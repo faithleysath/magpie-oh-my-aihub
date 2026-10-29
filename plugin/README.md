@@ -89,6 +89,14 @@ Which models may be shared:
 - issued keys are re-checked when a provider changes and at every hand-over: unshareable entries
   are removed from the key, and a key with nothing left is revoked.
 
+The guard that keeps shared keys native runs at start, after every reconcile, and on a 15 s poll:
+it compares Magpie's own key store (an empty model list means "every model") with the operator's
+shareable set, narrows keys that were widened by hand and revokes a key with nothing shareable
+left. If Magpie's provider list cannot be read, sharing is **suspended** — the export and Forward
+chain are withdrawn, no key is revoked on a transient error — and republished automatically when
+the check passes again. `checks` reports `sharing-suspended` and `shared-models-native-only`.
+The protection window is bounded by the poll interval (~15 s), not zero; see the known limits.
+
 Turning sharing off withdraws the export and the Forward chain, and deletes nothing in Magpie:
 local providers, models and issued Gateway Keys stay.
 
@@ -111,6 +119,19 @@ registers the provider as a native **Remote Magpie**, and refuses to finish unle
 answers 401 without a key **and** with a wrong key, and the valid key lists at least one model.
 Each provider gets its own loopback port and its own key; adding the same id again is idempotent.
 A failure restores the previous registration of that id and leaves the other providers alone.
+
+**Ownership.** The plugin only replaces or removes a Magpie provider it can prove it wrote: the
+connection record must exist, the entry must be a Remote Magpie, its URL must be exactly this
+connection's loopback forward, and its key must be the one in the key store. A same-named native
+provider, a different Remote Magpie, or an entry edited by hand is refused, reported as `degraded`
+("changed outside this plugin") and left untouched — by connect, update, delete, `consume off` and
+restart recovery alike. To take over an entry the plugin does not own, remove it in Magpie first.
+
+**Retargeting.** `provider update` that changes `mappedCidr` or `providerPort` moves the connection to
+a **fresh** loopback port, proves the new path, replaces the registration and restarts EasyTier once
+so the old listener is gone. A failed switch restores the old registration and keeps the old
+connection working. Reusing the same loopback port for a new target is refused (2.6.4 cannot
+retarget a live forward).
 
 Every provider is checked independently: one that goes down is `degraded` while the others keep
 serving; one that is removed or updated does not delete the others' registrations. If the overlay
@@ -138,6 +159,9 @@ What the plugin enforces on every key (the architecture's non-negotiables):
 - a cap recorded as pending before Magpie is written, so a crash between the write and the local
   commit is reconciled from what the gateway actually holds,
 - a key whose whitelist or cap cannot be applied is **deleted**, never handed over,
+- a hand-over runs the share guard first, then re-reads the key from Magpie: a key revoked during
+  the check is never delivered, an empty (all-models) whitelist is repaired first, and the returned
+  model list is the one Magpie holds (the cap is the one just read back),
 - a non-empty model whitelist; an empty one is refused,
 - a positive cost cap of at least **$0.0001** on Magpie's exact grid, finite and bounded,
 - every write is read back from `GET /v1/magpie/limit` and must match,
@@ -164,8 +188,9 @@ Checks include: the core is running; the **effective** ACL (read back from the r
 just the file) has Inbound Drop with no rules, Forward Drop with exactly the published ports, and
 only loopback forwards; the gateway answers 401 without a key from the provider's own address; the
 mapped prefix is announced; the published ports contain the gateway; every issued key names only
-native, allowed models; each remote provider has a loopback forward, a Remote Magpie registration
-and a healthy status; and no loopback listener is left without a provider.
+native, allowed models (and sharing is withdrawn, with `sharing-suspended`, if that cannot be
+proven); each remote provider has a loopback forward, a Remote Magpie entry the plugin owns and a
+healthy status; and no loopback listener is left without a provider.
 
 The plugin page cannot fetch any of this: Magpie serves plugin pages with `connect-src 'none'`.
 The host writes `page/status.js` and the page reloads to show it. This is a Magpie limitation, not a
@@ -287,6 +312,12 @@ macOS for every pull request that touches `plugin/`.
 - A remote provider's identity is the overlay hostname + mapped prefix + its Gateway Key. 2.6.4
   does not expose a peer's public key through the CLI, so this is a drift alarm, not cryptographic
   authentication; see `docs/ARCHITECTURE.md`, Decision 9.
+- The no-resale guard is polled (every 15 s and on reconcile), so an external provider replacement is
+  blocked within that window, not instantaneously. Absolute real-time prevention is UNKNOWN until
+  Magpie can make a key's provider scope immutable (see Decision 10).
+- If the plugin's connection record is lost (e.g. `state.json` recovered from `.prev` after a
+  provider was registered), the Magpie entry is treated as foreign and is not overwritten; remove it
+  in Magpie before re-adding it.
 - A shared key cannot name a routing group, even a purely native one: Magpie's group membership is
   not part of the key read-back, so it cannot be proven native.
 - Model pricing is Magpie's estimate at its current prices; changing a shared model's price

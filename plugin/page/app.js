@@ -47,7 +47,14 @@ function renderStatus(s) {
   rows.push(["Plugin host pid", s.plugin?.pid ?? "—"]);
   rows.push(["Magpie", s.magpie?.version ?? "—"]);
   rows.push(["This node", cfg.hostname ?? "—"]);
-  rows.push(["Sharing (published)", cfg.sharingEnabled ? "on" : "off"]);
+  rows.push([
+    "Sharing (published)",
+    !cfg.sharingEnabled
+      ? "off"
+      : cfg.sharingActive === false
+        ? `suspended — ${cfg.shareSuspended?.reason ?? "safety check pending"}`
+        : "on",
+  ]);
   rows.push(["Consuming (remote)", cfg.consumingEnabled ? "on" : "off"]);
   rows.push(["Overlay", et.networkName ?? cfg.networkName ?? "—"]);
   rows.push(["EasyTier", et.coreVersion ?? "—"]);

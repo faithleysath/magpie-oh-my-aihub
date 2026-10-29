@@ -244,27 +244,27 @@ export class Magpie {
   }
 
   /**
-   * Registers a remote Magpie, or leaves an identical registration alone. A
-   * different URL or key for the same id is replaced, because that is the only
-   * way to change a provider in 0.1.2038. The key is never part of an error.
+   * Registers a remote Magpie. It never removes or replaces an existing entry:
+   * the caller must prove ownership first and call `replaceRemoteProvider`, or
+   * refuse. The key is never part of an error.
    */
-  async ensureRemoteProvider(opts: { id: string; url: string; key: string }): Promise<"unchanged" | "added" | "replaced"> {
-    const existing = this.providerById(opts.id);
-    const wantChat = `${opts.url.replace(/\/$/, "")}/v1`;
-    const same = existing && existing.preset === "remote-magpie" && existing.chat === wantChat && existing.key === opts.key;
-    if (same) return "unchanged";
-    let replaced = false;
-    if (existing) {
-      await this.removeProvider(opts.id);
-      replaced = true;
-    }
+  async addRemoteProvider(opts: { id: string; url: string; key: string }): Promise<void> {
     const r = await this.serial(() =>
       run([this.bin, "provider", "add", "remote-magpie", opts.key, `url=${opts.url}`, `id=${opts.id}`], {
         timeoutMs: 120_000,
       }),
     );
     if (r.code !== 0) throw new Error(`provider add: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
-    return replaced ? "replaced" : "added";
+  }
+
+  /**
+   * Replaces an entry the caller has proven it owns (same id, same URL, same
+   * key as the one it wrote). Magpie 0.1.2038 has no in-place edit for a Remote
+   * Magpie, so this is remove-then-add.
+   */
+  async replaceRemoteProvider(opts: { id: string; url: string; key: string }): Promise<void> {
+    await this.removeProvider(opts.id);
+    await this.addRemoteProvider(opts);
   }
 
   async removeProvider(id: string): Promise<void> {

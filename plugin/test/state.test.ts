@@ -165,7 +165,7 @@ describe("phase-3 migration", () => {
 
 describe("crash safety", () => {
   test("writes leave no temporary files behind", () => {
-    saveState({ version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [] });
+    saveState({ version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [], shareSuspended: null });
     const names = readdirSync(join(dir, "oh-my-aihub"));
     expect(names.filter((n) => n.endsWith(".tmp"))).toEqual([]);
   });
@@ -191,7 +191,7 @@ describe("crash safety", () => {
   test("the key store is separate and keeps only its own ids", () => {
     setProviderKey("a", "sk-test-store-a");
     setProviderKey("b", "sk-test-store-b");
-    saveState({ version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [] });
+    saveState({ version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [], shareSuspended: null });
     const store = read(keyStoreFile());
     expect(Object.keys(store.keys).sort()).toEqual(["a", "b"]);
     const raw = readFileSync(stateFile(), "utf8");

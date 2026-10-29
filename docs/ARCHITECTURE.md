@@ -171,6 +171,13 @@ Each consumed provider is one `ProviderConnection`:
 | `status` / `detail` | `connected`, `degraded`, `identity-mismatch`, `disabled` |
 | `createdAt` / `updatedAt` / `lastConnectedAt` | timestamps |
 
+Ownership is part of the record, not a separate permission system: the plugin may replace or
+remove a Magpie provider only when a `ProviderConnection` exists **and** the entry is a Remote
+Magpie whose `chat` is exactly `http://127.0.0.1:<localPort>/v1` **and** whose key equals the key in
+the key store. Everything else — a same-named native provider, a different Remote Magpie, or an
+entry the operator edited by hand — is `foreign` and is refused, reported, and left untouched by
+connect, update, delete, consumption-off and restart recovery.
+
 Rules the service enforces:
 
 - adding the same `id` again is idempotent (same record, one registration, one forward);
@@ -223,6 +230,18 @@ A gives B can never name `peer-b/...`, so B cannot route a request back to A thr
 Measured with one upstream hit per cross-node request and no `/v1/models` model from the other
 side in any whitelist.
 
+Enforcement is continuous but **polled**: the guard runs at start, after every reconcile (45 s and
+manual) and on a 15 s tick that compares a native/remote fingerprint, and it compares Magpie's own key store (an
+empty model list means "every model") with the operator's shareable set. A key that was widened by
+hand is narrowed; a key with nothing shareable left is revoked. When `providers.json` cannot be
+read the guard does **not** revoke on a transient error, but it does not treat "unknown" as safe:
+sharing is suspended (the export and Forward chain are withdrawn, `state.shareSuspended`) and
+republished automatically once the check passes again. The protection window is therefore bounded
+by the poll interval (~15 s), not zero: a request already in flight or made inside that window could
+still use a channel whose provider id was just replaced. Absolute real-time prevention would need
+Magpie to make a key's provider set immutable or a request-path intermediary; **LIMITATION**, see
+[`validation/2026-10-29-pr5-review-fixes.md`](validation/2026-10-29-pr5-review-fixes.md).
+
 ## Decision 11 — State: versioned, atomic, backed up, with the keys elsewhere
 
 `state.json` (0600) is versioned (`version: 2`) and migrated from phase 3 exactly once:
@@ -254,7 +273,11 @@ therefore:
 - removes one by a supervised restart with the new config, after which the remaining providers are
   re-verified;
 - records a listener it could not close as an orphan, reports it in `checks`, and clears it on the
-  next core start.
+  next core start;
+- **retargets a provider** (new `mappedCidr` or `providerPort`) on a fresh loopback port, proves it,
+  replaces the registration, then restarts once so the old listener is gone. A failed retarget
+  restores the old registration and keeps the old forward; an explicit request to reuse the same
+  port for a new target is refused.
 
 ## Preferred dataflow
 
@@ -307,9 +330,14 @@ refuses an unlisted platform or a hash mismatch.
    `noise_static_pubkey`, and `peer_id` changes on every start. The mapped prefix + hostname check +
    Gateway Key is what this phase can prove; binding funds to a peer needs the public key exposed
    upstream (or an operator-signed statement).
-8. **Forward removal needs a core restart** (Decision 12), so removing or relocating one provider
+8. **Forward removal needs a core restart** (Decision 12), so removing or retargeting one provider
    briefly interrupts the others' in-flight requests; new requests recover as soon as the core is
    back (measured).
+9. **The no-resale guard is polled** (~15 s), not instantaneous; see Decision 10. A provider id
+   replaced outside the plugin can be used through an existing key inside that window. Treat
+   absolute real-time prevention as UNKNOWN until Magpie offers immutable per-key provider scope.
+10. **A provider whose connection record was lost is treated as foreign** and is not overwritten;
+    remove it in Magpie before re-adding it with the plugin (deliberate, fail-closed).
 
 ## References
 

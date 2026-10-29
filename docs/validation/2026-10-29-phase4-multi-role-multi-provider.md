@@ -48,7 +48,7 @@ forwarded calls as remote (loopback would be trusted: see phase 3).
 
 ## 3. Result summary
 
-`bun docs/validation/lab/phase4/lab.ts` → **24 passed, 0 failed** (REPRODUCED, 2026-10-29T15:46:45.680Z,
+`bun docs/validation/lab/phase4/lab.ts` → **25 passed, 0 failed** (REPRODUCED, 2026-10-29T17:54:00.766Z,
 macOS 26.6.2 arm64).
 
 `cd plugin && bun run ci` → typecheck, **111 unit tests**, boot-check, secret-scan all pass.
@@ -79,6 +79,7 @@ macOS 26.6.2 arm64).
 | 22 | Sharing off withdraws the export, keeps local providers/models | PASS | no export, both native models still listed; same mapped address returns |
 | 23 | Consuming off unregisters only the plugin's remote providers | PASS | no `Remote magpie` left, turned back on with `peer-b` restored |
 | 24 | A phase-3 `state.json` migrates on boot and keeps working | PASS | v2, backup, key moved to `provider-keys.json`, old provider answered |
+| 25 | Retargeting a provider (review regression) | PASS | `peer-b 13425 -> 13430 -> 13425`, peer-c stayed up, 2 listeners remain |
 
 ## 4. What each guarantee rests on
 

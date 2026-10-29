@@ -110,6 +110,11 @@ export interface OrphanForward {
   since: string;
 }
 
+export interface ShareSuspension {
+  at: string;
+  reason: string;
+}
+
 export interface PluginState {
   version: number;
   config: PluginConfig | null;
@@ -117,6 +122,12 @@ export interface PluginState {
   providers: ProviderConnection[];
   /** loopback forwards left behind by an EasyTier that cannot remove them live */
   orphanForwards: OrphanForward[];
+  /**
+   * Set while sharing is withdrawn because the native/remote split cannot be
+   * proven (Magpie's provider list is unreadable). The operator's intent
+   * (`config.sharingEnabled`) is kept; the export is not.
+   */
+  shareSuspended: ShareSuspension | null;
 }
 
 /** The shape phase 3 wrote; read only, never written. */
@@ -157,6 +168,7 @@ interface LegacyState {
   providers?: ProviderConnection[];
   providerWiring?: LegacyWiring | null;
   orphanForwards?: OrphanForward[];
+  shareSuspended?: ShareSuspension | null;
 }
 
 const KEY_STORE = "provider-keys.json";
@@ -340,6 +352,7 @@ export function loadState(): LoadedState {
     consumers: Array.isArray(value.consumers) ? value.consumers.map(String) : [],
     providers,
     orphanForwards: Array.isArray(value.orphanForwards) ? value.orphanForwards : [],
+    shareSuspended: value.shareSuspended ?? null,
   };
 
   const migratedFrom = legacy ? (typeof value.version === "number" ? value.version : 1) : null;
@@ -358,7 +371,7 @@ export function loadState(): LoadedState {
 }
 
 export function emptyState(): PluginState {
-  return { version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [] };
+  return { version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [], shareSuspended: null };
 }
 
 export function saveState(state: PluginState): void {

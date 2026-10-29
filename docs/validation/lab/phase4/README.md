@@ -1,14 +1,14 @@
 # Phase-4 lab — three isolated Magpie instances
 
-A local, disposable end-to-end lab. It creates three (and a fourth for the migration check)
-isolated Magpie 0.1.2038 instances with their own `HOME`/`XDG_CONFIG_HOME`, three real plugin
+A local, disposable end-to-end lab. It creates three (a fourth for the migration check and a fifth
+as the retarget target) isolated Magpie 0.1.2038 instances with their own `HOME`/`XDG_CONFIG_HOME`, three real plugin
 hosts, one real EasyTier 2.6.4 overlay, three OpenAI-compatible mock upstreams and a fourth
 provider whose `state.json` is a phase-3 document.
 
 ```sh
 # Needs: macOS with Magpie 0.1.2038 installed (or MAGPIE_BIN=…), Bun 1.4.3.
 # The first run downloads the pinned EasyTier release and caches it under /tmp.
-bun docs/validation/lab/phase4/lab.ts            # 24 steps, writes ../phase4-lab-report.json
+bun docs/validation/lab/phase4/lab.ts            # 25 steps, writes ../phase4-lab-report.json
 bun docs/validation/lab/phase4/lab.ts --keep     # keep /tmp/ohmyaihub-phase4-<pid> for inspection
 ```
 

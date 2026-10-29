@@ -85,6 +85,8 @@ export interface ServiceDeps {
   probes?: Partial<Probes>;
   /** the LAN address the provider exports; injected in tests */
   lanIp?: () => string | null;
+  /** how long an ingress probe retries before giving up (tests shorten it) */
+  probeTimeoutMs?: number;
 }
 
 export interface StatusSnapshot {
@@ -93,6 +95,9 @@ export interface StatusSnapshot {
   config: {
     role: Role | null;
     sharingEnabled: boolean;
+    /** false while the export is withdrawn by the safety guard */
+    sharingActive: boolean;
+    shareSuspended: { at: string; reason: string } | null;
     consumingEnabled: boolean;
     nodeId: string | null;
     hostname: string | null;
@@ -117,6 +122,9 @@ export interface StatusSnapshot {
   checks: { name: string; ok: boolean; detail: string }[];
   logs: string[];
 }
+
+/** Who wrote the Magpie provider entry that currently holds this id. */
+type Ownership = "absent" | "ours" | "foreign";
 
 export interface ProviderInput {
   id: string;
@@ -149,15 +157,18 @@ export class Service {
   private ticking: ReturnType<typeof setInterval> | null = null;
   private probes: Probes;
   private lanIp: () => string | null;
+  private probeTimeoutMs: number;
   private opQueue: Promise<unknown> = Promise.resolve();
   private connectionsBusy = new Set<string>();
   private mutating = 0;
   private lastReconcileAt = 0;
+  private lastProviderFingerprint = "";
 
   constructor(private deps: ServiceDeps) {
     this.state = loadState().state;
     this.probes = { ...defaultProbes(deps.magpie), ...(deps.probes ?? {}) };
     this.lanIp = deps.lanIp ?? (() => safeLanIp());
+    this.probeTimeoutMs = deps.probeTimeoutMs ?? 6000;
     this.supervisor =
       deps.supervisor ??
       new EasytierSupervisor({
@@ -222,6 +233,11 @@ export class Service {
       this.state.orphanForwards = [];
       saveState(this.state);
     }
+    // Before serving again, prove every issued key still names only this node's
+    // own providers. An unreadable provider list withdraws the export instead of
+    // pretending the state is safe.
+    await this.guardSharedKeys().catch((e) => logger.warn(`share guard at start failed: ${String(e)}`));
+    this.lastProviderFingerprint = this.providerFingerprint();
     await this.reconcileProviders({ quiet: true, verifyModels: true }).catch((e) =>
       logger.warn(`reconcile after start failed: ${String(e)}`),
     );
@@ -238,8 +254,61 @@ export class Service {
       /* the supervisor reports its own state */
     }
     if (this.busy()) return;
+    // Detect a change made to Magpie's provider list outside the plugin. This is
+    // a polled check, so the protection window is bounded by this interval (15s),
+    // not instantaneous; see the validation note.
+    if (this.state.config?.sharingEnabled) {
+      const fingerprint = this.providerFingerprint();
+      // Also retry while suspended: the withdrawal or the resumption may have
+      // failed (a restart error) and must not be forgotten until a change.
+      if (fingerprint !== this.lastProviderFingerprint || this.state.shareSuspended) {
+        this.lastProviderFingerprint = fingerprint;
+        await this.guardSharedKeys().catch((e) => logger.warn(`share guard after a provider change failed: ${String(e)}`));
+      }
+    }
     if (Date.now() - this.lastReconcileAt < 45_000) return;
     await this.reconcileProviders({ quiet: true }).catch(() => {});
+  }
+
+  /** A cheap summary of Magpie's provider list, to notice external changes. */
+  private providerFingerprint(): string {
+    if (!this.deps.magpie.providersReadable()) return "unreadable";
+    try {
+      const native = [...this.deps.magpie.nativeProviderIds()].sort();
+      const remote = [...this.deps.magpie.remoteProviderIds()].sort();
+      return `native:${native.join(",")}|remote:${remote.join(",")}`;
+    } catch {
+      return "unreadable";
+    }
+  }
+
+  /** Whether the export should be published: enabled by the operator and safe. */
+  private sharingActive(): boolean {
+    return Boolean(this.state.config?.sharingEnabled && !this.state.shareSuspended);
+  }
+
+  /**
+   * Withdraws the network publication while the operator's intent to share is
+   * kept. Used when the native/remote split cannot be proven: serving a key that
+   * might name a remote channel is worse than being briefly offline.
+   */
+  private async suspendSharing(reason: string): Promise<void> {
+    const cfg = this.state.config;
+    if (!cfg?.sharingEnabled || this.state.shareSuspended) return;
+    this.state.shareSuspended = { at: new Date().toISOString(), reason };
+    saveState(this.state);
+    await this.applyConfig(cfg);
+    logger.error(`sharing withdrawn: ${reason}`);
+  }
+
+  /** Republishes the export once the safety check passes again. */
+  private async resumeSharing(): Promise<void> {
+    if (!this.state.shareSuspended) return;
+    this.state.shareSuspended = null;
+    saveState(this.state);
+    const cfg = this.state.config;
+    if (cfg) await this.applyConfig(cfg);
+    logger.info("sharing restored: every shared key names only this node's own providers");
   }
 
   async stop(): Promise<void> {
@@ -359,6 +428,12 @@ export class Service {
       saveState(this.state);
 
       await this.applyConfig(cfg);
+      // A new configuration can change what is shareable (and a previous
+      // suspension may have to be lifted or re-applied).
+      if (cfg.sharingEnabled) {
+        await this.guardSharedKeys().catch((e) => logger.warn(`share guard after configure: ${String(e)}`));
+        this.lastProviderFingerprint = this.providerFingerprint();
+      }
       // Turning consumption off must cut the remote providers this node added,
       // and nothing else: a provider the operator made by hand stays.
       if (!consumingEnabled) await this.dropRemoteRegistrations("consumption disabled");
@@ -377,7 +452,7 @@ export class Service {
   /** The EasyTier configuration that implements the plugin's state. */
   private etConfig(cfg: PluginConfig): EasytierConfig {
     return {
-      sharingEnabled: cfg.sharingEnabled,
+      sharingEnabled: this.sharingActive(),
       consumingEnabled: cfg.consumingEnabled,
       nodeId: cfg.nodeId,
       instanceId: cfg.instanceId,
@@ -424,7 +499,12 @@ export class Service {
       this.state.config = next;
       saveState(this.state);
       await this.applyConfig(next);
-      if (enabled) await this.reconcileProviders({ quiet: true }).catch(() => {});
+      if (enabled) {
+        // Never republish blindly: the guard may keep the export withdrawn.
+        await this.guardSharedKeys().catch((e) => logger.warn(`share guard after enabling sharing: ${String(e)}`));
+        this.lastProviderFingerprint = this.providerFingerprint();
+        await this.reconcileProviders({ quiet: true }).catch(() => {});
+      }
       logger.info(enabled ? "sharing enabled: the gateway is published on the overlay" : "sharing disabled: the network publication was withdrawn");
       return this.status();
     });
@@ -505,7 +585,9 @@ export class Service {
           mappedCidr: patch.mappedCidr ?? existing.mappedCidr,
           key,
           providerPort: patch.providerPort ?? existing.providerPort,
-          localPort: patch.localPort ?? existing.localPort,
+          // Deliberately not defaulting to existing.localPort: if the target
+          // changes, connectProvider must pick a fresh port and prove it first.
+          localPort: patch.localPort,
         },
         { update: true },
       );
@@ -538,15 +620,51 @@ export class Service {
     const clash = this.state.providers.find((p) => p.id !== input.id && mappedHost(p.mappedCidr) === mappedHost(mappedCidr));
     if (clash) throw new Error(`${mappedCidr} is already used by provider ${clash.id}; each provider needs its own mapped_cidr`);
 
-    const localPort = input.localPort ?? (opts.update && existing ? existing.localPort : await this.allocLocalPort());
+    const want = mappedHost(mappedCidr);
+    const dst = `${want}:${providerPort}`;
+    const targetChanged =
+      Boolean(existing) && (`${mappedHost(existing!.mappedCidr)}:${existing!.providerPort}` !== dst);
+
+    // EasyTier 2.6.4 cannot retarget a live forward, so a changed destination
+    // gets a fresh loopback port and is proven before the old one is retired.
+    let localPort: number;
+    if (input.localPort !== undefined) {
+      if (targetChanged && input.localPort === existing!.localPort) {
+        throw new Error(
+          "EasyTier 2.6.4 cannot point an existing loopback forward at a new target; " +
+            "omit localPort and the plugin will switch to a fresh port safely",
+        );
+      }
+      localPort = input.localPort;
+    } else if (existing && !targetChanged) {
+      // A repeated add with the same target is idempotent: keep the port (and
+      // therefore the listener) instead of moving the connection for no reason.
+      localPort = existing.localPort;
+    } else {
+      localPort = await this.allocLocalPort();
+    }
     if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) throw new Error("localPort must be a TCP port");
     if (this.state.providers.some((p) => p.id !== input.id && p.localPort === localPort)) {
       throw new Error(`127.0.0.1:${localPort} is already the forward port of another provider`);
     }
-
-    const want = mappedHost(mappedCidr);
-    const dst = `${want}:${providerPort}`;
     const bind = `127.0.0.1:${localPort}`;
+
+    // Ownership check: the plugin may only replace a Magpie entry it can prove
+    // it wrote. A same-named native provider, a foreign Remote Magpie, or an
+    // entry the user edited by hand is never removed or overwritten.
+    const prevKey = existing ? getProviderKey(existing.id) : null;
+    const entryOwnership: Ownership = existing && prevKey
+      ? this.ownershipOf(input.id, existing.localPort, prevKey)
+      : this.deps.magpie.providerById(input.id)
+        ? "foreign"
+        : "absent";
+    if (entryOwnership === "foreign") {
+      throw new Error(
+        `a provider named "${input.id}" already exists in Magpie and is not owned by this plugin ` +
+          `(or was changed outside it); refusing to remove or overwrite it. Remove it in Magpie first, ` +
+          `or use a different id`,
+      );
+    }
 
     // 0. Who actually owns that mapped prefix? A mapped address can move, be
     //    spoofed or be announced by two peers; it is a routing selector, not an
@@ -563,14 +681,15 @@ export class Service {
     }
 
     const prev = existing ? { ...existing } : null;
-    const prevKey = existing ? getProviderKey(existing.id) : null;
     this.connectionsBusy.add(input.id);
     let addedForward = false;
     let registered: "unchanged" | "added" | "replaced" | null = null;
     try {
-      // 1. the overlay path first; nothing in Magpie changes yet
+      // 1. the overlay path first; nothing in Magpie changes yet. A freshly
+      //    announced prefix can take a moment to accept forwarded connections,
+      //    so the probe is retried for a few seconds before giving up.
       addedForward = await this.supervisor.addPortForward(bind, dst);
-      if (!(await this.probes.statusWith("127.0.0.1", localPort, 401))) {
+      if (!(await this.waitForStatus("127.0.0.1", localPort, 401))) {
         throw new Error(
           `127.0.0.1:${localPort} did not answer 401 without a key: ` +
             `the provider must be online, on the same network, and its mapped address reachable`,
@@ -580,12 +699,23 @@ export class Service {
       // A wrong key must also be refused, which proves a Gateway Key is actually
       // checked at the other end rather than a local, trusted caller.
       const wrong = `sk-ohmyaihub-probe-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-      if (!(await this.probes.statusWith("127.0.0.1", localPort, 401, wrong))) {
+      if (!(await this.waitForStatus("127.0.0.1", localPort, 401, wrong))) {
         throw new Error(`127.0.0.1:${localPort} did not refuse a wrong key; refusing to trust this endpoint`);
       }
 
-      // 2. the provider. The same id is replaced; a different id is added.
-      registered = await this.deps.magpie.ensureRemoteProvider({ id: input.id, url: `http://127.0.0.1:${localPort}`, key: input.key });
+      // 2. the provider. An entry this plugin owns is replaced; a missing one is
+      //    added; anything else was refused above. Re-registering an identical
+      //    binding is a no-op.
+      const targetOurs = this.ownershipOf(input.id, localPort, input.key) === "ours";
+      if (targetOurs) {
+        registered = "unchanged";
+      } else if (entryOwnership === "absent") {
+        await this.deps.magpie.addRemoteProvider({ id: input.id, url: `http://127.0.0.1:${localPort}`, key: input.key });
+        registered = "added";
+      } else {
+        await this.deps.magpie.replaceRemoteProvider({ id: input.id, url: `http://127.0.0.1:${localPort}`, key: input.key });
+        registered = "replaced";
+      }
 
       // 3. the consumer must actually see the remote's models through its key
       const remoteModels = await this.probes.remoteModelIds(localPort, input.key, 15_000);
@@ -619,9 +749,12 @@ export class Service {
       saveState(this.state);
       this.supervisor.setForwards(this.forwardSpecs());
       if (prev && prev.localPort !== localPort) {
-        // The old listener cannot be closed live in 2.6.4; it is no longer in the
-        // generated config, so the next core start drops it. Record it meanwhile.
-        await this.recordOrphanForward(prev.localPort, `${mappedHost(prev.mappedCidr)}:${prev.providerPort}`);
+        // The old listener cannot be closed live in 2.6.4. Restart from the new
+        // config now, so no unregistered forward is left behind, and re-verify
+        // the other providers afterwards.
+        const current = this.state.config;
+        if (current) await this.applyConfig(current);
+        await this.reconcileProviders({ quiet: true }).catch((e) => logger.warn(`reconcile after retarget: ${String(e)}`));
       }
       await this.guardSharedKeys().catch((e) => logger.warn(`share guard: ${String(e)}`));
       logger.info(`connected provider ${input.id} at ${bind} -> ${dst} (${registered})`);
@@ -630,12 +763,14 @@ export class Service {
       // Roll back exactly what this call changed. The previous registration of
       // the same id is restored with its key; other providers are untouched.
       if (registered === "added" || registered === "replaced") {
-        await this.deps.magpie.removeProvider(input.id).catch(() => {});
-        if (prev && prevKey) {
-          await this.deps.magpie
-            .ensureRemoteProvider({ id: prev.id, url: `http://127.0.0.1:${prev.localPort}`, key: prevKey })
-            .catch((err) => logger.error(`could not restore provider ${prev.id}: ${String(err)}`));
+        // Only undo an entry that still matches what this call wrote; a user
+        // edit in the meantime is theirs and is left alone.
+        if (this.ownershipOf(input.id, localPort, input.key) === "ours") {
+          await this.deps.magpie.removeProvider(input.id).catch(() => {});
+        } else {
+          logger.error(`not removing "${input.id}": its Magpie entry no longer matches what this call wrote`);
         }
+        if (prev && prevKey) await this.restoreRemoteProvider(prev, prevKey);
       }
       if (addedForward && !this.state.providers.some((p) => p.localPort === localPort)) {
         await this.recordOrphanForward(localPort, dst);
@@ -658,7 +793,16 @@ export class Service {
     return this.serialize(async () => {
       const rec = this.provider(id);
       if (!rec) throw new Error(`no remote provider ${id}`);
-      await this.deps.magpie.removeProvider(id);
+      const ownership = this.ownershipOf(id, rec.localPort, getProviderKey(id));
+      const leftInMagpie = ownership === "foreign";
+      if (ownership === "ours") {
+        await this.deps.magpie.removeProvider(id);
+      } else if (leftInMagpie) {
+        logger.warn(
+          `not deleting the Magpie provider "${id}": it was changed outside the plugin or is not owned by it; ` +
+            `removing only this plugin's connection`,
+        );
+      }
       deleteProviderKey(id);
       this.state.providers = this.state.providers.filter((p) => p.id !== id);
       saveState(this.state);
@@ -668,7 +812,11 @@ export class Service {
       if (cfg) await this.applyConfig(cfg);
       await this.reconcileProviders({ quiet: true }).catch((e) => logger.warn(`reconcile after removal: ${String(e)}`));
       logger.info(`removed remote provider ${id}; its loopback port ${rec.localPort} is gone`);
-      return providerView({ ...rec, status: "disabled", detail: "removed" });
+      return providerView({
+        ...rec,
+        status: "disabled",
+        detail: leftInMagpie ? "removed from the plugin; the Magpie entry was left untouched (not owned by this plugin)" : "removed",
+      });
     });
   }
 
@@ -728,6 +876,13 @@ export class Service {
       }
     }
     if (changed) saveState(this.state);
+    // A reconcile is also a full safety re-check (provider list and the keys
+    // Magpie actually holds), so a manual `/providers/reconcile` catches an
+    // external change even when the 15 s tick has not run yet.
+    if (cfg.sharingEnabled) {
+      this.lastProviderFingerprint = this.providerFingerprint();
+      await this.guardSharedKeys().catch((e) => logger.warn(`share guard after a provider change failed: ${String(e)}`));
+    }
     if (!opts.quiet) await this.writeSnapshot();
     return this.providers();
   }
@@ -759,7 +914,9 @@ export class Service {
       return null;
     });
     if (conn.status === "identity-mismatch" && conn.detail?.includes("announces")) {
-      await this.deps.magpie.removeProvider(conn.id).catch(() => {});
+      if (this.ownershipOf(conn.id, conn.localPort, key) === "ours") {
+        await this.deps.magpie.removeProvider(conn.id).catch(() => {});
+      }
       logger.error(`provider ${conn.id}: ${conn.detail}; unregistered while the prefix is ambiguous`);
       return true;
     }
@@ -777,7 +934,9 @@ export class Service {
         changed = true;
       }
       // Stop routing to it: the registration is what gives Magpie the path.
-      await this.deps.magpie.removeProvider(conn.id).catch(() => {});
+      if (this.ownershipOf(conn.id, conn.localPort, key) === "ours") {
+        await this.deps.magpie.removeProvider(conn.id).catch(() => {});
+      }
       logger.error(`provider ${conn.id}: ${conn.detail}; unregistered until its identity is back`);
       return changed;
     }
@@ -796,16 +955,29 @@ export class Service {
       }
     }
 
-    const registered = await this.deps.magpie
-      .ensureRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${conn.localPort}`, key })
-      .catch((e) => {
+    const ownership = this.ownershipOf(conn.id, conn.localPort, key);
+    if (ownership === "foreign") {
+      // Something else now holds this id. It is not ours to edit, and routing
+      // through it with our key would be wrong: report it and stop.
+      conn.status = "degraded";
+      conn.detail =
+        `the Magpie provider "${conn.id}" was replaced or changed outside this plugin; ` +
+        `leaving it untouched. Remove it in Magpie or use a different id`;
+      conn.updatedAt = new Date().toISOString();
+      logger.error(`provider ${conn.id}: ${conn.detail}`);
+      return true;
+    }
+    if (ownership === "absent") {
+      try {
+        await this.deps.magpie.addRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${conn.localPort}`, key });
+        changed = true;
+      } catch (e) {
         conn.status = "degraded";
         conn.detail = `cannot register the Remote Magpie: ${(e as Error).message}`.slice(0, 300);
         conn.updatedAt = new Date().toISOString();
-        return null;
-      });
-    if (registered === null) return true;
-    if (registered !== "unchanged") changed = true;
+        return true;
+      }
+    }
 
     const keyed = await this.probes.statusWith("127.0.0.1", conn.localPort, 200, key);
     if (!keyed) {
@@ -844,12 +1016,16 @@ export class Service {
   /** Unregisters the Remote Magpies this plugin added, and only those. */
   private async dropRemoteRegistrations(reason: string): Promise<void> {
     for (const p of this.state.providers) {
-      const existing = this.deps.magpie.providerById(p.id);
-      if (existing && existing.preset === "remote-magpie") {
+      const ownership = this.ownershipOf(p.id, p.localPort, getProviderKey(p.id));
+      if (ownership === "ours") {
         await this.deps.magpie.removeProvider(p.id).catch((e) => logger.warn(`cannot unregister ${p.id}: ${String(e)}`));
+      } else if (ownership === "foreign") {
+        logger.warn(
+          `leaving the Magpie provider "${p.id}" in place: it was changed outside the plugin or is not owned by it`,
+        );
       }
     }
-    if (this.state.providers.length) logger.info(`unregistered ${this.state.providers.length} remote provider(s): ${reason}`);
+    if (this.state.providers.length) logger.info(`unregistered the plugin's remote provider(s): ${reason}`);
   }
 
   private async recordOrphanForward(localPort: number, dstAddr: string): Promise<void> {
@@ -905,35 +1081,80 @@ export class Service {
    * Remote Magpie of the same id) is narrowed; if nothing shareable remains it
    * is revoked rather than left open.
    */
-  async guardSharedKeys(): Promise<{ narrowed: string[]; revoked: string[] }> {
+  async guardSharedKeys(): Promise<{ narrowed: string[]; revoked: string[]; suspended: boolean }> {
     const narrowed: string[] = [];
     const revoked: string[] = [];
     const cfg = this.state.config;
-    if (!cfg) return { narrowed, revoked };
+    if (!cfg?.sharingEnabled) return { narrowed, revoked, suspended: Boolean(this.state.shareSuspended) };
     if (!this.deps.magpie.providersReadable()) {
-      logger.warn("cannot read Magpie's provider list; leaving every issued key as it is");
-      return { narrowed, revoked };
+      // "Unknown" is not "safe": withdraw the export instead of serving keys
+      // that may name a provider somebody replaced. Nothing is revoked on a
+      // transient read failure, so a flaky read does not destroy working keys.
+      await this.suspendSharing(
+        "Magpie's provider list cannot be read, so it cannot be proven that every shared model still belongs to this node",
+      ).catch((e) => logger.error(`could not withdraw sharing: ${String(e)}`));
+      return { narrowed, revoked, suspended: true };
     }
     const native = this.deps.magpie.nativeProviderIds();
     const remote = this.deps.magpie.remoteProviderIds();
+    let unverified: string | null = null;
     for (const c of this.provisioner.all()) {
       if (c.revokedAt) continue;
-      const allowed = c.models.filter((m) => {
-        const provider = m.split("/")[0];
-        return !remote.has(provider) && native.has(provider) && allowedByPolicy(m, cfg.share);
-      });
-      if (allowed.length === c.models.length) continue;
-      if (allowed.length === 0) {
-        await this.provisioner.revoke(c.consumerId);
-        revoked.push(c.consumerId);
-        logger.error(`revoked ${c.consumerId}: none of its models may be shared any more (${c.models.join(", ")})`);
-        continue;
+      try {
+        // Magpie's own store is the truth, not this plugin's record: the key may
+        // have been widened by hand (an empty `models` means "every model" there).
+        const held = this.deps.magpie.keyById(c.keyId);
+        if (!held) {
+          // Somebody removed the key outside the plugin. There is nothing left to
+          // widen, narrow or revoke; a hand-over will report it. Do not fail the
+          // whole guard (or try to delete a key that is already gone) on it.
+          logger.warn(`consumer ${c.consumerId}: its key is no longer in Magpie; nothing to re-check`);
+          continue;
+        }
+        const allowed = c.models.filter((m) => {
+          const provider = m.split("/")[0];
+          return !remote.has(provider) && native.has(provider) && allowedByPolicy(m, cfg.share);
+        });
+        if (allowed.length === 0) {
+          await this.provisioner.revoke(c.consumerId);
+          revoked.push(c.consumerId);
+          logger.error(`revoked ${c.consumerId}: none of its models may be shared any more (${c.models.join(", ")})`);
+          continue;
+        }
+        const heldModels = Array.isArray(held.models) ? held.models.map(String) : [];
+        const drift = heldModels.length === 0 || !sameSet(heldModels, allowed);
+        if (drift) {
+          await this.provisioner.setModels(c.consumerId, allowed);
+          narrowed.push(c.consumerId);
+          logger.warn(
+            `narrowed ${c.consumerId} to ${allowed.join(", ")}: Magpie held ` +
+              `${heldModels.length ? heldModels.join(", ") : "an empty (all-models) list"}`,
+          );
+          continue;
+        }
+        if (allowed.length !== c.models.length) {
+          // The key is right but the record still lists an unshareable model.
+          await this.provisioner.setModels(c.consumerId, allowed);
+          narrowed.push(c.consumerId);
+          logger.warn(`narrowed ${c.consumerId} to ${allowed.join(", ")}: the rest may not be shared`);
+        }
+      } catch (e) {
+        // A key that cannot be re-checked must not keep being served: the export
+        // is withdrawn until the check succeeds, instead of assuming it is safe.
+        unverified = `${c.consumerId}: ${(e as Error).message}`;
+        logger.error(`cannot re-check ${c.consumerId}; withdrawing sharing: ${(e as Error).message}`);
       }
-      await this.provisioner.setModels(c.consumerId, allowed);
-      narrowed.push(c.consumerId);
-      logger.warn(`narrowed ${c.consumerId} to ${allowed.join(", ")}: the rest may not be shared`);
     }
-    return { narrowed, revoked };
+    if (unverified) {
+      await this.suspendSharing(`a shared key could not be re-checked (${unverified})`).catch((e) =>
+        logger.error(`could not withdraw sharing: ${String(e)}`),
+      );
+      return { narrowed, revoked, suspended: true };
+    }
+    if (this.state.shareSuspended) {
+      await this.resumeSharing().catch((e) => logger.error(`could not restore sharing: ${String(e)}`));
+    }
+    return { narrowed, revoked, suspended: false };
   }
 
   // --- consumers -------------------------------------------------------------
@@ -942,15 +1163,37 @@ export class Service {
   async handover(
     consumerId: string,
   ): Promise<{ consumerId: string; keyName: string; key: string; models: string[]; capUsd: number }> {
-    const rec = this.provisioner.find(consumerId);
-    if (!rec || rec.revokedAt) throw new Error(`no active consumer ${consumerId}`);
-    if (!rec.secret) throw new Error(`the key of ${consumerId} is not in this Magpie any more; recreate it`);
-    // A key is handed over only when Magpie really holds it with its whitelist
-    // and cap: the read-back is the gate, not the local record.
-    await this.provisioner.status(consumerId);
+    const first = this.provisioner.find(consumerId);
+    if (!first || first.revokedAt) throw new Error(`no active consumer ${consumerId}`);
+    if (!first.secret) throw new Error(`the key of ${consumerId} is not in this Magpie any more; recreate it`);
+
+    // The guard can narrow or revoke this key, so it runs before anything is
+    // returned, and every result below is re-read from that post-guard state.
     await this.guardSharedKeys();
-    logger.info(`handing key ${rec.keyName} over for ${consumerId}`);
-    return { consumerId, keyName: rec.keyName, key: rec.secret, models: [...rec.models], capUsd: rec.capUsd };
+    const rec = this.provisioner.find(consumerId);
+    if (!rec || rec.revokedAt) {
+      throw new Error(`consumer ${consumerId} was revoked while its key was being prepared; do not hand it over`);
+    }
+    if (!rec.secret) throw new Error(`the key of ${consumerId} is not in this Magpie any more; recreate it`);
+
+    // The cap is verified against the gateway; the model list comes from
+    // Magpie's own key store, never from the local record alone.
+    await this.provisioner.status(consumerId);
+    const held = this.deps.magpie.keyById(rec.keyId);
+    if (!held) throw new Error(`the key of ${consumerId} is no longer in Magpie; recreate it`);
+    let models = Array.isArray(held.models) ? held.models.map(String) : [];
+    if (models.length === 0) {
+      // An empty whitelist means "every model" in Magpie: rewrite it from the
+      // record (which the guard has just checked) before handing anything over.
+      await this.provisioner.setModels(consumerId, rec.models);
+      models = this.deps.magpie.keyById(rec.keyId)?.models?.map(String) ?? [];
+    }
+    if (models.length === 0) {
+      throw new Error(`the key of ${consumerId} has no model whitelist in Magpie; refusing to hand it over`);
+    }
+    this.assertShareable(models);
+    logger.info(`handing key ${rec.keyName} over for ${consumerId} (${models.join(", ")})`);
+    return { consumerId, keyName: rec.keyName, key: rec.secret, models, capUsd: rec.capUsd };
   }
 
   async topUp(consumerId: string, usd: number, depositId?: string): Promise<ConsumerView> {
@@ -990,6 +1233,13 @@ export class Service {
           : "Inbound Drop (no rules); nothing exported"
         : et.aclProblems.join("; "),
     });
+    if (this.state.shareSuspended) {
+      out.push({
+        name: "sharing-suspended",
+        ok: false,
+        detail: `sharing was withdrawn at ${this.state.shareSuspended.at}: ${this.state.shareSuspended.reason}`,
+      });
+    }
     if (cfg.sharingEnabled) {
       const gw = this.gatewayPort();
       out.push({
@@ -1019,10 +1269,16 @@ export class Service {
           ok: has,
           detail: has ? `127.0.0.1:${p.localPort} -> ${p.mappedCidr}` : `no listener on 127.0.0.1:${p.localPort}`,
         });
+        const ownership = this.ownershipOf(p.id, p.localPort, getProviderKey(p.id));
         out.push({
           name: `provider:${p.id}:registered`,
-          ok: this.deps.magpie.providerById(p.id)?.preset === "remote-magpie",
-          detail: `Remote Magpie "${p.id}" ${this.deps.magpie.providerById(p.id) ? "is" : "is not"} registered in Magpie`,
+          ok: ownership === "ours",
+          detail:
+            ownership === "ours"
+              ? `Remote Magpie "${p.id}" is the one this plugin registered`
+              : ownership === "absent"
+                ? `Remote Magpie "${p.id}" is not registered in Magpie`
+                : `the Magpie provider "${p.id}" was changed outside this plugin; left untouched`,
         });
         out.push({
           name: `provider:${p.id}:status`,
@@ -1108,6 +1364,8 @@ export class Service {
       config: {
         role: cfg ? (cfg.sharingEnabled ? "provider" : "consumer") : null,
         sharingEnabled: cfg?.sharingEnabled ?? false,
+        sharingActive: this.sharingActive(),
+        shareSuspended: this.state.shareSuspended,
         consumingEnabled: cfg?.consumingEnabled ?? false,
         nodeId: cfg?.nodeId ?? null,
         hostname: et.hostname ?? (cfg ? configHostname(cfg) : null),
@@ -1164,6 +1422,36 @@ export class Service {
   }
 
   /**
+   * Whether the Magpie entry with this id is the one this plugin wrote. This is
+   * the only ownership record: the connection's loopback port and the Gateway
+   * Key in the key store are what the plugin put there. A native provider, a
+   * different Remote Magpie, or an entry edited by hand does not match.
+   */
+  private ownershipOf(id: string, localPort: number, key: string | null | undefined): Ownership {
+    const entry = this.deps.magpie.providerById(id);
+    if (!entry) return "absent";
+    if (entry.preset !== "remote-magpie" || !key) return "foreign";
+    const want = `http://127.0.0.1:${localPort}/v1`;
+    return entry.chat === want && entry.key === key ? "ours" : "foreign";
+  }
+
+  /**
+   * Re-registers a provider this plugin already owns after a failed update.
+   * Never touches an entry that is not ours.
+   */
+  private async restoreRemoteProvider(prev: ProviderConnection, key: string): Promise<void> {
+    const ownership = this.ownershipOf(prev.id, prev.localPort, key);
+    if (ownership === "ours") return;
+    if (ownership === "foreign") {
+      logger.error(`not restoring Remote Magpie "${prev.id}": Magpie holds a different provider with that id`);
+      return;
+    }
+    await this.deps.magpie
+      .addRemoteProvider({ id: prev.id, url: `http://127.0.0.1:${prev.localPort}`, key })
+      .catch((e) => logger.error(`could not restore provider ${prev.id}: ${String(e)}`));
+  }
+
+  /**
    * The peer that announces `mapped` as a proxy prefix. More than one owner is
    * ambiguous and refused: the dial would land on either of them.
    */
@@ -1192,6 +1480,16 @@ export class Service {
     return { hostname: row.hostname, ipv4: row.ipv4.replace(/\/\d+$/, ""), peerId };
   }
 
+  /** Polls a keyed endpoint until it answers `want`, or the timeout passes. */
+  private async waitForStatus(host: string, port: number, want: number, bearer?: string, timeoutMs = this.probeTimeoutMs): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      if (await this.probes.statusWith(host, port, want, bearer)) return true;
+      await new Promise((r) => setTimeout(r, 500));
+    } while (Date.now() < deadline);
+    return false;
+  }
+
   private async waitLocalModels(providerId: string, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -1205,6 +1503,12 @@ export class Service {
     }
     return false;
   }
+}
+
+function sameSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((x) => set.has(x));
 }
 
 function describeRole(cfg: PluginConfig): string {

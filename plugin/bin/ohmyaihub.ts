@@ -93,6 +93,8 @@ switch (cmd) {
       JSON.stringify(
         {
           sharing: s.config?.sharingEnabled ?? false,
+          sharingActive: s.config?.sharingActive ?? false,
+          shareSuspended: s.config?.shareSuspended ?? null,
           consuming: s.config?.consumingEnabled ?? false,
           node: {
             id: s.config?.nodeId,

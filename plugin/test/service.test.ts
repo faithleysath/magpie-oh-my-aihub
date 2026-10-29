@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Service, type SupervisorLike } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { ProviderRecord } from "../src/magpie.ts";
+import { getProviderKey } from "../src/state.ts";
 
 // A unit test for the multi-provider service: a fake Magpie (providers +
 // Gateway Keys), a fake EasyTier supervisor that behaves like 2.6.4 (a forward
@@ -26,6 +27,8 @@ class FakeMagpie {
   native = new Set<string>(["alpha"]);
   keys = new Map<string, FakeKey>();
   removed: string[] = [];
+  addCalls = 0;
+  replaceCalls = 0;
   private n = 0;
 
   keyByName(name: string) {
@@ -78,13 +81,15 @@ class FakeMagpie {
   remoteProviderIds() {
     return new Set([...this.providers.values()].filter((p) => p.preset === "remote-magpie").map((p) => p.id));
   }
-  async ensureRemoteProvider(opts: { id: string; url: string; key: string }): Promise<"unchanged" | "added" | "replaced"> {
-    const existing = this.providers.get(opts.id);
-    const chat = `${opts.url}/v1`;
-    if (existing && existing.preset === "remote-magpie" && existing.chat === chat && existing.key === opts.key) return "unchanged";
-    const replaced = Boolean(existing);
-    this.providers.set(opts.id, { id: opts.id, preset: "remote-magpie", chat, key: opts.key });
-    return replaced ? "replaced" : "added";
+  async addRemoteProvider(opts: { id: string; url: string; key: string }): Promise<void> {
+    this.addCalls += 1;
+    if (this.providers.has(opts.id)) throw new Error(`provider ${opts.id} already exists`);
+    this.providers.set(opts.id, { id: opts.id, preset: "remote-magpie", chat: `${opts.url}/v1`, key: opts.key });
+  }
+  async replaceRemoteProvider(opts: { id: string; url: string; key: string }): Promise<void> {
+    this.replaceCalls += 1;
+    this.providers.delete(opts.id);
+    await this.addRemoteProvider(opts);
   }
   async removeProvider(id: string) {
     if (!this.providers.has(id)) throw new Error("no such provider");
@@ -233,6 +238,7 @@ async function service(opts: { sharing?: boolean; consuming?: boolean; fresh?: b
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
     lanIp: () => "127.0.0.1",
+    probeTimeoutMs: 400,
   });
   services.push(s);
   await s.configure({
@@ -242,6 +248,38 @@ async function service(opts: { sharing?: boolean; consuming?: boolean; fresh?: b
     networkSecret: "service-lab-secret",
   });
   return s;
+}
+
+/**
+ * A service whose remote probes are simulated per loopback port. Used when a
+ * test needs the plugin to choose its own new port (retargeting) and still have
+ * that port answer like a keyed gateway.
+ */
+async function serviceSim(portKeys: Map<number, string>, opts: { sharing?: boolean; consuming?: boolean } = {}): Promise<Service> {
+  const sim = new Service({
+    magpie: magpie as never,
+    magpieVersion: "magpie 0.1.2038",
+    supervisor: sup,
+    lanIp: () => "127.0.0.1",
+    probeTimeoutMs: 400,
+    probes: {
+      statusWith: async (_host, port, want, bearer) => {
+        if (port === LOCAL_GATEWAY_PORT) return want === 401;
+        const key = portKeys.get(port);
+        if (!key) return false;
+        return want === (bearer === key ? 200 : 401);
+      },
+      remoteModelIds: async (port) => (portKeys.has(port) ? ["sim-model"] : null),
+    },
+  });
+  services.push(sim);
+  await sim.configure({
+    sharingEnabled: opts.sharing ?? true,
+    consumingEnabled: opts.consuming ?? true,
+    networkName: "service-lab",
+    networkSecret: "service-lab-secret",
+  });
+  return sim;
 }
 
 function gateway(name: string, keys: string[]): FakeGateway {
@@ -274,6 +312,20 @@ describe("several remote providers", () => {
     expect(sup.forwards).toHaveLength(2);
     // the forward set is part of the generated config, so a core restart restores it
     expect(sup.cfg!.portForwards).toHaveLength(2);
+  });
+
+  test("re-adding without a local port keeps the same listener", async () => {
+    const portKeys = new Map<number, string>();
+    for (let port = 13425; port < 13440; port++) portKeys.set(port, "sk-test-provider-b-0001");
+    const s = await serviceSim(portKeys);
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    const first = await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425 });
+    const starts = sup.starts;
+    const again = await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425 });
+    expect(again.localPort).toBe(first.localPort);
+    expect(sup.starts).toBe(starts);
+    expect(sup.forwards).toHaveLength(1);
+    expect(magpie.providers_()).toHaveLength(1);
   });
 
   test("adding the same provider twice is idempotent", async () => {
@@ -450,16 +502,116 @@ describe("several remote providers", () => {
     expect(updated.mappedCidr).toBe("10.66.1.5/32");
     expect(magpie.providers_().find((p) => p.id === "peer-b")!.key).toBe("sk-test-provider-b-0002");
     expect(s.providers().find((p) => p.id === "peer-c")!.status).toBe("connected");
-    // 2.6.4 cannot close the old listener live: it is recorded, then dropped by
-    // the next core restart (which the generated config makes inevitable).
+    // The switch restarts the core once, so the old listener is gone and no
+    // unregistered forward is left behind.
     expect(s.providers().find((p) => p.id === "peer-b")!.localPort).toBe(b2.port);
-    expect(sup.forwards.map((f) => f.bindAddr)).toContain(`127.0.0.1:${b.port}`);
-    expect((s as unknown as { state: { orphanForwards: { localPort: number }[] } }).state.orphanForwards.map((o) => o.localPort)).toEqual([b.port]);
-
-    await s.setConsuming(true); // restarts the core from the generated config
-    await s.reconcileProviders({ verifyModels: true });
     expect(sup.forwards.map((f) => f.bindAddr).sort()).toEqual([`127.0.0.1:${b2.port}`, `127.0.0.1:${c.port}`].sort());
     expect((s as unknown as { state: { orphanForwards: unknown[] } }).state.orphanForwards).toEqual([]);
+  });
+
+  test("an update that only changes the destination picks a fresh port and verifies it first", async () => {
+    const portKeys = new Map<number, string>();
+    const oldPort = 13525;
+    portKeys.set(oldPort, "sk-test-provider-b-0001");
+    for (let port = 13425; port < 13440; port++) portKeys.set(port, "sk-test-provider-b-0001");
+    const s = await serviceSim(portKeys);
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    sup.route("10.66.1.9", "ohmyaihub-b0000009");
+    const first = await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: oldPort });
+    expect(first.localPort).toBe(oldPort);
+
+    const updated = await s.updateProvider("peer-b", { mappedCidr: "10.66.1.9/32" });
+    expect(updated.mappedCidr).toBe("10.66.1.9/32");
+    expect(updated.localPort).not.toBe(oldPort);
+    expect(updated.localPort).toBeGreaterThanOrEqual(13425);
+    expect(updated.localPort).toBeLessThan(13440);
+    expect(updated.status).toBe("connected");
+    // the new target was proven through the new port before the old one retired
+    expect(sup.forwards.map((f) => f.bindAddr).sort()).toEqual([`127.0.0.1:${updated.localPort}`]);
+    expect(magpie.providers_()[0].chat).toBe(`http://127.0.0.1:${updated.localPort}/v1`);
+  });
+
+  test("retargeting onto the same loopback port is refused instead of half-switching", async () => {
+    const s = await service();
+    const b = gateway("b", ["sk-test-provider-b-0001"]);
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    sup.route("10.66.1.9", "ohmyaihub-b0000009");
+    await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port });
+    await expect(s.updateProvider("peer-b", { mappedCidr: "10.66.1.9/32", localPort: b.port })).rejects.toThrow(
+      /cannot point an existing loopback forward at a new target|omit localPort/,
+    );
+    // nothing changed
+    expect(s.providers()[0].mappedCidr).toBe("10.66.1.2/32");
+    expect(s.providers()[0].localPort).toBe(b.port);
+    expect(s.providers()[0].status).toBe("connected");
+    expect(magpie.providers_()[0].chat).toBe(`http://127.0.0.1:${b.port}/v1`);
+  });
+
+  test("a retarget whose new path never answers keeps the old connection and records the failed listener", async () => {
+    const portKeys = new Map<number, string>();
+    const oldPort = 13525;
+    portKeys.set(oldPort, "sk-test-provider-b-0001");
+    portKeys.set(13527, "sk-test-provider-c-0001");
+    // No fresh port answers: the update fails at the first ingress probe.
+    const s = await serviceSim(portKeys, { sharing: false, consuming: true });
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    sup.route("10.66.1.9", "ohmyaihub-b0000009");
+    await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: oldPort });
+    await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: 13527 });
+
+    await expect(s.updateProvider("peer-b", { mappedCidr: "10.66.1.9/32" })).rejects.toThrow(/did not answer 401/);
+    const rec = s.providers().find((p) => p.id === "peer-b")!;
+    expect(rec.mappedCidr).toBe("10.66.1.2/32");
+    expect(rec.localPort).toBe(oldPort);
+    expect(rec.status).toBe("connected");
+    expect(magpie.providerById("peer-b")!.chat).toBe(`http://127.0.0.1:${oldPort}/v1`);
+    expect(magpie.providerById("peer-b")!.key).toBe("sk-test-provider-b-0001");
+    expect(s.providers().find((p) => p.id === "peer-c")!.status).toBe("connected");
+    const orphans = (s as unknown as { state: { orphanForwards: { localPort: number }[] } }).state.orphanForwards;
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].localPort).toBeGreaterThanOrEqual(13425);
+    expect(orphans[0].localPort).not.toBe(oldPort);
+  });
+
+  test("a failed retarget keeps the old provider working and restores its registration", async () => {
+    const portKeys = new Map<number, string>();
+    const oldPort = 13525;
+    portKeys.set(oldPort, "sk-test-provider-b-0001");
+    portKeys.set(13527, "sk-test-provider-c-0001");
+    // Every fresh port answers the key probes but serves no model, so the
+    // failure happens after the new registration was written.
+    for (let port = 13425; port < 13440; port++) portKeys.set(port, "sk-test-provider-b-0001");
+    const s = await serviceSim(portKeys, { sharing: false, consuming: true });
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    sup.route("10.66.1.9", "ohmyaihub-b0000009");
+    await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: oldPort });
+    const other = await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: 13527 });
+    void other;
+
+    // Make the new target answer the key but serve no model, after the
+    // registration step; then the update must roll back.
+    const sim = s as unknown as { probes: { remoteModelIds: (port: number, key: string, t: number) => Promise<string[] | null> } };
+    const real = sim.probes.remoteModelIds;
+    sim.probes.remoteModelIds = async (port, key, t) => (port === oldPort ? real(port, key, t) : null);
+
+    await expect(s.updateProvider("peer-b", { mappedCidr: "10.66.1.9/32" })).rejects.toThrow(/connect failed/);
+    sim.probes.remoteModelIds = real;
+
+    const rec = s.providers().find((p) => p.id === "peer-b")!;
+    expect(rec.mappedCidr).toBe("10.66.1.2/32");
+    expect(rec.localPort).toBe(oldPort);
+    expect(rec.status).toBe("connected");
+    // the old registration is back, pointing at the old port and key
+    const entry = magpie.providerById("peer-b")!;
+    expect(entry.chat).toBe(`http://127.0.0.1:${oldPort}/v1`);
+    expect(entry.key).toBe("sk-test-provider-b-0001");
+    // the other provider is untouched
+    expect(s.providers().find((p) => p.id === "peer-c")!.status).toBe("connected");
+    expect(magpie.providerById("peer-c")).toBeDefined();
+    // the failed new listener is recorded, not silently forgotten
+    const orphans = (s as unknown as { state: { orphanForwards: { localPort: number }[] } }).state.orphanForwards;
+    expect(orphans.length).toBe(1);
+    expect(orphans[0].localPort).not.toBe(oldPort);
   });
 });
 
@@ -581,12 +733,235 @@ describe("an unreadable provider list fails closed", () => {
     magpie.providersReadable = () => false;
     await expect(s.ensureConsumer("dave", ["alpha/native-model"], 1)).rejects.toThrow(/cannot read Magpie's provider list/);
     const guard = await s.guardSharedKeys();
-    expect(guard).toEqual({ narrowed: [], revoked: [] });
+    expect(guard).toEqual({ narrowed: [], revoked: [], suspended: true });
     expect(s.provisioner.find("carol")!.revokedAt).toBeNull();
+    // "unknown" is not "safe": the export is withdrawn while it cannot be proven.
+    expect(sup.cfg!.sharingEnabled).toBe(false);
     const report = await s.checks();
     const check = report.find((c) => c.name === "shared-models-native-only");
     expect(check?.ok).toBe(false);
     magpie.providersReadable = real;
+  });
+});
+
+describe("provider ownership", () => {
+  test("a new remote provider refuses a same-named native provider and leaves it untouched", async () => {
+    const s = await service();
+    const b = gateway("b", ["sk-test-provider-b-0001"]);
+    magpie.addManualProvider("peer-b");
+    const before = { ...magpie.providerById("peer-b")! };
+    await expect(
+      s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port }),
+    ).rejects.toThrow(/not owned by this plugin/);
+    expect(magpie.providerById("peer-b")).toEqual(before);
+    expect(s.providers()).toHaveLength(0);
+    expect(sup.forwards).toHaveLength(0);
+    expect(magpie.addCalls).toBe(0);
+    expect(magpie.replaceCalls).toBe(0);
+  });
+
+  test("a new remote provider refuses a same-named foreign Remote Magpie", async () => {
+    const s = await service();
+    const b = gateway("b", ["sk-test-provider-b-0001"]);
+    magpie.providers.set("peer-b", {
+      id: "peer-b",
+      preset: "remote-magpie",
+      chat: "http://127.0.0.1:1/v1",
+      key: "sk-test-somebody-elses-key",
+    });
+    const before = { ...magpie.providerById("peer-b")! };
+    await expect(
+      s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port }),
+    ).rejects.toThrow(/not owned by this plugin/);
+    expect(magpie.providerById("peer-b")).toEqual(before);
+    expect(magpie.addCalls).toBe(0);
+    expect(magpie.replaceCalls).toBe(0);
+  });
+
+  test("a provider edited outside the plugin is not overwritten, and reconcile leaves it alone", async () => {
+    const s = await service();
+    const b = gateway("b", ["sk-test-provider-b-0001"]);
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port });
+    const calls = { add: magpie.addCalls, replace: magpie.replaceCalls };
+
+    // The user rotates the key in Magpie (or edits the URL) by hand.
+    magpie.providers.get("peer-b")!.key = "sk-test-user-rotated-key";
+    await expect(s.updateProvider("peer-b", { key: "sk-test-provider-b-0002" })).rejects.toThrow(/not owned by this plugin/);
+    expect(magpie.providerById("peer-b")!.key).toBe("sk-test-user-rotated-key");
+
+    const list = await s.reconcileProviders({ verifyModels: false });
+    expect(list[0].status).toBe("degraded");
+    expect(list[0].detail).toMatch(/changed outside this plugin/);
+    expect(magpie.providerById("peer-b")!.key).toBe("sk-test-user-rotated-key");
+    expect(magpie.addCalls).toBe(calls.add);
+    expect(magpie.replaceCalls).toBe(calls.replace);
+  });
+
+  test("deleting a connection leaves an edited provider in Magpie, and clears only plugin state", async () => {
+    const s = await service();
+    const b = gateway("b", ["sk-test-provider-b-0001"]);
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port });
+    magpie.providers.get("peer-b")!.chat = "http://127.0.0.1:19999/v1";
+
+    const removed = await s.removeProvider("peer-b");
+    expect(magpie.providerById("peer-b")!.chat).toBe("http://127.0.0.1:19999/v1");
+    expect(s.providers()).toHaveLength(0);
+    expect(getProviderKey("peer-b")).toBeNull();
+    expect(removed.detail).toMatch(/left untouched/);
+  });
+
+  test("turning consumption off leaves an edited provider alone", async () => {
+    const s = await service();
+    const b = gateway("b", ["sk-test-provider-b-0001"]);
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port });
+    magpie.providers.get("peer-b")!.key = "sk-test-user-rotated-key";
+
+    await s.setConsuming(false);
+    expect(magpie.providerById("peer-b")!.key).toBe("sk-test-user-rotated-key");
+    expect(s.providers()[0].status).toBe("disabled");
+  });
+
+  test("a restart reconciles an owned provider without rewriting it, and never overwrites a foreign one", async () => {
+    const s = await service();
+    const b = gateway("b", ["sk-test-provider-b-0001"]);
+    sup.route("10.66.1.2", "ohmyaihub-b0000001");
+    await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port });
+    const calls = { add: magpie.addCalls, replace: magpie.replaceCalls };
+
+    const restarted = await service();
+    const ok = await restarted.reconcileProviders({ verifyModels: true });
+    expect(ok[0].status).toBe("connected");
+    expect(magpie.addCalls).toBe(calls.add);
+    expect(magpie.replaceCalls).toBe(calls.replace);
+
+    magpie.providers.get("peer-b")!.chat = "http://127.0.0.1:19999/v1";
+    const list = await restarted.reconcileProviders({ verifyModels: false });
+    expect(list[0].status).toBe("degraded");
+    expect(magpie.providerById("peer-b")!.chat).toBe("http://127.0.0.1:19999/v1");
+    expect(magpie.addCalls).toBe(calls.add);
+    expect(magpie.replaceCalls).toBe(calls.replace);
+  });
+});
+
+describe("the share guard reacts to changes made outside the plugin", () => {
+  test("start() re-checks issued keys when a native provider became a Remote Magpie", async () => {
+    const s = await service();
+    await s.ensureConsumer("carol", ["alpha/native-model"], 1);
+    expect(magpie.keys.size).toBe(1);
+
+    magpie.native.delete("alpha");
+    magpie.providers.set("alpha", { id: "alpha", preset: "remote-magpie", chat: "http://127.0.0.1:1/v1", key: "sk-test-foreign" });
+    const restarted = new Service({ magpie: magpie as never, magpieVersion: "magpie 0.1.2038", supervisor: sup, lanIp: () => "127.0.0.1", probeTimeoutMs: 400 });
+    services.push(restarted);
+    await restarted.start();
+    await restarted.stop();
+
+    expect(restarted.provisioner.find("carol")!.revokedAt).not.toBeNull();
+    expect(magpie.keys.size).toBe(0);
+  });
+
+  test("reconcile notices a provider-list change and revokes the key naming it", async () => {
+    const s = await service();
+    await s.ensureConsumer("carol", ["alpha/native-model"], 1);
+    magpie.native.delete("alpha");
+    magpie.providers.set("alpha", { id: "alpha", preset: "remote-magpie", chat: "http://127.0.0.1:1/v1", key: "sk-test-foreign" });
+
+    await s.reconcileProviders({ verifyModels: false });
+    expect(s.provisioner.find("carol")!.revokedAt).not.toBeNull();
+    expect(magpie.keys.size).toBe(0);
+  });
+
+  test("an unreadable provider list suspends the export, keeps keys, and resumes when readable", async () => {
+    const s = await service();
+    await s.ensureConsumer("carol", ["alpha/native-model"], 1);
+    const real = magpie.providersReadable.bind(magpie);
+    magpie.providersReadable = () => false;
+
+    const guard = await s.guardSharedKeys();
+    expect(guard.suspended).toBe(true);
+    expect(sup.cfg!.sharingEnabled).toBe(false);
+    expect(guard.revoked).toEqual([]);
+    expect(s.provisioner.find("carol")!.revokedAt).toBeNull();
+    expect(magpie.keys.size).toBe(1);
+
+    const checks = await s.checks();
+    expect(checks.find((c) => c.name === "sharing-suspended")?.ok).toBe(false);
+    expect(checks.find((c) => c.name === "shared-models-native-only")?.ok).toBe(false);
+
+    magpie.providersReadable = real;
+    const resumed = await s.guardSharedKeys();
+    expect(resumed.suspended).toBe(false);
+    expect(sup.cfg!.sharingEnabled).toBe(true);
+    expect((s as unknown as { state: { shareSuspended: unknown } }).state.shareSuspended).toBeNull();
+    expect(s.provisioner.find("carol")!.revokedAt).toBeNull();
+  });
+
+  test("a key deleted outside the plugin does not fail the guard or revoke anything else", async () => {
+    const s = await service();
+    const gone = await s.ensureConsumer("carol", ["alpha/native-model"], 1);
+    const kept = await s.ensureConsumer("dave", ["alpha/native-model"], 1);
+    magpie.keys.delete(gone.keyId);
+    const result = await s.guardSharedKeys();
+    expect(result.revoked).toEqual([]);
+    expect(s.provisioner.find("carol")!.revokedAt).toBeNull();
+    expect(s.provisioner.find("dave")!.revokedAt).toBeNull();
+    expect(magpie.keyById(kept.keyId)).toBeDefined();
+  });
+
+  test("a key widened by hand is narrowed back to the operator's shareable list", async () => {
+    const s = await service();
+    const view = await s.ensureConsumer("carol", ["alpha/native-model"], 1);
+    magpie.keys.get(view.keyId)!.models = [];
+
+    await s.guardSharedKeys();
+    expect(magpie.keyById(view.keyId)!.models).toEqual(["alpha/native-model"]);
+
+    // A remote model slipped into the key: the guard removes it.
+    magpie.providers.set("peer-b", { id: "peer-b", preset: "remote-magpie", chat: "http://127.0.0.1:1/v1", key: "sk-test-foreign" });
+    magpie.keys.get(view.keyId)!.models = ["alpha/native-model", "peer-b/x/model"];
+    await s.guardSharedKeys();
+    expect(magpie.keyById(view.keyId)!.models).toEqual(["alpha/native-model"]);
+  });
+});
+
+describe("handover reflects what Magpie actually holds", () => {
+  test("a narrowed key delivers the narrowed list, not the old record", async () => {
+    const s = await service();
+    await s.ensureConsumer("carol", ["alpha/a", "alpha/b"], 1);
+    s.config()!.share.models = ["alpha/a"];
+    const h = await s.handover("carol");
+    expect(h.models).toEqual(["alpha/a"]);
+    expect(h.models).toEqual(magpie.keyById(s.provisioner.find("carol")!.keyId)!.models);
+  });
+
+  test("a key revoked during the check is never delivered, and the error has no secret", async () => {
+    const s = await service();
+    const view = await s.ensureConsumer("carol", ["alpha/native-model"], 1);
+    const secret = s.provisioner.find("carol")!.secret;
+    s.config()!.share.models = ["nothing/*"];
+    let message = "";
+    try {
+      await s.handover("carol");
+      throw new Error("handover should have failed");
+    } catch (e) {
+      message = String((e as Error).message ?? e);
+    }
+    expect(message).toMatch(/revoked while/);
+    expect(message).not.toContain(secret);
+    expect(magpie.keyById(view.keyId)).toBeUndefined();
+  });
+
+  test("an empty model list is repaired before anything is handed over", async () => {
+    const s = await service();
+    const view = await s.ensureConsumer("carol", ["alpha/native-model"], 1);
+    magpie.keys.get(view.keyId)!.models = [];
+    const h = await s.handover("carol");
+    expect(h.models.length).toBeGreaterThan(0);
+    expect(h.models).toEqual(["alpha/native-model"]);
+    expect(magpie.keyById(view.keyId)!.models).toEqual(["alpha/native-model"]);
   });
 });
 

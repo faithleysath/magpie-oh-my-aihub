@@ -441,6 +441,19 @@ const a = new Instance("A", await freePorts());
 const b = new Instance("B", await freePorts());
 const c = new Instance("C", await freePorts());
 let d: Instance | null = null;
+let e: Instance | null = null;
+
+/** The verified EasyTier tree cached by the first step. */
+function easyTierCache(): string {
+  return `/tmp/ohmyaihub-et-cache-v2.6.4-${process.platform}-${process.arch}`;
+}
+
+function installEasytier(inst: Instance): void {
+  mkdirSync(inst.stateDir, { recursive: true });
+  const to = join(inst.stateDir, "easytier");
+  if (existsSync(to)) rmSync(to, { recursive: true, force: true });
+  Bun.spawnSync(["cp", "-R", easyTierCache(), to]);
+}
 
 try {
   await step("three isolated Magpie gateways start and enforce keys", async () => {
@@ -451,13 +464,8 @@ try {
   }, { required: true });
 
   await step("the pinned EasyTier is verified once and reused by the other nodes", async () => {
-    const cache = `/tmp/ohmyaihub-et-cache-v2.6.4-${process.platform}-${process.arch}`;
-    const install = (inst: Instance) => {
-      mkdirSync(inst.stateDir, { recursive: true });
-      const to = join(inst.stateDir, "easytier");
-      if (existsSync(to)) rmSync(to, { recursive: true, force: true });
-      Bun.spawnSync(["cp", "-R", cache, to]);
-    };
+    const cache = easyTierCache();
+    const install = (inst: Instance) => installEasytier(inst);
 
     if (existsSync(cache)) {
       for (const inst of [a, b, c]) install(inst);
@@ -736,6 +744,92 @@ try {
     return "peer-b degraded while peer-c answered; peer-b recovered after its Magpie came back";
   });
 
+  await step("retargeting a provider moves to a fresh port, verifies it, and drops the old listener", async () => {
+    e = new Instance("E", await freePorts());
+    await e.setup();
+    installEasytier(e);
+    await e.startHost();
+    await e.cli([
+      "configure",
+      "--network", NETWORK,
+      "--secret", NETWORK_SECRET,
+      "--share",
+      "--listen", `127.0.0.1:${e.listenPort}`,
+      "--virtual-ip", "10.77.0.15/24",
+      "--share-models", "*",
+      ...[a, b, c].flatMap((p) => ["--peer", `tcp://127.0.0.1:${p.listenPort}`]),
+    ]);
+    await waitFor("E joins the overlay", async () => {
+      const s = await e!.status();
+      return (s.easytier?.peers ?? []).length >= 3 ? true : null;
+    }, 60_000);
+    await e.cli(["consumers", "add", "a-node", `mock${e.upstreamName}/${e.model},mock${e.upstreamName}/common-model`, "1"]);
+    const eKey = await e.cli(["secret", "a-node"]);
+    const se = await e.status();
+    const eMapped = se.node.mappedCidr.replace(/\/32$/, "");
+    await waitFor("A has a route to E's mapped prefix", async () => {
+      const table = a.easytierCli(["route"]);
+      return table.includes(eMapped) ? true : null;
+    }, 60_000);
+
+    const before = await a.status();
+    const old = before.providers.find((p: any) => p.id === "peer-b")!;
+    const sb = await b.status();
+    const bKey = await b.cli(["secret", "a-node"]);
+
+    let moved: any;
+    try {
+      moved = await a.cli(["provider", "update", "peer-b", "--cidr", se.node.mappedCidr, "--key", eKey, "--port", String(e.gatewayPort)]);
+    } catch (err) {
+      const sa = await a.status().catch(() => null);
+      const pa = a.magpieReq(["providers"]);
+      const seAgain = await e.status().catch(() => null);
+      throw new Error(
+        `retarget failed: ${String((err as Error).message)} | A providers: ${pa.replace(/\n/g, " ")} | ` +
+          `A connections: ${JSON.stringify((sa as any)?.providers)} | E: ${JSON.stringify({ sharing: (seAgain as any)?.sharing, export: (seAgain as any)?.easytier?.export, ports: (seAgain as any)?.node?.publishedPorts })}`,
+      );
+    }
+    if (moved.localPort === old.localPort) throw new Error("the retarget reused the old loopback port");
+    await waitConnected(a, ["peer-b"], 60_000);
+    await waitFor("peer-b lists E's model", async () => {
+      const ms = await a.models();
+      return ms.some((m) => m === `peer-b/mock${e!.upstreamName}/${e!.model}`) ? true : null;
+    }, 30_000);
+    const viaNew = await http(`http://${lan()}:${a.gatewayPort}/v1/chat/completions`, {
+      key: a.labKey,
+      body: { model: `peer-b/mock${e.upstreamName}/${e.model}`, messages: [{ role: "user", content: "after retarget" }] },
+    });
+    if (viaNew.status !== 200 || !viaNew.text.includes("hello from e")) throw new Error(`retargeted peer-b did not reach E: ${viaNew.status} ${viaNew.text.slice(0, 160)}`);
+
+    const cCheck = await http(`http://${lan()}:${a.gatewayPort}/v1/chat/completions`, {
+      key: a.labKey,
+      body: { model: `peer-c/mock${c.upstreamName}/${c.model}`, messages: [{ role: "user", content: "unaffected" }] },
+    });
+    if (cCheck.status !== 200) throw new Error(`peer-c broke during the retarget: ${cCheck.status} ${cCheck.text.slice(0, 160)}`);
+
+    const back = await a.cli(["provider", "update", "peer-b", "--cidr", sb.node.mappedCidr, "--key", bKey, "--port", String(b.gatewayPort)]);
+    if (back.localPort === moved.localPort) throw new Error("the way back reused the moved port");
+    await waitConnected(a, ["peer-b"], 60_000);
+    await waitFor("peer-b lists B's model again", async () => {
+      const ms = await a.models();
+      return ms.some((m) => m === `peer-b/mock${b.upstreamName}/${b.model}`) ? true : null;
+    }, 30_000);
+    const viaOld = await http(`http://${lan()}:${a.gatewayPort}/v1/chat/completions`, {
+      key: a.labKey,
+      body: { model: `peer-b/mock${b.upstreamName}/${b.model}`, messages: [{ role: "user", content: "back home" }] },
+    });
+    if (viaOld.status !== 200 || !viaOld.text.includes("hello from b")) throw new Error(`peer-b did not return to B: ${viaOld.status} ${viaOld.text.slice(0, 160)}`);
+
+    const checks = await a.cliMayFail(["checks"]);
+    if (!checks.ok) throw new Error(`A's checks failed after the retarget: ${checks.out}${checks.err}`);
+    const forwards = a.easytierCli(["port-forward", "list"]);
+    const listeners = forwards.match(/127\.0\.0\.1:\d+/g) ?? [];
+    if (new Set(listeners).size !== 2) throw new Error(`expected exactly two provider listeners, saw: ${listeners.join(", ")}`);
+    e.stopAll();
+    e = null;
+    return `peer-b ${old.localPort} -> ${moved.localPort} -> ${back.localPort}; peer-c stayed up; ${new Set(listeners).size} listeners remain`;
+  });
+
   await step("deleting one provider leaves the other's connection intact", async () => {
     const before = (await a.status()).providers.map((p: any) => p.id);
     await a.cli(["provider", "rm", "peer-c"]);
@@ -904,7 +998,7 @@ try {
     return `turned off (was: ${before.split("\n").filter(Boolean).length} providers), turned back on with peer-b restored`;
   });
 } finally {
-  for (const inst of [a, b, c, d]) inst?.stopAll();
+  for (const inst of [a, b, c, d, e]) inst?.stopAll();
   const report = {
     ranAt: new Date().toISOString(),
     platform: `${process.platform}-${process.arch}`,
