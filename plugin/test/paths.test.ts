@@ -34,6 +34,47 @@ describe("resolveMagpieBin — Linux /proc/<pid>/exe", () => {
     expect(path).toBe("/usr/local/bin/magpie");
   });
 
+  test("a bash parent is not taken for Magpie (Linux CI regression)", () => {
+    // /proc/<pid>/exe points at an existing program that is not Magpie
+    const path = resolveMagpieBin({
+      platform: "linux",
+      ppid: 4242,
+      exists: (p) => p === "/usr/bin/bash" || p === "/opt/magpie/bin/magpie",
+      readlink: () => "/usr/bin/bash",
+      parentCommand: () => "/usr/bin/bash -c bun test",
+      parentCwd: () => "/work",
+      which: () => "/opt/magpie/bin/magpie",
+    });
+    expect(path).toBe("/opt/magpie/bin/magpie");
+  });
+
+  test("a magpie parent from /proc is used", () => {
+    const path = resolveMagpieBin({
+      platform: "linux",
+      ppid: 5,
+      exists: (p) => p === "/opt/Magpie Suite/magpie",
+      readlink: () => "/opt/Magpie Suite/magpie",
+      parentCommand: () => "/opt/Magpie Suite/magpie serve",
+      parentCwd: () => "/",
+      which: () => "/usr/bin/other",
+    });
+    expect(path).toBe("/opt/Magpie Suite/magpie");
+  });
+
+  test("a magpie parent that vanished is an error, never PATH", () => {
+    expect(() =>
+      resolveMagpieBin({
+        platform: "linux",
+        ppid: 5,
+        exists: (p) => p === "/usr/local/bin/magpie", // PATH has another one
+        readlink: () => "/old/magpie (deleted)",
+        parentCommand: () => "",
+        parentCwd: () => "",
+        which: () => "/usr/local/bin/magpie",
+      }),
+    ).toThrow(/cannot be resolved/);
+  });
+
   test("a missing /proc entry falls through, not a crash", () => {
     const path = resolveMagpieBin({
       platform: "linux",

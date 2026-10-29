@@ -146,7 +146,16 @@ function view(c: ConsumerRecord, status: LimitStatus | null): ConsumerView {
  * applied is deleted instead of being handed over.
  */
 export class Provisioner {
-  constructor(private magpie: Magpie) {}
+  private save: (list: ConsumerRecord[]) => void;
+
+  constructor(private magpie: Magpie, opts: { save?: (list: ConsumerRecord[]) => void } = {}) {
+    this.save = opts.save ?? saveConsumers;
+    this.list = loadConsumers();
+  }
+
+  private persist(): void {
+    this.save(this.list);
+  }
 
   private list: ConsumerRecord[] = loadConsumers();
   private locks = new Map<string, Promise<unknown>>();
@@ -178,8 +187,12 @@ export class Provisioner {
         continue;
       }
       try {
-        await this.reconcile(c);
-        out.push(view(c, await this.verify(c)));
+        out.push(
+          await this.withLock(c.consumerId, async () => {
+            await this.reconcile(c);
+            return view(c, await this.verify(c));
+          }),
+        );
       } catch {
         out.push(view(c, null));
       }
@@ -213,7 +226,7 @@ export class Provisioner {
       );
     }
     c.pending = null;
-    saveConsumers(this.list);
+    this.persist();
   }
 
   /** Creates the consumer's key if it does not exist yet, and checks it either way. */
@@ -260,7 +273,7 @@ export class Provisioner {
           await this.magpie.setModels(rec.keyId, rec.models);
           await this.magpie.setQuotasOff(rec.keyId);
           this.list.push(rec);
-          saveConsumers(this.list);
+          this.persist();
           await this.setCap(rec, capUsd);
           await this.verify(rec);
           logger.info(`created gateway key ${keyName} (${key.id}) for ${consumerId}`);
@@ -269,7 +282,7 @@ export class Provisioner {
           // handed over: delete it rather than leave a dangerous one behind.
           const idx = this.list.findIndex((c) => c.consumerId === consumerId);
           if (idx >= 0) this.list.splice(idx, 1);
-          saveConsumers(this.list);
+          this.persist();
           if (key) {
             await this.magpie.removeKey(key.id).catch((err) => logger.error(`could not remove the half-made key ${keyName}: ${String(err)}`));
           }
@@ -294,7 +307,7 @@ export class Provisioner {
           rec.capUsd = capUsd;
         }
         await this.verify(rec);
-        saveConsumers(this.list);
+        this.persist();
       }
       const status = await this.verify(rec);
       return view(rec, status);
@@ -333,7 +346,7 @@ export class Provisioner {
       calls: lim.calls ?? 0,
       spent: Boolean(lim.spent),
     };
-    saveConsumers(this.list);
+    this.persist();
     return status;
   }
 
@@ -362,38 +375,48 @@ export class Provisioner {
       if (!rec || rec.revokedAt) throw new Error(`no active consumer ${consumerId}`);
       await this.reconcile(rec);
       const id = depositId?.trim() || randomUUID();
-      if (rec.deposits.some((d) => d.id === id)) {
+      const applied = rec.deposits.find((d) => d.id === id);
+      if (applied) {
+        if (Math.abs(applied.usd - amount) > 1e-9) {
+          throw new Error(`deposit ${id} was already applied with $${applied.usd}; it cannot be replayed with $${amount}`);
+        }
         logger.info(`deposit ${id} for ${consumerId} was already applied; returning the current state`);
         return view(rec, await this.verify(rec));
       }
+      if (rec.pending && rec.pending.depositId === id && Math.abs(rec.pending.usd - amount) > 1e-9) {
+        throw new Error(`deposit ${id} is pending with $${rec.pending.usd}; it cannot be replayed with $${amount}`);
+      }
 
       const before = await this.verify(rec);
-      const used = before.limit?.cost ?? 0;
+      const usedBefore = before.limit?.cost ?? 0;
       const newCap = assertCap(roundCap(rec.capUsd + amount));
 
       // The intent is on disk before Magpie is touched, so a crash here can be
       // reconciled from what the gateway holds instead of double-crediting.
       rec.pending = { capUsd: newCap, depositId: id, usd: amount };
-      saveConsumers(this.list);
+      this.persist();
 
       await this.setCap(rec, newCap);
       const after = await this.verify(rec, newCap);
-      const afterUsed = after.limit?.cost ?? 0;
-      if (Math.abs(afterUsed - used) > 1e-9) {
-        rec.pending = null;
-        saveConsumers(this.list);
-        throw new Error(`top-up changed the used cost (${used} -> ${afterUsed}); it must raise the cap only`);
+      const usedAfter = after.limit?.cost ?? 0;
+      // Usage moving while the cap is written is normal: the consumer is allowed
+      // to call models during a top-up, and a window may roll over. The deposit
+      // is about the cap only, so this is recorded and never treated as failure.
+      if (Math.abs(usedAfter - usedBefore) > 1e-9) {
+        logger.info(
+          `deposit ${id}: usage moved ${usedBefore} -> ${usedAfter} while the cap was raised (allowed)`,
+        );
       }
 
       rec.capUsd = newCap;
       rec.creditedUsd = roundCap(rec.creditedUsd + amount);
       rec.deposits.push({ id, usd: amount, at: new Date().toISOString() });
       rec.pending = null;
-      saveConsumers(this.list);
-      if (afterUsed >= newCap) {
-        logger.warn(`top-up left ${consumerId} over budget: used ${afterUsed}, cap ${newCap}`);
+      this.persist();
+      if (usedAfter >= newCap) {
+        logger.warn(`top-up left ${consumerId} over budget: used ${usedAfter}, cap ${newCap}`);
       }
-      logger.info(`simulated deposit ${id} of ${amount} USD for ${consumerId}: cap ${newCap}, used ${afterUsed}`);
+      logger.info(`simulated deposit ${id} of ${amount} USD for ${consumerId}: cap ${newCap}, used ${usedAfter}`);
       return view(rec, after);
     });
   }
@@ -407,7 +430,7 @@ export class Provisioner {
         rec.revokedAt = new Date().toISOString();
         rec.secret = "";
         rec.pending = null;
-        saveConsumers(this.list);
+        this.persist();
         logger.info(`revoked gateway key ${rec.keyName} (${rec.keyId})`);
       }
       return view(rec, null);

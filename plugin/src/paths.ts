@@ -86,8 +86,12 @@ export function resolveMagpieBin(opts: ResolveOptions = {}): string {
   if (platform === "linux") {
     try {
       const target = readlink(`/proc/${ppid}/exe`).replace(/ \(deleted\)$/, "");
-      if (target && exists(target)) return target;
-      if (target && looksLikeMagpie(target)) unresolvedMagpie = target;
+      // The parent is often a shell or a test runner: only a program named
+      // magpie is the Magpie that started this host.
+      if (target && looksLikeMagpie(target)) {
+        if (exists(target)) return target;
+        unresolvedMagpie = target;
+      }
     } catch {
       /* the parent is gone or /proc is not mounted */
     }

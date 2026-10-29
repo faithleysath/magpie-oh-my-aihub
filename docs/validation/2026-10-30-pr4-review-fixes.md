@@ -8,8 +8,11 @@ by the unit tests here and runs in the Linux CI job.
 Result summary: **2 P0 defects confirmed** (the version name clash was a live crash, not a
 warning), **1 P0 validator weakness confirmed**, **3 P1 gaps confirmed**, one behaviour the
 review listed as missing that was already present (now enforced by tests anyway). Type check
-clean, **58 tests pass** (was 26), the entry boots, the credential scan passes, and the real
-two-instance regression still passes end to end.
+clean, **75 tests pass** (was 26 at review time, 58 after the first patch), the entry boots, the
+credential scan passes, and the real two-instance regression still passes end to end.
+
+A second acceptance patch (§11) adds the Linux CI fix, the top-up race fix and the runtime
+fail-closed path with fault injection.
 
 ---
 
@@ -253,3 +256,87 @@ on-disk key/connection operations are idempotent and recoverable. Remaining UNKN
 same product limits already listed (Windows/Linux Magpie end to end, the page in a browser,
 multi-NIC relocation, several providers per consumer), plus the pricing lock that blocks real
 credit.
+
+---
+
+## 11. Final acceptance patch: CI, top-up races, runtime fail closed
+
+### 11.1 Linux CI — the parent process was taken for Magpie
+
+**Root cause.** On Linux, `resolveMagpieBin()` returned `/proc/<ppid>/exe` whenever the target
+**existed**, without asking whether it was Magpie. Under `bun test` on the CI runner the parent is
+`bash`, so it returned `/usr/bin/bash`; the "finds a Magpie on this host" test then demanded a path
+containing `magpie` and failed (58 pass / 1 fail).
+
+**Fix.** Only a program whose basename is `magpie` (`magpie`, `magpie.exe`) may be taken from
+`/proc`; anything else falls through to the parent's argv, then the macOS bundle, then `PATH`. A
+parent that **is** Magpie but cannot be resolved stays a hard error, so no other installation is
+silently used. Tests: a simulated bash parent resolves through `PATH`; a simulated Magpie parent is
+used as-is; a Magpie parent that vanished (`/old/magpie (deleted)`) throws even though `PATH` has
+another one. The "real host" test is skipped only when the resolver reports that this machine has
+no Magpie at all — never to hide a failure.
+
+### 11.2 The top-up race with real traffic
+
+**Root cause.** `topUp()` compared the key's used cost before and after the cap write and treated
+any difference as an error, then cleared the pending intent and threw. A consumer calling models
+during a deposit (or a window rolling over) changes that number legitimately, so a correct deposit
+was reported as failed and could be retried.
+
+**Fix.** The cap is the only invariant of a deposit: the read-back must show the cap that was
+written; usage is recorded (`usage moved 0.4 -> 0.43 while the cap was raised (allowed)`) and never
+compared for equality. In addition:
+
+- a `depositId` is bound to its amount — replaying it with another amount is refused, replaying it
+  with the same amount returns the current state and credits once;
+- `refreshAll()` now takes the same per-consumer lock as `topUp()`/`status()`, so a background
+  refresh cannot read or rewrite the ledger mid-deposit;
+- the pending intent is written before Magpie and survives a local write failure; a restart
+  reconciles it from what the gateway holds (credit if the cap is there, drop it if not);
+- a Magpie write that failed is never credited;
+- the plugin never calls `limit reset` (a source-level regression test asserts it).
+
+Tests (`test/provisioner.test.ts`): the reviewed scenario exactly (cap $1, used $0.40, deposit $1,
+used becomes $0.43 during the write, read-back shows cap $2 / used $0.43 → deposit confirmed,
+`pending:false`), replay of the same id, same id with a different amount, save failure after the
+Magpie write followed by a restart/reconcile, a failed Magpie write followed by reconcile, and
+`topUp` + `status` + `refreshAll` running together.
+
+### 11.3 Runtime fail closed
+
+**Root cause.** `refresh()` only stopped the core on an ACL structure failure. An export that was
+not announced, an RPC portal on another address, a portal that could not be verified, and a
+configuration that could not be read all merely set `aclOk = false` while the core kept serving.
+
+**Fix.** Those checks now feed one verdict. Two consecutive failed checks stop the core this plugin
+owns; the stop sets `stopping`, so the supervised restart does not bring it back. An explicit
+`start()` (or a configuration change) re-validates the generated file and the running core before
+serving again. `stop()` also refuses to signal a pid whose command line no longer runs our config,
+so a recycled pid or a foreign EasyTier is never touched.
+
+Tests (`test/runtime.test.ts`, a fake `easytier-core` that sleeps and a fake `easytier-cli` that
+answers from a file):
+
+| Injected fault | Assertion |
+| --- | --- |
+| running config with `Inbound default_action = 1` | the pid is **gone** after the second check |
+| RPC reported on `0.0.0.0` | stopped |
+| RPC listener unverifiable (empty) | stopped |
+| running config unreadable (RPC throws) | stopped after the retry |
+| export missing from the running config | stopped |
+| healthy core | stays running, `aclOk: true` |
+| after an unsafe stop | no supervised restart; a new `start()` with a good config serves again |
+| a foreign pid placed in the state | never signalled |
+
+### 11.4 Re-run on macOS after this patch
+
+Two isolated Magpie 0.1.2038 instances (each with its own `HOME`): install and boot, provider and
+consumer checks **PASS**, virtual IP `000/000`, five calls to the `$0.0005` cap → `spent`, sixth
+**429**, deposit `dep-final` (+$1) → cap `1.0005` with used `0.00054675` kept, the same event
+replayed → still `credited 1`, next call **200**, revoke → **401**. No lab process, file or key was
+left behind; the user's agent configuration and Magpie keys were not touched.
+
+### 11.5 Status
+
+`tsc` clean · **75 tests pass** · boot-check PASS · secret-scan PASS · Linux + macOS CI (link in the
+PR). No P0 blocks remain. **Merge PR #4 after this commit.**

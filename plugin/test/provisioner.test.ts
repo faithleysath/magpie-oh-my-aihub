@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Provisioner, assertCap } from "../src/provisioner.ts";
+import { stateDir, statePath } from "../src/paths.ts";
 
 interface FakeKey {
   id: string;
@@ -20,6 +21,8 @@ class FakeMagpie {
   removed: string[] = [];
   quotaOff: string[] = [];
   setLimitCalls = 0;
+  /** runs inside setCostLimit, after the cap is written (simulates live usage) */
+  onSetLimit: ((k: FakeKey) => void) | null = null;
   /** make the next read-back report a wrong cap, to exercise the check */
   lieAboutCap: number | null = null;
   failSetModels = false;
@@ -51,7 +54,9 @@ class FakeMagpie {
     this.setLimitCalls += 1;
     if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs));
     if (this.failSetLimit) throw new Error("magpie refused the cap");
-    this.keys.get(id)!.cap = usd;
+    const k = this.keys.get(id)!;
+    k.cap = usd;
+    this.onSetLimit?.(k);
   }
   async setQuotasOff(id: string) {
     this.quotaOff.push(id);
@@ -217,6 +222,99 @@ describe("deposits", () => {
     await expect(p.topUp("iris", 0.00015)).rejects.toThrow(/grid/);
     await expect(p.topUp("iris", Number.NaN)).rejects.toThrow(/positive/);
     await expect(p.topUp("iris", Number.POSITIVE_INFINITY)).rejects.toThrow(/positive/);
+  });
+});
+
+describe("a deposit while the consumer is calling models", () => {
+  test("usage moving during the cap write does not lose or duplicate the deposit", async () => {
+    const v = await p.ensure("jane", { models, capUsd: 1 });
+    fake.keys.get(v.keyId)!.used = 0.4;
+    // a request completes between the cap write and the read-back
+    fake.onSetLimit = (k) => {
+      k.used = 0.43;
+      k.calls += 1;
+    };
+    const first = await p.topUp("jane", 1, "dep-A");
+    expect(first.capUsd).toBe(2);
+    expect(first.creditedUsd).toBe(1);
+    expect(first.usedUsd).toBeCloseTo(0.43, 10);
+    expect(first.pending).toBe(false);
+    expect(p.find("jane")!.deposits.map((d) => d.id)).toEqual(["dep-A"]);
+
+    // the same event twice: no second credit, no error
+    const replay = await p.topUp("jane", 1, "dep-A");
+    expect(replay.capUsd).toBe(2);
+    expect(replay.creditedUsd).toBe(1);
+    expect(p.find("jane")!.deposits).toHaveLength(1);
+  });
+
+  test("the same deposit id with a different amount is refused", async () => {
+    await p.ensure("kate", { models, capUsd: 1 });
+    await p.topUp("kate", 1, "dep-B");
+    await expect(p.topUp("kate", 2, "dep-B")).rejects.toThrow(/already applied with \$1/);
+    expect(p.find("kate")!.capUsd).toBe(2);
+  });
+
+  test("a local save failure after the Magpie write is reconciled on restart", async () => {
+    const v = await p.ensure("ivy", { models, capUsd: 1 });
+    let failSave = false;
+    const flaky = (list: unknown[]) => {
+      if (failSave) throw new Error("disk full");
+      mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
+      writeFileSync(statePath("consumers.json"), JSON.stringify({ consumers: list }), { mode: 0o600 });
+    };
+    const writing = new Provisioner(fake as never, { save: flaky as never });
+    fake.onSetLimit = () => {
+      failSave = true; // every save after this point fails
+    };
+    await expect(writing.topUp("ivy", 1, "dep-C")).rejects.toThrow(/disk full/);
+    expect(writing.find("ivy")!.pending).not.toBeNull(); // the intent was on disk before the write
+    expect(fake.keys.get(v.keyId)!.cap).toBe(2); // Magpie did apply it
+
+    // restart: a fresh provisioner reads the file and finishes the deposit once
+    failSave = false;
+    const restarted = new Provisioner(fake as never);
+    const view = await restarted.status("ivy");
+    expect(view.capUsd).toBe(2);
+    expect(view.creditedUsd).toBe(1);
+    expect(view.pending).toBe(false);
+  });
+
+  test("a Magpie write that did not happen is never credited", async () => {
+    const v = await p.ensure("liam", { models, capUsd: 1 });
+    fake.failSetLimit = true;
+    await expect(p.topUp("liam", 1, "dep-D")).rejects.toThrow(/refused the cap/);
+    expect(fake.keys.get(v.keyId)!.cap).toBe(1);
+    fake.failSetLimit = false;
+    const restarted = new Provisioner(fake as never);
+    const view = await restarted.status("liam");
+    expect(view.capUsd).toBe(1); // unchanged
+    expect(view.creditedUsd).toBe(0);
+    expect(view.pending).toBe(false); // the intent was dropped, not credited
+  });
+
+  test("refreshAll, status and a deposit running together keep one ledger", async () => {
+    await p.ensure("mona", { models, capUsd: 1 });
+    fake.delayMs = 25;
+    const deposit = p.topUp("mona", 1, "dep-E");
+    const reads = Promise.all([p.refreshAll(), p.status("mona"), p.refreshAll()]);
+    const [view, readResults] = await Promise.all([deposit, reads]);
+    expect(view.capUsd).toBe(2);
+    expect(view.creditedUsd).toBe(1);
+    for (const r of readResults) {
+      const list = Array.isArray(r) ? r : [r];
+      for (const x of list) expect(Number.isFinite(x.capUsd)).toBe(true);
+    }
+    const rec = p.find("mona")!;
+    expect(rec.capUsd).toBe(2);
+    expect(rec.deposits.map((d) => d.id)).toEqual(["dep-E"]);
+    expect(rec.pending).toBeNull();
+  });
+
+  test("the plugin never calls limit reset", () => {
+    const src = readFileSync(new URL("../src/provisioner.ts", import.meta.url), "utf8");
+    expect(src).not.toMatch(/"reset"/);
+    expect(src).not.toMatch(/limit.*reset|reset.*limit/);
   });
 });
 

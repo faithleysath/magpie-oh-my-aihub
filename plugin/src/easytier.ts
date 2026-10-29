@@ -350,9 +350,25 @@ export function relocationDecision(i: RelocationInput): { relocate: boolean; pen
   return { relocate: true, pending: null, count: 0 };
 }
 
+export interface SupervisorOptions {
+  lanIp?: () => string | null;
+  /** injected for tests; production always verifies the downloaded binaries */
+  binaries?: Binaries;
+  probe?: {
+    nodeInfo?: () => Promise<{ peerId: number; proxyCidrs: string[]; listeners: string[]; config: string }>;
+    rpcListeners?: (port: number) => Promise<string[]>;
+  };
+}
+
+/** How many consecutive unsafe runtime checks are tolerated before the core is stopped. */
+const MAX_UNSAFE_STRIKES = 2;
+
 export class EasytierSupervisor {
   private state = emptyState();
   private lanIpSource: () => string | null;
+  private opts: SupervisorOptions;
+  private probe: Required<NonNullable<SupervisorOptions["probe"]>>;
+  private unsafeStrikes = 0;
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private bin: Binaries | null = null;
   private cfg: EasytierConfig | null = null;
@@ -366,9 +382,14 @@ export class EasytierSupervisor {
   private pendingLanCount = 0;
   private events: SupervisorEvents;
 
-  constructor(events: SupervisorEvents, opts: { lanIp?: () => string | null } = {}) {
+  constructor(events: SupervisorEvents, opts: SupervisorOptions = {}) {
     this.events = events;
+    this.opts = opts;
     this.lanIpSource = opts.lanIp ?? safeLanIp;
+    this.probe = {
+      nodeInfo: opts.probe?.nodeInfo ?? (() => this.nodeInfo()),
+      rpcListeners: opts.probe?.rpcListeners ?? ((port: number) => rpcListeners(port)),
+    };
   }
 
   snapshot(): SupervisorState {
@@ -424,7 +445,7 @@ export class EasytierSupervisor {
     registerSecret(cfg.networkSecret);
     mkdirSync(easytierHome(), { recursive: true, mode: 0o700 });
 
-    this.bin = await ensureBinaries((m) => logger.info(m));
+    this.bin = this.opts.binaries ?? (await ensureBinaries((m) => logger.info(m)));
 
     const text = renderConfig(cfg);
     const acl = checkConfig(text, expectationsOf(cfg));
@@ -568,23 +589,25 @@ export class EasytierSupervisor {
     }
     const pid = this.state.pid;
     if (pid) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        /* gone */
-      }
-      for (let i = 0; i < 50; i++) {
-        await new Promise((r) => setTimeout(r, 100));
+      // The pid was ours when it was started, but it may have exited and been
+      // reused: only signal a process whose command line still runs our config.
+      if (!ownsProcess(pid, this.configPath())) {
+        logger.warn(`pid ${pid} no longer runs our easytier-core (exited or reused); not signalling it`);
+      } else {
         try {
-          process.kill(pid, 0);
+          process.kill(pid, "SIGTERM");
         } catch {
-          break;
+          /* gone */
         }
-        if (i === 49) {
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {
-            /* gone */
+        for (let i = 0; i < 50; i++) {
+          await new Promise((r) => setTimeout(r, 100));
+          if (!ownsProcess(pid, this.configPath())) break;
+          if (i === 49) {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {
+              /* gone */
+            }
           }
         }
       }
@@ -686,54 +709,97 @@ export class EasytierSupervisor {
    * Re-reads the running core and checks the invariants this project depends on:
    * the effective config's ACL, the RPC bound to loopback, and the proxy prefix.
    */
+  /**
+   * Re-reads the running core and proves it is still in the state this project
+   * requires. Anything that cannot be proven — an ACL that changed, an export
+   * that is not announced, an RPC portal somewhere else or not verifiable, a
+   * configuration that cannot be read — is a strike; two consecutive strikes stop
+   * the core this plugin owns. An explicit start() re-validates everything before
+   * serving again.
+   */
   async refresh(): Promise<SupervisorState> {
     if (!this.state.running) return this.snapshot();
+    const problems: string[] = [];
+
+    let node: { peerId: number; proxyCidrs: string[]; listeners: string[]; config: string } | null = null;
     try {
-      const node = await this.nodeInfo();
-      const acl = checkConfig(node.config, this.cfg ? expectationsOf(this.cfg) : { role: "consumer", publishedPorts: [], proxy: null, secureMode: false, networkName: "" });
-      this.state.aclOk = acl.ok;
-      this.state.aclProblems = acl.problems;
-      if (!acl.ok) {
-        // Fail closed: a running core whose configuration cannot be proven safe
-        // is stopped, not merely reported.
-        logger.error(`effective configuration failed the check; stopping the core: ${acl.problems.join("; ")}`);
-        this.state.lastError = `refusing to serve: ${acl.problems.join("; ")}`;
-        this.state.aclOk = false;
-        await this.stop();
-        return this.snapshot();
-      }
+      node = await this.probe.nodeInfo();
+    } catch (e) {
+      problems.push(`cannot read the running configuration: ${(e as Error).message}`);
+    }
+
+    if (node) {
+      const acl = checkConfig(
+        node.config,
+        this.cfg ? expectationsOf(this.cfg) : { role: "consumer", publishedPorts: [], proxy: null, secureMode: false, networkName: "" },
+      );
+      problems.push(...acl.problems);
 
       const effective = extractToml(node.config, "network_secret");
       if (effective) registerSecret(effective);
-
-      this.state.peers = await this.peers();
-      this.state.lanIp = safeLanIp();
-      this.state.rpcPort = this.state.rpcPort ?? this.cfg?.rpcPort ?? null;
-      this.state.lastCheckAt = new Date().toISOString();
 
       if (this.cfg?.role === "provider" && this.cfg.mappedCidr) {
         const want = this.cfg.mappedCidr.replace(/\/32$/, "");
         // An unmapped export is listed as "10.0.0.1"; a mapped one as
         // "192.0.2.10->10.66.1.2" (real->dialled), so compare the dialled side.
         const has = node.proxyCidrs.some((c) => c === want || c.endsWith(`->${want}`) || c === this.cfg?.mappedCidr);
-        if (!has) {
-          this.state.aclProblems = [...this.state.aclProblems, `proxy CIDR ${want} is not announced (got ${node.proxyCidrs.join(",") || "none"})`];
-          this.state.aclOk = false;
-        }
+        if (!has) problems.push(`proxy CIDR ${want} is not announced (got ${node.proxyCidrs.join(",") || "none"})`);
       }
-      if (this.state.rpcPort) {
-        const rpcBound = await rpcListeners(this.state.rpcPort);
-        if (rpcBound.length > 0 && rpcBound.some((a) => !a.startsWith("127.0.0.1"))) {
-          this.state.aclProblems = [...this.state.aclProblems, `RPC portal listens on ${rpcBound.join(", ")}, not loopback`];
-          this.state.aclOk = false;
-        }
+
+      try {
+        this.state.peers = await this.peers();
+      } catch (e) {
+        logger.warn(`peer list unavailable: ${String(e)}`);
       }
-    } catch (e) {
-      this.state.lastError = String(e);
+      this.state.lanIp = safeLanIp();
+      this.state.rpcPort = this.state.rpcPort ?? this.cfg?.rpcPort ?? null;
+      this.state.lastCheckAt = new Date().toISOString();
     }
+
+    if (this.state.rpcPort) {
+      try {
+        const bound = await this.probe.rpcListeners(this.state.rpcPort);
+        if (bound.length === 0) {
+          problems.push(`the RPC portal on port ${this.state.rpcPort} cannot be verified (no listener found)`);
+        } else if (bound.some((a) => !a.startsWith("127.0.0.1"))) {
+          problems.push(`the RPC portal listens on ${bound.join(", ")}, not loopback`);
+        }
+      } catch (e) {
+        problems.push(`the RPC portal on port ${this.state.rpcPort} cannot be verified: ${(e as Error).message}`);
+      }
+    }
+
+    const ok = problems.length === 0;
+    this.state.aclOk = ok;
+    this.state.aclProblems = problems;
+    if (!ok) {
+      this.unsafeStrikes += 1;
+      logger.error(`unsafe runtime state (${this.unsafeStrikes}/${MAX_UNSAFE_STRIKES}): ${problems.join("; ")}`);
+      if (this.unsafeStrikes >= MAX_UNSAFE_STRIKES) {
+        await this.haltUnsafe(problems);
+        return this.snapshot();
+      }
+    } else {
+      this.unsafeStrikes = 0;
+    }
+
     this.persist();
     this.emit();
+    this.maybeRelocate();
     return this.snapshot();
+  }
+
+  /** Stops an owned core that cannot be proven safe, and keeps it stopped. */
+  private async haltUnsafe(problems: string[]): Promise<void> {
+    this.state.lastError = `refusing to serve: ${problems.join("; ")}`;
+    this.state.aclOk = false;
+    this.state.aclProblems = problems;
+    logger.error(`stopping easytier-core: ${this.state.lastError}`);
+    // No supervised restart: the configuration must be fixed and start() called
+    // again, which re-validates the generated file and the running core.
+    await this.stop();
+    this.stopping = true;
+    this.emit();
   }
 
   /**
