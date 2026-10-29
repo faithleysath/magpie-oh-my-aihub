@@ -53,7 +53,7 @@ machine-readable; every step's detail is from that run.
 `bun docs/validation/lab/phase5/lab.ts` → **11 passed, 0 failed**
 (REPRODUCED, 2026-10-29T23:15:57.280Z, macOS arm64).
 
-`cd plugin && bun run ci` → typecheck, **158 unit tests**, boot-check and
+`cd plugin && bun run ci` → typecheck, **171 unit tests**, boot-check and
 secret-scan all pass. CI (Linux + macOS, Bun 1.4.3) is green at commit
 `0d89eb4`: https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40972860093
 
@@ -246,7 +246,73 @@ calls either guard and never writes a key.
 - The catalogue has no management endpoints and no write path; the host API is
   loopback + bearer token.
 
-## 7. Limits / UNKNOWN
+## 7. Security acceptance patch (after `57d88e1`)
+
+This patch changes only local parsing, trust storage and the structured connection request; it does
+not change EasyTier, the ACL, the SOCKS5 transport or the catalogue server. The three-node lab was
+re-run once to confirm actual quotes still pass the stricter validator.
+
+### 7.1 Reproduced before the patch
+
+Checked in a throwaway worktree at `57d88e1`, with harmless strings only:
+
+```
+OLD VERIFY ACCEPTED "alpha/x; echo PWNED" "1; echo PWNED"
+OLD PROTOTYPE POLLUTED true true
+```
+
+- `verifySignedCatalog()` accepted a **validly signed** document with a model id and minimum top-up
+  containing shell metacharacters. `catalogRequest()` then interpolated those values into a
+  copy-pasteable `providerCommand`.
+- `loadCatalogTrust()` returned a normal object, so `trust["__proto__"]` resolved to
+  `Object.prototype`; the old `trustCatalogPeer()` path could set `accepted = true` on it. The
+  reproduction showed `({}).accepted === true`.
+
+### 7.2 Fixes
+
+- **Strict runtime validation** in `plugin/src/catalog.ts`:
+  - exact top-level/node/publication/model/price/top-up/billing/identity field sets; unknown fields
+    are rejected;
+  - node id `^[a-f0-9]{8,64}$`; hostname must end in `-<node id>`; virtual IP in `10.77.0.0/24`;
+    mapped CIDR `10.66.a.b/32` with a,b 1-254; gateway/catalogue ports 1/1024-65535 and different;
+  - model ids are `provider/model` with only `[A-Za-z0-9._/-]`, no `*`, `;`, `$`, backticks,
+    whitespace or control characters; arrays capped (200 models, 3 APIs, 8 modalities, 20
+    reasoning levels, 10 price tiers);
+  - every price is a finite USD amount on a closed range; timestamps are valid ISO-8601 in
+    2000-2100; version is an integer; notes/contact/display names are length-bounded and
+    control-character-free;
+  - the signature covers the exact canonical body; identity fingerprint/key id are derived from the
+    public key, not trusted as claims.
+- **No shell command**: `catalogRequest()` returns a structured `approval` object
+  (`action`, `consumerId`, `models`, `capUsd`, `note`) and has no `providerCommand`. Model
+  arguments are validated again against the quote and a safe id pattern. The provider still uses
+  the local, token-authenticated CLI/API.
+- **Prototype-safe trust**: trust is loaded into a null-prototype map; only valid node-id keys are
+  ever read or written; `__proto__`, `constructor`, `prototype` cannot pass `NODE_ID_RE`. Invalid
+  records are skipped, a corrupt/unknown-version file yields an empty trust map (fail closed), and
+  legacy v1 records without `accepted`, `pending` or `quoteHash` normalize to "not accepted", "no
+  pending", "no hash".
+- **Peer binding**: the signed `node.hostname` and `node.virtualIpv4` must equal the EasyTier row
+  that announced the mapped prefix; the hostname must end in the signed node id; the mapped CIDR
+  must equal the route; the read port must equal the signed catalogue port.
+- **Replay/rollback**: trust stores the accepted quote version and content hash. An older version,
+  or the same version with a different signed content hash, is marked `stale`, keeps the newer
+  cached quote and is refused for `catalog request`/`catalog connect`. An explicitly accepted new
+  identity resets the version baseline so its quote may legitimately restart at v1.
+- **Failure isolation**: a malformed or invalid signed catalogue marks only that peer invalid; the
+  other peers' directory entries, quotes and connections are unaffected.
+
+### 7.3 Verification
+
+- `cd plugin && bun run ci`: typecheck, **171 unit tests**, boot-check, secret-scan — PASS.
+- The three-instance lab remains **11 passed, 0 failed** (the stricter validator accepted the real
+  Magpie quotes and the manual key flow).
+- Targeted tests include: valid signatures with malicious structure, shell metacharacters, wrong
+  model ids, invalid amounts, prototype node ids, corrupted/legacy trust, one bad peer among good
+  peers, hostname/virtual-IP/mapped binding, version rollback, same-version-different-content, and
+  the existing discovery/manual-connect regression.
+
+## 8. Limits / UNKNOWN
 
 1. **Identity is self-signed TOFU**, not a verified real-world identity. A
    malicious overlay member can publish its own catalogue or copy another's; the

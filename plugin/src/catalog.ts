@@ -241,38 +241,325 @@ export function signCatalog(body: Omit<CatalogQuoteBody, "identity"> & { identit
   return { ...body, signature };
 }
 
-/**
- * Verifies a catalogue document. Returns its unsigned body and content hash, or
- * throws with a reason. A self-signed document proves only key possession.
- */
-export function verifySignedCatalog(value: unknown): VerifiedCatalog {
-  if (!value || typeof value !== "object") throw new Error("catalogue is not an object");
-  const doc = value as Record<string, unknown>;
-  if (doc.schema !== CATALOG_SCHEMA) throw new Error(`unsupported catalogue schema ${String(doc.schema)}`);
-  if (typeof doc.signature !== "string" || !doc.signature) throw new Error("catalogue has no signature");
-  const identity = doc.identity as Record<string, unknown> | undefined;
-  if (!identity || identity.algorithm !== "ed25519" || typeof identity.publicKey !== "string") {
-    throw new Error("catalogue has no Ed25519 identity");
+/** A node id is the persisted 8-64 hex id; reserved object keys can never match. */
+export const NODE_ID_RE = /^[a-f0-9]{8,64}$/;
+const HOSTNAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+const FINGERPRINT_RE = /^[a-f0-9]{64}$/;
+const KEY_ID_RE = /^[a-f0-9]{16}$/;
+const API_NAMES = new Set(["chat", "responses", "anthropic"]);
+const MODALITIES = new Set(["text", "image", "audio", "video", "pdf"]);
+const CAPABILITY_SOURCES = new Set(["magpie-gateway", "magpie-settings", "configured-endpoints"]);
+const PRICE_SOURCES = new Set(["magpie-gateway", "magpie-settings"]);
+const MAX_MONEY = 1_000_000;
+const MAX_TOKENS = 10_000_000;
+const MAX_NOTE = 300;
+const MAX_DISPLAY = 128;
+
+export function isValidNodeId(value: unknown): value is string {
+  return typeof value === "string" && NODE_ID_RE.test(value);
+}
+
+export function isValidOverlayHostname(value: unknown, nodeId?: string): value is string {
+  if (typeof value !== "string" || value.length > 72 || !HOSTNAME_RE.test(value)) return false;
+  return nodeId ? value.endsWith(`-${nodeId}`) : true;
+}
+
+export function isValidModelId(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 200 && MODEL_ID_RE.test(value);
+}
+
+export function isValidMappedCidr(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 18) return false;
+  const m = /^10\.66\.(\d{1,3})\.(\d{1,3})\/32$/.exec(value);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  return a >= 1 && a <= 254 && b >= 1 && b <= 254;
+}
+
+type JsonObject = Record<string, unknown>;
+
+function objectOf(value: unknown, where: string): JsonObject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${where} must be an object`);
+  return value as JsonObject;
+}
+
+function assertKeys(value: JsonObject, allowed: readonly string[], where: string): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw new Error(`${where} has an unexpected field ${JSON.stringify(key)}`);
   }
-  const unsigned = { ...doc } as Record<string, unknown>;
-  delete unsigned.signature;
-  const canonical = canonicalJson(unsigned);
-  const raw = Buffer.from(identity.publicKey, "base64");
-  const ok = verify(null, Buffer.from(canonical), spkiFromRaw(raw), Buffer.from(doc.signature, "base64"));
-  if (!ok) throw new Error("catalogue signature does not match its content");
-  const fingerprint = fingerprintOf(identity.publicKey);
-  if (identity.fingerprint !== fingerprint || identity.keyId !== keyIdOf(identity.publicKey)) {
-    throw new Error("catalogue identity fingerprint does not match its key");
+}
+
+function stringOf(value: unknown, where: string, min: number, max: number, pattern?: RegExp): string {
+  if (typeof value !== "string") throw new Error(`${where} must be a string`);
+  if (value.length < min || value.length > max) throw new Error(`${where} must be ${min}-${max} characters`);
+  if (/[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${where} contains a control character`);
+  if (pattern && !pattern.test(value)) throw new Error(`${where} has an invalid format`);
+  return value;
+}
+
+function nullableString(value: unknown, where: string, max: number): string | null {
+  if (value === null) return null;
+  return stringOf(value, where, 0, max);
+}
+
+function boolOf(value: unknown, where: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${where} must be a boolean`);
+  return value;
+}
+
+function intOf(value: unknown, where: string, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${where} must be an integer from ${min} to ${max}`);
   }
-  const node = doc.node as Record<string, unknown> | undefined;
-  if (!node || typeof node.id !== "string" || typeof node.mappedCidr !== "string" || typeof node.catalogPort !== "number") {
-    throw new Error("catalogue node block is incomplete");
+  return value;
+}
+
+function moneyOf(value: unknown, where: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > MAX_MONEY) {
+    throw new Error(`${where} must be a finite USD amount from 0 to ${MAX_MONEY}`);
   }
+  return value;
+}
+
+function timestampOf(value: unknown, where: string): string {
+  const s = stringOf(value, where, 20, 40);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(s)) {
+    throw new Error(`${where} must be an ISO-8601 timestamp`);
+  }
+  if (!Number.isFinite(Date.parse(s))) throw new Error(`${where} is not a valid time`);
+  const year = Number(s.slice(0, 4));
+  if (year < 2000 || year > 2100) throw new Error(`${where} is outside 2000-2100`);
+  return s;
+}
+
+function apiList(value: unknown, where: string, allowEmpty: boolean): string[] {
+  if (!Array.isArray(value) || value.length > 3 || (!allowEmpty && value.length === 0)) {
+    throw new Error(`${where} must be an array of at most 3 API names`);
+  }
+  const out: string[] = [];
+  for (const v of value) {
+    if (typeof v !== "string" || !API_NAMES.has(v)) throw new Error(`${where} has an unknown API ${JSON.stringify(v)}`);
+    if (out.includes(v)) throw new Error(`${where} repeats ${v}`);
+    out.push(v);
+  }
+  return out;
+}
+
+function modalityList(value: unknown, where: string): string[] {
+  if (!Array.isArray(value) || value.length > 8) throw new Error(`${where} must be an array of at most 8 modalities`);
+  const out: string[] = [];
+  for (const v of value) {
+    if (typeof v !== "string" || !MODALITIES.has(v)) throw new Error(`${where} has an unknown modality ${JSON.stringify(v)}`);
+    if (out.includes(v)) throw new Error(`${where} repeats ${v}`);
+    out.push(v);
+  }
+  return out;
+}
+
+function validateIdentity(value: unknown): CatalogIdentitySummary {
+  const ident = objectOf(value, "identity");
+  assertKeys(ident, ["algorithm", "publicKey", "fingerprint", "keyId", "createdAt"], "identity");
+  if (ident.algorithm !== "ed25519") throw new Error("identity.algorithm must be ed25519");
+  const publicKey = stringOf(ident.publicKey, "identity.publicKey", 43, 44, /^[A-Za-z0-9+/]+={0,2}$/);
+  const raw = Buffer.from(publicKey, "base64");
+  if (raw.length !== 32) throw new Error("identity.publicKey must be a 32-byte Ed25519 key");
+  const fingerprint = stringOf(ident.fingerprint, "identity.fingerprint", 64, 64, FINGERPRINT_RE);
+  const keyId = stringOf(ident.keyId, "identity.keyId", 16, 16, KEY_ID_RE);
+  if (fingerprint !== fingerprintOf(publicKey)) throw new Error("identity.fingerprint does not match its key");
+  if (keyId !== keyIdOf(publicKey)) throw new Error("identity.keyId does not match its key");
+  return { algorithm: "ed25519", publicKey, fingerprint, keyId, createdAt: timestampOf(ident.createdAt, "identity.createdAt") };
+}
+
+function validatePrice(value: unknown): CatalogPrice {
+  const p = objectOf(value, "model.pricing");
+  assertKeys(p, ["unit", "input", "output", "cacheRead", "cacheWrite", "cacheWrite1h", "tiers", "source"], "model.pricing");
+  if (p.unit !== "USD per 1M tokens") throw new Error("model.pricing.unit is not USD per 1M tokens");
+  const out: CatalogPrice = {
+    unit: "USD per 1M tokens",
+    input: moneyOf(p.input, "model.pricing.input"),
+    output: moneyOf(p.output, "model.pricing.output"),
+    cacheRead: moneyOf(p.cacheRead, "model.pricing.cacheRead"),
+    cacheWrite: moneyOf(p.cacheWrite, "model.pricing.cacheWrite"),
+    source: PRICE_SOURCES.has(String(p.source)) ? (p.source as CatalogPrice["source"]) : (() => { throw new Error("model.pricing.source is invalid"); })(),
+  };
+  if (p.cacheWrite1h !== undefined) out.cacheWrite1h = moneyOf(p.cacheWrite1h, "model.pricing.cacheWrite1h");
+  if (p.tiers !== undefined) {
+    if (!Array.isArray(p.tiers) || p.tiers.length > 10) throw new Error("model.pricing.tiers must have at most 10 entries");
+    const tiers: CatalogPriceTier[] = [];
+    let lastAbove = 0;
+    for (const [i, raw] of p.tiers.entries()) {
+      const t = objectOf(raw, `model.pricing.tiers[${i}]`);
+      assertKeys(t, ["above", "input", "output", "cacheRead", "cacheWrite", "cacheWrite1h"], `model.pricing.tiers[${i}]`);
+      const above = intOf(t.above, `model.pricing.tiers[${i}].above`, 1, MAX_TOKENS);
+      if (above <= lastAbove) throw new Error("model.pricing.tiers must be strictly increasing");
+      lastAbove = above;
+      const tier: CatalogPriceTier = {
+        above,
+        input: moneyOf(t.input, `model.pricing.tiers[${i}].input`),
+        output: moneyOf(t.output, `model.pricing.tiers[${i}].output`),
+        cacheRead: moneyOf(t.cacheRead, `model.pricing.tiers[${i}].cacheRead`),
+        cacheWrite: moneyOf(t.cacheWrite, `model.pricing.tiers[${i}].cacheWrite`),
+      };
+      if (t.cacheWrite1h !== undefined) tier.cacheWrite1h = moneyOf(t.cacheWrite1h, `model.pricing.tiers[${i}].cacheWrite1h`);
+      tiers.push(tier);
+    }
+    if (tiers.length) out.tiers = tiers;
+  }
+  return out;
+}
+
+function validateModel(value: unknown, index: number): CatalogModel {
+  const where = `models[${index}]`;
+  const m = objectOf(value, where);
+  assertKeys(
+    m,
+    ["id", "displayName", "gatewayApis", "nativeApis", "contextWindow", "maxOutputTokens", "images", "modalities", "reasoningLevels", "pricing", "capabilitiesSource"],
+    where,
+  );
+  const id = stringOf(m.id, `${where}.id`, 3, 200);
+  if (!isValidModelId(id)) throw new Error(`${where}.id is not a safe provider/model id`);
+  const displayName = m.displayName === null ? null : stringOf(m.displayName, `${where}.displayName`, 1, MAX_DISPLAY);
+  const gatewayApis = apiList(m.gatewayApis, `${where}.gatewayApis`, false);
+  const nativeApis = m.nativeApis === null ? null : apiList(m.nativeApis, `${where}.nativeApis`, true);
+  const contextWindow = m.contextWindow === null ? null : intOf(m.contextWindow, `${where}.contextWindow`, 0, MAX_TOKENS);
+  const maxOutputTokens = m.maxOutputTokens === null ? null : intOf(m.maxOutputTokens, `${where}.maxOutputTokens`, 0, MAX_TOKENS);
+  const images = m.images === null ? null : boolOf(m.images, `${where}.images`);
+  let modalities: { input?: string[]; output?: string[] } | null = null;
+  if (m.modalities !== null) {
+    const mod = objectOf(m.modalities, `${where}.modalities`);
+    assertKeys(mod, ["input", "output"], `${where}.modalities`);
+    modalities = {};
+    if (mod.input !== undefined) modalities.input = modalityList(mod.input, `${where}.modalities.input`);
+    if (mod.output !== undefined) modalities.output = modalityList(mod.output, `${where}.modalities.output`);
+  }
+  let reasoningLevels: string[] | null = null;
+  if (m.reasoningLevels !== null) {
+    if (!Array.isArray(m.reasoningLevels) || m.reasoningLevels.length > 20) throw new Error(`${where}.reasoningLevels must have at most 20 entries`);
+    reasoningLevels = m.reasoningLevels.map((v) => stringOf(v, `${where}.reasoningLevels`, 1, 24, /^[a-z0-9_-]+$/));
+    if (new Set(reasoningLevels).size !== reasoningLevels.length) throw new Error(`${where}.reasoningLevels repeats a level`);
+  }
+  const pricing = m.pricing === null ? null : validatePrice(m.pricing);
+  if (typeof m.capabilitiesSource !== "string" || !CAPABILITY_SOURCES.has(m.capabilitiesSource)) {
+    throw new Error(`${where}.capabilitiesSource is invalid`);
+  }
+  return {
+    id,
+    displayName,
+    gatewayApis,
+    nativeApis,
+    contextWindow,
+    maxOutputTokens,
+    images,
+    modalities,
+    reasoningLevels,
+    pricing,
+    capabilitiesSource: m.capabilitiesSource as CatalogModel["capabilitiesSource"],
+  };
+}
+
+/** Strict runtime validation of the unsigned quote body. */
+export function validateCatalogQuote(value: unknown): CatalogQuoteBody {
+  const doc = objectOf(value, "catalogue");
+  assertKeys(doc, ["schema", "node", "publication", "models", "topUp", "billing", "identity"], "catalogue");
+  if (doc.schema !== CATALOG_SCHEMA) throw new Error(`unsupported catalogue schema ${JSON.stringify(doc.schema)}`);
+  const node = objectOf(doc.node, "node");
+  assertKeys(node, ["id", "displayName", "hostname", "virtualIpv4", "mappedCidr", "gatewayPort", "catalogPort", "contact"], "node");
+  const id = stringOf(node.id, "node.id", 8, 64);
+  if (!isValidNodeId(id)) throw new Error("node.id must be 8-64 lowercase hex characters");
+  const hostname = stringOf(node.hostname, "node.hostname", 3, 72);
+  if (!isValidOverlayHostname(hostname, id)) throw new Error("node.hostname does not belong to node.id");
+  const displayName = stringOf(node.displayName, "node.displayName", 1, 64);
+  const virtualIpv4 = stringOf(node.virtualIpv4, "node.virtualIpv4", 7, 15);
+  const v4 = /^10\.77\.0\.(\d{1,3})$/.exec(virtualIpv4);
+  if (!v4 || Number(v4[1]) < 2 || Number(v4[1]) > 254) {
+    throw new Error("node.virtualIpv4 must be a host in 10.77.0.0/24");
+  }
+  const mappedCidr = stringOf(node.mappedCidr, "node.mappedCidr", 9, 18);
+  if (!isValidMappedCidr(mappedCidr)) throw new Error("node.mappedCidr must be 10.66.a.b/32 with a,b in 1-254");
+  const gatewayPort = intOf(node.gatewayPort, "node.gatewayPort", 1, 65535);
+  const catalogPort = intOf(node.catalogPort, "node.catalogPort", 1024, 65535);
+  if (gatewayPort === catalogPort) throw new Error("node.gatewayPort and node.catalogPort must differ");
+  const contact = nullableString(node.contact, "node.contact", 120);
+
+  const pub = objectOf(doc.publication, "publication");
+  assertKeys(pub, ["status", "version", "updatedAt", "publishedAt", "note"], "publication");
+  if (pub.status !== "published") throw new Error("publication.status must be published");
+  const version = intOf(pub.version, "publication.version", 1, 2_147_483_647);
+  const updatedAt = timestampOf(pub.updatedAt, "publication.updatedAt");
+  const publishedAt = timestampOf(pub.publishedAt, "publication.publishedAt");
+  if (Date.parse(publishedAt) > Date.parse(updatedAt)) throw new Error("publication.publishedAt is after updatedAt");
+  const pubNote = stringOf(pub.note, "publication.note", 1, MAX_NOTE);
+
   if (!Array.isArray(doc.models) || doc.models.length > CATALOG_MAX_MODELS) {
     throw new Error(`catalogue models must be an array of at most ${CATALOG_MAX_MODELS}`);
   }
-  const quote = unsigned as unknown as CatalogQuoteBody;
-  return { quote, signature: doc.signature, contentHash: sha256Hex(canonical), fingerprint };
+  const models = doc.models.map((m, i) => validateModel(m, i));
+  const ids = new Set<string>();
+  for (const model of models) {
+    if (ids.has(model.id)) throw new Error(`catalogue repeats model ${model.id}`);
+    ids.add(model.id);
+  }
+
+  const topUp = objectOf(doc.topUp, "topUp");
+  assertKeys(topUp, ["minUsd", "simulated", "note"], "topUp");
+  const minUsd = moneyOf(topUp.minUsd, "topUp.minUsd");
+  if (minUsd < 0.0001) throw new Error("topUp.minUsd must be at least 0.0001");
+  if (topUp.simulated !== true) throw new Error("topUp.simulated must be true");
+  const topUpNote = stringOf(topUp.note, "topUp.note", 1, MAX_NOTE);
+
+  const billing = objectOf(doc.billing, "billing");
+  assertKeys(billing, ["quoteOnly", "charged", "note"], "billing");
+  if (billing.quoteOnly !== true) throw new Error("billing.quoteOnly must be true");
+  if (billing.charged !== false) throw new Error("billing.charged must be false");
+  const billingNote = stringOf(billing.note, "billing.note", 1, MAX_NOTE);
+
+  const identity = validateIdentity(doc.identity);
+  return {
+    schema: CATALOG_SCHEMA,
+    node: { id, displayName, hostname, virtualIpv4, mappedCidr, gatewayPort, catalogPort, contact },
+    publication: { status: "published", version, updatedAt, publishedAt, note: pubNote },
+    models,
+    topUp: { minUsd, simulated: true, note: topUpNote },
+    billing: { quoteOnly: true, charged: false, note: billingNote },
+    identity,
+  };
+}
+
+/**
+ * Verifies a catalogue document and then validates every field. A signature
+ * alone is not enough: a peer controls its own content. The returned quote is a
+ * freshly built, strictly typed object; unknown fields and malformed values are
+ * refused.
+ */
+export function verifySignedCatalog(value: unknown): VerifiedCatalog {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("catalogue is not an object");
+  const doc = value as Record<string, unknown>;
+  // The schema is checked before the signature only to give a clear error; the
+  // signature still covers it, and validateCatalogQuote checks it again.
+  if (doc.schema !== CATALOG_SCHEMA) throw new Error(`unsupported catalogue schema ${String(doc.schema)}`);
+  if (typeof doc.signature !== "string" || doc.signature.length > 128) throw new Error("catalogue has no valid signature");
+  const signature = Buffer.from(doc.signature, "base64");
+  if (signature.length !== 64) throw new Error("catalogue signature is not a 64-byte Ed25519 signature");
+
+  // Validate the identity before using its key. This also proves fingerprint and
+  // key id are derived, not merely claims attached to the document.
+  const identity = validateIdentity(doc.identity);
+  const unsigned = { ...doc } as Record<string, unknown>;
+  delete unsigned.signature;
+  const canonical = canonicalJson(unsigned);
+  if (Buffer.byteLength(canonical) > CATALOG_MAX_BYTES) throw new Error("catalogue exceeds the 64 KiB limit");
+  const raw = Buffer.from(identity.publicKey, "base64");
+  let ok = false;
+  try {
+    ok = verify(null, Buffer.from(canonical), spkiFromRaw(raw), signature);
+  } catch {
+    ok = false;
+  }
+  if (!ok) throw new Error("catalogue signature does not match its content");
+  const quote = validateCatalogQuote(unsigned);
+  return { quote, signature: doc.signature, contentHash: sha256Hex(canonical), fingerprint: identity.fingerprint };
 }
 
 // --- trust (TOFU) ------------------------------------------------------------
@@ -286,6 +573,8 @@ export interface CatalogTrustRecord {
   firstSeenAt: string;
   lastSeenAt: string;
   quoteVersion: number;
+  /** hash of the last accepted quote at that version (absent in older files) */
+  quoteHash?: string | null;
   /** the key the reader has actually accepted (first seen, or explicitly trusted) */
   accepted: boolean;
   /** a different key was seen: warned about until an operator accepts it */
@@ -305,14 +594,112 @@ export function catalogFilesExist(): boolean {
   return existsSync(identityFile());
 }
 
-export function loadCatalogTrust(): Record<string, CatalogTrustRecord> {
-  const { value } = readJsonWithBackup<TrustFile>(trustFile());
-  if (!value || typeof value.peers !== "object" || !value.peers) return {};
-  return value.peers;
+function trustKey(value: unknown): { publicKey: string; fingerprint: string; keyId: string } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.publicKey !== "string" || typeof v.fingerprint !== "string" || typeof v.keyId !== "string") return null;
+  try {
+    const raw = Buffer.from(v.publicKey, "base64");
+    if (raw.length !== 32 || fingerprintOf(v.publicKey) !== v.fingerprint || keyIdOf(v.publicKey) !== v.keyId) return null;
+    return { publicKey: v.publicKey, fingerprint: v.fingerprint, keyId: v.keyId };
+  } catch {
+    return null;
+  }
 }
 
+/** Strictly validates one trust record; anything malformed is ignored (fail closed). */
+function trustRecord(value: unknown, nodeId: string): CatalogTrustRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const r = value as Record<string, unknown>;
+  try {
+    assertKeys(r, ["nodeId", "overlayHostname", "publicKey", "fingerprint", "keyId", "firstSeenAt", "lastSeenAt", "quoteVersion", "quoteHash", "accepted", "pending"], "trust record");
+  } catch {
+    return null;
+  }
+  if (r.nodeId !== nodeId || !isValidNodeId(nodeId)) return null;
+  if (typeof r.overlayHostname !== "string" || !isValidOverlayHostname(r.overlayHostname, nodeId)) return null;
+  const key = trustKey(r);
+  if (!key) return null;
+  let firstSeenAt: string;
+  let lastSeenAt: string;
+  try {
+    firstSeenAt = timestampOf(r.firstSeenAt, "trust.firstSeenAt");
+    lastSeenAt = timestampOf(r.lastSeenAt, "trust.lastSeenAt");
+  } catch {
+    return null;
+  }
+  const quoteVersion = r.quoteVersion === undefined ? 0 : Number(r.quoteVersion);
+  if (!Number.isInteger(quoteVersion) || quoteVersion < 0 || quoteVersion > 2_147_483_647) return null;
+  let quoteHash: string | null = null;
+  if (r.quoteHash !== undefined && r.quoteHash !== null) {
+    if (typeof r.quoteHash !== "string" || !FINGERPRINT_RE.test(r.quoteHash)) return null;
+    quoteHash = r.quoteHash;
+  }
+  // An older file may predate "accepted": absence must mean "not accepted",
+  // never automatic trust. A missing pending is simply no pending change.
+  const accepted = r.accepted === undefined ? false : r.accepted;
+  if (typeof accepted !== "boolean") return null;
+  let pending: CatalogTrustRecord["pending"] = null;
+  if (r.pending !== undefined && r.pending !== null) {
+    const p = r.pending;
+    if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+    const po = p as Record<string, unknown>;
+    try {
+      assertKeys(po, ["publicKey", "fingerprint", "keyId", "hostname", "seenAt"], "trust pending");
+    } catch {
+      return null;
+    }
+    const pendingKey = trustKey(po);
+    if (!pendingKey) return null;
+    if (typeof po.hostname !== "string" || !isValidOverlayHostname(po.hostname, nodeId)) return null;
+    let seenAt: string;
+    try {
+      seenAt = timestampOf(po.seenAt, "trust.pending.seenAt");
+    } catch {
+      return null;
+    }
+    pending = { ...pendingKey, hostname: po.hostname, seenAt };
+  }
+  return {
+    nodeId,
+    overlayHostname: r.overlayHostname,
+    ...key,
+    firstSeenAt,
+    lastSeenAt,
+    quoteVersion,
+    quoteHash,
+    accepted,
+    pending,
+  };
+}
+
+/**
+ * Loads trust into a null-prototype map. A corrupt file or an invalid record is
+ * skipped rather than trusted; a file with a different version is ignored.
+ */
+export function loadCatalogTrust(): Record<string, CatalogTrustRecord> {
+  const out: Record<string, CatalogTrustRecord> = Object.create(null) as Record<string, CatalogTrustRecord>;
+  const { value } = readJsonWithBackup<TrustFile>(trustFile());
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  if (value.version !== undefined && value.version !== 1) return out;
+  const peers = value.peers;
+  if (!peers || typeof peers !== "object" || Array.isArray(peers)) return out;
+  for (const nodeId of Object.keys(peers)) {
+    const rec = trustRecord((peers as Record<string, unknown>)[nodeId], nodeId);
+    if (rec) out[nodeId] = rec;
+  }
+  return out;
+}
+
+/** Writes only strictly valid, non-reserved node ids; never mutates a prototype. */
 export function saveCatalogTrust(peers: Record<string, CatalogTrustRecord>): void {
-  writeJsonAtomic(trustFile(), { version: 1, peers });
+  const out: Record<string, CatalogTrustRecord> = Object.create(null) as Record<string, CatalogTrustRecord>;
+  for (const nodeId of Object.keys(peers)) {
+    if (!isValidNodeId(nodeId)) continue;
+    const rec = trustRecord(peers[nodeId], nodeId);
+    if (rec) out[nodeId] = rec;
+  }
+  writeJsonAtomic(trustFile(), { version: 1, peers: out });
 }
 
 // --- publication version -----------------------------------------------------

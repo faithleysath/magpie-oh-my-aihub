@@ -20,7 +20,7 @@ const fmtPrice = (p) =>
       (p.source ? ` (${p.source})` : "");
 
 function catalogBadge(status) {
-  if (status === "identity-changed") return "bad";
+  if (status === "identity-changed" || status === "stale") return "bad";
   if (status === "unverified" || status === "unreachable" || status === "conflict" || status === "offline") return "bad";
   return null;
 }

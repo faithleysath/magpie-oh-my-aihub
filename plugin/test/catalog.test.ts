@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createTcpServer } from "node:net";
@@ -10,20 +10,24 @@ import {
   classifyPeers,
   fingerprintOf,
   keyIdOf,
+  loadCatalogTrust,
   loadOrCreateCatalogIdentity,
+  saveCatalogTrust,
   sha256Hex,
+  trustFile,
   signCatalog,
   socksHttpGet,
   verifySignedCatalog,
   type CatalogModel,
   type CatalogQuoteBody,
+  type CatalogTrustRecord,
   type SignedCatalog,
 } from "../src/catalog.ts";
 
 let dir: string;
 
-function quote(identity: ReturnType<typeof loadOrCreateCatalogIdentity>, models: CatalogModel[] = [model("alpha/x")]): SignedCatalog {
-  const body: CatalogQuoteBody = {
+function body(identity: ReturnType<typeof loadOrCreateCatalogIdentity>, models: CatalogModel[] = [model("alpha/x")], version = 1): CatalogQuoteBody {
+  return {
     schema: "ohmyaihub.catalog/v1",
     node: {
       id: "abcd1234",
@@ -35,13 +39,23 @@ function quote(identity: ReturnType<typeof loadOrCreateCatalogIdentity>, models:
       catalogPort: 3426,
       contact: null,
     },
-    publication: { status: "published", version: 1, updatedAt: "2026-10-30T00:00:00.000Z", publishedAt: "2026-10-30T00:00:00.000Z", note: "read only" },
+    publication: { status: "published", version, updatedAt: "2026-10-30T00:00:00.000Z", publishedAt: "2026-10-30T00:00:00.000Z", note: "read only" },
     models,
     topUp: { minUsd: 1, simulated: true, note: "simulated" },
     billing: { quoteOnly: true, charged: false, note: "display only" },
     identity: identity.summary,
   };
-  return signCatalog(body, identity);
+}
+
+function quote(identity: ReturnType<typeof loadOrCreateCatalogIdentity>, models: CatalogModel[] = [model("alpha/x")], version = 1): SignedCatalog {
+  return signCatalog(body(identity, models, version), identity);
+}
+
+function signedWith(mutate: (b: any) => void): SignedCatalog {
+  const identity = loadOrCreateCatalogIdentity();
+  const b = body(identity);
+  mutate(b);
+  return signCatalog(b as never, identity);
 }
 
 function model(id: string): CatalogModel {
@@ -82,7 +96,7 @@ describe("canonical JSON and Ed25519 quotes", () => {
     const tampered = { ...signed, topUp: { ...signed.topUp, minUsd: 0 } };
     expect(() => verifySignedCatalog(tampered)).toThrow(/signature does not match/);
     const wrongKey = { ...signed, identity: { ...signed.identity, fingerprint: "0".repeat(64) } };
-    expect(() => verifySignedCatalog(wrongKey)).toThrow(/signature does not match/);
+    expect(() => verifySignedCatalog(wrongKey)).toThrow(/fingerprint does not match/);
   });
 
   test("the identity persists across loads and is 0600", () => {
@@ -91,6 +105,111 @@ describe("canonical JSON and Ed25519 quotes", () => {
     expect(b.summary.fingerprint).toBe(a.summary.fingerprint);
     expect(keyIdOf(a.summary.publicKey)).toBe(a.summary.keyId);
     expect(fingerprintOf(a.summary.publicKey)).toBe(a.summary.fingerprint);
+  });
+});
+
+describe("strict runtime validation of untrusted quotes", () => {
+  test("a valid signed quote still verifies", () => {
+    expect(verifySignedCatalog(quote(loadOrCreateCatalogIdentity())).quote.models[0].id).toBe("alpha/x");
+  });
+
+  test("dangerous model ids and shell metacharacters are refused", () => {
+    for (const id of ["alpha/x; touch /tmp/pwn", "alpha/$(id)", "alpha/`id`", "alpha/x|cat", "alpha/x y", "alpha/x*", "alpha/..", "alpha/" + "x".repeat(150)]) {
+      expect(() => verifySignedCatalog(signedWith((b) => { b.models[0].id = id; }))).toThrow(/model|safe provider\/model/);
+    }
+  });
+
+  test("invalid amounts, ports, timestamps and unknown fields are refused", () => {
+    expect(() => verifySignedCatalog(signedWith((b) => { b.topUp.minUsd = "1; rm -rf /"; }))).toThrow(/minUsd/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.topUp.minUsd = -1; }))).toThrow(/minUsd/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.topUp.minUsd = 0; }))).toThrow(/at least/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.models[0].pricing.input = -1; }))).toThrow(/input/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.models[0].pricing.input = "1"; }))).toThrow(/input/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.node.catalogPort = 70000; }))).toThrow(/catalogPort/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.node.catalogPort = b.node.gatewayPort; }))).toThrow(/must differ/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.publication.version = 0; }))).toThrow(/version/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.publication.updatedAt = "2026-99-99T99:99:99Z"; }))).toThrow(/updatedAt/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.node.contact = "ok\nrm"; }))).toThrow(/control/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.evil = "extra"; }))).toThrow(/unexpected field/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.models[0].gatewayApis = ["chat", "evil"]; }))).toThrow(/unknown API/);
+  });
+
+  test("node id and hostname binding reject prototype names and mismatches", () => {
+    for (const id of ["__proto__", "constructor", "prototype", "ABCD1234", "abc"]) {
+      expect(() => verifySignedCatalog(signedWith((b) => { b.node.id = id; b.node.hostname = `ohmyaihub-${id}`; }))).toThrow(/node\.id/);
+    }
+    expect(() => verifySignedCatalog(signedWith((b) => { b.node.hostname = "ohmyaihub-ffffffff"; }))).toThrow(/does not belong/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.node.mappedCidr = "10.66.999.1/32"; }))).toThrow(/mappedCidr/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.node.virtualIpv4 = "192.0.2.1"; }))).toThrow(/virtualIpv4/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.models = Array.from({ length: 201 }, (_, i) => model(`alpha/m${i}`)); }))).toThrow(/at most 200|64 KiB/);
+  });
+
+  test("pricing shape and tiers are bounded", () => {
+    expect(() => verifySignedCatalog(signedWith((b) => { b.models[0].pricing.unit = "USD"; }))).toThrow(/unit/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.models[0].pricing.source = "remote"; }))).toThrow(/source/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.models[0].pricing.input = 1e12; }))).toThrow(/input/);
+    expect(() => verifySignedCatalog(signedWith((b) => { b.models[0].pricing.tiers = [{ above: 10, input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, { above: 10, input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }]; }))).toThrow(/strictly increasing/);
+  });
+});
+
+describe("catalogue trust is prototype-safe and fail-closed", () => {
+  function validTrust(nodeId: string, ident: ReturnType<typeof loadOrCreateCatalogIdentity>, extra: Partial<CatalogTrustRecord> = {}): CatalogTrustRecord {
+    return {
+      nodeId,
+      overlayHostname: `ohmyaihub-${nodeId}`,
+      publicKey: ident.summary.publicKey,
+      fingerprint: ident.summary.fingerprint,
+      keyId: ident.summary.keyId,
+      firstSeenAt: "2026-10-30T00:00:00.000Z",
+      lastSeenAt: "2026-10-30T00:00:00.000Z",
+      quoteVersion: 1,
+      quoteHash: null,
+      accepted: false,
+      pending: null,
+      ...extra,
+    };
+  }
+
+  test("__proto__/constructor/prototype keys are ignored and Object.prototype is untouched", () => {
+    const ident = loadOrCreateCatalogIdentity();
+    const peers = Object.create(null) as Record<string, unknown>;
+    peers["__proto__"] = { polluted: true };
+    peers["constructor"] = { polluted: true };
+    peers["prototype"] = { polluted: true };
+    peers["deadbeef"] = validTrust("deadbeef", ident, { accepted: undefined as never, pending: undefined as never });
+    mkdirSync(join(dir, "oh-my-aihub"), { recursive: true, mode: 0o700 });
+    writeFileSync(trustFile(), JSON.stringify({ version: 1, peers }), { mode: 0o600 });
+
+    const trust = loadCatalogTrust();
+    expect(Object.getPrototypeOf(trust)).toBeNull();
+    expect(Object.keys(trust)).toEqual(["deadbeef"]);
+    expect(trust["deadbeef"].accepted).toBe(false);
+    expect(trust["deadbeef"].pending).toBeNull();
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(trust, "__proto__")).toBe(false);
+  });
+
+  test("a corrupt trust file fails closed; a valid legacy record is recovered", () => {
+    mkdirSync(join(dir, "oh-my-aihub"), { recursive: true, mode: 0o700 });
+    writeFileSync(trustFile(), "{not json", { mode: 0o600 });
+    expect(Object.keys(loadCatalogTrust())).toEqual([]);
+
+    const ident = loadOrCreateCatalogIdentity();
+    saveCatalogTrust({ deadbeef: validTrust("deadbeef", ident) });
+    const loaded = loadCatalogTrust();
+    expect(loaded["deadbeef"].fingerprint).toBe(ident.summary.fingerprint);
+    expect(readFileSync(trustFile(), "utf8")).toContain("deadbeef");
+  });
+
+  test("saving ignores a reserved key instead of writing it", () => {
+    const ident = loadOrCreateCatalogIdentity();
+    const peers = Object.create(null) as Record<string, CatalogTrustRecord>;
+    peers["__proto__"] = validTrust("__proto__" as never, ident);
+    peers["deadbeef"] = validTrust("deadbeef", ident);
+    saveCatalogTrust(peers);
+    const raw = JSON.parse(readFileSync(trustFile(), "utf8")) as { peers: Record<string, unknown> };
+    expect(Object.keys(raw.peers)).toEqual(["deadbeef"]);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 });
 

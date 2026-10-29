@@ -372,15 +372,26 @@ raw 32-byte public key) and stores the first-seen key per signed `node.id` in
   accepts the new key.
 - A signature proves only that the same key signed the document. It does not
   prove a real-world identity, and there is no certificate server or PKI.
+- A valid signature is **not** sufficient: the document is structurally
+  validated field by field (node id, hostname/id binding, virtual IP, mapped CIDR,
+  ports, model ids, prices, timestamps, version, sizes and enum values) before
+  any value is stored or displayed. Unknown fields and control characters are
+  refused.
+- Trust is held in a null-prototype map keyed only by the strict node id, so
+  `__proto__`, `constructor` and `prototype` cannot reach `Object.prototype`; a
+  corrupt or unknown-version trust file fails closed.
 - A node that presents another node's `mappedCidr` is refused; a node that
   presents another node's `node.id` with its own key becomes a pending identity
-  change, not a silent replacement.
+  change, not a silent replacement. The last accepted quote version and content
+  hash are stored; an older version or the same version with different content
+  is marked stale and cannot replace the newer cached quote.
 
 ## Decision 16 — The catalogue is display data; connection stays manual
 
 A quote never creates a key, a balance, a charge or a Magpie provider. The flow
 is: discover -> browse -> `catalog request <node>` (a JSON request with the
-consumer's node id, the provider's mapped address, models and quote hash) ->
+consumer's node id, the provider's mapped address, models, quote hash and a
+**structured** approval block; it deliberately contains no shell command) ->
 provider operator approves out of band and runs `consumers add` with a native
 model whitelist and a positive cap -> provider runs `secret` -> consumer runs the
 existing `provider add`/`catalog connect` with that key. The catalogue itself

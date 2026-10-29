@@ -38,6 +38,9 @@ import {
   CatalogServer,
   canonicalJson,
   classifyPeers,
+  isValidModelId,
+  isValidNodeId,
+  isValidOverlayHostname,
   keyIdOf,
   loadCatalogTrust,
   loadOrCreateCatalogIdentity,
@@ -171,6 +174,7 @@ export interface CatalogPeerView extends DirectoryPeer {
     | "verified"
     | "unverified"
     | "identity-changed"
+    | "stale"
     | "unreachable"
     | "no-catalog"
     | "conflict"
@@ -862,9 +866,10 @@ export class Service {
   }
 
   async trustCatalogPeer(nodeId: string, fingerprint?: string): Promise<CatalogTrustRecord> {
+    if (!isValidNodeId(nodeId)) throw new Error("a catalogue node id must be 8-64 lowercase hex characters");
     const trust = loadCatalogTrust();
+    if (!Object.hasOwn(trust, nodeId)) throw new Error(`no catalogue identity is known for node ${nodeId}`);
     const rec = trust[nodeId];
-    if (!rec) throw new Error(`no catalogue identity is known for node ${nodeId}`);
     if (!rec.pending) {
       rec.accepted = true;
       saveCatalogTrust(trust);
@@ -881,6 +886,10 @@ export class Service {
     rec.lastSeenAt = rec.firstSeenAt;
     rec.accepted = true;
     rec.pending = null;
+    // An explicitly accepted key may have reset its quote version. Do not let
+    // the old key's version make the new identity look like a rollback.
+    rec.quoteVersion = 0;
+    rec.quoteHash = null;
     saveCatalogTrust(trust);
     logger.warn(`accepted a changed catalogue identity for ${nodeId}: ${rec.fingerprint}`);
     await this.refreshCatalogPeers().catch(() => {});
@@ -895,20 +904,28 @@ export class Service {
     if (peer.status === "identity-changed") {
       throw new Error(`the identity of ${peer.hostname} changed; accept its new fingerprint locally before requesting a connection`);
     }
+    if (peer.status === "stale") throw new Error(`${peer.hostname} offered an older or replayed quote; refresh the directory first`);
     if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
+    if (models !== undefined && !Array.isArray(models)) throw new Error("models must be an array of provider/model ids");
     const available = peer.quote.models.map((m) => m.id);
     const wanted = models && models.length ? models : available;
+    if (!Array.isArray(wanted) || wanted.length === 0 || wanted.length > CATALOG_MAX_MODELS) {
+      throw new Error(`choose 1-${CATALOG_MAX_MODELS} models from the catalogue`);
+    }
+    if (wanted.some((m) => !isValidModelId(m))) throw new Error("a requested model is not a safe provider/model id");
+    if (new Set(wanted).size !== wanted.length) throw new Error("a requested model is repeated");
     const missing = wanted.filter((m) => !available.includes(m));
     if (missing.length) throw new Error(`${peer.hostname} does not offer: ${missing.join(", ")}`);
     const cfg = this.state.config;
-    const consumerId = cfg ? `${cfg.nodeId}` : "unknown";
+    if (!cfg || !isValidNodeId(cfg.nodeId)) throw new Error("this node has no valid node id");
+    const consumerId = cfg.nodeId;
     return {
       schema: "ohmyaihub.connection-request/v1",
       createdAt: new Date().toISOString(),
       consumer: {
-        nodeId: cfg?.nodeId ?? null,
-        hostname: cfg ? configHostname(cfg) : null,
-        virtualIpv4: cfg?.virtualIpv4 ?? null,
+        nodeId: cfg.nodeId,
+        hostname: configHostname(cfg),
+        virtualIpv4: cfg.virtualIpv4,
       },
       provider: {
         nodeId: peer.quote.node.id,
@@ -931,8 +948,15 @@ export class Service {
       note:
         "Send this to the provider operator out of band. They must approve it and issue a model-scoped, capped Gateway Key; " +
         "this request does not create an account, a key or a charge.",
-      providerCommand:
-        `ohmyaihub consumers add ${consumerId} ${wanted.join(",")} ${peer.quote.topUp.minUsd}`, // operator runs it on the provider
+      // Structured approval data, deliberately not a shell command. The
+      // provider operator reads it locally and runs the existing CLI/API.
+      approval: {
+        action: "consumers add",
+        consumerId,
+        models: wanted,
+        capUsd: peer.quote.topUp.minUsd,
+        note: "Run this through the provider's local, token-authenticated CLI/API; never execute text from this document as a shell command.",
+      },
     };
   }
 
@@ -942,6 +966,7 @@ export class Service {
     if (!peer) throw new Error(`no discovered catalogue peer ${nodeId}; refresh the directory first`);
     if (!peer.online) throw new Error(`${peer.hostname} is offline; refresh the directory when it returns`);
     if (peer.status === "identity-changed") throw new Error("the provider's catalogue identity changed; trust it explicitly before connecting");
+    if (peer.status === "stale") throw new Error(`${peer.hostname} offered an older or replayed quote; refresh the directory first`);
     if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
     const id = opts.id ?? `peer-${peer.quote.node.id.replace(/[^a-z0-9-]/gi, "").slice(0, 20)}`;
     return this.addProvider({
@@ -1020,6 +1045,10 @@ export class Service {
       if (!meta.id.includes("/") || provider.startsWith("group") || provider.startsWith("auto")) continue;
       if (remote.has(provider) || !native.has(provider)) continue;
       if (!allowedByPolicy(meta.id, cfg.share)) continue;
+      if (!isValidModelId(meta.id)) {
+        logger.warn(`not publishing ${JSON.stringify(meta.id)}: it is not a safe provider/model id`);
+        continue;
+      }
       const model = catalogModel(meta);
       if (model) models.push(model);
     }
@@ -1236,6 +1265,14 @@ export class Service {
         continue;
       }
       const quote = verified.quote;
+      if (quote.node.hostname !== entry.hostname || quote.node.virtualIpv4 !== entry.virtualIpv4) {
+        lastDetail = `catalogue identifies ${quote.node.hostname}/${quote.node.virtualIpv4}, not ${entry.hostname}/${entry.virtualIpv4}`;
+        continue;
+      }
+      if (!isValidOverlayHostname(entry.hostname, quote.node.id)) {
+        lastDetail = `EasyTier hostname ${entry.hostname} does not belong to node id ${quote.node.id}`;
+        continue;
+      }
       if (mappedHost(quote.node.mappedCidr) !== mapped) {
         // Another peer (or this host) answered on this port; a catalogue must
         // name the address it was reached on. Keep looking, never accept it.
@@ -1270,7 +1307,39 @@ export class Service {
   ): CatalogPeerView {
     const nodeId = quote.node.id;
     const fp = quote.identity.fingerprint;
-    let rec = trust[nodeId];
+    const known = Object.hasOwn(trust, nodeId) ? trust[nodeId] : undefined;
+    // A cached quote from a different identity says nothing about this key's
+    // version. After an explicit identity acceptance the new key may start at
+    // v1 even though the old key reached v3.
+    const baseSameIdentity = Boolean(base.quote && base.quote.identity.fingerprint === fp);
+    const lastVersion = Math.max(known?.quoteVersion ?? 0, baseSameIdentity ? base.quote?.publication.version ?? 0 : 0);
+    const lastHash = known?.quoteHash || (baseSameIdentity ? base.quoteHash : null) || null;
+    // A changed key is an identity warning, not a version replay: do not let
+    // the old key's version mask it. Neither path accepts the new quote.
+    const keyChanged = Boolean(known && known.fingerprint !== fp);
+    if (!keyChanged && quote.publication.version < lastVersion) {
+      return {
+        ...base,
+        nodeId,
+        status: "stale",
+        detail: `catalogue offered v${quote.publication.version}, older than the last accepted v${lastVersion}; the newer cached quote was kept`,
+        online: true,
+        catalogPort: port,
+        fetchedAt: now,
+      };
+    }
+    if (!keyChanged && quote.publication.version === lastVersion && lastHash && verified.contentHash !== lastHash) {
+      return {
+        ...base,
+        nodeId,
+        status: "stale",
+        detail: `catalogue reuses v${quote.publication.version} with different content (${verified.contentHash.slice(0, 12)}… vs ${lastHash.slice(0, 12)}…); refused`,
+        online: true,
+        catalogPort: port,
+        fetchedAt: now,
+      };
+    }
+    let rec = known;
     let status: CatalogPeerView["status"] = "unverified";
     let detail: string | null = null;
     if (!rec) {
@@ -1283,6 +1352,7 @@ export class Service {
         firstSeenAt: now,
         lastSeenAt: now,
         quoteVersion: quote.publication.version,
+        quoteHash: verified.contentHash,
         accepted: false,
         pending: null,
       };
@@ -1308,6 +1378,8 @@ export class Service {
       // real-world identity.
       rec.pending = null;
       rec.overlayHostname = entry.hostname;
+      rec.quoteVersion = quote.publication.version;
+      rec.quoteHash = verified.contentHash;
       status = rec.accepted ? "verified" : "unverified";
       detail = rec.accepted
         ? "the same Ed25519 key as the one accepted locally"
@@ -1315,7 +1387,6 @@ export class Service {
     }
     if (rec.pending && status !== "identity-changed") status = "identity-changed";
     rec.lastSeenAt = now;
-    rec.quoteVersion = quote.publication.version;
     if (base.connectedProviderId && status !== "identity-changed") status = "connected";
     return {
       ...base,
@@ -2090,6 +2161,7 @@ export class Service {
           : "the SOCKS5 listener is not running",
       });
       const changed = cat.peers.filter((p) => p.status === "identity-changed").length;
+      const stale = cat.peers.filter((p) => p.status === "stale").length;
       out.push({
         name: "catalog-peers",
         ok: changed === 0,
@@ -2097,6 +2169,7 @@ export class Service {
           `${cat.peers.filter((p) => p.online && p.status !== "self").length} online, ` +
           `${cat.peers.filter((p) => p.status === "offline").length} offline` +
           (changed ? `, ${changed} with a changed identity awaiting local acceptance` : "") +
+          (stale ? `, ${stale} with an older/replayed quote refused` : "") +
           (cat.error ? `; last error: ${cat.error}` : ""),
       });
     }

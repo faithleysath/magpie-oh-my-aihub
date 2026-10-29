@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Service, type Probes } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta, ProviderRecord } from "../src/magpie.ts";
-import { loadOrCreateCatalogIdentity, signCatalog, verifySignedCatalog, type CatalogIdentity, type CatalogModel, type CatalogQuoteBody, type SignedCatalog } from "../src/catalog.ts";
+import { loadCatalogTrust, loadOrCreateCatalogIdentity, signCatalog, verifySignedCatalog, type CatalogIdentity, type CatalogModel, type CatalogQuoteBody, type SignedCatalog } from "../src/catalog.ts";
 import { getProviderKey } from "../src/state.ts";
 
 // Service-level catalogue tests: a fake Magpie, a fake supervisor, a fake
@@ -211,26 +211,43 @@ function model(id: string): CatalogModel {
   };
 }
 
-function quote(id: string, ident: CatalogIdentity, mapped: string, models: CatalogModel[]): SignedCatalog {
-  const body: CatalogQuoteBody = {
+function quoteBody(
+  id: string,
+  ident: CatalogIdentity,
+  mapped: string,
+  models: CatalogModel[],
+  virtualIpv4 = "10.77.0.9",
+  opts: { version?: number; hostname?: string; catalogPort?: number } = {},
+): CatalogQuoteBody {
+  return {
     schema: "ohmyaihub.catalog/v1",
     node: {
       id,
       displayName: `ohmyaihub-${id}`,
-      hostname: `ohmyaihub-${id}`,
-      virtualIpv4: "10.77.0.9",
+      hostname: opts.hostname ?? `ohmyaihub-${id}`,
+      virtualIpv4,
       mappedCidr: mapped,
       gatewayPort: 3425,
-      catalogPort: 3426,
+      catalogPort: opts.catalogPort ?? 3426,
       contact: null,
     },
-    publication: { status: "published", version: 1, updatedAt: "2026-10-30T00:00:00.000Z", publishedAt: "2026-10-30T00:00:00.000Z", note: "read only" },
+    publication: { status: "published", version: opts.version ?? 1, updatedAt: "2026-10-30T00:00:00.000Z", publishedAt: "2026-10-30T00:00:00.000Z", note: "read only" },
     models,
     topUp: { minUsd: 1, simulated: true, note: "simulated" },
     billing: { quoteOnly: true, charged: false, note: "display only" },
     identity: ident.summary,
   };
-  return signCatalog(body, ident);
+}
+
+function quote(
+  id: string,
+  ident: CatalogIdentity,
+  mapped: string,
+  models: CatalogModel[],
+  virtualIpv4 = "10.77.0.9",
+  opts: { version?: number; hostname?: string; catalogPort?: number } = {},
+): SignedCatalog {
+  return signCatalog(quoteBody(id, ident, mapped, models, virtualIpv4, opts), ident);
 }
 
 function meta(id: string, price: boolean): CatalogModelMeta {
@@ -386,8 +403,8 @@ describe("peer discovery", () => {
   test("reads two peers, keeps an offline quote, and warns on a changed key", async () => {
     const idB = identity();
     const idC = identity();
-    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")])));
-    fetchMap.set("10.66.1.4", JSON.stringify(quote("cccccccc", idC, "10.66.1.4/32", [model("beta/c")])));
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3")));
+    fetchMap.set("10.66.1.4", JSON.stringify(quote("cccccccc", idC, "10.66.1.4/32", [model("beta/c")], "10.77.0.4")));
     sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3"), peer("ohmyaihub-cccccccc", "10.77.0.4")];
     sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
     sup.route("10.66.1.4", "ohmyaihub-cccccccc", "10.77.0.4");
@@ -409,6 +426,9 @@ describe("peer discovery", () => {
     const request = s.catalogRequest("bbbbbbbb");
     expect(JSON.stringify(request)).not.toContain("sk-");
     expect(request.provider).toMatchObject({ mappedCidr: "10.66.1.3/32", gatewayPort: 3425 });
+    expect(request.providerCommand).toBeUndefined();
+    expect(request.approval).toMatchObject({ action: "consumers add", consumerId: s.config()!.nodeId, models: ["alpha/b"], capUsd: 1 });
+    expect(() => s.catalogRequest("bbbbbbbb", ["alpha/b; touch /tmp/pwn"])).toThrow(/safe provider\/model/);
 
     // C disappears from EasyTier's peer list: its last quote is kept, marked offline.
     sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
@@ -420,7 +440,7 @@ describe("peer discovery", () => {
 
     // C comes back with a different key: a warning, never silent acceptance.
     const idC2 = identity();
-    fetchMap.set("10.66.1.4", JSON.stringify(quote("cccccccc", idC2, "10.66.1.4/32", [model("beta/c")])));
+    fetchMap.set("10.66.1.4", JSON.stringify(quote("cccccccc", idC2, "10.66.1.4/32", [model("beta/c")], "10.77.0.4")));
     sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3"), peer("ohmyaihub-cccccccc", "10.77.0.4")];
     sup.route("10.66.1.4", "ohmyaihub-cccccccc", "10.77.0.4");
     peers = await s.refreshCatalog();
@@ -428,11 +448,110 @@ describe("peer discovery", () => {
     expect(changed.status).toBe("identity-changed");
     expect(changed.pendingFingerprint).toBe(idC2.summary.fingerprint);
     expect(changed.identity!.fingerprint).toBe(idC.summary.fingerprint);
+    expect(loadCatalogTrust()["cccccccc"].fingerprint).toBe(idC.summary.fingerprint);
     expect(() => s.catalogRequest("cccccccc")).toThrow(/identity/);
     await s.trustCatalogPeer("cccccccc", idC2.summary.fingerprint);
     peers = await s.refreshCatalog();
     expect(peers.find((p) => p.hostname === "ohmyaihub-cccccccc")!.status).toBe("verified");
     expect(() => s.catalogRequest("cccccccc")).not.toThrow();
+  });
+
+  test("a malformed quote invalidates only that peer", async () => {
+    const idB = identity();
+    const idC = identity();
+    const good = quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3");
+    const badBody = quoteBody("cccccccc", idC, "10.66.1.4/32", [model("beta/c")], "10.77.0.4");
+    badBody.models[0].id = "beta/c; touch /tmp/pwn";
+    const bad = signCatalog(badBody, idC);
+    fetchMap.set("10.66.1.3", JSON.stringify(good));
+    fetchMap.set("10.66.1.4", JSON.stringify(bad));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3"), peer("ohmyaihub-cccccccc", "10.77.0.4")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    sup.route("10.66.1.4", "ohmyaihub-cccccccc", "10.77.0.4");
+    const s = await service({ discovery: true });
+    const peers = await s.refreshCatalog();
+    expect(peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!.quote!.models[0].id).toBe("alpha/b");
+    const c = peers.find((p) => p.hostname === "ohmyaihub-cccccccc")!;
+    expect(c.status).toBe("unreachable");
+    expect(c.quote).toBeNull();
+    expect(s.catalogStatus().error).toBeNull();
+  });
+
+  test("hostname and virtual-IP binding are checked against the overlay row", async () => {
+    const id = identity();
+    // Internally valid quote, but it names a different node than the overlay row.
+    const wrongHost = quote("deadbeef", id, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3");
+    fetchMap.set("10.66.1.3", JSON.stringify(wrongHost));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    let peers = await s.refreshCatalog();
+    let b = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(b.status).toBe("unreachable");
+    expect(b.quote).toBeNull();
+
+    // Same node id, but a virtual IP the overlay row does not have.
+    const wrongIp = quote("bbbbbbbb", id, "10.66.1.3/32", [model("alpha/b")], "10.77.0.9");
+    fetchMap.set("10.66.1.3", JSON.stringify(wrongIp));
+    peers = await s.refreshCatalog();
+    b = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(b.status).toBe("unreachable");
+    expect(b.quote).toBeNull();
+  });
+
+  test("older and same-version-different-content quotes never replace a newer one", async () => {
+    const id = identity();
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", id, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3", { version: 2 })));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    let peers = await s.refreshCatalog();
+    expect(peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!.quote!.publication.version).toBe(2);
+
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", id, "10.66.1.3/32", [model("beta/c")], "10.77.0.3", { version: 1 })));
+    peers = await s.refreshCatalog();
+    let b = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(b.status).toBe("stale");
+    expect(b.quote!.publication.version).toBe(2);
+    expect(b.quote!.models[0].id).toBe("alpha/b");
+
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", id, "10.66.1.3/32", [model("beta/c")], "10.77.0.3", { version: 2 })));
+    peers = await s.refreshCatalog();
+    b = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(b.status).toBe("stale");
+    expect(b.quote!.models[0].id).toBe("alpha/b");
+    expect(() => s.catalogRequest("bbbbbbbb")).toThrow(/stale|older|replayed/);
+  });
+
+  test("an explicitly accepted new identity may restart its quote at v1", async () => {
+    const old = identity();
+    const fresh = identity();
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", old, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3", { version: 3 })));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    await s.refreshCatalog();
+    await s.trustCatalogPeer("bbbbbbbb");
+
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", fresh, "10.66.1.3/32", [model("beta/c")], "10.77.0.3", { version: 1 })));
+    let peers = await s.refreshCatalog();
+    let b = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(b.status).toBe("identity-changed");
+    await s.trustCatalogPeer("bbbbbbbb", fresh.summary.fingerprint);
+    peers = await s.refreshCatalog();
+    b = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(b.status).toBe("verified");
+    expect(b.quote!.publication.version).toBe(1);
+    expect(b.quote!.models[0].id).toBe("beta/c");
+  });
+
+  test("prototype-pollution node ids are refused and cannot touch trust", async () => {
+    const s = await service({ discovery: true });
+    for (const id of ["__proto__", "constructor", "prototype"]) {
+      await expect(s.trustCatalogPeer(id)).rejects.toThrow(/node id/);
+    }
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(loadCatalogTrust())).toBeNull();
   });
 
   test("conflicting routes are shown and never probed", async () => {
@@ -492,7 +611,7 @@ describe("catalogue never disturbs connections, keys or foreign providers", () =
 describe("restart", () => {
   test("the publication, its version and the trust survive a host restart", async () => {
     const idB = identity();
-    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")])));
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3")));
     sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
     sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
     const first = await service({ discovery: true });

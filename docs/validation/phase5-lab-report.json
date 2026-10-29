@@ -1,13 +1,13 @@
 {
-  "at": "2026-10-29T23:23:31.310Z",
+  "at": "2026-10-29T23:55:25.199Z",
   "platform": "darwin arm64",
   "bun": "1.4.3",
   "magpie": "/Users/laysath/.local/bin/magpie",
   "network": "phase5-lab",
   "instances": {
-    "A": 28104,
-    "B": 23591,
-    "C": 26259
+    "A": 45500,
+    "B": 32803,
+    "C": 26298
   },
   "catalogPorts": {
     "A": 3426,
@@ -19,67 +19,67 @@
       "name": "three isolated Magpie gateways enforce keys",
       "ok": true,
       "detail": "A 401, B 401 without a key (both 401)",
-      "ms": 4118
+      "ms": 4034
     },
     {
       "name": "the three plugin hosts boot on one real EasyTier overlay",
       "ok": true,
-      "detail": "A sees 3 peers: ohmyaihub-f5f1f0d2, ohmyaihub-a384bba8, ohmyaihub-c44dfb4a",
-      "ms": 30393
+      "detail": "A sees 3 peers: ohmyaihub-b13db260, ohmyaihub-61f65ddf, ohmyaihub-fd1b1db0",
+      "ms": 15158
     },
     {
       "name": "B and C publish signed catalogues; A discovers both without a typed mapped_cidr",
       "ok": true,
-      "detail": "B 10.66.242.54/32 v1 unverified; C 10.66.19.133/32 v1 unverified; models and prices match",
-      "ms": 15461
+      "detail": "B 10.66.167.194/32 v1 unverified; C 10.66.139.155/32 v1 unverified; models and prices match",
+      "ms": 40345
     },
     {
       "name": "the catalogue is reachable on mapped_cidr through SOCKS5, not on the virtual IP",
       "ok": true,
-      "detail": "mapped 10.66.242.54/32:3427 200; virtual 10.77.0.129:3427 blocked: catalogue read timed out after 3000ms",
-      "ms": 3025
+      "detail": "mapped 10.66.167.194/32:3427 200; virtual 10.77.0.196:3427 blocked: catalogue read timed out after 3000ms",
+      "ms": 3028
     },
     {
       "name": "the catalogue port exposes no management API",
       "ok": true,
       "detail": "GET /status, /providers and /configure on the catalogue port all answer 404",
-      "ms": 74
+      "ms": 75
     },
     {
       "name": "A requests a connection; B issues a capped key by hand; A connects through the existing provider flow",
       "ok": true,
-      "detail": "request had no key; B issued a key; A peer-b connected at 10.66.242.54/32:23591; native limit 0/1 USD",
-      "ms": 602
+      "detail": "request had no key; B issued a key; A peer-b connected at 10.66.167.194/32:32803; native limit 0/1 USD",
+      "ms": 592
     },
     {
       "name": "a quote price change does not alter B's key cost cap",
       "ok": true,
       "detail": "quote input 1000 -> 2000; key cap stayed 1",
-      "ms": 301
+      "ms": 295
     },
     {
       "name": "B goes offline: A keeps the last quote and marks B offline; B returns",
       "ok": true,
       "detail": "B was offline with its quote kept, then returned",
-      "ms": 5696
+      "ms": 5695
     },
     {
       "name": "a changed catalogue key is warned about; A accepts it explicitly",
       "ok": true,
-      "detail": "identity-changed with pending 2132810a7f9f201a…, request refused, then trusted",
-      "ms": 273
+      "detail": "identity-changed with pending b2c9018f4d36690f…, request refused, then trusted",
+      "ms": 257
     },
     {
       "name": "C unpublishes: its listener stops and its Forward port is withdrawn",
       "ok": true,
-      "detail": "C catalogue off; Forward ports [26259] exclude 3428",
-      "ms": 826
+      "detail": "C catalogue off; Forward ports [26298] exclude 3428",
+      "ms": 836
     },
     {
       "name": "A's host restart restores discovery, its trusted peer and the cached quote",
       "ok": true,
       "detail": "discovery enabled, B connected, quote v3, provider record kept",
-      "ms": 33558
+      "ms": 28674
     }
   ],
   "passed": 11,
