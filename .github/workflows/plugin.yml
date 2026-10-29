@@ -1,0 +1,56 @@
+name: plugin
+
+on:
+  pull_request:
+    paths:
+      - "plugin/**"
+      - ".github/workflows/plugin.yml"
+  push:
+    branches: [main]
+    paths:
+      - "plugin/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: plugin (linux, bun 1.4.3)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - run: bun install --frozen-lockfile
+      - name: TypeScript
+        run: bun run typecheck
+      - name: Unit tests
+        run: bun test
+      - name: Plugin entry boots (stub Magpie, isolated HOME)
+        run: bun run boot-check
+      - name: No credentials in the tree
+        run: bun run secret-scan
+
+  macos:
+    name: plugin (macos, bun 1.4.3)
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - run: bun install --frozen-lockfile
+      - name: TypeScript
+        run: bun run typecheck
+      - name: Unit tests
+        run: bun test
+      - name: Plugin entry boots (stub Magpie, isolated HOME)
+        run: bun run boot-check

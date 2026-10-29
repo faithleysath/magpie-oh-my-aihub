@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Oh My AIHub</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Oh My AIHub</h1>
+      <p class="sub">EasyTier supervisor and Gateway Key provisioner for Magpie. No AI request passes through this plugin.</p>
+    </header>
+
+    <section id="status">
+      <h2>Status <button id="reload" type="button" title="The page cannot fetch: Magpie serves plugin pages with connect-src 'none', so it reads a snapshot written by the host.">Reload snapshot</button></h2>
+      <div id="status-body" class="muted">No snapshot yet — open this page after the host has started.</div>
+    </section>
+
+    <section id="settings">
+      <h2>Overlay</h2>
+      <p class="muted">
+        Saving writes this plugin's options in Magpie. The supervisor reads them when the plugin host starts; Magpie restarts
+        the host when a plugin is installed, updated or set.
+      </p>
+      <form id="form">
+        <label>Role
+          <select name="role">
+            <option value="provider">provider (serve a gateway)</option>
+            <option value="consumer">consumer (use a provider)</option>
+          </select>
+        </label>
+        <label>Network name <input name="networkName" autocomplete="off" placeholder="magpie-lab" /></label>
+        <label>Network secret <input name="networkSecret" type="password" autocomplete="off" placeholder="at least 8 characters" /></label>
+        <label>Initial peers <input name="peers" autocomplete="off" placeholder="tcp://relay.example.com:11010" /></label>
+        <label>Listen address <input name="listenAddr" autocomplete="off" placeholder="empty = dial only, or 127.0.0.1:11010" /></label>
+        <label>Published ports <input name="publishedPorts" autocomplete="off" placeholder="3425" /></label>
+        <label class="row"><input name="secureMode" type="checkbox" checked /> Secure Mode (persisted X25519 identity)</label>
+        <div class="actions">
+          <button type="submit">Save</button>
+          <span id="saved" class="muted"></span>
+        </div>
+      </form>
+    </section>
+
+    <section id="operator">
+      <h2>Operations</h2>
+      <p class="muted">
+        This page cannot call the host (the sandbox forbids network access). Use the loopback API with the token in
+        <code>&lt;magpie data&gt;/oh-my-aihub/api-token</code>, or the CLI:
+      </p>
+      <pre>bun plugin/bin/ohmyaihub.ts --data &lt;magpie data&gt; status
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie data&gt; consumers add alice deepseek/deepseek-flash 1
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie data&gt; topup alice 1</pre>
+    </section>
+
+    <script src="_magpie/bridge.js"></script>
+    <script src="status.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
