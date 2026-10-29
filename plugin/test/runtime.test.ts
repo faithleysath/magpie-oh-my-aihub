@@ -200,7 +200,7 @@ describe("runtime fail closed", () => {
     const sup = makeSup({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
     const pid = (await sup.start(cfg)).pid!;
     await sup.refresh();
-    expect(alive(pid)).toBe(false);
+    expect(await gone(pid)).toBe(true);
     // no supervised restart after an unsafe stop
     await new Promise((r) => setTimeout(r, 1200));
     expect(sup.snapshot().running).toBe(false);
