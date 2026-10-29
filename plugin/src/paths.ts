@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readlinkSync } from "node:fs";
+import { basename, isAbsolute, join } from "node:path";
 import { networkInterfaces } from "node:os";
 
 /** Magpie runs the plugin host with the settings directory as its working directory. */
@@ -20,60 +20,117 @@ export function pluginRoot(): string {
   return join(import.meta.dir, "..");
 }
 
+export interface ResolveOptions {
+  /** override, normally OH_MY_AIHUB_MAGPIE */
+  env?: string | undefined;
+  /** the Magpie that started this host */
+  ppid?: number;
+  platform?: NodeJS.Platform;
+  exists?: (path: string) => boolean;
+  /** Linux /proc/<pid>/exe reader; a symlink reader, never a file reader */
+  readlink?: (path: string) => string;
+  /** the parent's command line */
+  parentCommand?: () => string;
+  /** the parent's working directory, for a relative argv[0] such as ./Magpie.app/… */
+  parentCwd?: () => string;
+  /** `which magpie` */
+  which?: () => string;
+}
+
+function defaultParentCommand(ppid: number): string {
+  return Bun.spawnSync(["ps", "-p", String(ppid), "-o", "command="]).stdout.toString().trim();
+}
+
+function defaultParentCwd(ppid: number): string {
+  const out = Bun.spawnSync(["lsof", "-a", "-p", String(ppid), "-d", "cwd", "-Fn"]).stdout.toString();
+  const line = out.split("\n").find((l) => l.startsWith("n"));
+  return line ? line.slice(1) : "";
+}
+
+function defaultWhich(): string {
+  return Bun.spawnSync(["which", "magpie"]).stdout.toString().trim();
+}
+
+function looksLikeMagpie(path: string): boolean {
+  return /^magpie(\.exe)?$/i.test(basename(path));
+}
+
 /**
  * The magpie binary running this host.
  *
- * The host is a child of the magpie process, so its parent's executable is the
- * same binary with the same data directory (portable or installed). Falling back
- * to a path lookup keeps a manually started supervisor working too.
+ * The host is a child of the magpie process, so the parent's executable is the
+ * same binary with the same data directory (portable or installed). On Linux the
+ * parent's path comes from `/proc/<pid>/exe`, which is a **symlink**: reading the
+ * file itself would load a 60 MB executable into memory and return its bytes as
+ * the path. A parent that is clearly a magpie but cannot be resolved is an error,
+ * not a reason to use some other installation.
  */
-export function resolveMagpieBin(): string {
-  const override = process.env.OH_MY_AIHUB_MAGPIE;
-  if (override && existsSync(override)) return override;
+export function resolveMagpieBin(opts: ResolveOptions = {}): string {
+  const platform = opts.platform ?? process.platform;
+  const ppid = opts.ppid ?? process.ppid;
+  const exists = opts.exists ?? existsSync;
+  const readlink = opts.readlink ?? readlinkSync;
+  const parentCommand = opts.parentCommand ?? (() => defaultParentCommand(ppid));
+  const parentCwd = opts.parentCwd ?? (() => defaultParentCwd(ppid));
+  const which = opts.which ?? defaultWhich;
 
-  if (process.platform === "linux") {
-    try {
-      const exe = readFileSync(`/proc/${process.ppid}/exe`); // symlink target
-      const p = exe.toString().replace(/\0+$/, "");
-      if (p) return p;
-    } catch {
-      /* not readable */
-    }
+  const override = opts.env ?? process.env.OH_MY_AIHUB_MAGPIE;
+  if (override) {
+    if (exists(override)) return override;
+    // An explicit override that is gone must not silently become another Magpie.
+    throw new Error(`OH_MY_AIHUB_MAGPIE is set to ${override}, which does not exist`);
   }
 
-  if (process.platform === "darwin") {
-    // The parent's argv[0] may be relative to the parent's working directory
-    // (`./Magpie.app/Contents/MacOS/magpie serve` from a portable copy), so ask
-    // lsof for that directory before trusting existsSync. Falling back to the
-    // installed app here would silently manage another Magpie's data directory.
+  let unresolvedMagpie: string | null = null;
+
+  if (platform === "linux") {
     try {
-      const cmd = Bun.spawnSync(["ps", "-p", String(process.ppid), "-o", "command="]).stdout.toString().trim();
-      const argv0 = cmd.split(/\s+/)[0] ?? "";
-      if (argv0) {
-        if (argv0.startsWith("/") && existsSync(argv0)) return argv0;
-        const lsof = Bun.spawnSync(["lsof", "-a", "-p", String(process.ppid), "-d", "cwd", "-Fn"]).stdout.toString();
-        const cwdLine = lsof.split("\n").find((l) => l.startsWith("n"));
-        const cwd = cwdLine ? cwdLine.slice(1) : "";
-        if (cwd) {
-          const candidate = join(cwd, argv0);
-          if (existsSync(candidate)) return candidate;
-        }
-      }
+      const target = readlink(`/proc/${ppid}/exe`).replace(/ \(deleted\)$/, "");
+      if (target && exists(target)) return target;
+      if (target && looksLikeMagpie(target)) unresolvedMagpie = target;
     } catch {
-      /* ps/lsof unavailable */
+      /* the parent is gone or /proc is not mounted */
     }
-    const app = "/Applications/magpie.app/Contents/MacOS/magpie";
-    if (existsSync(app)) return app;
   }
 
   try {
-    const r = Bun.spawnSync(["which", "magpie"]);
-    const p = r.stdout.toString().trim();
-    if (p && existsSync(p)) return p;
+    const cmd = parentCommand();
+    const argv0 = cmd.split(/\s+/)[0] ?? "";
+    if (argv0) {
+      if (isAbsolute(argv0)) {
+        if (looksLikeMagpie(argv0)) {
+          if (exists(argv0)) return argv0;
+          unresolvedMagpie = argv0;
+        }
+      } else {
+        const cwd = parentCwd();
+        if (cwd) {
+          const candidate = join(cwd, argv0);
+          if (looksLikeMagpie(argv0)) {
+            if (exists(candidate)) return candidate;
+            unresolvedMagpie = candidate;
+          }
+        }
+      }
+    }
   } catch {
-    /* no PATH */
+    /* ps/lsof unavailable */
   }
-  throw new Error("cannot locate the magpie binary (set OH_MY_AIHUB_MAGPIE)");
+
+  if (unresolvedMagpie) {
+    throw new Error(
+      `the magpie running this plugin host (${unresolvedMagpie}) cannot be resolved; ` +
+        `refusing to fall back to another installation. Set OH_MY_AIHUB_MAGPIE to its path.`,
+    );
+  }
+
+  if (platform === "darwin") {
+    const app = "/Applications/magpie.app/Contents/MacOS/magpie";
+    if (exists(app)) return app;
+  }
+  const onPath = which();
+  if (onPath && exists(onPath)) return onPath;
+  throw new Error("cannot locate the magpie binary (set OH_MY_AIHUB_MAGPIE to its path)");
 }
 
 function isUsableIPv4(ip: string): boolean {
@@ -89,7 +146,7 @@ function isUsableIPv4(ip: string): boolean {
 /**
  * The provider address EasyTier exports. The plugin exports exactly this /32 by
  * default (never a whole subnet), so it must be the interface a consumer can
- * reach after the overla'.
+ * reach after the overlay.
  */
 export function lanIPv4(): string {
   const preferred = /^(en0|en1|eth0|eth1|ens[0-9]|enp[0-9]|wlan0|Wi-?Fi)$/;
@@ -112,4 +169,9 @@ export function isMac(): boolean {
 
 export function isLinux(): boolean {
   return process.platform === "linux";
+}
+
+/** Kept for callers that only need the content of a small file. */
+export function readSmallFile(path: string): string {
+  return readFileSync(path, "utf8");
 }

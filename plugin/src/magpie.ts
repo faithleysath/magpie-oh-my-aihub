@@ -61,7 +61,7 @@ export function gatewayBaseURL(): string {
  */
 export class Magpie {
   private queue: Promise<unknown> = Promise.resolve();
-  private version: string | null = null;
+  private versionLabel: string | null = null;
   private cliTried = false;
 
   constructor(private bin: string) {}
@@ -76,7 +76,7 @@ export class Magpie {
    * label, never a reason to start a process.
    */
   version(): string {
-    if (this.version) return this.version;
+    if (this.versionLabel) return this.versionLabel;
     try {
       if (process.platform === "darwin") {
         const bundle = dirname(dirname(dirname(this.bin)));
@@ -84,17 +84,14 @@ export class Magpie {
         if (existsSync(plist)) {
           const r = Bun.spawnSync(["plutil", "-extract", "CFBundleShortVersionString", "raw", plist]);
           const v = r.stdout.toString().trim();
-          if (v) this.version = `magpie ${v}`;
+          if (v) this.versionLabel = `magpie ${v}`;
         }
       }
     } catch {
       /* label only */
     }
-    if (!this.version) {
-      const m = /magpie(?:-app)?(?: \d+)?/i.exec(this.bin);
-      this.version = m ? m[0] : "magpie (version unknown)";
-    }
-    return this.version;
+    if (!this.versionLabel) this.versionLabel = "magpie (version unknown)";
+    return this.versionLabel;
   }
 
   /**
@@ -112,11 +109,11 @@ export class Magpie {
     try {
       const r = await this.serial(() => run([this.bin, "--version"], { timeoutMs: 3000 }));
       const m = /magpie\s+(\d+\.\d+\.\d+)/.exec(r.stdout);
-      if (r.code === 0 && m) this.version = `magpie ${m[1]}`;
+      if (r.code === 0 && m) this.versionLabel = `magpie ${m[1]}`;
     } catch {
       /* a label, not a dependency */
     }
-    return this.version;
+    return this.version();
   }
 
   /** One CLI call at a time: a stuck call must not pile up. */

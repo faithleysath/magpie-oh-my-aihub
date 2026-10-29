@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { EASYTIER_VERSION, assetFor, assetUrl } from "./easytier-manifest.ts";
 import { logger, registerSecret, redact } from "./log.ts";
+import { checkConfig, type AclExpectation } from "./acl.ts";
 import { lanIPv4, stateDir, statePath } from "./paths.ts";
 import { run } from "./run.ts";
 
@@ -69,6 +70,37 @@ export function binariesDir(): string {
   return join(easytierHome(), `v${VERSION}`, `${process.platform}-${process.arch}`);
 }
 
+async function hashFile(path: string): Promise<string> {
+  const bytes = await Bun.file(path).arrayBuffer();
+  return new Bun.CryptoHasher("sha256").update(new Uint8Array(bytes)).digest("hex");
+}
+
+/**
+ * A pid belongs to this plugin only when it is alive and its command line runs
+ * exactly our config file: a recycled pid or another EasyTier on the machine is
+ * never adopted and never killed.
+ */
+export function ownsProcess(pid: number, configPath: string, platform: string = process.platform): boolean {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    if (platform === "linux") {
+      const raw = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+      const cmd = raw.split("\0").join(" ");
+      return cmd.includes("easytier-core") && cmd.includes(configPath);
+    }
+    const r = Bun.spawnSync(["ps", "-p", String(pid), "-o", "command="]);
+    const cmd = r.stdout.toString();
+    return cmd.includes("easytier-core") && cmd.includes(configPath);
+  } catch {
+    return false;
+  }
+}
+
 export interface Binaries {
   core: string;
   cli: string;
@@ -86,12 +118,24 @@ export async function ensureBinaries(log: (m: string) => void = () => {}): Promi
   const core = join(dir, asset.core);
   const cli = join(dir, asset.cli);
   const marker = join(dir, ".sha256");
+  const records = join(dir, ".binaries.json");
 
-  if (existsSync(core) && existsSync(cli) && existsSync(marker)) {
-    if (readFileSync(marker, "utf8").trim() === asset.sha256) {
-      return { core, cli, verified: true };
+  if (existsSync(core) && existsSync(cli) && existsSync(marker) && existsSync(records)) {
+    // The marker says which archive was extracted once; it says nothing about
+    // the files that are there now. Hash the binaries themselves on every start.
+    try {
+      const rec = JSON.parse(readFileSync(records, "utf8")) as { core?: string; cli?: string };
+      if (
+        readFileSync(marker, "utf8").trim() === asset.sha256 &&
+        rec.core === (await hashFile(core)) &&
+        rec.cli === (await hashFile(cli))
+      ) {
+        return { core, cli, verified: true };
+      }
+      log(`installed binaries at ${dir} no longer match their recorded hashes; reinstalling`);
+    } catch {
+      log(`cannot read the binary records at ${dir}; reinstalling`);
     }
-    log(`binaries at ${dir} do not match the pinned hash; reinstalling`);
     rmSync(dir, { recursive: true, force: true });
   }
 
@@ -133,6 +177,11 @@ export async function ensureBinaries(log: (m: string) => void = () => {}): Promi
     if (process.platform !== "win32") chmodSync(dst, 0o755);
   }
   writeFileSync(marker, asset.sha256 + "\n", { mode: 0o600 });
+  writeFileSync(
+    records,
+    JSON.stringify({ version: VERSION, zip: asset.sha256, core: await hashFile(core), cli: await hashFile(cli) }, null, 1),
+    { mode: 0o600 },
+  );
   rmSync(extractDir, { recursive: true, force: true });
   rmSync(zip, { force: true });
   log(`EasyTier ${VERSION} verified and installed in ${dir}`);
@@ -211,62 +260,22 @@ export function renderConfig(cfg: EasytierConfig): string {
   return lines.join("\n");
 }
 
-export interface AclCheck {
-  ok: boolean;
-  problems: string[];
-}
-
-/** The invariants that make the ingress safe (docs/ARCHITECTURE.md, decision 3). */
-export function checkAclInvariants(text: string): AclCheck {
-  const problems: string[] = [];
-  if (/\btcp_whitelist\s*=/.test(text)) problems.push("tcp_whitelist is present (it builds Inbound allow rules)");
-  if (/\budp_whitelist\s*=/.test(text)) problems.push("udp_whitelist is present");
-
-  const inbound = section(text, "Inbound");
-  if (!inbound) {
-    problems.push("no Inbound chain: EasyTier's default inbound action is Allow");
-  } else {
-    if (!/default_action\s*=\s*2\b/.test(inbound)) problems.push("Inbound chain does not default to Drop");
-    const rules = (inbound.match(/\[\[acl\.acl_v1\.chains\.rules\]\]/g) ?? []).length;
-    if (rules > 0) problems.push(`Inbound chain has ${rules} rule(s); it must have none`);
-  }
-  if (/\bforward_by_system\s*=\s*true/.test(text)) problems.push("forward_by_system would bypass the internal proxy");
-
-  if (/\[\[acl\.acl_v1\.chains\]\]/.test(text)) {
-    // every Forward chain must default to Drop
-    for (const chunk of chainsOfType(text, 3)) {
-      if (!/default_action\s*=\s*2\b/.test(chunk)) problems.push("a Forward chain does not default to Drop");
-    }
-  }
-  return { ok: problems.length === 0, problems };
-}
-
-function section(text: string, name: string): string | null {
-  for (const chunk of chains(text)) {
-    if (new RegExp(`^name = "${name}"$`, "m").test(chunk)) return chunk;
-  }
-  return null;
-}
-
-function chains(text: string): string[] {
-  const parts = text.split(/^\[\[acl\.acl_v1\.chains\]\]$/m);
-  return parts.slice(1).map((p) => p.split(/^\[\[acl\.acl_v1\.chains\.rules\]\]$/m).length > 0 ? p : p);
-}
-
-function chainsOfType(text: string, chainType: number): string[] {
-  const out: string[] = [];
-  for (const chunk of chains(text)) {
-    // the chain's own header precedes its rules; compare only the header block
-    const header = chunk.split(/^\[\[acl\.acl_v1\.chains\.rules\]\]$/m)[0] ?? "";
-    if (new RegExp(`chain_type = ${chainType}\\b`).test(header)) out.push(chunk);
-  }
-  return out;
+function expectationsOf(cfg: EasytierConfig): AclExpectation {
+  return {
+    role: cfg.role,
+    publishedPorts: cfg.role === "provider" ? cfg.publishedPorts : [],
+    proxy: cfg.role === "provider" && cfg.proxyCidr && cfg.mappedCidr ? { cidr: cfg.proxyCidr, mappedCidr: cfg.mappedCidr } : null,
+    secureMode: cfg.secureMode,
+    networkName: cfg.networkName,
+  };
 }
 
 // --- supervisor --------------------------------------------------------------
 
 export interface SupervisorEvents {
   onState: (state: SupervisorState) => void;
+  /** the provider's exported address changed and the core was restarted for it */
+  onProxyMoved?: (proxyCidr: string) => void;
 }
 
 export interface SupervisorState {
@@ -319,8 +328,31 @@ interface Persisted {
   restarts: number;
 }
 
+export interface RelocationInput {
+  current: string | null;
+  observed: string | null;
+  pending: string | null;
+  count: number;
+  now: number;
+  lastAt: number;
+}
+
+/**
+ * When the provider's own address moved far enough to act on. A new address must
+ * be seen twice and the previous move must be at least a minute old, so a
+ * flapping interface cannot restart the core in a loop.
+ */
+export function relocationDecision(i: RelocationInput): { relocate: boolean; pending: string | null; count: number } {
+  if (!i.current || !i.observed || i.observed === i.current) return { relocate: false, pending: null, count: 0 };
+  const count = i.pending === i.observed ? i.count + 1 : 1;
+  if (count < 2) return { relocate: false, pending: i.observed, count };
+  if (i.now - i.lastAt < 60_000) return { relocate: false, pending: i.observed, count: 0 };
+  return { relocate: true, pending: null, count: 0 };
+}
+
 export class EasytierSupervisor {
   private state = emptyState();
+  private lanIpSource: () => string | null;
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private bin: Binaries | null = null;
   private cfg: EasytierConfig | null = null;
@@ -329,10 +361,14 @@ export class EasytierSupervisor {
   private timer: ReturnType<typeof setInterval> | null = null;
   private consecutiveFailures = 0;
   private lastStartAt = 0;
+  private lastRelocateAt = 0;
+  private pendingLanIp: string | null = null;
+  private pendingLanCount = 0;
   private events: SupervisorEvents;
 
-  constructor(events: SupervisorEvents) {
+  constructor(events: SupervisorEvents, opts: { lanIp?: () => string | null } = {}) {
     this.events = events;
+    this.lanIpSource = opts.lanIp ?? safeLanIp;
   }
 
   snapshot(): SupervisorState {
@@ -374,8 +410,7 @@ export class EasytierSupervisor {
     } catch {
       return false;
     }
-    const r = Bun.spawnSync(["ps", "-p", String(pid), "-o", "command="]);
-    return r.stdout.toString().includes("easytier-core");
+    return ownsProcess(pid, this.configPath());
   }
 
   /**
@@ -392,7 +427,7 @@ export class EasytierSupervisor {
     this.bin = await ensureBinaries((m) => logger.info(m));
 
     const text = renderConfig(cfg);
-    const acl = checkAclInvariants(text);
+    const acl = checkConfig(text, expectationsOf(cfg));
     this.state.aclOk = acl.ok;
     this.state.aclProblems = acl.problems;
     if (!acl.ok) {
@@ -655,10 +690,18 @@ export class EasytierSupervisor {
     if (!this.state.running) return this.snapshot();
     try {
       const node = await this.nodeInfo();
-      const acl = checkAclInvariants(node.config);
+      const acl = checkConfig(node.config, this.cfg ? expectationsOf(this.cfg) : { role: "consumer", publishedPorts: [], proxy: null, secureMode: false, networkName: "" });
       this.state.aclOk = acl.ok;
       this.state.aclProblems = acl.problems;
-      if (!acl.ok) logger.error(`effective ACL failed the check: ${acl.problems.join("; ")}`);
+      if (!acl.ok) {
+        // Fail closed: a running core whose configuration cannot be proven safe
+        // is stopped, not merely reported.
+        logger.error(`effective configuration failed the check; stopping the core: ${acl.problems.join("; ")}`);
+        this.state.lastError = `refusing to serve: ${acl.problems.join("; ")}`;
+        this.state.aclOk = false;
+        await this.stop();
+        return this.snapshot();
+      }
 
       const effective = extractToml(node.config, "network_secret");
       if (effective) registerSecret(effective);
@@ -693,16 +736,47 @@ export class EasytierSupervisor {
     return this.snapshot();
   }
 
-  /** called when the LAN address moved: rewrite the export and restart (no hot ACL). */
+  /**
+   * The provider's exported address moved: rewrite the export and restart (2.6.4
+   * has no hot ACL/proxy edit). Called from the monitor only after the new
+   * address has been seen twice and not sooner than a minute after the previous
+   * move, so a flapping interface does not restart the core in a loop.
+   */
   async relocateProxy(): Promise<SupervisorState> {
     if (!this.cfg || this.cfg.role !== "provider") return this.snapshot();
-    const ip = safeLanIp();
+    const ip = this.lanIpSource();
     if (!ip || !this.cfg.proxyCidr) return this.snapshot();
     const next = `${ip}/32`;
     if (next === this.cfg.proxyCidr) return this.snapshot();
+    if (Date.now() - this.lastRelocateAt < 60_000) {
+      logger.warn(`LAN address moved to ${next} again within a minute; keeping ${this.cfg.proxyCidr} for now`);
+      return this.snapshot();
+    }
     logger.warn(`provider LAN address changed: ${this.cfg.proxyCidr} -> ${next}; restarting easytier-core`);
+    this.lastRelocateAt = Date.now();
     this.cfg = { ...this.cfg, proxyCidr: next };
-    return this.start(this.cfg);
+    const state = await this.start(this.cfg);
+    this.events.onProxyMoved?.(next);
+    return state;
+  }
+
+  /** Watches the provider's own address; called by the monitor. */
+  private maybeRelocate(): void {
+    if (!this.cfg || this.cfg.role !== "provider" || !this.cfg.proxyCidr) return;
+    const ip = this.lanIpSource();
+    const decision = relocationDecision({
+      current: this.cfg.proxyCidr,
+      observed: ip ? `${ip}/32` : null,
+      pending: this.pendingLanIp,
+      count: this.pendingLanCount,
+      now: Date.now(),
+      lastAt: this.lastRelocateAt,
+    });
+    this.pendingLanIp = decision.pending;
+    this.pendingLanCount = decision.count;
+    if (decision.relocate) {
+      this.relocateProxy().catch((e) => logger.error(`relocating the export failed: ${String(e)}`));
+    }
   }
 }
 

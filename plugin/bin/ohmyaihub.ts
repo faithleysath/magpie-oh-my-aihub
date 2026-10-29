@@ -4,7 +4,7 @@
 //
 //   bun bin/ohmyaihub.ts --data <magpie data dir> status
 //   ... consumers add <id> <model[,model]> <capUsd>
-//   ... topup <id> <usd>
+//   ... topup <id> <usd> [--deposit-id <id>]
 //   ... revoke <id>
 //   ... configure --role provider --network <name> --secret <secret> --peer tcp://host:11010 [--listen 127.0.0.1:11010]
 //   ... connect --id <provider> --cidr 10.66.a.b/32 --key sk-... [--local-port 13425]
@@ -127,7 +127,11 @@ switch (cmd) {
   }
   case "topup": {
     const [id, usd] = positional(1);
-    const c = await call("POST", "/topup", { consumerId: id, usd: Number(usd) });
+    const c = await call("POST", "/topup", {
+      consumerId: id,
+      usd: Number(usd),
+      depositId: flag("deposit-id"),
+    });
     console.log(JSON.stringify(c, null, 2));
     break;
   }

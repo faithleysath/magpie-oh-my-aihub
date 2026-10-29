@@ -6,11 +6,14 @@
   "main": "src/index.ts",
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "boot-check": "bun run scripts/boot-check.ts",
+    "secret-scan": "bun run scripts/secret-scan.ts",
+    "ci": "bun run typecheck && bun test && bun run boot-check && bun run secret-scan"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "latest"
+    "@types/bun": "^1.4.4",
+    "typescript": "^5.9.0"
   },
   "magpie": {
     "page": {

@@ -1,131 +1,180 @@
 import { describe, expect, test } from "bun:test";
-import { createPrivateKey, createPublicKey } from "node:crypto";
-import { checkAclInvariants, renderConfig, randomMappedCidr, randomVirtualIp, generateSecureIdentity } from "../src/easytier.ts";
-import type { EasytierConfig } from "../src/easytier.ts";
+import { checkConfig, type AclExpectation } from "../src/acl.ts";
+import { renderConfig, type EasytierConfig } from "../src/easytier.ts";
 
-const base: EasytierConfig = {
+const provider: EasytierConfig = {
   role: "provider",
   networkName: "lab",
   networkSecret: "supersecret",
-  peers: [],
+  peers: ["tcp://relay.example.com:11010"],
   virtualIpv4: "10.77.0.7/24",
   overlayCidr: "10.77.0.0/24",
-  listenAddr: null,
+  listenAddr: "tcp://127.0.0.1:11010",
   rpcPort: 17888,
-  proxyCidr: "192.168.1.20/32",
+  proxyCidr: "192.0.2.84/32",
   mappedCidr: "10.66.7.9/32",
   publishedPorts: [3425],
   secureMode: true,
-  secureIdentity: {
-    privateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-    publicKey: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
-  },
+  secureIdentity: { privateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" },
   instanceName: "ohmyaihub-provider",
 };
 
-describe("renderConfig", () => {
-  const text = renderConfig(base);
+const consumer: EasytierConfig = {
+  ...provider,
+  role: "consumer",
+  proxyCidr: null,
+  mappedCidr: null,
+  publishedPorts: [],
+  instanceName: "ohmyaihub-consumer",
+};
 
-  test("no TUN, no whitelist, secured and mapped", () => {
-    expect(text).toContain("no_tun = true");
-    expect(text).not.toContain("tcp_whitelist");
-    expect(text).not.toContain("udp_whitelist");
-    expect(text).toContain('mapped_cidr = "10.66.7.9/32"');
-    expect(text).toContain("enabled = true");
-    expect(text).toContain("local_private_key");
+const expectProvider: AclExpectation = {
+  role: "provider",
+  publishedPorts: [3425],
+  proxy: { cidr: "192.0.2.84/32", mappedCidr: "10.66.7.9/32" },
+  secureMode: true,
+  networkName: "lab",
+};
+const expectConsumer: AclExpectation = { role: "consumer", publishedPorts: [], proxy: null, secureMode: true, networkName: "lab" };
+
+const good = renderConfig(provider);
+const goodConsumer = renderConfig(consumer);
+
+describe("generated configurations", () => {
+  test("the provider's passes, and it says what it must", () => {
+    const r = checkConfig(good, expectProvider);
+    expect(r).toEqual({ ok: true, problems: [] });
+    expect(good).toContain("no_tun = true");
+    expect(good).not.toContain("tcp_whitelist");
+    expect(good).toContain('mapped_cidr = "10.66.7.9/32"');
   });
 
-  test("Forward chain allows exactly the published ports and defaults to Drop", () => {
-    expect(text).toContain('name = "Forward"');
-    expect(text).toContain("default_action = 2");
-    expect(text).toContain('ports = ["3425"]');
+  test("the consumer's passes and exports nothing", () => {
+    expect(checkConfig(goodConsumer, expectConsumer)).toEqual({ ok: true, problems: [] });
+    expect(goodConsumer).not.toContain("proxy_network");
   });
 
-  test("Inbound chain has no rules and defaults to Drop", () => {
-    const inbound = text.split('name = "Inbound"')[1] ?? "";
-    expect(inbound).toContain("default_action = 2");
-    expect(inbound).not.toContain("[[acl.acl_v1.chains.rules]]");
-  });
-
-  test("passes its own invariants", () => {
-    expect(checkAclInvariants(text)).toEqual({ ok: true, problems: [] });
-  });
-
-  test("a consumer has no Forward chain and exports nothing", () => {
-    const c = renderConfig({ ...base, role: "consumer", proxyCidr: null, mappedCidr: null, publishedPorts: [] });
-    expect(c).not.toContain('name = "Forward"');
-    expect(c).not.toContain("proxy_network");
-    expect(c).toContain('name = "Inbound"');
-    expect(checkAclInvariants(c).ok).toBe(true);
+  test("the validator refuses a file that is not TOML at all", () => {
+    expect(checkConfig("not toml = = =", expectProvider).ok).toBe(false);
   });
 });
 
-describe("checkAclInvariants", () => {
-  const good = renderConfig(base);
+describe("ACL must fail closed", () => {
+  const mutate = (from: string, to: string) => good.replace(from, to);
 
-  test("rejects tcp_whitelist", () => {
-    const bad = good.replace("[flags]", 'tcp_whitelist = ["3425"]\n[flags]');
-    expect(checkAclInvariants(bad).ok).toBe(false);
-    expect(checkAclInvariants(bad).problems.join(" ")).toContain("tcp_whitelist");
+  test("tcp_whitelist is refused", () => {
+    const r = checkConfig('tcp_whitelist = ["3425"]\n' + good, expectProvider);
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(" ")).toContain("tcp_whitelist");
   });
 
-  test("rejects a missing Inbound chain", () => {
-    const bad = good.replace(/\[\[acl\.acl_v1\.chains\]\]\nname = "Inbound"[\s\S]*$/, "");
-    expect(checkAclInvariants(bad).ok).toBe(false);
-    expect(checkAclInvariants(bad).problems.join(" ")).toContain("no Inbound chain");
+  test("a missing Inbound chain is refused", () => {
+    const cut = good.lastIndexOf("[[acl.acl_v1.chains]]");
+    const withoutInbound = good.slice(0, cut);
+    const r = checkConfig(withoutInbound, expectProvider);
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(" ")).toContain("no Inbound chain");
   });
 
-  test("rejects an Inbound rule, even an allow for the gateway port", () => {
-    const bad = good + '\n[[acl.acl_v1.chains.rules]]\nname = "oops"\nprotocol = 1\nports = ["3425"]\naction = 1\n';
-    expect(checkAclInvariants(bad).ok).toBe(false);
+  test("any Inbound rule is refused, even an allow for the gateway port", () => {
+    const withRule = good + '\n[[acl.acl_v1.chains.rules]]\nname = "oops"\nprotocol = 1\nports = ["3425"]\naction = 1\n';
+    expect(checkConfig(withRule, expectProvider).ok).toBe(false);
   });
 
-  test("rejects an Inbound chain that defaults to Allow", () => {
+  test("a second Inbound chain with a hidden allow is refused", () => {
+    const hidden =
+      good +
+      '\n[[acl.acl_v1.chains]]\nname = "Inbound-2"\nchain_type = 1\nenabled = false\ndefault_action = 2\n' +
+      '[[acl.acl_v1.chains.rules]]\nprotocol = 1\nports = ["3425"]\naction = 1\n';
+    const r = checkConfig(hidden, expectProvider);
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(" ")).toContain("must have none");
+  });
+
+  test("an Inbound chain that defaults to Allow is refused", () => {
     const bad = good.replace(/(name = "Inbound"[\s\S]*?)default_action = 2/, "$1default_action = 1");
-    expect(checkAclInvariants(bad).ok).toBe(false);
+    expect(checkConfig(bad, expectProvider).ok).toBe(false);
   });
 
-  test("rejects a Forward chain that defaults to Allow", () => {
+  test("a Forward chain that defaults to Allow is refused", () => {
     const bad = good.replace(/(name = "Forward"[\s\S]*?)default_action = 2/, "$1default_action = 1");
-    expect(checkAclInvariants(bad).ok).toBe(false);
+    expect(checkConfig(bad, expectProvider).ok).toBe(false);
   });
 
-  test("rejects forward_by_system", () => {
-    const bad = good.replace("no_tun = true", "no_tun = true\nforward_by_system = true");
-    expect(checkAclInvariants(bad).ok).toBe(false);
-  });
-});
-
-describe("address allocation", () => {
-  test("mapped cidrs are unique and in 10.66.0.0/16", () => {
-    const seen = new Set<string>();
-    for (let i = 0; i < 50; i++) {
-      const c = randomMappedCidr(seen);
-      expect(c).toMatch(/^10\.66\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\/32$/);
-      seen.add(c);
-    }
-    expect(seen.size).toBe(50);
+  test("an extra allowed port is refused", () => {
+    const bad = good + '\n[[acl.acl_v1.chains]]\nname = "Forward-2"\nchain_type = 3\ndefault_action = 2\n' +
+      '[[acl.acl_v1.chains.rules]]\nprotocol = 1\nports = ["22"]\naction = 1\n';
+    const r = checkConfig(bad, expectProvider);
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(" ")).toContain("allows [22, 3425]");
   });
 
-  test("virtual addresses stay inside the overlay /24 and skip .0/.1/.255", () => {
-    for (let i = 0; i < 50; i++) {
-      const v = randomVirtualIp("10.77.0.0/24");
-      const host = Number(v.split("/")[0].split(".")[3]);
-      expect(host).toBeGreaterThanOrEqual(2);
-      expect(host).toBeLessThanOrEqual(253);
-      expect(v.endsWith("/24")).toBe(true);
-    }
+  test("a port range is refused", () => {
+    const bad = good.replace('ports = ["3425"]', 'ports = ["3000-4000"]');
+    expect(checkConfig(bad, expectProvider).ok).toBe(false);
   });
 
-  test("a secure identity is a matching X25519 pair in base64", () => {
-    const { privateKey, publicKey } = generateSecureIdentity();
-    expect(Buffer.from(privateKey, "base64")).toHaveLength(32);
-    expect(Buffer.from(publicKey, "base64")).toHaveLength(32);
-    // PKCS#8 for a raw X25519 private key: a fixed prefix and the 32 bytes.
-    const prefix = Buffer.from("302e020100300506032b656e04220420", "hex");
-    const der = Buffer.concat([prefix, Buffer.from(privateKey, "base64")]);
-    const key = createPrivateKey({ key: der, format: "der", type: "pkcs8" });
-    const derived = createPublicKey(key).export({ format: "jwk" }).x;
-    expect(derived).toBe(Buffer.from(publicKey, "base64").toString("base64url"));
+  test("a non-TCP allow is refused", () => {
+    const bad = good.replace("protocol = 1", "protocol = 2");
+    expect(checkConfig(bad, expectProvider).ok).toBe(false);
+  });
+
+  test("an address-scoped allow is refused", () => {
+    const bad = good.replace('ports = ["3425"]', 'ports = ["3425"]\ndestination_ips = ["203.0.113.0/24"]');
+    expect(checkConfig(bad, expectProvider).ok).toBe(false);
+  });
+
+  test("a provider without a Forward chain is refused", () => {
+    const forward = good.indexOf("[[acl.acl_v1.chains]]");
+    const inbound = good.lastIndexOf("[[acl.acl_v1.chains]]");
+    const withoutForward = good.slice(0, forward) + good.slice(inbound);
+    const r = checkConfig(withoutForward, expectProvider);
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(" ")).toContain("needs a Forward chain");
+  });
+
+  test("a consumer with a Forward allow or an export is refused", () => {
+    const withExport = 'proxy_network = [{ cidr = "192.0.2.84/32" }]\n' + goodConsumer;
+    expect(checkConfig(withExport, expectConsumer).ok).toBe(false);
+    const withForward = goodConsumer + '\n[[acl.acl_v1.chains]]\nname = "Forward"\nchain_type = 3\ndefault_action = 2\n' +
+      '[[acl.acl_v1.chains.rules]]\nprotocol = 1\nports = ["3425"]\naction = 1\n';
+    expect(checkConfig(withForward, expectConsumer).ok).toBe(false);
+  });
+
+  test("EasyTier's /32 normalization still passes", () => {
+    // the running core reports a single-host CIDR without "/32"
+    const normalized = good
+      .replace('cidr = "192.0.2.84/32"', 'cidr = "192.0.2.84"')
+      .replace('mapped_cidr = "10.66.7.9/32"', 'mapped_cidr = "10.66.7.9"');
+    expect(checkConfig(normalized, expectProvider)).toEqual({ ok: true, problems: [] });
+  });
+
+  test("a different or extra export is refused", () => {
+    const other = good.replace('mapped_cidr = "10.66.7.9/32"', 'mapped_cidr = "10.66.9.9/32"');
+    expect(checkConfig(other, expectProvider).ok).toBe(false);
+    const two = good.replace('proxy_network = ', 'proxy_network = [{ cidr = "198.51.100.0/24" }, ');
+    expect(checkConfig(two, expectProvider).ok).toBe(false);
+  });
+
+  test("no_tun other than true is refused", () => {
+    expect(checkConfig(good.replace("no_tun = true", "no_tun = false"), expectProvider).ok).toBe(false);
+    expect(checkConfig(good.replace("no_tun = true\n", ""), expectProvider).ok).toBe(false);
+  });
+
+  test("forward_by_system and disabled encryption are refused", () => {
+    expect(checkConfig(good.replace("[flags]", "[flags]\nforward_by_system = true"), expectProvider).ok).toBe(false);
+    expect(checkConfig(good.replace("[flags]", "[flags]\ndisable_encryption = true"), expectProvider).ok).toBe(false);
+  });
+
+  test("Secure Mode must be on with a pinned keypair", () => {
+    const noSecure = good.replace(/\[secure_mode\][\s\S]*?(?=\[acl)/, "");
+    expect(checkConfig(noSecure, expectProvider).ok).toBe(false);
+    const noKeys = good.replace(/local_private_key = .*\n/, "").replace(/local_public_key = .*\n/, "");
+    expect(checkConfig(noKeys, expectProvider).ok).toBe(false);
+  });
+
+  test("a different network name or an unknown chain type is refused", () => {
+    expect(checkConfig(good.replace('network_name = "lab"', 'network_name = "other"'), expectProvider).ok).toBe(false);
+    expect(checkConfig(good.replace("chain_type = 3", "chain_type = 9"), expectProvider).ok).toBe(false);
   });
 });

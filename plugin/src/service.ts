@@ -112,7 +112,16 @@ export class Service {
   private ticking: ReturnType<typeof setInterval> | null = null;
 
   constructor(private deps: ServiceDeps) {
-    this.supervisor = new EasytierSupervisor({ onState: () => this.writeSnapshot() });
+    this.supervisor = new EasytierSupervisor({
+      onState: () => this.writeSnapshot(),
+      onProxyMoved: (cidr) => {
+        if (this.state.config) {
+          this.state.config.proxyCidr = cidr;
+          writeState(this.state);
+          logger.info(`export moved to ${cidr}; plugin state updated`);
+        }
+      },
+    });
     this.provisioner = new Provisioner(deps.magpie);
   }
 
@@ -292,10 +301,6 @@ export class Service {
     if (!/^sk-[A-Za-z0-9._-]{8,}$/.test(input.key)) throw new Error("that is not a gateway key");
     registerSecret(input.key);
 
-    const providerPort = input.providerPort ?? 3425;
-    if (!Number.isInteger(providerPort) || providerPort < 1 || providerPort > 65535) {
-      throw new Error("providerPort must be a TCP port");
-    }
     // A mapped prefix must identify exactly one provider on this overlay: two
     // peers announcing the same one would make the dial land on either.
     const want = input.mappedCidr.replace(/\/32$/, "");
@@ -314,45 +319,77 @@ export class Service {
       }
     } catch (e) {
       if (String(e).includes("already announces")) throw e;
-      // no route table yet: the connect's own ingress check will catch a real problem
+      // no route table yet: the ingress check below catches a real problem
     }
 
+    const providerPort = input.providerPort ?? 3425;
+    if (!Number.isInteger(providerPort) || providerPort < 1 || providerPort > 65535) {
+      throw new Error("providerPort must be a TCP port");
+    }
     const localPort = input.localPort ?? (await freeLoopbackPort());
-    const dst = `${input.mappedCidr.replace(/\/32$/, "")}:${providerPort}`;
+    const dst = `${want}:${providerPort}`;
+    const bind = `127.0.0.1:${localPort}`;
     for (const f of await this.supervisor.listPortForwards()) {
       if (f.bindAddr.endsWith(`:${localPort}`) && f.dstAddr !== dst) {
         await this.supervisor.removePortForward(f.bindAddr);
       }
     }
-    await this.supervisor.addPortForward(`127.0.0.1:${localPort}`, dst);
 
-    await this.deps.magpie.removeProvider(input.id);
-    await this.deps.magpie.addRemoteProvider({ id: input.id, url: `http://127.0.0.1:${localPort}`, key: input.key });
+    const prev = this.state.providerWiring;
+    let added = false;
+    let removedPrev = false;
+    try {
+      // 1. the overlay path first; nothing in Magpie changes yet
+      await this.supervisor.addPortForward(bind, dst);
+      if (!(await waitIngressKeyed(localPort, 10_000))) {
+        throw new Error(
+          `127.0.0.1:${localPort} did not answer 401 without a key within 10s: ` +
+            `the provider must be online, on the same network, and its mapped address reachable`,
+        );
+      }
 
-    this.state.providerWiring = {
-      id: input.id,
-      mappedCidr: input.mappedCidr,
-      providerPort,
-      key: input.key,
-      localPort,
-      createdAt: new Date().toISOString(),
-    };
-    writeState(this.state);
+      // 2. the provider. A different id is added beside the old one, which keeps
+      //    working until the new one is proven; the same id has to be replaced.
+      if (prev && prev.id === input.id) {
+        await this.deps.magpie.removeProvider(prev.id);
+        removedPrev = true;
+      }
+      await this.deps.magpie.addRemoteProvider({ id: input.id, url: `http://127.0.0.1:${localPort}`, key: input.key });
+      added = true;
 
-    let ok = false;
-    for (let i = 0; i < 20 && !ok; i++) {
-      ok = await ingressRequiresKey(localPort);
-      if (!ok) await new Promise((r) => setTimeout(r, 500));
+      // 3. the consumer must actually see the remote's models
+      if (!(await waitModel(input.id, 10_000))) {
+        throw new Error(`magpie did not list any ${input.id}/ model within 10s; is that key allowed a model?`);
+      }
+
+      // 4. only now drop the previous wiring and record the new one
+      if (prev && prev.id !== input.id) {
+        await this.deps.magpie.removeProvider(prev.id).catch((e) => logger.warn(`could not remove the old provider ${prev.id}: ${String(e)}`));
+        await this.supervisor.removePortForward(`127.0.0.1:${prev.localPort}`).catch(() => {});
+      }
+      this.state.providerWiring = {
+        id: input.id,
+        mappedCidr: input.mappedCidr,
+        providerPort,
+        key: input.key,
+        localPort,
+        createdAt: new Date().toISOString(),
+      };
+      writeState(this.state);
+      logger.info(`connected provider ${input.id} at ${bind} -> ${dst}`);
+      await this.supervisor.refresh();
+      return this.status();
+    } catch (e) {
+      // Roll back so a failed connect never costs the consumer a working provider.
+      if (added) await this.deps.magpie.removeProvider(input.id).catch(() => {});
+      await this.supervisor.removePortForward(bind).catch(() => {});
+      if (removedPrev && prev) {
+        await this.deps.magpie
+          .addRemoteProvider({ id: prev.id, url: `http://127.0.0.1:${prev.localPort}`, key: prev.key })
+          .catch((err) => logger.error(`could not restore the previous provider ${prev.id}: ${String(err)}`));
+      }
+      throw new Error(`connect failed: ${(e as Error).message}${prev ? ` (the previous provider ${prev.id} was kept)` : ""}`);
     }
-    if (!ok) {
-      throw new Error(
-        `the ingress at 127.0.0.1:${localPort} did not answer 401 without a key within 10s: ` +
-          `the provider must be online, on the same network, and its Virtual IP/export reachable`,
-      );
-    }
-    logger.info(`connected provider ${input.id} at 127.0.0.1:${localPort} -> ${dst}`);
-    await this.supervisor.refresh();
-    return this.status();
   }
 
   async disconnectProvider(): Promise<StatusSnapshot> {
@@ -368,16 +405,21 @@ export class Service {
   }
 
   /** The provider operator hands a consumer key over; never logged. */
-  handover(consumerId: string): { consumerId: string; keyName: string; key: string; models: string[]; capUsd: number } {
+  async handover(
+    consumerId: string,
+  ): Promise<{ consumerId: string; keyName: string; key: string; models: string[]; capUsd: number }> {
     const rec = this.provisioner.find(consumerId);
     if (!rec || rec.revokedAt) throw new Error(`no active consumer ${consumerId}`);
     if (!rec.secret) throw new Error(`the key of ${consumerId} is not in this Magpie any more; recreate it`);
+    // A key is handed over only when Magpie really holds it with its whitelist
+    // and cap: the read-back is the gate, not the local record.
+    await this.provisioner.status(consumerId);
     logger.info(`handing key ${rec.keyName} over for ${consumerId}`);
     return { consumerId, keyName: rec.keyName, key: rec.secret, models: [...rec.models], capUsd: rec.capUsd };
   }
 
-  async topUp(consumerId: string, usd: number): Promise<ConsumerView> {
-    return this.provisioner.topUp(consumerId, usd);
+  async topUp(consumerId: string, usd: number, depositId?: string): Promise<ConsumerView> {
+    return this.provisioner.topUp(consumerId, usd, depositId);
   }
 
   async ensureConsumer(consumerId: string, models: string[], capUsd: number): Promise<ConsumerView> {
@@ -524,6 +566,32 @@ async function statusIs(host: string, port: number, want: number): Promise<boole
   } catch {
     return false;
   }
+}
+
+async function waitIngressKeyed(localPort: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await ingressRequiresKey(localPort)) return true;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
+
+async function waitModel(providerId: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${gatewayBaseURL()}/v1/models`, { signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const body = (await res.json()) as { data?: { id?: string }[] };
+        if ((body.data ?? []).some((m) => typeof m.id === "string" && m.id.startsWith(`${providerId}/`))) return true;
+      }
+    } catch {
+      /* keep waiting */
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
 }
 
 function instanceName(role: Role): string {

@@ -93,9 +93,13 @@ bun bin/ohmyaihub.ts --data ~/.config/magpie revoke alice
 
 What the plugin enforces on every key (the architecture's non-negotiables):
 
+- one operation per consumer at a time, and a deposit id makes a replayed top-up a no-op,
+- a cap recorded as pending before Magpie is written, so a crash between the write and the
+  local commit is reconciled from what the gateway actually holds,
+- a key whose whitelist or cap cannot be applied is **deleted**, never handed over,
 - a non-empty model whitelist; an empty one is refused,
-- a positive cost cap of at least **$0.0001** (Magpie rounds caps to that grid; a smaller
-  value silently means *unlimited*),
+- a positive cost cap of at least **$0.0001** on Magpie's exact grid, finite and bounded
+  (a smaller value silently means *unlimited*),
 - every write is read back from `GET /v1/magpie/limit` and must match,
 - top-ups raise the cumulative cap and never `reset` usage,
 - revoking removes the key from Magpie and wipes the stored secret.
@@ -133,8 +137,13 @@ is a Magpie limitation, not a choice (see `docs/ARCHITECTURE.md`).
   survives restarts.
 - Runs the management RPC on `-r 127.0.0.1:<port>` (the TOML key is ignored by 2.6.4 and the
   default binds `0.0.0.0`), and checks that the RPC is not on another address.
+- Verifies the **installed binaries' own SHA-256** on every start (a recorded hash per binary,
+  not only the archive marker) and reinstalls from the pinned archive on a mismatch.
 - Restarts a crashed core with backoff (5 attempts), adopts a core that survived a host
-  restart (pid file), and stops its core when Magpie (or the plugin) goes away.
+  restart (pid file, only when its command line runs *our* config, so a recycled pid is never
+  touched), and stops its core when Magpie (or the plugin) goes away.
+- Watches the provider's own address: a change seen twice, at least a minute after the previous
+  move, rewrites the export with a supervised restart (2.6.4 has no hot ACL/proxy edit).
 - Detects a change of the provider's LAN address and rewrites the export with a supervised
   restart (2.6.4 has no runtime ACL/proxy-network edit).
 - Port forwards are added/removed through `easytier-cli`, always bound to `127.0.0.1`.
@@ -183,6 +192,13 @@ page/                   the plugin page (settings + status snapshot)
 bin/ohmyaihub.ts        operator CLI
 test/                   bun tests (ACL invariants, keys, addresses, binary hashes)
 ```
+
+## CI
+
+`bun run ci` (= `bun run typecheck && bun test && bun run boot-check && bun run secret-scan`)
+runs the TypeScript check, the unit tests, a boot of the real plugin entry against a stub
+Magpie in an isolated HOME/data directory, and a credential scan. GitHub Actions runs the
+same on Linux and macOS for every pull request that touches `plugin/`.
 
 ## Known limits
 

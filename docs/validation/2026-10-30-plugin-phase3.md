@@ -1,5 +1,10 @@
 # 2026-10-30 — Plugin skeleton: EasyTier supervisor and Gateway Key provisioner
 
+> **Superseded in part by [`2026-10-30-pr4-review-fixes.md`](2026-10-30-pr4-review-fixes.md).**
+> The plugin entry as first committed to PR #4 had a field/method name clash that made
+> `magpie.version()` throw at boot; the successful runs below predate that refactor. Read the
+> review note for the correction and the re-run.
+
 Phase 3. The first product code: a Magpie community plugin that runs the EasyTier overlay and
 issues consumer Gateway Keys, plus the mock top-up loop with no blockchain and no real money.
 The ingress and quota semantics it relies on were measured in

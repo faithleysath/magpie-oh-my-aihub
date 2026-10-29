@@ -127,14 +127,14 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
         return json(await svc.ensureConsumer(consumerId, models, capUsd));
       }
       case "/topup": {
-        const { consumerId, usd } = body as { consumerId?: string; usd?: number };
+        const { consumerId, usd, depositId } = body as { consumerId?: string; usd?: number; depositId?: string };
         if (!consumerId || typeof usd !== "number") return json({ error: "consumerId and usd are required" }, 400);
-        return json(await svc.topUp(consumerId, usd));
+        return json(await svc.topUp(consumerId, usd, depositId));
       }
       case "/secret": {
         const { consumerId } = body as { consumerId?: string };
         if (!consumerId) return json({ error: "consumerId is required" }, 400);
-        return json(svc.handover(consumerId));
+        return json(await svc.handover(consumerId));
       }
       case "/revoke": {
         const { consumerId } = body as { consumerId?: string };
