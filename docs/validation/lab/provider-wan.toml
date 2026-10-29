@@ -1,0 +1,36 @@
+# Provider used for the two-host run in docs/validation/2026-10-29-acl-fix-and-two-host.md §4.
+# Documentation addresses (192.0.2.0/24, 10.66.137.0/24); replace peers, secret and the real LAN address.
+instance_name = "p2-wan-provider"
+hostname = "mac-provider"
+ipv4 = "10.77.0.1"
+# No listener behind NAT: the provider dials out. Behind a public host, add listeners.
+peer = [{ uri = "tcp://relay.example.com:11010" }]
+# real address -> the stable address consumers dial; unique per provider
+proxy_network = [{ cidr = "192.0.2.84/32", mapped_cidr = "10.66.137.1/32" }]
+
+[network_identity]
+network_name = "<NETWORK_NAME>"
+network_secret = "<NETWORK_SECRET>"
+
+[flags]
+no_tun = true
+
+[acl.acl_v1]
+[[acl.acl_v1.chains]]
+name = "Forward"
+chain_type = 3
+enabled = true
+default_action = 2
+[[acl.acl_v1.chains.rules]]
+name = "allow-gateway"
+priority = 1000
+enabled = true
+protocol = 1
+ports = ["3425"]
+action = 1
+stateful = true
+[[acl.acl_v1.chains]]
+name = "Inbound"
+chain_type = 1
+enabled = true
+default_action = 2

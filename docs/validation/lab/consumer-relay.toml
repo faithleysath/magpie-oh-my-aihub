@@ -1,0 +1,22 @@
+# NAT'd consumer forced through the relay (docs/validation/2026-10-29-acl-fix-and-two-host.md §4.3).
+# no_listener + disable_p2p make a direct path impossible, so the HK peer relays.
+instance_name = "p2-wan-consumer"
+hostname = "usw-consumer"
+ipv4 = "10.77.0.2"
+no_listener = true
+peer = [{ uri = "tcp://relay.example.com:11010" }]
+
+[network_identity]
+network_name = "<NETWORK_NAME>"
+network_secret = "<NETWORK_SECRET>"
+
+[flags]
+no_tun = true
+disable_p2p = true
+
+[acl.acl_v1]
+[[acl.acl_v1.chains]]
+name = "Inbound"
+chain_type = 1
+enabled = true
+default_action = 2
