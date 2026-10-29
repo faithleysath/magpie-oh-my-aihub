@@ -1,0 +1,32 @@
+# EasyTier 2.6.4 provider config used in docs/validation/2026-10-29-local-lab.md §3.4.
+# Replace every <...> placeholder. Never commit a real network secret or LAN address.
+instance_name = "lab-p"
+hostname = "lab-p"
+ipv4 = "10.44.0.1"                                     # the node's virtual IP inside the overlay
+listeners = ["tcp://127.0.0.1:11011"]                  # lab only; real deployments listen on a reachable address
+proxy_network = [{ cidr = "<PROVIDER_LAN_IP>/32" }]    # export the node's own address through the overlay
+tcp_whitelist = ["3425"]                               # inbound (virtual-IP) TCP allow list
+
+[network_identity]
+network_name = "<NETWORK_NAME>"
+network_secret = "<NETWORK_SECRET>"
+
+[flags]
+no_tun = true                                          # no TUN device: no root, no routes on the provider
+
+# Inbound-only whitelists do not cover proxied networks (easytier-core/src/config/peers.rs:75-121);
+# a Forward chain is what keeps every local port but the gateway unreachable from the overlay.
+[acl.acl_v1]
+[[acl.acl_v1.chains]]
+name = "Forward"
+chain_type = 3                                         # Forward = subnet proxy path
+enabled = true
+default_action = 2                                     # Drop
+[[acl.acl_v1.chains.rules]]
+name = "allow-gateway"
+description = "only the magpie gateway port leaves this node for the overlay"
+priority = 1000
+enabled = true
+protocol = 1                                           # TCP
+ports = ["3425"]
+action = 1                                             # Allow
