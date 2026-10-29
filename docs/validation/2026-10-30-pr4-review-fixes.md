@@ -311,8 +311,10 @@ configuration that could not be read all merely set `aclOk = false` while the co
 **Fix.** Those checks now feed one verdict. Two consecutive failed checks stop the core this plugin
 owns; the stop sets `stopping`, so the supervised restart does not bring it back. An explicit
 `start()` (or a configuration change) re-validates the generated file and the running core before
-serving again. `stop()` also refuses to signal a pid whose command line no longer runs our config,
-so a recycled pid or a foreign EasyTier is never touched.
+serving again. `stop()` signals a child **by handle** when this process spawned it (a shell script's argv is not
+the command line it was given), and an **adopted** pid only when its command line still runs our
+config; the handle is cleared when the child exits, so a recycled pid is never signalled. A foreign
+pid is never touched (tested).
 
 Tests (`test/runtime.test.ts`, a fake `easytier-core` that sleeps and a fake `easytier-cli` that
 answers from a file):
@@ -338,5 +340,6 @@ left behind; the user's agent configuration and Magpie keys were not touched.
 
 ### 11.5 Status
 
-`tsc` clean · **75 tests pass** · boot-check PASS · secret-scan PASS · Linux + macOS CI (link in the
-PR). No P0 blocks remain. **Merge PR #4 after this commit.**
+`tsc` clean · **75 tests pass** · boot-check PASS · secret-scan PASS · Linux **and** macOS CI green
+([run 40892663744](https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40892663744)).
+No P0 blocks remain. **Merge PR #4 after this commit.**
