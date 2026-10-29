@@ -54,7 +54,8 @@ machine-readable; every step's detail is from that run.
 (REPRODUCED, 2026-10-29T23:15:57.280Z, macOS arm64).
 
 `cd plugin && bun run ci` → typecheck, **158 unit tests**, boot-check and
-secret-scan all pass.
+secret-scan all pass. CI (Linux + macOS, Bun 1.4.3) is green at commit
+`0d89eb4`: https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40972860093
 
 | # | Test | Result | Evidence |
 | --- | --- | --- | --- |
