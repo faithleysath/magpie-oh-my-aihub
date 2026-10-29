@@ -1,0 +1,156 @@
+{
+ "ranAt": "2026-10-29T15:46:45.680Z",
+ "platform": "darwin-arm64",
+ "bun": "1.4.3",
+ "magpie": "/Users/laysath/.local/bin/magpie",
+ "network": "phase4-lab",
+ "labDir": "/tmp/ohmyaihub-phase4-69744",
+ "results": [
+  {
+   "name": "three isolated Magpie gateways start and enforce keys",
+   "ok": true,
+   "detail": "A: 401 without a key, 200 with one",
+   "ms": 4243
+  },
+  {
+   "name": "the pinned EasyTier is verified once and reused by the other nodes",
+   "ok": true,
+   "detail": "reused the verified 2.6.4 cache at /tmp/ohmyaihub-et-cache-v2.6.4-darwin-arm64",
+   "ms": 91
+  },
+  {
+   "name": "the three plugin hosts boot and the overlay finds every peer",
+   "ok": true,
+   "detail": "A sees 3 nodes, exports 192.168.10.84/32 -> 10.66.238.160/32",
+   "ms": 13249
+  },
+  {
+   "name": "A opens independent Gateway Keys for B and C, and shares its own model",
+   "ok": true,
+   "detail": "B key sk-magpi…, C key sk-magpi… (different: true); A issued b-node and c-node",
+   "ms": 816
+  },
+  {
+   "name": "A connects to B and to C at the same time (distinct ports, distinct keys)",
+   "ok": true,
+   "detail": "A: 13425, 13426 (unique: true); keys differ",
+   "ms": 1388
+  },
+  {
+   "name": "each node lists the models it consumes, prefixed by the remote id",
+   "ok": true,
+   "detail": "A: auto/common-model, mocka/a-model, mocka/common-model, peer-b/mockb/b-model, peer-b/mockb/common-model, peer-c/mockc/c-model, peer-c/mockc/common-model · B: mockb/b-model, mockb/common-model, peer-a/mocka/a-model · C: mockc/c-model, mockc/common-model, peer-a/mocka/a-model",
+   "ms": 562
+  },
+  {
+   "name": "two providers serving the same model name stay distinct",
+   "ok": true,
+   "detail": "the same upstream model id is addressable as peer-b/... and peer-c/... with no overwrite",
+   "ms": 137
+  },
+  {
+   "name": "one request crosses exactly one overlay hop (no routing loop)",
+   "ok": true,
+   "detail": "B upstream hit 1x, A upstream hit 0x (expected 1 / 0)",
+   "ms": 13
+  },
+  {
+   "name": "streaming, Responses and Messages API pass through the keyed chain",
+   "ok": true,
+   "detail": "SSE chunks + [DONE], /v1/responses and /v1/messages answered through peer-b",
+   "ms": 10
+  },
+  {
+   "name": "remote models join a native Magpie routing group and are used through it",
+   "ok": true,
+   "detail": "group/labmix served by a remote model through Magpie's own routing",
+   "ms": 505
+  },
+  {
+   "name": "exhausting B's key on A leaves C's key and both nodes' own models working",
+   "ok": true,
+   "detail": "B's key refused after 3 calls (last 429); C 200; B's native model 200",
+   "ms": 1031
+  },
+  {
+   "name": "a simulated top-up raises only B's key and B can call A again",
+   "ok": true,
+   "detail": "deposit replayed without a second credit (cap 1.03)",
+   "ms": 116
+  },
+  {
+   "name": "revoking one provider's key leaves the other provider untouched, then re-issuing restores it",
+   "ok": true,
+   "detail": "C was refused (401) while B stayed 200; a re-issued key + provider update restored C (200)",
+   "ms": 1017
+  },
+  {
+   "name": "sharing refuses to resell a remote Magpie's models (no A->B->A)",
+   "ok": true,
+   "detail": "mutual sharing lists A: peer-b/mockb/b-model,peer-b/mockb/common-model,peer-c/mockc/c-model,peer-c/mockc/common-model / B: peer-a/mocka/a-model but no shared key may name them",
+   "ms": 247
+  },
+  {
+   "name": "a provider that goes offline degrades alone; the other keeps serving",
+   "ok": true,
+   "detail": "peer-b degraded while peer-c answered; peer-b recovered after its Magpie came back",
+   "ms": 71577
+  },
+  {
+   "name": "deleting one provider leaves the other's connection intact",
+   "ok": true,
+   "detail": "peer-c removed, peer-b still connected and answering",
+   "ms": 6231
+  },
+  {
+   "name": "the same provider added twice is idempotent",
+   "ok": true,
+   "detail": "one peer-b entry, 1 provider(s), status connected",
+   "ms": 740
+  },
+  {
+   "name": "an EasyTier restart restores every forward from the generated config",
+   "ok": true,
+   "detail": "{\"id\":\"c1\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"b-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello from b model b-model\"},\"finish_reason\":\"stop\"}],\"usage\":{\"promp",
+   "ms": 922
+  },
+  {
+   "name": "a full Magpie + plugin restart restores the connection set",
+   "ok": true,
+   "detail": "{\"id\":\"c1\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"b-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello from b model b-model\"},\"finish_reason\":\"stop\"}],\"usage\":{\"promp",
+   "ms": 53081
+  },
+  {
+   "name": "a provider's own Magpie + plugin restart is recovered by the consumer",
+   "ok": true,
+   "detail": "{\"id\":\"c1\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"b-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello from b model b-model\"},",
+   "ms": 8118
+  },
+  {
+   "name": "the overlay's virtual-IP path is dropped by the Inbound ACL (no loopback bypass)",
+   "ok": true,
+   "detail": "TimeoutError: The operation timed out.",
+   "ms": 7016
+  },
+  {
+   "name": "sharing off withdraws the export but keeps every local provider and model",
+   "ok": true,
+   "detail": "export withdrawn while 2 native model(s) stayed; sharing came back with the same mapped address",
+   "ms": 60065
+  },
+  {
+   "name": "a phase-3 state.json migrates on boot, keeps its wiring and moves the key out",
+   "ok": true,
+   "detail": "role=consumer + providerWiring became a v2 record, its key moved to provider-keys.json, a backup was written, and the old provider answered",
+   "ms": 15367
+  },
+  {
+   "name": "consuming off unregisters only the plugin's remote providers",
+   "ok": true,
+   "detail": "turned off (was: 2 providers), turned back on with peer-b restored",
+   "ms": 2942
+  }
+ ],
+ "passed": 24,
+ "failed": 0
+}

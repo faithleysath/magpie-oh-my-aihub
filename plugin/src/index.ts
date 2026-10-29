@@ -29,13 +29,17 @@ interface PluginInput {
 }
 
 interface PluginOptions {
+  /** phase-3 shorthand: provider = share only, consumer = consume only */
   role?: "provider" | "consumer";
+  sharingEnabled?: boolean;
+  consumingEnabled?: boolean;
   networkName?: string;
   networkSecret?: string;
   peers?: string[] | string;
   listenAddr?: string;
   publishedPorts?: number[] | string;
   secureMode?: boolean;
+  shareModels?: string[] | string;
   rpcPort?: number;
   apiPort?: number;
 }
@@ -67,35 +71,43 @@ export async function boot(input?: PluginInput, options?: PluginOptions): Promis
 
     const opt = options ?? {};
     const current = service.config();
+    const sharingEnabled = opt.sharingEnabled ?? (opt.role === "provider" ? true : opt.role === "consumer" ? false : (current?.sharingEnabled ?? true));
+    const consumingEnabled = opt.consumingEnabled ?? (opt.role === "consumer" ? true : opt.role === "provider" ? false : (current?.consumingEnabled ?? false));
     const fromOptions = {
-      role: opt.role ?? "provider",
+      sharingEnabled,
+      consumingEnabled,
       networkName: opt.networkName ? String(opt.networkName) : "",
       networkSecret: opt.networkSecret ? String(opt.networkSecret) : "",
       peers: toList(opt.peers),
       listenAddr: opt.listenAddr ? String(opt.listenAddr) : null,
       publishedPorts: toList(opt.publishedPorts).map(Number).filter(Boolean),
       secureMode: opt.secureMode !== false,
+      shareModels: toList(opt.shareModels),
     };
     const changed =
       !current ||
-      current.role !== fromOptions.role ||
+      current.sharingEnabled !== fromOptions.sharingEnabled ||
+      current.consumingEnabled !== fromOptions.consumingEnabled ||
       current.networkName !== fromOptions.networkName ||
       current.networkSecret !== fromOptions.networkSecret ||
       JSON.stringify(current.peers) !== JSON.stringify(fromOptions.peers.map((p) => (p.includes("://") ? p : `tcp://${p}`))) ||
       (current.listenAddr ?? null) !== (fromOptions.listenAddr ? (fromOptions.listenAddr.includes("://") ? fromOptions.listenAddr : `tcp://${fromOptions.listenAddr}`) : null) ||
-      JSON.stringify(current.publishedPorts) !== JSON.stringify(fromOptions.role === "provider" ? fromOptions.publishedPorts : []) ||
-      current.secureMode !== fromOptions.secureMode;
+      JSON.stringify(current.publishedPorts) !== JSON.stringify(fromOptions.sharingEnabled ? fromOptions.publishedPorts : current.publishedPorts) ||
+      current.secureMode !== fromOptions.secureMode ||
+      (fromOptions.shareModels.length > 0 && JSON.stringify(current.share.models) !== JSON.stringify(fromOptions.shareModels));
 
     if (opt.networkName && opt.networkSecret && changed) {
       await service
         .configure({
-          role: opt.role ?? "provider",
+          sharingEnabled,
+          consumingEnabled,
           networkName: String(opt.networkName),
           networkSecret: String(opt.networkSecret),
           peers: toList(opt.peers),
           listenAddr: opt.listenAddr ? String(opt.listenAddr) : null,
           publishedPorts: toList(opt.publishedPorts).map(Number).filter(Boolean),
           secureMode: opt.secureMode !== false,
+          shareModels: fromOptions.shareModels.length ? fromOptions.shareModels : undefined,
           rpcPort: opt.rpcPort ? Number(opt.rpcPort) : undefined,
         })
         .catch((e) => logger.error(`configure from plugin options failed: ${String(e)}`));

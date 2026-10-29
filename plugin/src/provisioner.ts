@@ -147,9 +147,19 @@ function view(c: ConsumerRecord, status: LimitStatus | null): ConsumerView {
  */
 export class Provisioner {
   private save: (list: ConsumerRecord[]) => void;
+  /**
+   * Called with every whitelist before it is written. The service uses it to
+   * refuse a model that is not this node's own: a Gateway Key may share native
+   * models only, never a channel this node merely consumes from a peer.
+   */
+  private validateModels: (models: string[]) => void;
 
-  constructor(private magpie: Magpie, opts: { save?: (list: ConsumerRecord[]) => void } = {}) {
+  constructor(
+    private magpie: Magpie,
+    opts: { save?: (list: ConsumerRecord[]) => void; validateModels?: (models: string[]) => void } = {},
+  ) {
     this.save = opts.save ?? saveConsumers;
+    this.validateModels = opts.validateModels ?? (() => {});
     this.list = loadConsumers();
   }
 
@@ -240,6 +250,7 @@ export class Provisioner {
     for (const m of opts.models) {
       if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._*,/-]+$/.test(m)) throw new Error(`bad model name: ${m}`);
     }
+    this.validateModels(opts.models);
     const window = opts.window ?? "day";
     if (!/^(day|week|month|\d+d|\d+h)$/.test(window)) throw new Error(`bad limit window ${window}`);
     const capUsd = assertCap(opts.capUsd);
@@ -295,6 +306,7 @@ export class Provisioner {
           rec.secret = again.secret;
         }
         if (JSON.stringify(rec.models) !== JSON.stringify(opts.models)) {
+          this.validateModels(opts.models);
           await this.magpie.setModels(rec.keyId, opts.models);
           rec.models = [...opts.models];
           logger.info(`key ${rec.keyName}: model whitelist updated (${opts.models.join(", ")})`);
@@ -434,6 +446,28 @@ export class Provisioner {
         logger.info(`revoked gateway key ${rec.keyName} (${rec.keyId})`);
       }
       return view(rec, null);
+    });
+  }
+
+  /**
+   * Replaces a consumer's whitelist (used when a shared model stopped being
+   * shareable). Refuses an empty list: a key without models would be unlimited
+   * in Magpie's eyes, so the caller must revoke instead.
+   */
+  async setModels(consumerId: string, models: string[]): Promise<ConsumerView> {
+    if (!Array.isArray(models) || models.length === 0) throw new Error("refusing to set an empty model whitelist");
+    for (const m of models) {
+      if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._*,/-]+$/.test(m)) throw new Error(`bad model name: ${m}`);
+    }
+    this.validateModels(models);
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec || rec.revokedAt) throw new Error(`no active consumer ${consumerId}`);
+      await this.magpie.setModels(rec.keyId, models);
+      rec.models = [...models];
+      this.persist();
+      logger.info(`key ${rec.keyName}: model whitelist set to ${models.join(", ")}`);
+      return view(rec, await this.verify(rec));
     });
   }
 
