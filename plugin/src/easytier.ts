@@ -539,6 +539,7 @@ export class EasytierSupervisor {
     void read(proc.stdout as ReadableStream<Uint8Array>, "info");
     void read(proc.stderr as ReadableStream<Uint8Array>, "error");
     const code = await proc.exited;
+    if (this.proc === proc) this.proc = null; // the handle no longer pins a pid
     if (this.stopping) return;
     logger.error(`easytier-core exited unexpectedly (code ${code})`);
     this.state.running = false;
@@ -589,9 +590,11 @@ export class EasytierSupervisor {
     }
     const pid = this.state.pid;
     if (pid) {
-      // The pid was ours when it was started, but it may have exited and been
-      // reused: only signal a process whose command line still runs our config.
-      if (!ownsProcess(pid, this.configPath())) {
+      // A child we spawned in this process is ours by handle, whatever `ps` says
+      // about its command line (a script's argv changes under a shell shebang).
+      // An adopted pid has no handle, so its command line must still be ours.
+      const byHandle = this.proc !== null && this.proc.pid === pid && this.proc.exitCode === null;
+      if (!byHandle && !ownsProcess(pid, this.configPath())) {
         logger.warn(`pid ${pid} no longer runs our easytier-core (exited or reused); not signalling it`);
       } else {
         try {

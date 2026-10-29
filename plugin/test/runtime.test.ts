@@ -29,6 +29,15 @@ let dir: string;
 let bins: { core: string; cli: string; verified: boolean };
 let configFile: string;
 
+async function gone(pid: number, timeoutMs = 3000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!alive(pid)) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return !alive(pid);
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -98,7 +107,7 @@ describe("runtime fail closed", () => {
     expect(after.running).toBe(false);
     expect(after.aclOk).toBe(false);
     expect(after.lastError).toContain("refusing to serve");
-    expect(alive(pid)).toBe(false); // the process is really gone
+    expect(await gone(pid)).toBe(true); // the process is really gone
   });
 
   test("an RPC portal on a non-loopback address stops the core", async () => {
@@ -110,7 +119,7 @@ describe("runtime fail closed", () => {
     const pid = (await sup.start(cfg)).pid!;
     await sup.refresh();
     expect(sup.snapshot().aclProblems.join(" ")).toContain("not loopback");
-    expect(alive(pid)).toBe(false);
+    expect(await gone(pid)).toBe(true);
   });
 
   test("an RPC portal that cannot be verified stops the core", async () => {
@@ -122,7 +131,7 @@ describe("runtime fail closed", () => {
     const pid = (await sup.start(cfg)).pid!;
     await sup.refresh();
     expect(sup.snapshot().aclProblems.join(" ")).toContain("cannot be verified");
-    expect(alive(pid)).toBe(false);
+    expect(await gone(pid)).toBe(true);
   });
 
   test("a configuration that cannot be read stops the core after the retry", async () => {
@@ -149,7 +158,7 @@ describe("runtime fail closed", () => {
     const s = sup.snapshot();
     expect(s.running).toBe(false);
     expect(s.lastError).toContain("cannot read the running configuration");
-    expect(alive(pid)).toBe(false);
+    expect(await gone(pid)).toBe(true);
   });
 
   test("an export that is not announced stops the core", async () => {
@@ -159,7 +168,7 @@ describe("runtime fail closed", () => {
     const pid = (await sup.start(cfg)).pid!;
     await sup.refresh();
     expect(sup.snapshot().aclProblems.join(" ")).toContain("proxy_network");
-    expect(alive(pid)).toBe(false);
+    expect(await gone(pid)).toBe(true);
   });
 
   test("a healthy core keeps running", async () => {
@@ -171,7 +180,7 @@ describe("runtime fail closed", () => {
     expect(s.aclOk).toBe(true);
     expect(alive(pid)).toBe(true);
     await sup.stop();
-    expect(alive(pid)).toBe(false);
+    expect(await gone(pid)).toBe(true);
   });
 
   test("an unsafe core is not restarted, and a new start validates again", async () => {
