@@ -341,5 +341,5 @@ left behind; the user's agent configuration and Magpie keys were not touched.
 ### 11.5 Status
 
 `tsc` clean · **75 tests pass** · boot-check PASS · secret-scan PASS · Linux **and** macOS CI green
-([run 40892663744](https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40892663744)).
+([run 40893223749](https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40893223749)).
 No P0 blocks remain. **Merge PR #4 after this commit.**
