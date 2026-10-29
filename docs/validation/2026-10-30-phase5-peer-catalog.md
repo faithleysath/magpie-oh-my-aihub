@@ -166,6 +166,9 @@ generated `status.js` snapshot because Magpie serves plugin pages with
 - price unit `USD per 1M tokens`, with cache read/write and tiers when present;
   no price is invented — an unpriced model is published as `null`;
 - a simulated minimum top-up (`topUp.simulated = true`), never a wallet;
+- an explicit `billing` block (`quoteOnly: true`, `charged: false`) saying the
+  document is display data and real charging depends on the later price lock and
+  a manually issued capped key;
 - mapped_cidr, gateway port, catalogue port, display name, optional manual
   contact, publication version/updated time, and the self-signed identity.
 
