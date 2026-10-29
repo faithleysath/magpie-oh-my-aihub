@@ -1,32 +1,58 @@
-# EasyTier 2.6.4 provider config used in docs/validation/2026-10-29-local-lab.md §3.4.
-# Replace every <...> placeholder. Never commit a real network secret or LAN address.
+# EasyTier 2.6.4 provider config, corrected in docs/validation/2026-10-29-acl-fix-and-two-host.md.
+#
+# Why this differs from the first version (PR #1):
+#   * `tcp_whitelist = ["3425"]` builds an *Inbound* allow rule for the gateway port
+#     (easytier-core/src/config/peers.rs:75-121). In no-TUN mode a flow to the node's
+#     own virtual IP is rewritten to 127.0.0.1:<port> (gateway/proxy/wrapped_tcp_proxy.rs:81-86)
+#     and Magpie trusts loopback, so that one rule reopens the unauthenticated gateway.
+#   * With no Inbound chain at all, EasyTier's inbound default is Allow
+#     (peers/acl/processor.rs:274-285), which is worse: every loopback service is exposed.
+# The Inbound chain below has no rules and default Drop: nothing addressed to this node's
+# virtual IP is delivered, so the loopback rewrite can never be reached. The gateway is
+# reached only through the Forward chain, from this node's own non-loopback address, where
+# Magpie sees a remote caller and enforces its gateway key.
+#
+# The addresses are documentation values (192.0.2.0/24 is TEST-NET-1); replace them, and
+# never commit a real network secret or the provider's real LAN address.
 instance_name = "lab-p"
 hostname = "lab-p"
-ipv4 = "10.44.0.1"                                     # the node's virtual IP inside the overlay
-listeners = ["tcp://127.0.0.1:11011"]                  # lab only; real deployments listen on a reachable address
-proxy_network = [{ cidr = "<PROVIDER_LAN_IP>/32" }]    # export the node's own address through the overlay
-tcp_whitelist = ["3425"]                               # inbound (virtual-IP) TCP allow list
+ipv4 = "10.44.0.1"                                                  # this node's virtual IP
+listeners = ["tcp://127.0.0.1:11011"]                               # lab only; real deployments need a reachable listener
+proxy_network = [{ cidr = "192.0.2.84/32", mapped_cidr = "10.66.137.1/32" }]
+                                                                    # real address -> stable overlay address
 
 [network_identity]
 network_name = "<NETWORK_NAME>"
 network_secret = "<NETWORK_SECRET>"
 
 [flags]
-no_tun = true                                          # no TUN device: no root, no routes on the provider
+no_tun = true                                                       # no TUN device, no root
+# The management RPC portal is NOT settable from this file in 2.6.4 (`rpc_portal` is ignored
+# and the default binds 0.0.0.0:15888). Always pass it on the command line:
+#   easytier-core -c provider-acl.toml -r 127.0.0.1:15888
 
-# Inbound-only whitelists do not cover proxied networks (easytier-core/src/config/peers.rs:75-121);
-# a Forward chain is what keeps every local port but the gateway unreachable from the overlay.
 [acl.acl_v1]
+# Forward: the proxied-network path (what Magpie sees as a remote caller). Only the gateway.
 [[acl.acl_v1.chains]]
 name = "Forward"
-chain_type = 3                                         # Forward = subnet proxy path
+chain_type = 3                                                      # Forward = subnet proxy path
 enabled = true
-default_action = 2                                     # Drop
+default_action = 2                                                  # Drop
 [[acl.acl_v1.chains.rules]]
 name = "allow-gateway"
 description = "only the magpie gateway port leaves this node for the overlay"
 priority = 1000
 enabled = true
-protocol = 1                                           # TCP
+protocol = 1                                                        # TCP
 ports = ["3425"]
-action = 1                                             # Allow
+action = 1                                                          # Allow
+stateful = true
+
+# Inbound: everything addressed to this node's own virtual IP. No rules, default Drop.
+# Do not add an allow rule here for the gateway port (or any other loopback service):
+# in no-TUN that is the 127.0.0.1 rewrite, which Magpie treats as a local, unauthenticated caller.
+[[acl.acl_v1.chains]]
+name = "Inbound"
+chain_type = 1                                                      # Inbound = sent to this node
+enabled = true
+default_action = 2                                                  # Drop
