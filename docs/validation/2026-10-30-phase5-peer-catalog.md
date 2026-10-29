@@ -307,6 +307,8 @@ OLD PROTOTYPE POLLUTED true true
 - `cd plugin && bun run ci`: typecheck, **171 unit tests**, boot-check, secret-scan — PASS.
 - The three-instance lab remains **11 passed, 0 failed** (the stricter validator accepted the real
   Magpie quotes and the manual key flow).
+- CI (Linux + macOS, Bun 1.4.3) at commit `30384bb`:
+  https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40976718923
 - Targeted tests include: valid signatures with malicious structure, shell metacharacters, wrong
   model ids, invalid amounts, prototype node ids, corrupted/legacy trust, one bad peer among good
   peers, hostname/virtual-IP/mapped binding, version rollback, same-version-different-content, and
