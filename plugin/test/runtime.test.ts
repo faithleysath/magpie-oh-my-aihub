@@ -9,7 +9,10 @@ import { EasytierSupervisor, renderConfig, type EasytierConfig } from "../src/ea
 // proven to stop the process, not merely to set a flag.
 
 const cfg: EasytierConfig = {
-  role: "provider",
+  sharingEnabled: true,
+  consumingEnabled: false,
+  nodeId: "rt000001",
+  instanceId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
   networkName: "runtime-lab",
   networkSecret: "runtime-secret",
   peers: [],
@@ -20,9 +23,9 @@ const cfg: EasytierConfig = {
   proxyCidr: "192.0.2.84/32",
   mappedCidr: "10.66.9.9/32",
   publishedPorts: [3425],
+  portForwards: [],
   secureMode: true,
   secureIdentity: { privateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" },
-  instanceName: "runtime-provider",
 };
 
 let dir: string;

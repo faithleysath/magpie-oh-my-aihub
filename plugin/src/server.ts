@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { stateDir, statePath } from "./paths.ts";
-import { logger, recentLogs } from "./log.ts";
+import { logger, recentLogs, redact } from "./log.ts";
 import type { Service } from "./service.ts";
 
 export interface ApiOptions {
@@ -41,6 +41,11 @@ function json(data: unknown, status = 200): Response {
  * `connect-src 'none'`), so the page reads a generated snapshot instead. Mutating
  * calls need the bearer token from the plugin state directory; read-only status
  * does not.
+ *
+ * Phase-4 additions: the two capabilities can be switched (`/sharing`,
+ * `/consuming`), remote providers have their own endpoints (`/providers` …
+ * `/providers/rm`), and the phase-3 `/connect` and `/disconnect` stay as thin
+ * aliases so an older CLI or script keeps working.
  */
 export function startApi(opts: ApiOptions): ApiHandle {
   const token = apiToken();
@@ -81,6 +86,13 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
   }
   if (req.method === "GET" && path === "/health") return json({ ok: true });
   if (req.method === "GET" && path === "/checks") return json({ checks: await svc.checks() });
+  if (req.method === "GET" && path === "/providers") {
+    return json({ sharingEnabled: svc.config()?.sharingEnabled ?? false, consumingEnabled: svc.config()?.consumingEnabled ?? false, providers: svc.providers() });
+  }
+  if (req.method === "GET" && path === "/consumers") {
+    const s = await svc.status();
+    return json({ consumers: s.consumers });
+  }
 
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const auth = req.headers.get("authorization") ?? "";
@@ -98,9 +110,30 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
     switch (path) {
       case "/configure":
         return json(await svc.configure(body as Parameters<Service["configure"]>[0]));
+      case "/sharing": {
+        const { enabled } = body as { enabled?: unknown };
+        if (typeof enabled !== "boolean") return json({ error: "enabled (boolean) is required" }, 400);
+        return json(await svc.setSharing(enabled));
+      }
+      case "/consuming": {
+        const { enabled } = body as { enabled?: unknown };
+        if (typeof enabled !== "boolean") return json({ error: "enabled (boolean) is required" }, 400);
+        return json(await svc.setConsuming(enabled));
+      }
+      case "/share/models": {
+        const { models } = body as { models?: unknown };
+        if (!Array.isArray(models)) return json({ error: "models (string[]) is required" }, 400);
+        return json(await svc.setShareModels(models.map(String)));
+      }
       case "/publish":
         return json(await svc.publishPorts((body.ports as number[]) ?? []));
-      case "/connect": {
+      case "/providers/add": {
+        const input = providerInput(body);
+        if (typeof input === "string") return json({ error: input }, 400);
+        return json(await svc.addProvider(input));
+      }
+      case "/providers/update": {
+        // A patch: only what the operator names is changed, the rest is kept.
         const { id, mappedCidr, key, localPort, providerPort } = body as {
           id?: string;
           mappedCidr?: string;
@@ -108,8 +141,26 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
           localPort?: number;
           providerPort?: number;
         };
-        if (!id || !mappedCidr || !key) return json({ error: "id, mappedCidr and key are required" }, 400);
-        return json(await svc.connectProvider({ id, mappedCidr, key, localPort, providerPort }));
+        if (!id) return json({ error: "id is required" }, 400);
+        return json(await svc.updateProvider(id, { mappedCidr, key, localPort, providerPort }));
+      }
+      case "/providers/rm": {
+        const { id } = body as { id?: string };
+        if (!id) return json({ error: "id is required" }, 400);
+        return json(await svc.removeProvider(id));
+      }
+      case "/providers/reconcile":
+        return json({ providers: await svc.reconcileProviders({ verifyModels: Boolean(body.verifyModels) }) });
+      case "/connect": {
+        // phase-3 alias
+        const input = providerInput(body);
+        if (typeof input === "string") return json({ error: input }, 400);
+        return json(await svc.addProvider(input));
+      }
+      case "/disconnect": {
+        const { id } = body as { id?: string };
+        if (id) return json(await svc.removeProvider(id));
+        return json(await svc.disconnectProvider());
       }
       case "/supervisor/stop":
         await svc.supervisor.stop();
@@ -117,8 +168,18 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
       case "/supervisor/start":
         await svc.start();
         return json({ ok: true, running: svc.supervisor.snapshot().running });
-      case "/disconnect":
-        return json(await svc.disconnectProvider());
+      case "/consumers/add": {
+        const { consumerId, models, capUsd } = body as { consumerId?: string; models?: string[]; capUsd?: number };
+        if (!consumerId || !Array.isArray(models) || typeof capUsd !== "number") {
+          return json({ error: "consumerId, models and capUsd are required" }, 400);
+        }
+        return json(await svc.ensureConsumer(consumerId, models, capUsd));
+      }
+      case "/consumers/models": {
+        const { consumerId, models } = body as { consumerId?: string; models?: string[] };
+        if (!consumerId || !Array.isArray(models)) return json({ error: "consumerId and models are required" }, 400);
+        return json(await svc.provisioner.setModels(consumerId, models));
+      }
       case "/consumers": {
         const { consumerId, models, capUsd } = body as { consumerId?: string; models?: string[]; capUsd?: number };
         if (!consumerId || !Array.isArray(models) || typeof capUsd !== "number") {
@@ -139,7 +200,12 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
       case "/revoke": {
         const { consumerId } = body as { consumerId?: string };
         if (!consumerId) return json({ error: "consumerId is required" }, 400);
-        return json(await svc.provisioner.revoke(consumerId));
+        return json(await svc.revokeConsumer(consumerId));
+      }
+      case "/guard": {
+        const { consumerId } = body as { consumerId?: string };
+        if (consumerId) return json({ consumerId, guard: await svc.guardSharedKeys() });
+        return json(await svc.guardSharedKeys());
       }
       case "/verify": {
         const s = await svc.status();
@@ -149,7 +215,23 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
         return json({ error: `no such endpoint: ${path}` }, 404);
     }
   } catch (e) {
-    logger.error(`${path}: ${String(e)}`);
-    return json({ error: String((e as Error)?.message ?? e) }, 400);
+    // Never let a key or a network secret ride out on an error line, even if a
+    // tool or a URL mentions it.
+    const message = redact(String((e as Error)?.message ?? e));
+    logger.error(`${path}: ${message}`);
+    return json({ error: message }, 400);
   }
+}
+
+/** Reads a provider input, returning `null` for a bad one (handled as 400). */
+function providerInput(body: Record<string, unknown>): Parameters<Service["addProvider"]>[0] | string {
+  const { id, mappedCidr, key, localPort, providerPort } = body as {
+    id?: string;
+    mappedCidr?: string;
+    key?: string;
+    localPort?: number;
+    providerPort?: number;
+  };
+  if (!id || !mappedCidr || !key) return "id, mappedCidr and key are required";
+  return { id, mappedCidr, key, localPort, providerPort };
 }

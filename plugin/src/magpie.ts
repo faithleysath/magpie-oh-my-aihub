@@ -23,6 +23,19 @@ export interface KeyRecord {
   quotas?: boolean;
 }
 
+export interface ProviderRecord {
+  id: string;
+  name?: string;
+  preset?: string;
+  /** where the vendor (or the remote Magpie) is reached; holds a key, never log it */
+  chat?: string;
+  responses?: string;
+  anthropic?: string;
+  /** the Gateway Key of a remote Magpie; never logged or returned */
+  key?: string;
+  models?: string[];
+}
+
 export interface LimitStatus {
   limited: boolean;
   key: string;
@@ -135,6 +148,50 @@ export class Magpie {
     }
   }
 
+  /** Magpie's provider list, read from its own store (providers.json). */
+  providers(): ProviderRecord[] {
+    try {
+      const raw = readFileSync(join(magpieDataDir(), "providers.json"), "utf8");
+      const parsed = JSON.parse(raw) as { providers?: ProviderRecord[] } | ProviderRecord[];
+      const list = Array.isArray(parsed) ? parsed : (parsed.providers ?? []);
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Whether Magpie's provider list can be read at all. A transient read failure
+   * must never look like "this node has no providers": that would make every
+   * shared model look unshareable and could revoke working keys.
+   */
+  providersReadable(): boolean {
+    try {
+      const raw = readFileSync(join(magpieDataDir(), "providers.json"), "utf8");
+      const parsed = JSON.parse(raw) as { providers?: unknown } | unknown[];
+      return Array.isArray(parsed) || Array.isArray((parsed as { providers?: unknown }).providers);
+    } catch {
+      return false;
+    }
+  }
+
+  providerById(id: string): ProviderRecord | undefined {
+    return this.providers().find((p) => p.id === id);
+  }
+
+  /**
+   * Providers this node owns. A Remote Magpie is another node's gateway: it is
+   * marked with Magpie's own `remote-magpie` preset. Only the rest may be
+   * shared — reselling somebody else's channel is not a feature of this phase.
+   */
+  remoteProviderIds(): Set<string> {
+    return new Set(this.providers().filter((p) => p.preset === "remote-magpie").map((p) => p.id));
+  }
+
+  nativeProviderIds(): Set<string> {
+    return new Set(this.providers().filter((p) => p.preset !== "remote-magpie").map((p) => p.id));
+  }
+
   keyByName(name: string): KeyRecord | undefined {
     return this.keys().find((k) => k.name === name);
   }
@@ -186,6 +243,11 @@ export class Magpie {
     await this.serial(() => runOk([this.bin, "gateway-key", "remove", id], { timeoutMs: 30_000 }));
   }
 
+  /**
+   * Registers a remote Magpie. It never removes or replaces an existing entry:
+   * the caller must prove ownership first and call `replaceRemoteProvider`, or
+   * refuse. The key is never part of an error.
+   */
   async addRemoteProvider(opts: { id: string; url: string; key: string }): Promise<void> {
     const r = await this.serial(() =>
       run([this.bin, "provider", "add", "remote-magpie", opts.key, `url=${opts.url}`, `id=${opts.id}`], {
@@ -195,11 +257,41 @@ export class Magpie {
     if (r.code !== 0) throw new Error(`provider add: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
   }
 
+  /**
+   * Replaces an entry the caller has proven it owns (same id, same URL, same
+   * key as the one it wrote). Magpie 0.1.2038 has no in-place edit for a Remote
+   * Magpie, so this is remove-then-add.
+   */
+  async replaceRemoteProvider(opts: { id: string; url: string; key: string }): Promise<void> {
+    await this.removeProvider(opts.id);
+    await this.addRemoteProvider(opts);
+  }
+
   async removeProvider(id: string): Promise<void> {
     const r = await this.serial(() => run([this.bin, "provider", "rm", id], { timeoutMs: 60_000 }));
     if (r.code !== 0 && !/not found|no such|no provider/i.test(r.stderr + r.stdout)) {
       throw new Error(`provider rm: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
     }
+  }
+
+  /**
+   * Every model this Magpie serves, from its own read-only CLI. The gateway's
+   * `/v1/models` cannot be used for this from the plugin: on a gateway bound to
+   * the LAN address it requires a Gateway Key, and the plugin intentionally has
+   * no standing local key. `magpie models` needs none and lists a remote
+   * Magpie's models as `<remote>/<provider>/<model>`.
+   */
+  async modelIds(): Promise<string[]> {
+    const r = await this.serial(() => run([this.bin, "models"], { timeoutMs: 30_000 }));
+    if (r.code !== 0) throw new Error(`magpie models: ${(r.stderr || r.stdout).trim().slice(0, 200)}`);
+    const ids = new Set<string>();
+    for (const line of r.stdout.split("\n")) {
+      const token = line.trim().split(/\s{2,}/)[0]?.trim();
+      if (!token) continue;
+      if (/^(https?|group|auto):?\/\//.test(token)) continue;
+      if (/^[A-Za-z0-9._-]+\/[A-Za-z0-9._*,/-]+$/.test(token)) ids.add(token);
+    }
+    return [...ids];
   }
 
   /** The key's own numbers, from the gateway's documented endpoint. */

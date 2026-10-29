@@ -3,7 +3,10 @@ import { checkConfig, type AclExpectation } from "../src/acl.ts";
 import { renderConfig, type EasytierConfig } from "../src/easytier.ts";
 
 const provider: EasytierConfig = {
-  role: "provider",
+  sharingEnabled: true,
+  consumingEnabled: true,
+  nodeId: "aaaa1111",
+  instanceId: "11111111-2222-3333-4444-555555555555",
   networkName: "lab",
   networkSecret: "supersecret",
   peers: ["tcp://relay.example.com:11010"],
@@ -14,28 +17,35 @@ const provider: EasytierConfig = {
   proxyCidr: "192.0.2.84/32",
   mappedCidr: "10.66.7.9/32",
   publishedPorts: [3425],
+  portForwards: [{ bindAddr: "127.0.0.1:13425", dstAddr: "10.66.1.2:3425" }],
   secureMode: true,
   secureIdentity: { privateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" },
-  instanceName: "ohmyaihub-provider",
 };
 
 const consumer: EasytierConfig = {
   ...provider,
-  role: "consumer",
+  sharingEnabled: false,
   proxyCidr: null,
   mappedCidr: null,
   publishedPorts: [],
-  instanceName: "ohmyaihub-consumer",
 };
 
 const expectProvider: AclExpectation = {
-  role: "provider",
+  sharingEnabled: true,
   publishedPorts: [3425],
   proxy: { cidr: "192.0.2.84/32", mappedCidr: "10.66.7.9/32" },
+  portForwards: [{ bindAddr: "127.0.0.1:13425", dstAddr: "10.66.1.2:3425" }],
   secureMode: true,
   networkName: "lab",
 };
-const expectConsumer: AclExpectation = { role: "consumer", publishedPorts: [], proxy: null, secureMode: true, networkName: "lab" };
+const expectConsumer: AclExpectation = {
+  sharingEnabled: false,
+  publishedPorts: [],
+  proxy: null,
+  portForwards: [{ bindAddr: "127.0.0.1:13425", dstAddr: "10.66.1.2:3425" }],
+  secureMode: true,
+  networkName: "lab",
+};
 
 const good = renderConfig(provider);
 const goodConsumer = renderConfig(consumer);
@@ -52,6 +62,13 @@ describe("generated configurations", () => {
   test("the consumer's passes and exports nothing", () => {
     expect(checkConfig(goodConsumer, expectConsumer)).toEqual({ ok: true, problems: [] });
     expect(goodConsumer).not.toContain("proxy_network");
+    expect(goodConsumer).toContain("[[port_forward]]");
+  });
+
+  test("a dual-role node carries one export and its own forwards", () => {
+    expect(good).toContain("proxy_network");
+    expect(good).toContain("[[port_forward]]");
+    expect(checkConfig(good, expectProvider)).toEqual({ ok: true, problems: [] });
   });
 
   test("the validator refuses a file that is not TOML at all", () => {
@@ -131,6 +148,36 @@ describe("ACL must fail closed", () => {
     const r = checkConfig(withoutForward, expectProvider);
     expect(r.ok).toBe(false);
     expect(r.problems.join(" ")).toContain("needs a Forward chain");
+  });
+
+  test("a forward bound anywhere but loopback is refused", () => {
+    const bad = goodConsumer.replace('bind_addr = "127.0.0.1:13425"', 'bind_addr = "0.0.0.0:13425"');
+    const r = checkConfig(bad, expectConsumer);
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(" ")).toContain("loopback-only");
+  });
+
+  test("a missing forward is refused", () => {
+    const missing = goodConsumer.replace(/\[\[port_forward\]\][\s\S]*?proto = "tcp"\n/, "");
+    const r = checkConfig(missing, expectConsumer);
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(" ")).toContain("does not forward");
+  });
+
+  test("an extra loopback forward is tolerated by the ACL check but must stay loopback", () => {
+    // 2.6.4 cannot close a listener at runtime, so a removed provider's forward
+    // can still be listed for a moment; it is not a network exposure as long as
+    // it is bound to loopback. The service reports it separately.
+    const extra = goodConsumer + '\n[[port_forward]]\nbind_addr = "127.0.0.1:13499"\ndst_addr = "10.66.9.9:3425"\nproto = "tcp"\n';
+    expect(checkConfig(extra, expectConsumer).ok).toBe(true);
+    const exposed = extra.replace('bind_addr = "127.0.0.1:13499"', 'bind_addr = "192.0.2.84:13499"');
+    expect(checkConfig(exposed, expectConsumer).ok).toBe(false);
+  });
+
+  test("a node that consumes nothing may not carry forwards", () => {
+    const idle = renderConfig({ ...consumer, consumingEnabled: false });
+    expect(checkConfig(idle, { ...expectConsumer, portForwards: [] })).toEqual({ ok: true, problems: [] });
+    expect(checkConfig(idle, expectConsumer).ok).toBe(false);
   });
 
   test("a consumer with a Forward allow or an export is refused", () => {

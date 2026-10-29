@@ -7,11 +7,14 @@
 // failure as "do not serve", never as a warning (fail closed).
 
 export interface AclExpectation {
-  role: "provider" | "consumer";
+  /** this node publishes its gateway on the overlay */
+  sharingEnabled: boolean;
   /** the gateway ports this node may expose through the Forward chain */
   publishedPorts: number[];
-  /** the provider's export, or null for a consumer */
+  /** this node's export, or null when it shares nothing */
   proxy: { cidr: string; mappedCidr: string } | null;
+  /** the loopback forwards this node's config must contain (a subset is enough) */
+  portForwards: { bindAddr: string; dstAddr: string }[];
   secureMode: boolean;
   networkName: string;
 }
@@ -131,7 +134,7 @@ export function checkConfig(text: string, expect: AclExpectation): AclCheck {
 
   // --- exports ---------------------------------------------------------------
   const proxy = asArray(root.proxy_network);
-  if (expect.role === "provider") {
+  if (expect.sharingEnabled) {
     if (!expect.proxy) problems.push("the expected export is missing from the plugin's configuration");
     else if (proxy.length !== 1) {
       problems.push(`expected exactly one proxy_network export, found ${proxy.length}`);
@@ -148,7 +151,7 @@ export function checkConfig(text: string, expect: AclExpectation): AclCheck {
       }
     }
   } else if (proxy.length > 0) {
-    problems.push(`a consumer must not export a network, found ${proxy.length} proxy_network entr(ies)`);
+    problems.push(`a node that is not sharing must not export a network, found ${proxy.length} proxy_network entr(ies)`);
   }
 
   // --- ACL -------------------------------------------------------------------
@@ -215,15 +218,47 @@ export function checkConfig(text: string, expect: AclExpectation): AclCheck {
       for (const p of ports) allowed.add(p);
     }
   }
-  if (expect.role === "provider") {
-    if (forward.length === 0) problems.push("a provider needs a Forward chain for its published ports");
+  if (expect.sharingEnabled) {
+    if (forward.length === 0) problems.push("a sharing node needs a Forward chain for its published ports");
     const want = [...new Set(expect.publishedPorts)].sort((a, b) => a - b);
     const got = [...allowed].sort((a, b) => a - b);
     if (JSON.stringify(want) !== JSON.stringify(got)) {
       problems.push(`the Forward chain allows [${got.join(", ")}], expected exactly [${want.join(", ")}]`);
     }
   } else if (allowed.size > 0) {
-    problems.push(`a consumer must not forward any port, found [${[...allowed].join(", ")}]`);
+    problems.push(`a node that is not sharing must not allow any forwarded port, found [${[...allowed].join(", ")}]`);
+  }
+
+  // --- loopback forwards -----------------------------------------------------
+  // A port forward binds a listener on this machine. It must be loopback-only:
+  // a forward bound to a LAN address would publish somebody's local service to
+  // the whole network. The forwards this plugin asked for must all be present.
+  const forwards = asArray(root.port_forward);
+  const seen = new Set<string>();
+  for (const [i, f] of forwards.entries()) {
+    const rec = asRecord(f);
+    if (!rec) {
+      problems.push(`port_forward ${i + 1} is not a table`);
+      continue;
+    }
+    const bind = String(rec.bind_addr ?? "");
+    const dst = String(rec.dst_addr ?? "");
+    const host = bind.replace(/^tcp:\/\//, "").split(":")[0];
+    if (host !== "127.0.0.1" && host !== "localhost") {
+      problems.push(`port_forward ${i + 1} is bound to ${bind || "(nothing)"}; a local forward must be loopback-only`);
+    }
+    if (rec.proto !== undefined && String(rec.proto).toLowerCase() !== "tcp") {
+      problems.push(`port_forward ${i + 1} is not TCP`);
+    }
+    seen.add(`${bind}->${dst}`);
+  }
+  for (const want of expect.portForwards) {
+    if (!seen.has(`${want.bindAddr}->${want.dstAddr}`)) {
+      problems.push(`the config does not forward ${want.bindAddr} -> ${want.dstAddr}`);
+    }
+  }
+  if (!expect.portForwards.length && forwards.length > 0) {
+    problems.push(`this node consumes nothing but its config has ${forwards.length} port forward(s)`);
   }
 
   return { ok: problems.length === 0, problems };

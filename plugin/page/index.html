@@ -9,7 +9,9 @@
   <body>
     <header>
       <h1>Oh My AIHub</h1>
-      <p class="sub">EasyTier supervisor and Gateway Key provisioner for Magpie. No AI request passes through this plugin.</p>
+      <p class="sub">
+        One Magpie can share its own channels and use several remote Magpies at once. No AI request passes through this plugin.
+      </p>
     </header>
 
     <section id="status">
@@ -18,23 +20,21 @@
     </section>
 
     <section id="settings">
-      <h2>Overlay</h2>
+      <h2>This node</h2>
       <p class="muted">
         Saving writes this plugin's options in Magpie. The supervisor reads them when the plugin host starts; Magpie restarts
-        the host when a plugin is installed, updated or set.
+        the host when a plugin is installed, updated or set. Both capabilities may be on at the same time; they share one
+        EasyTier core and one network identity.
       </p>
       <form id="form">
-        <label>Role
-          <select name="role">
-            <option value="provider">provider (serve a gateway)</option>
-            <option value="consumer">consumer (use a provider)</option>
-          </select>
-        </label>
+        <label class="row"><input name="sharingEnabled" type="checkbox" /> Share this Magpie (publish the gateway on the overlay)</label>
+        <label class="row"><input name="consumingEnabled" type="checkbox" /> Use remote Magpies (connect to other providers)</label>
         <label>Network name <input name="networkName" autocomplete="off" placeholder="magpie-lab" /></label>
         <label>Network secret <input name="networkSecret" type="password" autocomplete="off" placeholder="at least 8 characters" /></label>
         <label>Initial peers <input name="peers" autocomplete="off" placeholder="tcp://relay.example.com:11010" /></label>
         <label>Listen address <input name="listenAddr" autocomplete="off" placeholder="empty = dial only, or 127.0.0.1:11010" /></label>
         <label>Published ports <input name="publishedPorts" autocomplete="off" placeholder="3425" /></label>
+        <label>Shared models <input name="shareModels" autocomplete="off" placeholder="* or provider/model, provider/*" /></label>
         <label class="row"><input name="secureMode" type="checkbox" checked /> Secure Mode (persisted X25519 identity)</label>
         <div class="actions">
           <button type="submit">Save</button>
@@ -49,9 +49,16 @@
         This page cannot call the host (the sandbox forbids network access). Use the loopback API with the token in
         <code>&lt;magpie data&gt;/oh-my-aihub/api-token</code>, or the CLI:
       </p>
-      <pre>bun plugin/bin/ohmyaihub.ts --data &lt;magpie data&gt; status
-bun plugin/bin/ohmyaihub.ts --data &lt;magpie data&gt; consumers add alice deepseek/deepseek-flash 1
-bun plugin/bin/ohmyaihub.ts --data &lt;magpie data&gt; topup alice 1</pre>
+      <pre>bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; status
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; share on
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; provider add peer-b --cidr 10.66.1.2/32 --key sk-… --port 3425
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; consumers add alice deepseek/deepseek-flash 1
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; topup alice 1</pre>
+      <p class="muted">
+        Remote providers are managed one by one: each has its own loopback port, its own Gateway Key and its own status.
+        Deleting one never touches the others. Sharing only ever exports this node's own models: a remote Magpie's models
+        stay this node's own consumption and cannot be resold through a consumer key.
+      </p>
     </section>
 
     <script src="_magpie/bridge.js"></script>

@@ -1,4 +1,9 @@
-# Architecture decision record — updated 2026-10-30
+# Architecture decision record — updated 2026-10-29 (phase 4)
+
+Phase 4 turns the two mutually exclusive roles into two independent capabilities on one node
+(share my Magpie, consume other Magpies) and replaces the single consumer wiring with a set of
+remote providers. Everything measured in phase 3 still holds; the new decisions are 8–12 and
+the evidence is in [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md).
 
 Supersedes the 2026-10-29 draft. Every claim below is backed by a measured result in
 [`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md) or
@@ -96,13 +101,27 @@ Semantics the product must accept (measured):
   a charge.
 - Usage recorded while a key had no cap counts as soon as a cap exists.
 
-## Decision 5 — Roles
+## Decision 5 — Roles: two independent capabilities, one core
+
+A node has `sharingEnabled` and `consumingEnabled`; both may be on. The phase-3 `role`
+(`provider`/`consumer`) is kept only as a migration input and CLI shorthand.
+
+- **Sharing** publishes this node's Magpie on the overlay: one `proxy_network` export (the node's
+  own LAN address `/32`, mapped to a per-node `10.66.a.b/32`) and a Forward chain that allows
+  exactly the published gateway ports. Turning sharing off withdraws the export and the Forward
+  chain and touches no Magpie provider, model or Gateway Key.
+- **Consuming** is a set of remote providers, each with its own loopback forward, Remote Magpie
+  registration, Gateway Key and status. Turning consuming off unregisters only the Remote Magpie
+  entries this plugin created; a provider the operator added by hand is never touched.
+- **One EasyTier core, one identity.** The export/ACL and the consumer forwards are written into
+  the same generated TOML. A second core on the same machine would fight over the network name,
+  the `instance_id` and the listener ports, so it is not an option.
 
 - **Magpie**: providers, models, Remote Magpie, routing groups, Gateway Keys, limits, usage, 429s.
 - **EasyTier**: private encrypted overlay, no-TUN, subnet proxy, port forwards, ACLs.
-- **Plugin** (`plugin/`): EasyTier supervisor (download/pin/verify, config, lifecycle, peers, port
-  forwards, restart), Gateway Key provisioner, simulated deposits, status, and later the wallet,
-  chain watcher and reconciliation.
+- **Plugin** (`plugin/`): one EasyTier supervisor (download/pin/verify, config, lifecycle, peers,
+  forwards, restart), the Gateway Key provisioner, the remote-provider registry, simulated
+  deposits, status, and later the wallet, chain watcher and reconciliation.
 - **Relay host** (e.g. an HK VPS): only `easytier-core`. No business service runs there.
 
 ## Decision 6 — Product rules
@@ -136,6 +155,129 @@ and (e) never calls `magpie --version` at boot (macOS reads the bundle's `Info.p
 platforms get one cached 3 s call when a status is requested). A `--json` output, or a
 token-gated loopback management endpoint, is the smallest upstream change that would remove
 the last text dependency; it is proposed upstream, not required.
+
+## Decision 8 — A remote provider is a record, not a global "wiring"
+
+Each consumed provider is one `ProviderConnection`:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | local key of the record; also the CLI/API handle |
+| `remoteMagpieId` | the Remote Magpie provider id inside this node's Magpie (equal to `id` in this phase) |
+| `mappedCidr` + `providerPort` | the overlay address and the **real published port** the provider listens on |
+| `localPort` | the loopback port this node's EasyTier forwards; one per provider |
+| `keyRef` | `provider-keys.json#<id>` — the Gateway Key lives in a separate 0600 store, never in `state.json` |
+| `fingerprint` | overlay identity observed at connect time: hostname, virtual IPv4, session `peer_id` |
+| `status` / `detail` | `connected`, `degraded`, `identity-mismatch`, `disabled` |
+| `createdAt` / `updatedAt` / `lastConnectedAt` | timestamps |
+
+Ownership is part of the record, not a separate permission system: the plugin may replace or
+remove a Magpie provider only when a `ProviderConnection` exists **and** the entry is a Remote
+Magpie whose `chat` is exactly `http://127.0.0.1:<localPort>/v1` **and** whose key equals the key in
+the key store. Everything else — a same-named native provider, a different Remote Magpie, or an
+entry the operator edited by hand — is `foreign` and is refused, reported, and left untouched by
+connect, update, delete, consumption-off and restart recovery.
+
+Rules the service enforces:
+
+- adding the same `id` again is idempotent (same record, one registration, one forward);
+- a mapped prefix may belong to exactly one local provider, and to exactly one overlay peer at
+  connect time (two peers announcing it are refused);
+- each provider has its own key: a key is never reused for another provider, and swapping keys is
+  refused by the remote gateway's own 401;
+- a failed connect rolls back exactly what that call added (its registration, its forward) and
+  keeps every other provider; the previous registration of the same id is restored with its key;
+- removing or updating one provider restarts the core only to drop a forward 2.6.4 cannot drop at
+  runtime, then re-verifies the remaining providers (measured: they recover);
+- every remote provider's health is checked separately, so one provider being down degrades only
+  itself.
+
+## Decision 9 — Identity: the mapped address is a selector, not an identity
+
+`mappedCidr` can collide, move, or be announced by someone else, so it is never treated as the
+provider's identity. What 2.6.4 actually exposes and what the plugin does with it:
+
+| Signal | Readable in 2.6.4? | Use |
+| --- | --- | --- |
+| `proxy_cidrs` per route | yes (`easytier-cli -o json route`) | routing selector; must have a single owner at connect time |
+| hostname + virtual IPv4 | yes (`route`, `peer list`) | recorded fingerprint; a different hostname on the same prefix is `identity-mismatch` and the provider is unregistered until it comes back |
+| numeric `peer_id` | yes (`peer list`) | recorded; **changes on every EasyTier start**, so it cannot identify a node across restarts |
+| `instance_id` | own node only (`node`) | persisted in this node's TOML; not readable for a peer through the CLI |
+| `RoutePeerInfo.noise_static_pubkey` (X25519) | **no** — present in the RPC protobuf (`peer_rpc.proto:46`) but the CLI's route/peer JSON does not print it | UNKNOWN / upstream gap; a stable cryptographic peer identity cannot be read in 2.6.4 |
+| Gateway Key enforcement | yes | the actual guard: no key or a wrong key must be 401, and the valid key must list models |
+
+The connect path therefore proves, in order: one overlay owner for the prefix, the endpoint
+refuses no key **and a wrong key**, the valid key lists at least one model, and Magpie lists the
+provider's models. The hostname check is a drift alarm, not authentication: a different peer that
+hijacks the prefix still cannot answer with our Gateway Key. Binding a wallet to a peer will need
+the public key exposed upstream (or a signed statement), which is why the wallet phase stays out.
+
+## Decision 10 — Share native models only (no resale, no A→B→A)
+
+A Gateway Key issued by this node may name only models of this node's **own** providers:
+
+- the provider segment of each whitelist entry must be a native Magpie provider
+  (`providers.json` entry without `preset = "remote-magpie"`);
+- an entry naming a Remote Magpie is refused with an explicit error;
+- `group/…` and `auto/…` entries are refused for shared keys, because a native Magpie group may
+  contain models imported from another peer;
+- the operator's `share.models` allow list (globs, default `*`) bounds every key;
+- issued keys are re-checked whenever a provider is added/removed and at every handover: a key
+  whose models stopped being native is narrowed, and revoked if nothing shareable remains.
+
+Consequence for loops: with A↔B sharing, A lists `peer-b/...` and B lists `peer-a/...`, but a key
+A gives B can never name `peer-b/...`, so B cannot route a request back to A through a shared key.
+Measured with one upstream hit per cross-node request and no `/v1/models` model from the other
+side in any whitelist.
+
+Enforcement is continuous but **polled**: the guard runs at start, after every reconcile (45 s and
+manual) and on a 15 s tick that compares a native/remote fingerprint, and it compares Magpie's own key store (an
+empty model list means "every model") with the operator's shareable set. A key that was widened by
+hand is narrowed; a key with nothing shareable left is revoked. When `providers.json` cannot be
+read the guard does **not** revoke on a transient error, but it does not treat "unknown" as safe:
+sharing is suspended (the export and Forward chain are withdrawn, `state.shareSuspended`) and
+republished automatically once the check passes again. The protection window is therefore bounded
+by the poll interval (~15 s), not zero: a request already in flight or made inside that window could
+still use a channel whose provider id was just replaced. Absolute real-time prevention would need
+Magpie to make a key's provider set immutable or a request-path intermediary; **LIMITATION**, see
+[`validation/2026-10-29-pr5-review-fixes.md`](validation/2026-10-29-pr5-review-fixes.md).
+
+## Decision 11 — State: versioned, atomic, backed up, with the keys elsewhere
+
+`state.json` (0600) is versioned (`version: 2`) and migrated from phase 3 exactly once:
+
+- a backup `state.json.bak-<timestamp>` is written before the first v2 write;
+- `providerWiring` becomes the first provider record; its key moves to `provider-keys.json`
+  (0600) and the record keeps only `keyRef`;
+- `role` becomes `sharingEnabled`/`consumingEnabled`; `mappedCidr`, `proxyCidr`, the virtual IP,
+  the RPC port and the Secure Mode identity are preserved (a re-enabled share keeps the address
+  consumers already know);
+- writes go to a temporary file, are fsynced, renamed over the target and the directory is
+  fsynced; the previous document is kept as `.prev`, and an unreadable `state.json` is recovered
+  from it;
+- a provider's forward set is written into the generated TOML, so an EasyTier restart restores
+  every listener without a second source of truth;
+- no database service is introduced: the document is small, local and single-writer (the host
+  lock), and SQLite would add a dependency without removing the need for the backup/rename.
+
+## Decision 12 — EasyTier 2.6.4 cannot remove a port forward at runtime
+
+Measured (`port-forward remove` prints success, the rule and listener stay) and explained by the
+source: the CLI sends a `PortForwardPatch` with only `bind_addr` and no `dst_addr`
+(`easytier/src/easytier-cli.rs:1957-1962`), while the patcher removes by whole-struct equality
+(`easytier/src/proto/api.rs:53-75`), so the default `0.0.0.0:0` never matches. The plugin
+therefore:
+
+- writes `[[port_forward]]` into the generated TOML (supported: `config.rs:551,1486`);
+- adds a forward live (idempotently — a duplicate rule really does create a second listener);
+- removes one by a supervised restart with the new config, after which the remaining providers are
+  re-verified;
+- records a listener it could not close as an orphan, reports it in `checks`, and clears it on the
+  next core start;
+- **retargets a provider** (new `mappedCidr` or `providerPort`) on a fresh loopback port, proves it,
+  replaces the registration, then restarts once so the old listener is gone. A failed retarget
+  restores the old registration and keeps the old forward; an explicit request to reuse the same
+  port for a new target is refused.
 
 ## Preferred dataflow
 
@@ -184,11 +326,25 @@ refuses an unlisted platform or a hash mismatch.
 6. The community plugin **page cannot reach the network** (`internal/gui/pluginpage.go`, CSP
    `connect-src 'none'`), so the page is settings-only; live status needs a generated snapshot file
    or a future first-class bridge.
+7. **Remote provider identity is not cryptographic in 2.6.4**: the CLI does not expose a peer's
+   `noise_static_pubkey`, and `peer_id` changes on every start. The mapped prefix + hostname check +
+   Gateway Key is what this phase can prove; binding funds to a peer needs the public key exposed
+   upstream (or an operator-signed statement).
+8. **Forward removal needs a core restart** (Decision 12), so removing or retargeting one provider
+   briefly interrupts the others' in-flight requests; new requests recover as soon as the core is
+   back (measured).
+9. **The no-resale guard is polled** (~15 s), not instantaneous; see Decision 10. A provider id
+   replaced outside the plugin can be used through an existing key inside that window. Treat
+   absolute real-time prevention as UNKNOWN until Magpie offers immutable per-key provider scope.
+10. **A provider whose connection record was lost is treated as foreign** and is not overwritten;
+    remove it in Magpie before re-adding it with the plugin (deliberate, fail-closed).
 
 ## References
 
 - Magpie: https://github.com/yetone/magpie (pin above)
 - EasyTier: https://github.com/EasyTier/EasyTier (pin above)
 - Validation: [`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md),
-  [`validation/2026-10-29-acl-fix-and-two-host.md`](validation/2026-10-29-acl-fix-and-two-host.md)
+  [`validation/2026-10-29-acl-fix-and-two-host.md`](validation/2026-10-29-acl-fix-and-two-host.md),
+  [`validation/2026-10-30-plugin-phase3.md`](validation/2026-10-30-plugin-phase3.md),
+  [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md)
 - Corrected provider config: [`validation/lab/provider-acl.toml`](validation/lab/provider-acl.toml)
