@@ -163,6 +163,7 @@ function renderCatalog(c) {
     rows.push(["Quote", `version ${c.quote.version} · ${c.quote.modelCount} model(s) · updated ${c.quote.updatedAt}`]);
     rows.push(["Identity", `Ed25519 ${c.quote.identity?.fingerprint ?? "—"} (self-signed, not a real-world identity)`]);
     rows.push(["Top-up", `${fmtUsd(c.config?.minTopUpUsd ?? 0)} minimum, simulated only — no wallet or payment is connected`]);
+    rows.push(["Billing", "display only — the quote itself never charges; real charging needs a manually issued key and the later price lock"]);
   } else {
     rows.push(["Quote", c.publishing ? "no signed quote yet" : "not published"]);
   }

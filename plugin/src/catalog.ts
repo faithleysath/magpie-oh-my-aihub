@@ -97,6 +97,12 @@ export interface CatalogQuoteBody {
     simulated: true;
     note: string;
   };
+  /** The quote is display data; it is not an invoice and never charges. */
+  billing: {
+    quoteOnly: true;
+    charged: false;
+    note: string;
+  };
   identity: CatalogIdentitySummary;
 }
 

@@ -38,6 +38,7 @@ function quote(identity: ReturnType<typeof loadOrCreateCatalogIdentity>, models:
     publication: { status: "published", version: 1, updatedAt: "2026-10-30T00:00:00.000Z", publishedAt: "2026-10-30T00:00:00.000Z", note: "read only" },
     models,
     topUp: { minUsd: 1, simulated: true, note: "simulated" },
+    billing: { quoteOnly: true, charged: false, note: "display only" },
     identity: identity.summary,
   };
   return signCatalog(body, identity);

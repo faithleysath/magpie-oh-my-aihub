@@ -555,7 +555,12 @@ export class Service {
         { gatewayPort: this.gatewayPort(), reserved: [rpcPort], strict: true },
       );
       if (catalog.enabled && !sharingEnabled) {
-        throw new Error("publishing a catalogue requires sharing this node's Magpie; enable sharing first");
+        if (input.catalogEnabled === true) {
+          throw new Error("publishing a catalogue requires sharing this node's Magpie; enable sharing first");
+        }
+        // Turning sharing off withdraws the catalogue with it; leaving the
+        // intent on would make the next boot fail or advertise a dead port.
+        catalog.enabled = false;
       }
 
       const cfg: PluginConfig = {
@@ -1039,7 +1044,14 @@ export class Service {
       simulated: true as const,
       note: "Simulated configuration only. No wallet, payment network, deposit or real credit is connected in this phase.",
     };
-    const contentHash = sha256Hex(canonicalJson({ schema: "ohmyaihub.catalog/v1", node, models, topUp, identity: identity.summary }));
+    const billing = {
+      quoteOnly: true as const,
+      charged: false as const,
+      note:
+        "Display only. No request is billed from this quote, no key or balance is created, and real charging " +
+        "depends on the later price-lock validation and a manually issued, capped Gateway Key.",
+    };
+    const contentHash = sha256Hex(canonicalJson({ schema: "ohmyaihub.catalog/v1", node, models, topUp, billing, identity: identity.summary }));
     const prev = loadPublishState();
     let version = prev.versionNumber;
     let updatedAt = prev.updatedAt ?? now;
@@ -1069,6 +1081,7 @@ export class Service {
       },
       models,
       topUp,
+      billing,
       identity: identity.summary,
     };
     this.catalogQuote = signCatalog(body, identity);
