@@ -28,6 +28,14 @@ const cfg: EasytierConfig = {
 let dir: string;
 let bins: { core: string; cli: string; verified: boolean };
 let configFile: string;
+/** every supervisor a test made, stopped after it so no fake core leaks */
+const made: EasytierSupervisor[] = [];
+
+function makeSup(events: ConstructorParameters<typeof EasytierSupervisor>[0], opts: ConstructorParameters<typeof EasytierSupervisor>[1] = {}): EasytierSupervisor {
+  const sup = new EasytierSupervisor(events, opts);
+  made.push(sup);
+  return sup;
+}
 
 async function gone(pid: number, timeoutMs = 3000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -81,8 +89,11 @@ if (args.includes("node")) {
   process.env.FAKE_CONFIG = configFile;
 });
 
-afterEach(() => {
+afterEach(async () => {
   delete process.env.FAKE_CONFIG;
+  for (const sup of made.splice(0)) {
+    await sup.stop().catch(() => {});
+  }
 });
 
 function goodRunning(): string {
@@ -95,7 +106,7 @@ describe("runtime fail closed", () => {
     // that allows everything — the case a file check cannot see.
     const bad = goodRunning().replace(/(name = "Inbound"[\s\S]*?)default_action = 2/, "$1default_action = 1");
     writeFileSync(configFile, bad);
-    const sup = new EasytierSupervisor({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
+    const sup = makeSup({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
 
     const state = await sup.start(cfg);
     expect(state.running).toBe(true); // the generated config passed and the core is up
@@ -112,7 +123,7 @@ describe("runtime fail closed", () => {
 
   test("an RPC portal on a non-loopback address stops the core", async () => {
     writeFileSync(configFile, goodRunning());
-    const sup = new EasytierSupervisor(
+    const sup = makeSup(
       { onState: () => {} },
       { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["0.0.0.0"] } },
     );
@@ -124,7 +135,7 @@ describe("runtime fail closed", () => {
 
   test("an RPC portal that cannot be verified stops the core", async () => {
     writeFileSync(configFile, goodRunning());
-    const sup = new EasytierSupervisor(
+    const sup = makeSup(
       { onState: () => {} },
       { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => [] } },
     );
@@ -137,7 +148,7 @@ describe("runtime fail closed", () => {
   test("a configuration that cannot be read stops the core after the retry", async () => {
     writeFileSync(configFile, goodRunning());
     let reads = 0;
-    const sup = new EasytierSupervisor(
+    const sup = makeSup(
       { onState: () => {} },
       {
         binaries: bins,
@@ -164,7 +175,7 @@ describe("runtime fail closed", () => {
   test("an export that is not announced stops the core", async () => {
     const withoutExport = goodRunning().replace(/proxy_network = .*\n/, "");
     writeFileSync(configFile, withoutExport);
-    const sup = new EasytierSupervisor({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
+    const sup = makeSup({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
     const pid = (await sup.start(cfg)).pid!;
     await sup.refresh();
     expect(sup.snapshot().aclProblems.join(" ")).toContain("proxy_network");
@@ -173,7 +184,7 @@ describe("runtime fail closed", () => {
 
   test("a healthy core keeps running", async () => {
     writeFileSync(configFile, goodRunning());
-    const sup = new EasytierSupervisor({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
+    const sup = makeSup({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
     const pid = (await sup.start(cfg)).pid!;
     const s = await sup.refresh();
     expect(s.running).toBe(true);
@@ -186,7 +197,7 @@ describe("runtime fail closed", () => {
   test("an unsafe core is not restarted, and a new start validates again", async () => {
     const bad = goodRunning().replace(/(name = "Inbound"[\s\S]*?)default_action = 2/, "$1default_action = 1");
     writeFileSync(configFile, bad);
-    const sup = new EasytierSupervisor({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
+    const sup = makeSup({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84", probe: { rpcListeners: async () => ["127.0.0.1"] } });
     const pid = (await sup.start(cfg)).pid!;
     await sup.refresh();
     expect(alive(pid)).toBe(false);
@@ -204,7 +215,7 @@ describe("runtime fail closed", () => {
   test("the supervisor never signals a pid it does not own", async () => {
     // a stand-in process whose command line is not our easytier-core
     const other = Bun.spawn({ cmd: ["sleep", "5"], stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const sup = new EasytierSupervisor({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84" });
+    const sup = makeSup({ onState: () => {} }, { binaries: bins, lanIp: () => "192.0.2.84" });
     // put the foreign pid where an adopted state would have it
     const state = sup.snapshot();
     (sup as unknown as { state: typeof state }).state = { ...state, running: true, pid: other.pid };
