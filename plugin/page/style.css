@@ -1,0 +1,22 @@
+:root { color-scheme: light dark; }
+body {
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  margin: 0 auto; padding: 24px; max-width: 860px;
+  background: var(--magpie-bg, Canvas); color: var(--magpie-fg, CanvasText);
+}
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 28px 0 8px; }
+.sub, .muted { color: var(--magpie-dim, GrayText); }
+section { border-top: 1px solid var(--magpie-border, color-mix(in srgb, CanvasText 15%, Canvas)); padding-top: 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 4px 8px; vertical-align: top; border-bottom: 1px solid var(--magpie-border, color-mix(in srgb, CanvasText 12%, Canvas)); }
+th { font-weight: 600; width: 34%; }
+.bad { color: #c0392b; font-weight: 600; }
+form { display: grid; gap: 10px; max-width: 520px; }
+label { display: grid; gap: 4px; font-weight: 500; }
+label.row { display: flex; gap: 8px; align-items: center; font-weight: 400; }
+input, select, button { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--magpie-border, color-mix(in srgb, CanvasText 20%, Canvas)); background: var(--magpie-input, Field); color: inherit; }
+button { cursor: pointer; font-weight: 500; padding: 6px 14px; }
+.actions { display: flex; gap: 12px; align-items: center; }
+pre { background: var(--magpie-code, color-mix(in srgb, CanvasText 6%, Canvas)); padding: 10px 12px; border-radius: 8px; overflow: auto; font-size: 12px; }
+code { font-size: 12px; }
