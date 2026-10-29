@@ -1,0 +1,9 @@
+{
+  "name":"magpie-p2p-market-preview",
+  "version":"0.1.0",
+  "private":true,
+  "magpie":{
+    "page":{"title":"P2P Market (Preview)","file":"page/index.html"},
+    "permissions":["providers:list"]
+  }
+}
