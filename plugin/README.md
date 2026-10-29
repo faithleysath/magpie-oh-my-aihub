@@ -1,10 +1,10 @@
 # Oh My AIHub — Magpie plugin
 
 A Magpie community plugin that runs a private **EasyTier no-TUN** overlay, publishes this node's
-Magpie to peers that hold a **Gateway Key**, and connects this node to **several remote Magpies**
-at once. It is not an AI gateway: every AI request goes consumer agent → consumer Magpie →
-EasyTier → provider Magpie, and Magpie itself does the authentication, cost/token accounting and
-429s.
+Magpie to peers that hold a **Gateway Key**, connects this node to **several remote Magpies** at
+once, and optionally discovers peers' read-only catalogues. It is not an AI gateway: every AI
+request goes consumer agent → consumer Magpie → EasyTier → provider Magpie, and Magpie itself does
+the authentication, cost/token accounting and 429s.
 
 - Verified against Magpie **0.1.2038** and EasyTier **2.6.4** (pinned; see
   `src/easytier-manifest.ts`).
@@ -89,16 +89,52 @@ Which models may be shared:
 - issued keys are re-checked when a provider changes and at every hand-over: unshareable entries
   are removed from the key, and a key with nothing left is revoked.
 
-The guard that keeps shared keys native runs at start, after every reconcile, and on a 15 s poll:
-it compares Magpie's own key store (an empty model list means "every model") with the operator's
-shareable set, narrows keys that were widened by hand and revokes a key with nothing shareable
-left. If Magpie's provider list cannot be read, sharing is **suspended** — the export and Forward
-chain are withdrawn, no key is revoked on a transient error — and republished automatically when
-the check passes again. `checks` reports `sharing-suspended` and `shared-models-native-only`.
-The protection window is bounded by the poll interval (~15 s), not zero; see the known limits.
+The guard that keeps shared keys native runs at start, after every reconcile (about every 45 s),
+after configure/connect/update/remove, at every hand-over, and whenever the 15 s provider-id
+fingerprint changes. It compares Magpie's own key store (an empty model list means "every model")
+with the operator's shareable set, narrows keys that were widened by hand and revokes a key with
+nothing shareable left. If Magpie's provider list cannot be read, sharing is **suspended** — the
+export and Forward chain are withdrawn, no key is revoked on a transient error — and republished
+automatically when the check passes again. `checks` reports `sharing-suspended` and
+`shared-models-native-only`.
+
+Two changes have two deadlines, and they are not both 15 s:
+
+- a provider **id/type** replacement changes the 15 s fingerprint and is seen on that tick;
+- a direct edit of a **Gateway Key's model whitelist** does not change that fingerprint; the full
+  guard sees it on the ~45 s reconcile pass, or at the next hand-over. The protection window is
+  bounded by those intervals, not zero; see the known limits.
 
 Turning sharing off withdraws the export and the Forward chain, and deletes nothing in Magpie:
 local providers, models and issued Gateway Keys stay.
+
+### Catalogue (read-only, opt-in)
+
+A node may publish a small signed JSON document of its shareable native models, API capabilities,
+explicit prices, simulated minimum top-up, mapped address and gateway port. Another node may
+discover it from EasyTier's peer/route list and read it through EasyTier's loopback SOCKS5 portal.
+
+```sh
+bun bin/ohmyaihub.ts --data ~/.config/magpie catalog config --display-name "My Magpie" --port 3426
+bun bin/ohmyaihub.ts --data ~/.config/magpie catalog publish on
+bun bin/ohmyaihub.ts --data ~/.config/magpie catalog discover on
+bun bin/ohmyaihub.ts --data ~/.config/magpie catalog peers
+bun bin/ohmyaihub.ts --data ~/.config/magpie catalog request <node-id>
+bun bin/ohmyaihub.ts --data ~/.config/magpie catalog trust <node-id> [--fingerprint <sha256>]
+```
+
+- It is **not** a gateway and **not** the management API: one `GET /catalog/v1`, bound to the
+  provider's LAN address, no write path, no AI request, no key. Its port is added to the Forward
+  ACL only while published; Inbound stays Drop, so the virtual-IP/loopback path cannot reach it.
+- It is one document in `catalog-identity.json` signed with a persisted Ed25519 key. First sight is
+  **unverified (TOFU)**; a changed fingerprint is `identity-changed` and is never accepted silently.
+  The signature is not a real-world identity.
+- A quote never issues a key, charges, deposits or changes a Magpie provider. `catalog request`
+  only produces connection information; the provider still runs `consumers add` and `secret`, and
+  the consumer still uses `provider add`/`catalog connect` with that key.
+- The discovery client uses EasyTier's own SOCKS5 listener (`socks5_proxy = socks5://127.0.0.1:…`),
+  so a catalogue read creates no port forward and no listener EasyTier 2.6.4 cannot remove. The
+  listener is loopback-only and off unless discovery is enabled.
 
 ### Consuming
 

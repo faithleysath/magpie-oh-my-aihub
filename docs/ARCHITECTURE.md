@@ -1,9 +1,12 @@
-# Architecture decision record — updated 2026-10-29 (phase 4)
+# Architecture decision record — updated 2026-10-30 (phase 5)
 
-Phase 4 turns the two mutually exclusive roles into two independent capabilities on one node
-(share my Magpie, consume other Magpies) and replaces the single consumer wiring with a set of
-remote providers. Everything measured in phase 3 still holds; the new decisions are 8–12 and
-the evidence is in [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md).
+Phase 5 adds opt-in peer discovery and a read-only quote catalogue, and does not add a wallet, a
+central directory or an automatic key issuer. Phase 4 turned the two mutually exclusive roles into
+two independent capabilities on one node (share my Magpie, consume other Magpies) and replaced the
+single consumer wiring with a set of remote providers. Everything measured in phase 3 still holds;
+the phase-4 decisions are 5–12 and the phase-5 decisions are 13–17. Evidence is in
+[`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md)
+and [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md).
 
 Supersedes the 2026-10-29 draft. Every claim below is backed by a measured result in
 [`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md) or
@@ -237,9 +240,12 @@ hand is narrowed; a key with nothing shareable left is revoked. When `providers.
 read the guard does **not** revoke on a transient error, but it does not treat "unknown" as safe:
 sharing is suspended (the export and Forward chain are withdrawn, `state.shareSuspended`) and
 republished automatically once the check passes again. The protection window is therefore bounded
-by the poll interval (~15 s), not zero: a request already in flight or made inside that window could
-still use a channel whose provider id was just replaced. Absolute real-time prevention would need
-Magpie to make a key's provider set immutable or a request-path intermediary; **LIMITATION**, see
+by the poll interval, not zero: a request already in flight or made inside that window could
+still use a channel whose provider id was just replaced. Two different changes have two different
+deadlines: a provider **id/type** change is seen by the 15 s fingerprint, while a direct edit of a
+Gateway Key's **model whitelist** is seen by the full guard on the ~45 s reconcile pass (or at the
+next hand-over). Absolute real-time prevention would need Magpie to make a key's provider set
+immutable or a request-path intermediary; **LIMITATION**, see
 [`validation/2026-10-29-pr5-review-fixes.md`](validation/2026-10-29-pr5-review-fixes.md).
 
 ## Decision 11 — State: versioned, atomic, backed up, with the keys elsewhere
@@ -278,6 +284,132 @@ therefore:
   replaces the registration, then restarts once so the old listener is gone. A failed retarget
   restores the old registration and keeps the old forward; an explicit request to reuse the same
   port for a new target is refused.
+
+## Decision 13 — Discovery is EasyTier's own peer and route data
+
+The directory is rebuilt from `easytier-cli -o json peer list` and `route` on a
+10 s supervisor refresh plus a 15 s service tick (the catalogue refresh itself
+is at most every `refreshSec`, default 20 s). No DHT, mDNS, broadcast,
+central directory or new routing algorithm is introduced.
+
+- A peer row carries `hostname`, `ipv4`, `id` (session peer id), `cost`
+  (`Local`/`p2p`/`relay(N)`), `lat_ms`, `loss_rate`, `tunnel_proto`, `nat_type`.
+- A route row carries the peer's virtual IPv4, `proxy_cidrs` (`real->mapped`)
+  and `next_hop_hostname` (`DIRECT` or an intermediate peer). The mapped side is
+  the only address a consumer dials.
+- The self row (`cost = Local`) and the node's own hostname/virtual IP are
+  classified as `self`; a peer whose route owns a `ProviderConnection.mappedCidr`
+  is `connected`; the rest are `unknown` until a catalogue is read.
+- Duplicate virtual addresses and duplicate mapped prefixes are `conflict` and
+  are never probed. A catalogue whose signed `node.mappedCidr` does not match
+  the address it was read through is refused.
+- An offline peer keeps its last quote in memory for at most one hour, marked
+  `offline`; a peer that returns is re-read.
+- Hostname, virtual IP, `mapped_cidr` and peer id are routing hints, **not**
+  cryptographic identities. `peer_id` changes on every EasyTier start.
+
+The default catalogue port is 3426. A host may publish on another port; discovery
+probes the configured base and the next four ports only until one answers, then
+remembers the port. This is a bounded compatibility range, not a port sweep.
+
+## Decision 14 — The catalogue is one read-only GET over SOCKS5
+
+The catalogue is a separate, thin HTTP server in the plugin host, bound to the
+provider's **LAN address** (not `0.0.0.0`, not loopback), one path
+`GET /catalog/v1`, one signed JSON body. It is never an AI gateway, never proxies
+a chat/responses/messages request and has no write path. Its only data source is
+a cached quote built from Magpie's native models and explicit settings.
+
+The consumer reads it through EasyTier 2.6.4's own SOCKS5 portal, configured as
+`socks5_proxy = "socks5://127.0.0.1:<port>"` in the generated TOML. The source
+binds `proxy_url.host_str()` (`gateway/socks5.rs:661-670`), unlike `--socks5`,
+which hardcodes `0.0.0.0` (`launcher.rs:666-670`). The plugin's client dials only
+the peer's mapped IPv4 address, never a DNS name, caps the response at 64 KiB and
+uses a 5 s timeout. The SOCKS5 listener is loopback-only and is verified as such
+at runtime (the same lsof/ss check as the RPC portal).
+
+Why not a port forward per read: EasyTier 2.6.4 `port-forward remove` prints
+success and keeps the listener (Decision 12), so a per-read forward would leak an
+undelatable port. SOCKS5 creates no forward and no listener of its own; one
+persistent loopback listener serves every on-demand read. A local process on the
+consumer could use that listener to reach the private overlay; it is off unless
+discovery is enabled, bound to loopback, and its port is stored in a 0600 config.
+This is a local-trust boundary, not a network-exposed service.
+
+Publication rules:
+
+- The user must explicitly enable publishing; a phase-4 state migrates with both
+  catalogue switches off.
+- The catalogue port is appended to the Forward ACL's published ports only while
+  the catalogue is published; turning publication off stops the server and
+  rewrites the TOML without that port (supervised restart).
+- Inbound stays `Drop` with zero rules. A request addressed to the provider's
+  virtual IP on the catalogue port is dropped (and would hit no listener: the
+  server binds the LAN address, not `127.0.0.1`).
+- The server caps concurrency (8), request rate (60/min, burst 10), idle time
+  (5 s), body size (64 KiB) and model count (200); it accepts only `GET` on its
+  one path. `/status`, `/providers`, `/configure` and every other path are 404 or
+  405. No CORS header is added.
+- Enabling/disabling publication, changing its port, or enabling discovery is a
+  config change and a supervised core restart. A quote refresh is not: it only
+  re-signs the cached document and never restarts EasyTier or touches a key.
+
+## Decision 15 — Quotes are self-signed; identity is TOFU, never PKI
+
+The provider persists an Ed25519 key in `catalog-identity.json` (0600). The
+quote's bytes (canonical JSON, sorted keys, no whitespace) are signed; the
+consumer verifies the signature, recomputes the key fingerprint (`SHA-256` of the
+raw 32-byte public key) and stores the first-seen key per signed `node.id` in
+`catalog-trust.json` (0600).
+
+- First sight is displayed as **unverified (self-signed, TOFU)**.
+- A later quote with the same key is still only "same key as before"; the
+  operator can mark it accepted locally (`catalog trust <node-id>`), after which
+  the page calls it verified-by-TOFU.
+- A different key is never accepted silently: the peer becomes
+  `identity-changed`, the pending fingerprint is shown, `catalog request` and
+  `catalog connect` refuse, and only a local, authenticated `catalog trust`
+  accepts the new key.
+- A signature proves only that the same key signed the document. It does not
+  prove a real-world identity, and there is no certificate server or PKI.
+- A node that presents another node's `mappedCidr` is refused; a node that
+  presents another node's `node.id` with its own key becomes a pending identity
+  change, not a silent replacement.
+
+## Decision 16 — The catalogue is display data; connection stays manual
+
+A quote never creates a key, a balance, a charge or a Magpie provider. The flow
+is: discover -> browse -> `catalog request <node>` (a JSON request with the
+consumer's node id, the provider's mapped address, models and quote hash) ->
+provider operator approves out of band and runs `consumers add` with a native
+model whitelist and a positive cap -> provider runs `secret` -> consumer runs the
+existing `provider add`/`catalog connect` with that key. The catalogue itself
+has no endpoint that accepts a key, a deposit or a write.
+
+Price display is read from Magpie's own `settings.json` `modelPrices` (and from
+the local gateway's `magpie_price` when the gateway answers on loopback), in USD
+per 1M tokens, with cache read/write and tiers when present. A model with no
+configured price is published as "no published price", never invented. The
+minimum top-up is a simulated display field (`simulated: true`); no wallet is
+connected. A quote change does not call the provisioner and cannot change a
+Gateway Key's cost cap. Real charging still depends on the price-lock work in
+Decision 4/known blockers.
+
+The provider page cannot fetch (`connect-src 'none'`); it renders a generated
+`status.js` snapshot with the peer directory, quotes, connected providers,
+native `/v1/magpie/limit` numbers, identity warnings, errors and timestamps. The
+CSP is not relaxed and the host API is not exposed on the LAN.
+
+## Decision 17 — Share-guard detection has two different deadlines
+
+The 15 s provider fingerprint compares only the **ids and types** of Magpie's
+providers (native/remote) to detect a replacement, addition or removal. A direct
+edit of a Gateway Key's model whitelist does not change that fingerprint; it is
+found by the full guard on the reconcile pass (about every 45 s), at start, on
+configure, on connect/update/remove, and at every hand-over. The real upper bound
+is therefore ~15 s for provider id/type changes and ~45 s for a direct key-store
+whitelist edit, not 15 s for both. Catalogue refresh never invokes the guard and
+never changes a key.
 
 ## Preferred dataflow
 
@@ -333,11 +465,22 @@ refuses an unlisted platform or a hash mismatch.
 8. **Forward removal needs a core restart** (Decision 12), so removing or retargeting one provider
    briefly interrupts the others' in-flight requests; new requests recover as soon as the core is
    back (measured).
-9. **The no-resale guard is polled** (~15 s), not instantaneous; see Decision 10. A provider id
-   replaced outside the plugin can be used through an existing key inside that window. Treat
-   absolute real-time prevention as UNKNOWN until Magpie offers immutable per-key provider scope.
+9. **The no-resale guard is polled**, not instantaneous; see Decisions 10 and 17. A provider
+   id/type change is noticed on the ~15 s tick; a direct edit of a Gateway Key's model whitelist is
+   noticed by the full guard on the ~45 s reconcile pass or at a hand-over. Treat absolute
+   real-time prevention as UNKNOWN until Magpie offers immutable per-key provider scope.
 10. **A provider whose connection record was lost is treated as foreign** and is not overwritten;
     remove it in Magpie before re-adding it with the plugin (deliberate, fail-closed).
+11. **Catalogue identity is self-signed TOFU**, not a real-world identity. A malicious overlay
+    member can publish its own catalogue or copy another's; the Gateway Key is still what guards
+    the AI path, and a changed key is only a warning.
+12. **Catalogue discovery needs a reachable mapped address and the published port.** A host with no
+    export, a conflicting route, or a catalogue port outside the bounded probe range is shown but
+    not read automatically. The range (base … base+4) exists so several lab instances can share a
+    LAN address; a real deployment uses 3426.
+13. **The consumer's SOCKS5 listener is loopback-only but unauthenticated.** Any local process could
+    use it to reach the private overlay while discovery is on. It creates no persistent forward and
+    is stopped when discovery is off; local process isolation is out of scope.
 
 ## References
 
@@ -346,5 +489,6 @@ refuses an unlisted platform or a hash mismatch.
 - Validation: [`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md),
   [`validation/2026-10-29-acl-fix-and-two-host.md`](validation/2026-10-29-acl-fix-and-two-host.md),
   [`validation/2026-10-30-plugin-phase3.md`](validation/2026-10-30-plugin-phase3.md),
-  [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md)
+  [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
+  [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md)
 - Corrected provider config: [`validation/lab/provider-acl.toml`](validation/lab/provider-acl.toml)

@@ -41,6 +41,8 @@ export interface EasytierConfig {
   mappedCidr: string | null;
   /** sharing: ports the Forward chain may reach (default [3425]) */
   publishedPorts: number[];
+  /** consuming: loopback SOCKS5 listener for on-demand catalogue reads */
+  socks5Proxy: string | null;
   /** consuming: loopback listeners towards remote providers */
   portForwards: ForwardSpec[];
   secureMode: boolean;
@@ -265,6 +267,15 @@ export function renderConfig(cfg: EasytierConfig): string {
       `proxy_network = [{ cidr = ${tomlString(cfg.proxyCidr)}, mapped_cidr = ${tomlString(cfg.mappedCidr)} }]`,
     );
   }
+  if (cfg.socks5Proxy) {
+    // EasyTier's SOCKS5 portal is the on-demand path for reading a peer's
+    // catalogue: no per-read port forward, no listener 2.6.4 cannot remove.
+    // It must be loopback-only; the URL's host is what EasyTier binds
+    // (gateway/socks5.rs: `proxy_url.host_str()`), unlike `--socks5`, which
+    // hardcodes 0.0.0.0.
+    assertLoopbackUrl(cfg.socks5Proxy);
+    lines.push(`socks5_proxy = ${tomlString(cfg.socks5Proxy)}`);
+  }
   // A forward is part of the generated config, not a runtime-only CLI command:
   // it comes back by itself after an EasyTier restart, and removing one is a
   // config change (2.6.4 cannot delete a forward at runtime).
@@ -363,6 +374,7 @@ export interface SupervisorState {
   publishedPorts: number[];
   peers: Peer[];
   secureMode: boolean;
+  socks5Port: number | null;
   aclOk: boolean;
   aclProblems: string[];
   lanIp: string | null;
@@ -387,6 +399,7 @@ const emptyState = (): SupervisorState => ({
   publishedPorts: [],
   peers: [],
   secureMode: false,
+  socks5Port: null,
   aclOk: false,
   aclProblems: [],
   lanIp: null,
@@ -540,6 +553,7 @@ export class EasytierSupervisor {
     this.state.mappedCidr = cfg.mappedCidr;
     this.state.publishedPorts = [...cfg.publishedPorts];
     this.state.secureMode = cfg.secureMode;
+    this.state.socks5Port = cfg.socks5Proxy ? Number(new URL(cfg.socks5Proxy).port) : null;
     this.state.rpcPort = cfg.rpcPort;
 
     const persisted = this.loadPersisted();
@@ -858,6 +872,13 @@ export class EasytierSupervisor {
         if (!has) problems.push(`proxy CIDR ${want} is not announced (got ${node.proxyCidrs.join(",") || "none"})`);
       }
 
+      if (this.cfg?.socks5Proxy) {
+        const effective = extractToml(node.config, "socks5_proxy");
+        if (effective !== this.cfg.socks5Proxy) {
+          problems.push(`the running core does not carry the loopback SOCKS5 listener ${this.cfg.socks5Proxy}`);
+        }
+      }
+
       try {
         this.state.peers = await this.peers();
       } catch (e) {
@@ -878,6 +899,21 @@ export class EasytierSupervisor {
         }
       } catch (e) {
         problems.push(`the RPC portal on port ${this.state.rpcPort} cannot be verified: ${(e as Error).message}`);
+      }
+    }
+
+    if (this.state.socks5Port) {
+      // The catalogue client reaches peers through this local proxy. If it is
+      // bound beyond loopback, any LAN host could use the private overlay.
+      try {
+        const bound = await this.probe.rpcListeners(this.state.socks5Port);
+        if (bound.length === 0) {
+          problems.push(`the catalogue SOCKS5 listener on port ${this.state.socks5Port} cannot be verified (no listener found)`);
+        } else if (bound.some((a) => !a.startsWith("127.0.0.1"))) {
+          problems.push(`the catalogue SOCKS5 listener listens on ${bound.join(", ")}, not loopback`);
+        }
+      } catch (e) {
+        problems.push(`the catalogue SOCKS5 listener on port ${this.state.socks5Port} cannot be verified: ${(e as Error).message}`);
       }
     }
 
@@ -975,6 +1011,18 @@ function assertLoopbackBind(bindAddr: string): void {
   const host = bindAddr.replace(/^tcp:\/\//, "").split(":")[0];
   if (host !== "127.0.0.1" && host !== "localhost") {
     throw new Error(`refusing a port forward bound to ${bindAddr}: local proxies must listen on 127.0.0.1`);
+  }
+}
+
+function assertLoopbackUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`refusing a malformed SOCKS5 URL: ${url}`);
+  }
+  if (parsed.protocol !== "socks5:" || parsed.hostname !== "127.0.0.1" || !parsed.port) {
+    throw new Error(`refusing a SOCKS5 listener that is not 127.0.0.1:<port>: ${url}`);
   }
 }
 

@@ -42,6 +42,11 @@ interface PluginOptions {
   shareModels?: string[] | string;
   rpcPort?: number;
   apiPort?: number;
+  catalogEnabled?: boolean;
+  catalogDiscovery?: boolean;
+  catalogDisplayName?: string;
+  catalogContact?: string;
+  catalogPort?: number;
 }
 
 interface Running {
@@ -83,6 +88,11 @@ export async function boot(input?: PluginInput, options?: PluginOptions): Promis
       publishedPorts: toList(opt.publishedPorts).map(Number).filter(Boolean),
       secureMode: opt.secureMode !== false,
       shareModels: toList(opt.shareModels),
+      catalogEnabled: opt.catalogEnabled ?? current?.catalog.enabled ?? false,
+      catalogDiscovery: opt.catalogDiscovery ?? current?.catalog.discoveryEnabled ?? false,
+      catalogDisplayName: opt.catalogDisplayName ?? current?.catalog.displayName ?? null,
+      catalogContact: opt.catalogContact ?? current?.catalog.contact ?? null,
+      catalogPort: opt.catalogPort ?? current?.catalog.port ?? 3426,
     };
     const changed =
       !current ||
@@ -94,6 +104,11 @@ export async function boot(input?: PluginInput, options?: PluginOptions): Promis
       (current.listenAddr ?? null) !== (fromOptions.listenAddr ? (fromOptions.listenAddr.includes("://") ? fromOptions.listenAddr : `tcp://${fromOptions.listenAddr}`) : null) ||
       JSON.stringify(current.publishedPorts) !== JSON.stringify(fromOptions.sharingEnabled ? fromOptions.publishedPorts : current.publishedPorts) ||
       current.secureMode !== fromOptions.secureMode ||
+      current.catalog.enabled !== fromOptions.catalogEnabled ||
+      current.catalog.discoveryEnabled !== fromOptions.catalogDiscovery ||
+      current.catalog.displayName !== fromOptions.catalogDisplayName ||
+      current.catalog.contact !== fromOptions.catalogContact ||
+      current.catalog.port !== fromOptions.catalogPort ||
       (fromOptions.shareModels.length > 0 && JSON.stringify(current.share.models) !== JSON.stringify(fromOptions.shareModels));
 
     if (opt.networkName && opt.networkSecret && changed) {
@@ -109,6 +124,11 @@ export async function boot(input?: PluginInput, options?: PluginOptions): Promis
           secureMode: opt.secureMode !== false,
           shareModels: fromOptions.shareModels.length ? fromOptions.shareModels : undefined,
           rpcPort: opt.rpcPort ? Number(opt.rpcPort) : undefined,
+          catalogEnabled: fromOptions.catalogEnabled,
+          catalogDiscovery: fromOptions.catalogDiscovery,
+          catalogDisplayName: fromOptions.catalogDisplayName,
+          catalogContact: fromOptions.catalogContact,
+          catalogPort: fromOptions.catalogPort,
         })
         .catch((e) => logger.error(`configure from plugin options failed: ${String(e)}`));
     } else {

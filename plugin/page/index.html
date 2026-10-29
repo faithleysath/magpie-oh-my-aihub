@@ -29,18 +29,39 @@
       <form id="form">
         <label class="row"><input name="sharingEnabled" type="checkbox" /> Share this Magpie (publish the gateway on the overlay)</label>
         <label class="row"><input name="consumingEnabled" type="checkbox" /> Use remote Magpies (connect to other providers)</label>
+        <label class="row"><input name="catalogEnabled" type="checkbox" /> Publish a read-only catalogue of shareable native models</label>
+        <label class="row"><input name="catalogDiscovery" type="checkbox" /> Discover peers' catalogues through EasyTier SOCKS5</label>
         <label>Network name <input name="networkName" autocomplete="off" placeholder="magpie-lab" /></label>
         <label>Network secret <input name="networkSecret" type="password" autocomplete="off" placeholder="at least 8 characters" /></label>
         <label>Initial peers <input name="peers" autocomplete="off" placeholder="tcp://relay.example.com:11010" /></label>
         <label>Listen address <input name="listenAddr" autocomplete="off" placeholder="empty = dial only, or 127.0.0.1:11010" /></label>
         <label>Published ports <input name="publishedPorts" autocomplete="off" placeholder="3425" /></label>
         <label>Shared models <input name="shareModels" autocomplete="off" placeholder="* or provider/model, provider/*" /></label>
+        <label>Catalogue display name <input name="catalogDisplayName" autocomplete="off" placeholder="optional, shown to peers" /></label>
+        <label>Manual contact <input name="catalogContact" autocomplete="off" placeholder="optional text; never dialled" /></label>
+        <label>Catalogue port <input name="catalogPort" type="number" min="1024" max="65535" placeholder="3426" /></label>
         <label class="row"><input name="secureMode" type="checkbox" checked /> Secure Mode (persisted X25519 identity)</label>
         <div class="actions">
           <button type="submit">Save</button>
           <span id="saved" class="muted"></span>
         </div>
       </form>
+    </section>
+
+    <section id="catalog">
+      <h2>Shared catalogue (read-only)</h2>
+      <div id="catalog-body" class="muted">No catalogue snapshot yet.</div>
+    </section>
+
+    <section id="directory">
+      <h2>Peer directory</h2>
+      <div id="directory-body" class="muted">No peer snapshot yet.</div>
+      <p class="muted">
+        EasyTier hostnames, virtual IPs and mapped_cidr values are routing hints, not cryptographically verified identities.
+        A catalogue quote is self-signed with a persisted Ed25519 key. The signature proves only that the same key signed
+        the document; it does not prove who the operator is. A changed fingerprint is shown as a warning and is never
+        accepted silently.
+      </p>
     </section>
 
     <section id="operator">
@@ -51,6 +72,10 @@
       </p>
       <pre>bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; status
 bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; share on
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; catalog publish on
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; catalog discover on
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; catalog peers
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; catalog request &lt;node-id&gt;
 bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; provider add peer-b --cidr 10.66.1.2/32 --key sk-… --port 3425
 bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; consumers add alice deepseek/deepseek-flash 1
 bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; topup alice 1</pre>

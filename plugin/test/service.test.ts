@@ -148,6 +148,7 @@ class FakeSupervisor implements SupervisorLike {
       publishedPorts: cfg?.publishedPorts ?? [],
       peers: [...this.peerRows],
       secureMode: cfg?.secureMode ?? false,
+      socks5Port: cfg?.socks5Proxy ? Number(new URL(cfg.socks5Proxy).port) : null,
       aclOk: Boolean(cfg),
       aclProblems: [],
       lanIp: "192.0.2.84",
