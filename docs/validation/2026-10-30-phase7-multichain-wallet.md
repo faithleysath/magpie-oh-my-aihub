@@ -492,3 +492,128 @@ ran end to end on a real EVM node including a reorg.
 has no price lock, overshoot has no closed form, no real-testnet deposit has ever executed, BSC's
 finality policy is a substitute rather than a measurement, in-flight and interrupted calls are still
 unbilled, and the watcher has no consensus read.
+
+---
+
+# Phase 7 review patch — four credit-correctness defects
+
+Added after review of `abcc208`. No new feature, no new network, no mainnet, no buy path. Four
+defects in the deposit path, each reproduced by a test that failed before the fix.
+
+## A. An event with an unreadable receipt was lost permanently
+
+**Reproduction.** `receiptDown = true`, then a real transfer is scanned. The event is stored and set
+`uncertain`. The receipt comes back. Nothing ever credits it. Before the fix, `pendingFinality()`
+selected `status IN ('observed','confirming')` only, so `uncertain` was a dead end: the payment was
+recorded and then unreachable. `creditFinalized()` only looked at `finalized`/`crediting`, so it could
+not reach it either.
+
+**Second half of the same defect.** The scan loop caught a per-log error, wrote an anomaly, and
+**still advanced the page cursor**. An event that was never persisted therefore could not be
+re-read, and was lost with no trace beyond an anomaly line.
+
+**Root cause.** Two states were conflated — *stored* and *verified* — and the cursor advanced
+independently of whether the page's rows actually committed.
+
+**Fix.**
+- `ChainStore.pendingVerification(chainId)` is the retry set: `observed` and `uncertain`, no deposit,
+  no invoice, ordered by attempt count. It is a query over persisted rows, not an in-memory list, so
+  it survives a restart.
+- `ChainWatcher.verifyEvent()` classifies the receipt read into three outcomes instead of two:
+  `ok`, `retryable` (an RPC failure, a missing receipt, or a receipt that does not yet carry the log),
+  and `permanent` (the transaction reverted). Only `permanent` gets `failed`; the rest stay retryable.
+- `verifyPending()` re-runs verification and attribution for that set, and runs inside
+  `settlePending()`, which every scan path reaches — including the "no new blocks" early return that
+  previously skipped it.
+- A successfully re-verified event returns to `observed` and then to the finality path. Without that
+  it would be claimed and never finalised, which is the same loss in a different place.
+- `ChainStore.commitPage()` writes **the page's events and the cursor in one transaction**. A failed
+  page rolls back both, so the range is re-read. The old comment claimed this while the code issued
+  one transaction per event plus another for the cursor; the comment now matches the code.
+- A claimed event leaves the verification set (`claim()` moves `observed`/`uncertain` to
+  `confirming`), because leaving it there made the retry pass re-attribute a payment whose intent was
+  already `matched` and mark it `unclaimed`. That was a second real bug the tests caught.
+- Retry batches are bounded (100 verify, 50 credit) so a backlog cannot stall a tick.
+
+**Tests** (`plugin/test/wallet-reliability.test.ts`, 18 total): receipt outage then recovery credits
+exactly once; a restart over the same database finishes the event; a reverted transaction is
+permanent and is not retried; four scans of an unverifiable event credit nothing and the fifth
+credits once; a page that fails to commit leaves the cursor untouched and is stored by the next scan;
+a mid-batch `NOT NULL` violation rolls back the earlier rows **and** the cursor.
+
+## B. A credit retry did not re-verify the chain
+
+**Reproduction.** A payment reaches finality, the ledger books it, and `applyDeposit` fails (Magpie
+refuses the cap write). The event stays `crediting`. The block is then reorganised away. Before the
+fix, the retry credited it anyway: `creditFinalized()` took `awaitingCredit()` and went straight to
+the conversion, with no block-hash check and no finality check. A `crediting` row proves the ledger
+intent exists, not that the block still does.
+
+**Fix.** `reconfirmChain(event)` runs before every credit, first attempt and retry alike:
+- the block at `event.blockNumber` is re-read; a different hash marks the event `reverted`, writes a
+  `reorg` anomaly, and — because a ledger deposit may already exist — **freezes the consumer**. The
+  deposit is kept for audit; nothing is deleted and no balance is rewritten;
+- the finality policy is re-evaluated; if it no longer holds the event returns to `confirming`;
+- a chain that cannot answer (no block, no head) **pauses** the retry: the event keeps its status and
+  the scan moves on, so a later pass retries instead of crediting on an assumption. A `null` block is
+  explicitly *not* treated as evidence of a reorg.
+
+**Tests.** A reorg between a failed credit and its retry is refused, the ledger intent stays and the
+consumer is frozen; an unreadable chain pauses the retry and the credit lands only after the chain is
+readable and unchanged; a rewound chain leaves the event uncredited.
+
+This remains a testnet guarantee. It is not a claim of mainnet irreversible settlement.
+
+## C. The conversion used the current rate, not the issued one
+
+**Reproduction.** A deposit intent is created at 1 MOCK = 1 test USD and signed. Before the transfer
+is confirmed, the operator changes the test rate to 2. Before the fix the event credited at **2×**:
+`creditFinalized()` called `convertRawToNanos({ rawAmount, asset })` with the live registry asset,
+and the intent's `priceVersion` was recorded but never consulted.
+
+**Fix.** The rate is snapshotted into the intent when it is issued
+(`rateNanosPerToken`, `rateDecimals`, `rateAssetId`), and `rateForDeposit()` decides:
+- an intent **with** a snapshot is converted at that snapshot, whatever the registry now says, and
+  the rate used is frozen onto the event (`credited_nanos`, `rate_nanos_per_token`, `rate_version`)
+  before the ledger is asked for anything;
+- an intent **without** one (a row from the first build) is converted at the registry rate only if
+  the registry still reports the same version the intent was issued with; otherwise the event goes to
+  `manualReview` with a `rate-mismatch` anomaly and is **never** credited automatically.
+- `recordConversion()` refuses to re-convert an event at a different amount, so a later registry edit
+  cannot rewrite an accepted booking.
+
+**Tests.** The issued rate is used after the registry doubles; a registry change after the credit
+cannot recompute it under a full rescan; a snapshot-less intent with a changed version goes to manual
+review and credits nothing; `convertRawToNanos` honours an explicit rate over the asset's own.
+
+## D. Receiving addresses did not survive a restart
+
+**Reproduction.** `wallet.receiving` was a plain array field. After a restart
+`receivingAddressFor()` returned `null`, so every new deposit intent was refused and outstanding ones
+had no published address to reference.
+
+**Fix.** A `receiving_addresses` table in the existing `chain.sqlite`, primary key
+`(provider_id, chain_id)`. Updating one network's address never touches another's; an intent that was
+already issued keeps the address in its own row, so a later config change cannot rewrite it; a corrupt
+database file is an error (the `ChainStore` constructor throws), never a silent empty set. The table
+holds `provider_id`, `chain_id`, `address`, `added_at` and nothing else — no key material, which a
+test asserts column by column.
+
+**Tests.** An address survives a reopen; one provider has two chains and a second provider is
+separate; a corrupt store throws; an issued intent keeps its original recipient after the provider
+changes it; the table's columns are exactly those four and contain no 32-byte value.
+
+## Effect on the numbers
+
+| | Before this patch | After |
+| --- | --- | --- |
+| Tests | 370 | **388** (0 failures, 1425 assertions, 24 files) |
+| New suite | — | `wallet-reliability.test.ts` (18) |
+| `bun run ci` | PASS | PASS (typecheck, test, boot-check, secret-scan) |
+| Local EVM lab | 17/17 | **20/20** — adds a receipt outage + recovery and a rate change between request and confirmation |
+
+## Still not verified
+
+The real-testnet end-to-end run is still **UNKNOWN** for the same reason as §9.2: no reachable faucet
+would fund a throwaway account. This patch did not attempt it again and did not need to — the two new
+lab steps exercise exactly the reported defects against a real node.

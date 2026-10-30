@@ -723,6 +723,33 @@ so the enforcement level is measured rather than assumed. The deposit row stays,
 edited, and `reissue()` is the only way back. Proven with `anvil_reorg` on a real node: two credits,
 two freezes, two deposits still present.
 
+## Decision 32a — Stored, verified and credited are three different states
+
+A chain log becomes credit in three steps that can each fail, so they are recorded separately:
+
+- **stored** — the log exists in `deposit_events` with its `(chain, token, tx, logIndex)` key. The
+  page's rows and the scan cursor commit in **one** transaction, so a failure re-reads the range
+  instead of skipping it.
+- **verified** — the transaction receipt exists, is successful, and contains this log at this block.
+  A provider that cannot serve the receipt is a *retryable* condition, not a refusal: the event stays
+  in `pendingVerification()` (a query, so it survives a restart) and is re-examined on the next pass,
+  including a pass with no new blocks. Only a reverted transaction is permanent.
+- **credited** — the finality policy holds, the amount is converted at the rate the **intent** was
+  issued at, and the ledger has accepted the deposit.
+
+A `crediting` row means the ledger intent exists; it does **not** mean the block still does. Every
+credit, including a retry, first re-reads the block hash and re-evaluates the finality policy. A
+reorg marks the event `reverted`, keeps the deposit for audit and freezes the consumer; a chain that
+cannot answer pauses the retry rather than assuming the payment is still good.
+
+## Decision 32b — A deposit is converted at the rate it was requested at
+
+The rate (and its version) is snapshotted into the deposit intent at issue time and frozen onto the
+event before the ledger is asked for anything. A registry edit afterwards cannot change the value of
+an amount the consumer already signed for; an intent with no snapshot is converted only if the
+registry still reports the version it was issued with, and otherwise goes to manual review. This is
+the same rule the phase-6 ledger applies to consumption: a settled amount is never repriced.
+
 ## Decision 33 — No buy, swap, bridge or fiat path; two plain external links
 
 The product does not sell, buy, swap, bridge or exchange any token. There is no buy button, order
@@ -843,18 +870,20 @@ Phase-7 additions:
 15. **BSC testnet's finality policy is a substitute.** Its RPCs report `finalized` == `latest`, so 15
     confirmations is a conservative choice, not a measured chain guarantee. No BSC testnet reorg
     distribution was observed.
-16. **Two identical intents from one payer are ambiguous by design.** The plugin marks the event
+16. **The verification retry set is bounded per tick** (100 verify, 50 credit). A large backlog
+    drains over several scans; the deposit is never lost, but it can take time.
+17. **Two identical intents from one payer are ambiguous by design.** The plugin marks the event
     `uncertain` and credits nothing. Safe, but a real usability limit; per-consumer addresses or
     amount uniqueness would fix it and are explicitly out of scope for this phase.
-17. **Attribution depends on the consumer keeping their wallet key.** A payment from an exchange
+18. **Attribution depends on the consumer keeping their wallet key.** A payment from an exchange
     withdrawal address is `unclaimed` forever without manual review. There is an anomaly table and a
     CLI, not a resolution workflow.
-18. **The watcher trusts the configured RPC for a log's existence.** It cross-checks the receipt and
+19. **The watcher trusts the configured RPC for a log's existence.** It cross-checks the receipt and
     re-reads the block at finality time, and reports endpoint health, but a provider that lies
     consistently about a block and its hash would not be caught. There is no consensus read.
-19. **The wallet page is read-only.** Enabling a network, registering an asset, creating or signing an
+20. **The wallet page is read-only.** Enabling a network, registering an asset, creating or signing an
     intent are CLI/API operations, because the page cannot reach the network (`connect-src 'none'`).
-20. **No HD wallet, no per-consumer addresses, no key custody.** The plugin stores no private key for
+21. **No HD wallet, no per-consumer addresses, no key custody.** The plugin stores no private key for
     either side; the provider's receiving address is one they already own.
 14. **A native window boundary is not atomic with a cap rebase.** Phase 6 removes the key and
     requires `reissue`; it does not silently adjust the cap at the computed reset time. A consumer

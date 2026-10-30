@@ -265,7 +265,84 @@ async function main(): Promise<void> {
   const again = await watcher.scan();
   record("rescan is idempotent", again.newEvents === 0 && again.credited === 0 && ledger.deposits.size === 1, `rescan: ${JSON.stringify(again)}`);
 
-  // 9. A second consumer paying the same provider is attributed to itself.
+  // 9. A temporary receipt outage must not lose a payment, and its recovery
+  //    must credit exactly once. This is the phase-7 review's defect A on a real
+  //    node: the first build marked the event uncertain and never looked again.
+  const outageIntent = store.insertIntent(
+    buildIntent({
+      request: { providerId: "lab-provider", consumerId: "lab-consumer-3", chainId: LOCAL_CHAIN_ID, assetId: asset.assetId, recipientAddress: providerAddress, expectedAmountRaw: AMOUNT_RAW.toString(), ttlSec: 3600 },
+      network: localNetwork,
+      asset,
+      priceVersion: asset.pricing.version,
+    }),
+  );
+  const outageSig = signTypedData(intentTypedData(outageIntent, localNetwork, asset), CONSUMER_KEY);
+  const outageCheck = verifyIntentSignature({ intent: outageIntent, network: localNetwork, asset, signature: outageSig, expectedPayer: consumerAddress });
+  store.setPayer({ invoiceId: outageIntent.invoiceId, payerAddress: outageCheck.payer!, digest: intentDigest(outageIntent, localNetwork, asset) });
+  const outageTx = JSON.parse(cast(["send", token, "transfer(address,uint256)", providerAddress, AMOUNT_RAW.toString(), "--rpc-url", RPC, "--private-key", CONSUMER_KEY, "--json"])) as { transactionHash: string };
+  cast(["rpc", "anvil_mine", "--rpc-url", RPC]);
+  cast(["rpc", "anvil_mine", "--rpc-url", RPC]);
+
+  let receiptCalls = 0;
+  const flaky = new ChainWatcher({ network: localNetwork, registry, store, ledger, initialLookback: 30 });
+  (flaky as unknown as { client: unknown }).client = {
+    verifyChain: () => client.verifyChain(),
+    blockNumber: () => client.blockNumber(),
+    maybeBlock: (tag: "latest" | "safe" | "finalized" | number) => client.maybeBlock(tag),
+    block: (tag: "latest" | "safe" | "finalized" | number) => client.block(tag),
+    logs: (input: Parameters<EvmClient["logs"]>[0]) => client.logs(input),
+    callData: (to: string, data: string) => client.callData(to, data),
+    receipt: async (txHash: string) => {
+      receiptCalls += 1;
+      if (receiptCalls <= 2) throw new Error("the receipt index is catching up");
+      return client.receipt(txHash);
+    },
+  };
+  const depositsBefore = ledger.deposits.size;
+  await flaky.scan();
+  const outageEvent = store.eventByTx(outageTx.transactionHash)[0]!;
+  record("receipt outage keeps the event", outageEvent.status === "uncertain" && ledger.deposits.size === depositsBefore, `${outageEvent.status}: ${outageEvent.reason}`);
+  const recovered = await flaky.scan();
+  const recoveredEvent = store.eventByTx(outageTx.transactionHash)[0]!;
+  record(
+    "receipt recovery finishes the payment",
+    recoveredEvent.status === "credited" && ledger.deposits.size === depositsBefore + 1,
+    `${recoveredEvent.status} (reverified ${recovered.reverified}); ${ledger.deposits.size} deposit(s) total`,
+  );
+
+  // 10. A rate change between the request and the confirmation must not change
+  //     the amount. This is defect C on a real node.
+  const rateIntent = store.insertIntent(
+    buildIntent({
+      request: { providerId: "lab-provider", consumerId: "lab-consumer-4", chainId: LOCAL_CHAIN_ID, assetId: asset.assetId, recipientAddress: providerAddress, expectedAmountRaw: AMOUNT_RAW.toString(), ttlSec: 3600 },
+      network: localNetwork,
+      asset,
+      priceVersion: asset.pricing.version,
+    }),
+  );
+  const rateSig = signTypedData(intentTypedData(rateIntent, localNetwork, asset), CONSUMER_KEY);
+  const rateCheck = verifyIntentSignature({ intent: rateIntent, network: localNetwork, asset, signature: rateSig, expectedPayer: consumerAddress });
+  store.setPayer({ invoiceId: rateIntent.invoiceId, payerAddress: rateCheck.payer!, digest: intentDigest(rateIntent, localNetwork, asset) });
+  // Double the rate in the registry *after* the intent was signed.
+  const originalPricing = { ...asset.pricing };
+  registry.upsertAsset({ ...asset, pricing: { nanosPerToken: "4000000000", version: "fixed:31337:tMOCK6:4000000000:v1", kind: "fixed-test-rate", note: "doubled after the request" } });
+  const rateTx = JSON.parse(cast(["send", token, "transfer(address,uint256)", providerAddress, AMOUNT_RAW.toString(), "--rpc-url", RPC, "--private-key", CONSUMER_KEY, "--json"])) as { transactionHash: string };
+  cast(["rpc", "anvil_mine", "--rpc-url", RPC]);
+  cast(["rpc", "anvil_mine", "--rpc-url", RPC]);
+  const rateWatcher = new ChainWatcher({ network: localNetwork, registry, store, ledger, initialLookback: 30 });
+  (rateWatcher as unknown as { client: EvmClient }).client = client;
+  await rateWatcher.scan();
+  const rateEvent = store.eventByTx(rateTx.transactionHash)[0]!;
+  const rateDeposit = rateEvent.depositId ? ledger.deposits.get(rateEvent.depositId) : undefined;
+  record(
+    "a rate change does not reprice a signed request",
+    rateEvent.status === "credited" && rateDeposit?.amountNanos === Number((AMOUNT_RAW * 1_000_000_000n) / 10n ** BigInt(onchain)),
+    `credited ${rateDeposit?.amountNanos} nanos at ${rateEvent.rateNanosPerToken} (registry now 4000000000)`,
+  );
+  registry.upsertAsset({ ...asset, pricing: originalPricing });
+
+  // 11. A second consumer paying the same provider is attributed to itself.
+  const depositsBeforeSecond = ledger.deposits.size;
   const otherKey = newKey();
   const otherAddress = checksumAddress(addressOf(otherKey));
   cast(["rpc", "anvil_setBalance", otherAddress, "0x21e19e0c9bab2400000", "--rpc-url", RPC]);
@@ -288,11 +365,12 @@ async function main(): Promise<void> {
   const otherEvent = store.eventByTx(otherTx.transactionHash)[0]!;
   record(
     "two consumers, one provider address",
-    third.claimed === 1 && otherEvent.invoiceId === otherIntent.invoiceId && ledger.deposits.size === 2,
+    third.claimed === 1 && otherEvent.invoiceId === otherIntent.invoiceId && ledger.deposits.size === depositsBeforeSecond + 1,
     `consumer 2 claimed ${otherEvent.invoiceId} (${otherEvent.status}); ${ledger.deposits.size} deposits total`,
   );
 
-  // 10. An unsigned payer is unclaimed, never credited.
+  // 12. An unsigned payer is unclaimed, never credited.
+  const depositsBeforeStranger = ledger.deposits.size;
   const strangerKey = newKey();
   const strangerAddress = checksumAddress(addressOf(strangerKey));
   cast(["rpc", "anvil_setBalance", strangerAddress, "0x21e19e0c9bab2400000", "--rpc-url", RPC]);
@@ -302,11 +380,12 @@ async function main(): Promise<void> {
   cast(["rpc", "anvil_mine", "--rpc-url", RPC]);
   const fourth = await watcher.scan();
   const strangerEvent = store.eventByTx(strangerTx.transactionHash)[0]!;
-  record("unsigned payer stays unclaimed", strangerEvent.status === "unclaimed" && ledger.deposits.size === 2, `${fourth.unclaimed} unclaimed; deposits still ${ledger.deposits.size}`);
+  record("unsigned payer stays unclaimed", strangerEvent.status === "unclaimed" && ledger.deposits.size === depositsBeforeStranger, `${fourth.unclaimed} unclaimed; deposits still ${ledger.deposits.size}`);
 
-  // 11. A reorg of a credited event freezes instead of deleting.
+  // 13. A reorg of a credited event freezes instead of deleting.
   const firstEvent = store.eventByTx(txHash)[0]!;
   const blockHashBefore = firstEvent.blockHash;
+  const depositsBeforeReorg = ledger.deposits.size;
   // anvil's ReorgOptions is a 2-tuple: [depth, txBlockDepth[]].
   const reorgArgs = `[${Math.max(1, (await client.blockNumber()) - firstEvent.blockNumber + 1)}, []]`;
   const reorg = Bun.spawnSync(["mise", "x", "foundry", "--", "cast", "rpc", "anvil_reorg", reorgArgs, "--raw", "--rpc-url", RPC], { stdout: "pipe", stderr: "pipe" });
@@ -315,7 +394,7 @@ async function main(): Promise<void> {
   const afterReorg = store.eventByTx(txHash)[0]!;
   record(
     "reorg freezes, never deletes",
-    afterReorg.status === "reverted" && ledger.frozen.length >= 1 && ledger.deposits.size === 2,
+    afterReorg.status === "reverted" && ledger.frozen.length >= 1 && ledger.deposits.size === depositsBeforeReorg,
     `block ${blockHashBefore.slice(0, 12)}… → ${afterReorg.blockHash.slice(0, 12)}…; status ${afterReorg.status}; frozen ${ledger.frozen.length}; deposits ${ledger.deposits.size}; scan ${JSON.stringify(fifth)}`,
   );
 

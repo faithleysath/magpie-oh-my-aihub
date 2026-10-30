@@ -112,7 +112,6 @@ export class Wallet {
   private credit: CreditSink;
   private watchers = new Map<number, ChainWatcher>();
   private running = new Map<number, { stop: () => void }>();
-  private receiving: ReceivingAddress[] = [];
   private makeWatcher: (deps: ConstructorParameters<typeof ChainWatcher>[0]) => ChainWatcher;
   private now: () => Date;
   private initialLookback: number;
@@ -230,26 +229,34 @@ export class Wallet {
 
   // --- receiving addresses ----------------------------------------------------
 
+  /**
+   * Publishes the provider's own receiving address for one chain.
+   *
+   * Persisted in `chain.sqlite`, keyed by `(providerId, chainId)`, because an
+   * address that vanishes on restart would make every outstanding deposit intent
+   * unclaimable. Updating one network's address never touches another's, and an
+   * intent that was already issued keeps the address it was issued with (it is
+   * a column of that row, not a lookup).
+   *
+   * No key material is involved: this records a public address the provider
+   * already controls. The plugin holds no private key for either side.
+   */
   setReceivingAddress(providerId: string, chainId: number, address: string): ReceivingAddress {
     this.registry.requireEnabledNetwork(chainId);
     if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error("a receiving address must be a 20-byte hex address");
     if (address.toLowerCase() === "0x0000000000000000000000000000000000000000") throw new Error("the zero address cannot receive");
-    const existing = this.receiving.find((r) => r.providerId === providerId && r.chainId === chainId);
-    if (existing) {
-      existing.address = address;
-      return { ...existing };
-    }
-    const rec: ReceivingAddress = { providerId, chainId, address, addedAt: this.now().toISOString() };
-    this.receiving.push(rec);
-    return { ...rec };
+    if (!providerId || providerId.length > 64) throw new Error("a receiving address needs a provider id");
+    const at = this.now().toISOString();
+    this.store.setReceivingAddress({ providerId, chainId, address, at });
+    return { providerId, chainId, address, addedAt: at };
   }
 
   receivingAddresses(): ReceivingAddress[] {
-    return this.receiving.map((r) => ({ ...r }));
+    return this.store.receivingAddresses();
   }
 
   receivingAddressFor(providerId: string, chainId: number): string | null {
-    return this.receiving.find((r) => r.providerId === providerId && r.chainId === chainId)?.address ?? null;
+    return this.store.receivingAddress(providerId, chainId);
   }
 
   // --- intents ----------------------------------------------------------------

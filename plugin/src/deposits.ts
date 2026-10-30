@@ -98,6 +98,18 @@ export interface DepositIntent {
   /** the digest that was signed, for audit; null until signed */
   digest: string | null;
   createdAt: string;
+  /**
+   * The rate snapshot taken when the intent was issued.
+   *
+   * A deposit is converted at **this** rate, never at whatever the registry says
+   * when the transfer eventually lands. Without it, an operator changing a test
+   * rate between the request and the confirmation would silently change the
+   * value of a payment the consumer already agreed to, which is exactly the
+   * repricing the phase-6 ledger refuses to do for consumption.
+   */
+  rateNanosPerToken: string;
+  rateDecimals: number;
+  rateAssetId: string;
 }
 
 export interface IntentRequest {
@@ -200,6 +212,10 @@ export function buildIntent(input: BuildIntentInput): DepositIntent {
     attributionStatus: "unsigned",
     priceVersion: input.priceVersion,
     status: "requested",
+    // Frozen here, at issue time, and never read from the registry again.
+    rateNanosPerToken: asset.pricing.nanosPerToken,
+    rateDecimals: asset.decimals,
+    rateAssetId: asset.assetId,
     nonce: `0x${randomBytes(16).toString("hex")}`,
     digest: null,
     createdAt: requestedAt,

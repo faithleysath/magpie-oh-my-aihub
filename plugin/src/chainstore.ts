@@ -69,6 +69,13 @@ export interface ChainDepositEvent {
   reason: string | null;
   /** how many times a scan saw this same log (proves the dedupe) */
   observations: number;
+  /** the rate this event was converted at; null until credited (or on an old row) */
+  rateNanosPerToken: string | null;
+  rateVersion: string | null;
+  /** the nano-USD actually booked, once credited */
+  creditedNanos: number | null;
+  /** how many verification attempts the scan has made */
+  verifyAttempts: number;
 }
 
 export interface ScanCursor {
@@ -86,7 +93,17 @@ export interface ChainAnomaly {
   id: number;
   chainId: number;
   at: string;
-  kind: "reorg" | "rpc-disagreement" | "cursor-gap" | "credit-failure" | "ledger-failure" | "finality-unavailable" | "bad-log" | "over-credit";
+  kind:
+    | "reorg"
+    | "rpc-disagreement"
+    | "cursor-gap"
+    | "credit-failure"
+    | "ledger-failure"
+    | "finality-unavailable"
+    | "bad-log"
+    | "over-credit"
+    /** the intent's rate snapshot no longer matches and cannot be proven */
+    | "rate-mismatch";
   eventId: string | null;
   detail: string;
   resolvedAt: string | null;
@@ -114,7 +131,14 @@ CREATE TABLE IF NOT EXISTS deposit_events (
   finalized_at TEXT,
   credited_at TEXT,
   reason TEXT,
-  observations INTEGER NOT NULL DEFAULT 1
+  observations INTEGER NOT NULL DEFAULT 1,
+  -- The rate the event was *converted at*, frozen here so a later registry edit
+  -- can never recompute an accepted amount. Written once, at credit time.
+  rate_nanos_per_token TEXT,
+  rate_version TEXT,
+  credited_nanos INTEGER,
+  -- how many times verification was attempted, for the status view
+  verify_attempts INTEGER NOT NULL DEFAULT 0
 );
 -- The phase-7 uniqueness rule: one row per (chain, token, tx, log index).
 CREATE UNIQUE INDEX IF NOT EXISTS one_event_per_log
@@ -144,7 +168,12 @@ CREATE TABLE IF NOT EXISTS deposit_intents (
   nonce TEXT NOT NULL,
   digest TEXT,
   created_at TEXT NOT NULL,
-  claimed_event_id TEXT
+  claimed_event_id TEXT,
+  -- The rate snapshot taken when the intent was issued. A deposit is converted
+  -- at *this* rate, never at whatever the registry says when the transfer lands.
+  rate_nanos_per_token TEXT,
+  rate_decimals INTEGER,
+  rate_asset_id TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_intent_per_nonce ON deposit_intents(nonce);
 CREATE UNIQUE INDEX IF NOT EXISTS one_intent_per_event
@@ -173,6 +202,16 @@ CREATE TABLE IF NOT EXISTS chain_anomalies (
   resolution_note TEXT
 );
 CREATE INDEX IF NOT EXISTS anomalies_by_chain ON chain_anomalies(chain_id, id);
+
+-- The provider's receiving address per (provider, chain). No secret material is
+-- stored here: a receiving address is public and the plugin holds no key for it.
+CREATE TABLE IF NOT EXISTS receiving_addresses (
+  provider_id TEXT NOT NULL,
+  chain_id INTEGER NOT NULL,
+  address TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (provider_id, chain_id)
+);
 
 CREATE TABLE IF NOT EXISTS asset_checks (
   asset_id TEXT PRIMARY KEY,
@@ -214,6 +253,27 @@ export class ChainStore {
     this.db.exec("PRAGMA synchronous = FULL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    // A database written by the first phase-7 build has no rate snapshot on its
+    // events. Add the columns rather than making the file unreadable; an event
+    // from that build has `rate_nanos_per_token IS NULL` and is therefore
+    // treated as "no snapshot" by the credit path, not as a zero rate.
+    const eventColumns = this.db.query("PRAGMA table_info(deposit_events)").all() as { name: string }[];
+    for (const [name, type] of [
+      ["rate_nanos_per_token", "TEXT"],
+      ["rate_version", "TEXT"],
+      ["credited_nanos", "INTEGER"],
+      ["verify_attempts", "INTEGER NOT NULL DEFAULT 0"],
+    ] as const) {
+      if (!eventColumns.some((c) => c.name === name)) this.db.exec(`ALTER TABLE deposit_events ADD COLUMN ${name} ${type}`);
+    }
+    const intentColumns = this.db.query("PRAGMA table_info(deposit_intents)").all() as { name: string }[];
+    for (const [name, type] of [
+      ["rate_nanos_per_token", "TEXT"],
+      ["rate_decimals", "INTEGER"],
+      ["rate_asset_id", "TEXT"],
+    ] as const) {
+      if (!intentColumns.some((c) => c.name === name)) this.db.exec(`ALTER TABLE deposit_intents ADD COLUMN ${name} ${type}`);
+    }
     try {
       chmodSync(path, 0o600);
     } catch {
@@ -249,8 +309,9 @@ export class ChainStore {
     this.db
       .query(
         `INSERT INTO deposit_intents(invoice_id,provider_id,consumer_id,chain_id,asset_id,token_contract,recipient_address,
-          expected_amount_raw,requested_at,expires_at,payer_address,attribution_status,price_version,status,nonce,digest,created_at,claimed_event_id)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`,
+          expected_amount_raw,requested_at,expires_at,payer_address,attribution_status,price_version,status,nonce,digest,created_at,claimed_event_id,
+          rate_nanos_per_token,rate_decimals,rate_asset_id)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)`,
       )
       .run(
         intent.invoiceId,
@@ -270,6 +331,9 @@ export class ChainStore {
         intent.nonce,
         intent.digest,
         intent.createdAt,
+        intent.rateNanosPerToken || null,
+        intent.rateDecimals >= 0 ? intent.rateDecimals : null,
+        intent.rateAssetId || null,
       );
     return this.intent(intent.invoiceId)!;
   }
@@ -448,25 +512,82 @@ export class ChainStore {
     return rows.map(mapEvent);
   }
 
-  /** Events that are finalized (or later) and still need a ledger deposit. */
-  awaitingCredit(chainId?: number): ChainDepositEvent[] {
-    const rows = chainId === undefined
-      ? (this.db.query("SELECT * FROM deposit_events WHERE status IN ('finalized','crediting') ORDER BY chain_id,block_number").all() as EventRow[])
-      : (this.db
-          .query("SELECT * FROM deposit_events WHERE chain_id=? AND status IN ('finalized','crediting') ORDER BY block_number")
-          .all(chainId) as EventRow[]);
+  /**
+   * Events that were stored but not yet verified, so a temporary RPC failure is
+   * retried instead of losing the payment.
+   *
+   * `uncertain` covers both "the receipt could not be read" and "the receipt did
+   * not contain this log"; `observed` covers a row whose verification never ran
+   * (a crash between the insert and the receipt read). `failed` is deliberately
+   * **not** here: a reverted transaction is permanent, and retrying it forever
+   * would only churn. `unclaimed` is not here either: it is a decision, not an
+   * error, and a later intent cannot retroactively claim an old transfer without
+   * a human saying so.
+   */
+  pendingVerification(chainId: number, limit = 100): ChainDepositEvent[] {
+    const rows = this.db
+      .query(
+        `SELECT * FROM deposit_events
+         WHERE chain_id=? AND status IN ('observed','uncertain')
+           AND deposit_id IS NULL AND invoice_id IS NULL
+         ORDER BY verify_attempts, block_number, log_index
+         LIMIT ?`,
+      )
+      .all(chainId, limit) as EventRow[];
     return rows.map(mapEvent);
   }
 
-  setEventStatus(id: string, status: ChainEventStatus, reason?: string | null, at = nowIso()): void {
+  /** Counts one verification attempt; the status view shows it. */
+  noteVerifyAttempt(id: string, at = nowIso()): void {
+    this.db.query("UPDATE deposit_events SET verify_attempts=verify_attempts+1,updated_at=? WHERE id=?").run(at, id);
+  }
+
+  /** Events that are finalized (or later) and still need a ledger deposit. */
+  awaitingCredit(chainId?: number, limit = 50): ChainDepositEvent[] {
+    const rows = chainId === undefined
+      ? (this.db.query("SELECT * FROM deposit_events WHERE status IN ('finalized','crediting') ORDER BY chain_id,block_number LIMIT ?").all(limit) as EventRow[])
+      : (this.db
+          .query("SELECT * FROM deposit_events WHERE chain_id=? AND status IN ('finalized','crediting') ORDER BY block_number LIMIT ?")
+          .all(chainId, limit) as EventRow[]);
+    return rows.map(mapEvent);
+  }
+
+  setEventStatus(id: string, status: ChainEventStatus, reason?: string | null, at = nowIso(), confirmations?: number): void {
     const event = this.event(id);
     if (!event) throw new Error(`no deposit event ${id}`);
     // A credited event is never moved back to a creditable state by a scan; only
     // `reverted` (a proven reorg) may override it, and that keeps the deposit id.
     if (event.status === "credited" && status !== "reverted") return;
     this.db
-      .query("UPDATE deposit_events SET status=?,reason=?,updated_at=?,finalized_at=CASE WHEN ?='finalized' AND finalized_at IS NULL THEN ? ELSE finalized_at END WHERE id=?")
-      .run(status, reason ?? event.reason, at, status, at, id);
+      .query(
+        `UPDATE deposit_events SET status=?,reason=?,updated_at=?,
+           finalized_at=CASE WHEN ?='finalized' AND finalized_at IS NULL THEN ? ELSE finalized_at END,
+           confirmations=CASE WHEN ? IS NULL THEN confirmations ELSE MAX(confirmations, ?) END
+         WHERE id=?`,
+      )
+      .run(status, reason ?? event.reason, at, status, at, confirmations ?? null, confirmations ?? 0, id);
+  }
+
+  /**
+   * Freezes the rate an event was converted at, before the ledger is asked for a
+   * deposit. Written once: a later registry change cannot overwrite it, so an
+   * accepted amount can never be recomputed.
+   */
+  recordConversion(input: { id: string; nanos: number; nanosPerToken: string; priceVersion: string; at?: string }): void {
+    const at = input.at ?? nowIso();
+    this.tx(() => {
+      const event = this.event(input.id);
+      if (!event) throw new Error(`no deposit event ${input.id}`);
+      if (event.creditedNanos !== null) {
+        if (event.creditedNanos !== input.nanos) {
+          throw new Error(`event ${input.id} was converted at ${event.creditedNanos} nanos; it cannot be re-converted at ${input.nanos}`);
+        }
+        return;
+      }
+      this.db
+        .query("UPDATE deposit_events SET credited_nanos=?,rate_nanos_per_token=?,rate_version=?,updated_at=? WHERE id=?")
+        .run(input.nanos, input.nanosPerToken, input.priceVersion, at, input.id);
+    });
   }
 
   markCredited(id: string, depositId: string, at = nowIso()): void {
@@ -494,7 +615,13 @@ export class ChainStore {
       if (event.invoiceId && event.invoiceId !== input.invoiceId) {
         throw new Error(`event ${input.eventId} is already claimed by ${event.invoiceId}`);
       }
-      this.db.query("UPDATE deposit_events SET invoice_id=?,updated_at=? WHERE id=? AND invoice_id IS NULL").run(input.invoiceId, at, input.eventId);
+      // The status moves out of `observed`/`uncertain` here: attribution is done,
+      // and only finality is left. Leaving it in the verification set would make
+      // the retry pass re-attribute it after the intent is already `matched`,
+      // which finds no candidate and wrongly marks a claimed payment `unclaimed`.
+      this.db
+        .query("UPDATE deposit_events SET invoice_id=?,status=CASE WHEN status IN ('observed','uncertain') THEN 'confirming' ELSE status END,updated_at=? WHERE id=? AND invoice_id IS NULL")
+        .run(input.invoiceId, at, input.eventId);
       const r = this.db
         .query("UPDATE deposit_intents SET claimed_event_id=?,status='matched',attribution_status='matched' WHERE invoice_id=? AND claimed_event_id IS NULL")
         .run(input.eventId, input.invoiceId);
@@ -543,6 +670,104 @@ export class ChainStore {
            last_scan_at=excluded.last_scan_at`,
       )
       .run(input.chainId, input.block, input.blockHash, at, at);
+  }
+
+  /**
+   * Stores one page of logs **and** advances the cursor in a single transaction.
+   *
+   * This is the commit point. The phase-7 comment claimed this behaviour while
+   * the code inserted each event in its own transaction and advanced the cursor
+   * in another, so a crash or a failed insert could leave a page partially
+   * stored with the cursor already past it. Either the whole page and the cursor
+   * commit, or neither does and the page is re-read.
+   *
+   * Duplicates are not an error: an event that already exists is counted and
+   * skipped, because re-reading a page is normal after a restart.
+   */
+  commitPage(input: {
+    chainId: number;
+    block: number;
+    blockHash: string | null;
+    events: {
+      tokenContract: string;
+      txHash: string;
+      logIndex: number;
+      blockNumber: number;
+      blockHash: string;
+      from: string;
+      to: string;
+      amountRaw: string;
+      confirmations?: number;
+    }[];
+    at?: string;
+  }): { created: ChainDepositEvent[]; duplicates: number } {
+    const at = input.at ?? nowIso();
+    return this.tx(() => {
+      const created: ChainDepositEvent[] = [];
+      let duplicates = 0;
+      for (const e of input.events) {
+        const id = chainEventId(input.chainId, e.tokenContract, e.txHash, e.logIndex);
+        const existing = this.event(id);
+        if (existing) {
+          const sameBlock = existing.blockHash.toLowerCase() === e.blockHash.toLowerCase();
+          this.db.query("UPDATE deposit_events SET observations=observations+1,updated_at=? WHERE id=?").run(at, id);
+          if (!sameBlock) {
+            this.db
+              .query("UPDATE deposit_events SET status='reverted',reason=?,updated_at=? WHERE id=?")
+              .run(`block hash changed from ${existing.blockHash} to ${e.blockHash}`, at, id);
+            this.anomaly({
+              chainId: input.chainId,
+              kind: "reorg",
+              eventId: id,
+              detail: `event ${id} was seen in block ${e.blockNumber} with hash ${e.blockHash}; the stored hash was ${existing.blockHash}`,
+              at,
+            });
+          }
+          duplicates += 1;
+          continue;
+        }
+        this.db
+          .query(
+            `INSERT INTO deposit_events(id,chain_id,token_contract,tx_hash,log_index,block_number,block_hash,from_address,to_address,
+              amount_raw,status,invoice_id,deposit_id,confirmations,first_seen_at,updated_at,finalized_at,credited_at,reason,observations)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?,?,NULL,NULL,NULL,1)`,
+          )
+          .run(
+            id,
+            input.chainId,
+            e.tokenContract.toLowerCase(),
+            e.txHash.toLowerCase(),
+            e.logIndex,
+            e.blockNumber,
+            e.blockHash.toLowerCase(),
+            e.from.toLowerCase(),
+            e.to.toLowerCase(),
+            e.amountRaw,
+            (e.confirmations ?? 0) > 0 ? "confirming" : "observed",
+            e.confirmations ?? 0,
+            at,
+            at,
+          );
+        created.push(this.event(id)!);
+      }
+      this.advanceCursorInTx(input.chainId, input.block, input.blockHash, at);
+      return { created, duplicates };
+    });
+  }
+
+  private advanceCursorInTx(chainId: number, block: number, blockHash: string | null, at: string): void {
+    this.db
+      .query(
+        `INSERT INTO scan_cursors(chain_id,last_block,last_block_hash,updated_at,last_error,last_scan_at)
+         VALUES(?,?,?,?,NULL,?)
+         ON CONFLICT(chain_id) DO UPDATE SET
+           last_block=MAX(scan_cursors.last_block, excluded.last_block),
+           last_block_hash=CASE WHEN excluded.last_block >= scan_cursors.last_block THEN excluded.last_block_hash ELSE scan_cursors.last_block_hash END,
+           updated_at=excluded.updated_at,
+           last_error=NULL,
+           last_scan_at=excluded.last_scan_at`,
+      )
+      .run(chainId, block, blockHash, at, at);
   }
 
   rewindCursor(chainId: number, toBlock: number, reason: string): void {
@@ -612,6 +837,47 @@ export class ChainStore {
     if (r.changes === 0) throw new Error(`no open anomaly ${id}`);
   }
 
+  // --- receiving addresses ----------------------------------------------------
+
+  /**
+   * Records the provider's receiving address for one chain.
+   *
+   * The unique key is `(provider_id, chain_id)`, so one provider may publish a
+   * different address per network and updating one never touches another. No
+   * secret is stored: a receiving address is public, and the plugin holds no key
+   * for either side.
+   */
+  setReceivingAddress(input: { providerId: string; chainId: number; address: string; at?: string }): void {
+    this.db
+      .query(
+        `INSERT INTO receiving_addresses(provider_id,chain_id,address,added_at) VALUES(?,?,?,?)
+         ON CONFLICT(provider_id,chain_id) DO UPDATE SET address=excluded.address,added_at=excluded.added_at`,
+      )
+      .run(input.providerId, input.chainId, input.address, input.at ?? nowIso());
+  }
+
+  receivingAddresses(): { providerId: string; chainId: number; address: string; addedAt: string }[] {
+    const rows = this.db.query("SELECT * FROM receiving_addresses ORDER BY provider_id, chain_id").all() as {
+      provider_id: string;
+      chain_id: number;
+      address: string;
+      added_at: string;
+    }[];
+    return rows.map((r) => ({ providerId: r.provider_id, chainId: r.chain_id, address: r.address, addedAt: r.added_at }));
+  }
+
+  receivingAddress(providerId: string, chainId: number): string | null {
+    const row = this.db
+      .query("SELECT address FROM receiving_addresses WHERE provider_id=? AND chain_id=?")
+      .get(providerId, chainId) as { address: string } | null;
+    return row?.address ?? null;
+  }
+
+  /** Test seam: pretend an intent was written before the rate snapshot existed. */
+  clearIntentRateSnapshot(invoiceId: string): void {
+    this.db.query("UPDATE deposit_intents SET rate_nanos_per_token=NULL,rate_decimals=NULL,rate_asset_id=NULL WHERE invoice_id=?").run(invoiceId);
+  }
+
   // --- decimals checks -------------------------------------------------------
 
   recordAssetCheck(input: { assetId: string; chainId: number; contract: string; onchainDecimals: number | null; registeredDecimals: number; ok: boolean; detail: string | null; at?: string }): void {
@@ -650,6 +916,9 @@ interface IntentRow {
   digest: string | null;
   created_at: string;
   claimed_event_id: string | null;
+  rate_nanos_per_token: string | null;
+  rate_decimals: number | null;
+  rate_asset_id: string | null;
 }
 
 interface EventRow {
@@ -673,6 +942,10 @@ interface EventRow {
   credited_at: string | null;
   reason: string | null;
   observations: number;
+  rate_nanos_per_token: string | null;
+  rate_version: string | null;
+  credited_nanos: number | null;
+  verify_attempts: number;
 }
 
 interface CursorRow {
@@ -725,6 +998,12 @@ function mapIntent(r: IntentRow): DepositIntent {
     nonce: r.nonce,
     digest: r.digest,
     createdAt: r.created_at,
+    // An intent written by the first phase-7 build has no snapshot. It is
+    // reported as empty strings rather than invented values, and the credit path
+    // refuses such an intent instead of guessing a rate.
+    rateNanosPerToken: r.rate_nanos_per_token ?? "",
+    rateDecimals: r.rate_decimals ?? -1,
+    rateAssetId: r.rate_asset_id ?? "",
   };
 }
 
@@ -750,6 +1029,10 @@ function mapEvent(r: EventRow): ChainDepositEvent {
     creditedAt: r.credited_at,
     reason: r.reason,
     observations: r.observations,
+    rateNanosPerToken: r.rate_nanos_per_token,
+    rateVersion: r.rate_version,
+    creditedNanos: r.credited_nanos,
+    verifyAttempts: r.verify_attempts,
   };
 }
 

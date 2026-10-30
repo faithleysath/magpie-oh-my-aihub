@@ -107,10 +107,19 @@ export interface Conversion {
 export function convertRawToNanos(input: {
   rawAmount: bigint;
   asset: AssetRecord;
+  /**
+   * The rate to convert at. **Always pass the snapshot the deposit intent was
+   * issued with**; the default (the asset's current rate) exists only for a
+   * caller that has no intent, such as the status view.
+   */
+  nanosPerToken?: string;
+  /** recorded alongside the result, so the amount is auditable */
+  priceVersion?: string;
   at?: Date;
 }): Conversion {
   if (input.rawAmount < 0n) throw new Error("a token amount cannot be negative");
-  const perToken = BigInt(input.asset.pricing.nanosPerToken);
+  const rate = input.nanosPerToken ?? input.asset.pricing.nanosPerToken;
+  const perToken = BigInt(rate);
   if (perToken <= 0n) throw new Error(`asset ${input.asset.assetId} has no usable rate`);
   const scale = 10n ** BigInt(input.asset.decimals);
   const numerator = input.rawAmount * perToken;
@@ -123,26 +132,42 @@ export function convertRawToNanos(input: {
     assetId: input.asset.assetId,
     decimals: input.asset.decimals,
     rawAmount: input.rawAmount.toString(),
-    nanosPerToken: input.asset.pricing.nanosPerToken,
-    priceVersion: input.asset.pricing.version,
+    nanosPerToken: rate,
+    priceVersion: input.priceVersion ?? input.asset.pricing.version,
     rateAt: (input.at ?? new Date()).toISOString(),
     rounding: "floor",
   };
 }
 
 /**
- * What one log produced. `stored` says whether a new row was written (so a
- * rescan is visibly a no-op) and `attribution` says what happened to it.
+ * The rate a deposit must be converted at, or a refusal.
+ *
+ * The intent's snapshot wins. An intent written before snapshots existed has
+ * none, and then the only safe answer is "do not convert": if the current
+ * registry rate still carries the same version the intent was issued with, the
+ * amount is provably unchanged and may be used; otherwise a human must look.
  */
-interface IngestOutcome {
-  stored: boolean;
-  attribution: "claimed" | "unclaimed" | "none";
+export function rateForDeposit(input: {
+  intent: { rateNanosPerToken?: string | null; priceVersion: string };
+  asset: AssetRecord;
+}): { ok: true; nanosPerToken: string; priceVersion: string } | { ok: false; reason: string } {
+  const snapshot = input.intent.rateNanosPerToken;
+  if (snapshot && snapshot !== "") {
+    // The version on the intent is the one that was signed; a registry edit
+    // after the fact cannot change what this deposit is worth.
+    return { ok: true, nanosPerToken: snapshot, priceVersion: input.intent.priceVersion };
+  }
+  if (input.asset.pricing.version === input.intent.priceVersion) {
+    return { ok: true, nanosPerToken: input.asset.pricing.nanosPerToken, priceVersion: input.asset.pricing.version };
+  }
+  return {
+    ok: false,
+    reason:
+      `the deposit was requested at rate version ${input.intent.priceVersion.slice(0, 24)}… but the asset now reports ` +
+      `${input.asset.pricing.version.slice(0, 24)}…, and the intent carries no rate snapshot; ` +
+      `the amount cannot be recomputed safely, so it needs manual review`,
+  };
 }
-
-const DUPLICATE: IngestOutcome = { stored: false, attribution: "none" };
-const stored = (): IngestOutcome => ({ stored: true, attribution: "none" });
-const claimedStored = (): IngestOutcome => ({ stored: true, attribution: "claimed" });
-const unclaimedStored = (): IngestOutcome => ({ stored: true, attribution: "unclaimed" });
 
 /** What the watcher needs from the ledger. Narrow on purpose: it cannot repricing anything. */
 export interface CreditSink {
@@ -179,6 +204,8 @@ export interface ScanResult {
   unclaimed: number;
   finalized: number;
   credited: number;
+  /** stored-but-unverified events that verification resolved this pass */
+  reverified: number;
   errors: string[];
   /** true when the scan did not complete and the cursor did not advance */
   partial: boolean;
@@ -293,12 +320,16 @@ export class ChainWatcher {
   }
 
   /**
-   * One scan step: read the range, store new logs, attribute them, then move
-   * whatever is final into the ledger.
+   * One scan step: read the range, store and attribute its logs, verify anything
+   * still unverified, then move whatever is final into the ledger.
    *
-   * The cursor advances in the same transaction that stores the events of that
-   * range (the store writes both), so a crash either loses the whole page or
-   * none of it, and a restart re-reads the same page harmlessly.
+   * **Commit semantics.** One page of logs and the cursor move commit in a single
+   * `commitPage()` transaction. The earlier comment claimed this while the code
+   * did not: each event was inserted in its own transaction and the cursor in
+   * another, so a crash or a failed insert could leave a page half-stored with
+   * the cursor already past it, losing the rest permanently. Now a page either
+   * commits whole or not at all, and a failed page stops the scan with the cursor
+   * where it was, so the same range is read again next time.
    */
   async scan(): Promise<ScanResult> {
     const chainId = this.network.chainId;
@@ -312,6 +343,7 @@ export class ChainWatcher {
       unclaimed: 0,
       finalized: 0,
       credited: 0,
+      reverified: 0,
       errors: [],
       partial: false,
     };
@@ -362,22 +394,46 @@ export class ChainWatcher {
         break;
       }
       result.logs += logs.length;
-      for (const log of logs) {
-        try {
-          const outcome = await this.ingestLog(log);
-          if (outcome.stored) result.newEvents += 1;
-          if (outcome.attribution === "claimed") result.claimed += 1;
-          if (outcome.attribution === "unclaimed") result.unclaimed += 1;
-        } catch (e) {
-          const message = `log ${log.transactionHash}:${log.logIndex}: ${String((e as Error).message ?? e)}`;
-          result.errors.push(message);
-          this.store.anomaly({ chainId, kind: "bad-log", detail: message, at: this.now().toISOString() });
+      const page = this.pageFrom(logs);
+      if (page.refused.length > 0) {
+        // A log the plugin will not even store (another token, a non-ERC-20
+        // Transfer) is recorded as an anomaly, not as a silent skip.
+        for (const r of page.refused) {
+          this.store.anomaly({ chainId, kind: "bad-log", detail: r, at: this.now().toISOString() });
         }
       }
       const endBlock = await this.client.block(to).catch(() => null);
-      // The cursor is written only after the page's logs are stored, and it
-      // carries the page's own block hash so a reorg behind it is detectable.
-      this.store.advanceCursor({ chainId, block: to, blockHash: endBlock?.hash ?? null, at: this.now().toISOString() });
+      let committed: { created: ChainDepositEvent[]; duplicates: number };
+      try {
+        // One transaction: the page's events and the cursor together.
+        committed = this.store.commitPage({
+          chainId,
+          block: to,
+          blockHash: endBlock?.hash ?? null,
+          events: page.events,
+          at: this.now().toISOString(),
+        });
+      } catch (e) {
+        // Nothing from this page was stored and the cursor did not move, so the
+        // next scan reads the same range again. This is the case that used to
+        // lose events permanently.
+        const message = `page ${from}..${to} could not be committed: ${String((e as Error).message ?? e)}`;
+        result.errors.push(message);
+        result.partial = true;
+        this.store.recordScanError(chainId, message);
+        break;
+      }
+      result.newEvents += committed.created.length;
+      for (const event of committed.created) {
+        const outcome = await this.attribute(event).catch((e) => {
+          const message = `log ${event.txHash}:${event.logIndex}: ${String((e as Error).message ?? e)}`;
+          result.errors.push(message);
+          this.store.anomaly({ chainId, kind: "bad-log", detail: message, eventId: event.id, at: this.now().toISOString() });
+          return { attribution: "none" as const };
+        });
+        if (outcome.attribution === "claimed") result.claimed += 1;
+        if (outcome.attribution === "unclaimed") result.unclaimed += 1;
+      }
       if (to >= head) break;
       from = to + 1;
       to = Math.min(head, from + this.network.maxBlockRange - 1);
@@ -389,83 +445,89 @@ export class ChainWatcher {
   }
 
   /**
-   * Stores one log and tries to attribute it. Attribution is strict:
-   *  - the token must be an enabled asset of *this* chain,
-   *  - the recipient must be one an intent names,
-   *  - exactly one signed, unexpired intent must match `(payer, amount, token,
-   *    recipient)`. Zero means `unclaimed`; two or more means `uncertain`.
+   * Splits a page's logs into the ones this watcher will store and the ones it
+   * refuses, without touching the database. Storing and refusing both happen in
+   * `commitPage()`/`anomaly()`, so a refusal cannot half-write a page.
    */
-  private async ingestLog(log: EvmLog): Promise<IngestOutcome> {
+  private pageFrom(logs: EvmLog[]): {
+    events: Parameters<ChainStore["commitPage"]>[0]["events"];
+    refused: string[];
+  } {
     const chainId = this.network.chainId;
-    const blockNumber = Number(BigInt(log.blockNumber));
-    const logIndex = Number(BigInt(log.logIndex));
-    const topics = log.topics.map((t) => t.toLowerCase());
-    if (topics.length !== 3 || topics[0] !== TRANSFER_TOPIC.toLowerCase()) {
-      // An ERC-721 `Transfer` has 4 topics; this phase credits ERC-20 only.
-      this.store.anomaly({
-        chainId,
-        kind: "bad-log",
-        detail: `log ${log.transactionHash}:${log.logIndex} has ${topics.length} topics; only an ERC-20 Transfer (3 topics) is credited`,
-        at: this.now().toISOString(),
+    const events: Parameters<ChainStore["commitPage"]>[0]["events"] = [];
+    const refused: string[] = [];
+    for (const log of logs) {
+      const topics = log.topics.map((t) => t.toLowerCase());
+      if (topics.length !== 3 || topics[0] !== TRANSFER_TOPIC.toLowerCase()) {
+        refused.push(`log ${log.transactionHash}:${log.logIndex} has ${topics.length} topics; only an ERC-20 Transfer (3 topics) is credited`);
+        continue;
+      }
+      const asset = this.registry.asset(assetIdOf(chainId, log.address));
+      if (!asset || !asset.enabled) {
+        refused.push(`log ${log.transactionHash}:${log.logIndex} is from ${log.address}, which is not an enabled asset of chain ${chainId}`);
+        continue;
+      }
+      const blockNumber = Number(BigInt(log.blockNumber));
+      const amount = BigInt(log.data);
+      events.push({
+        tokenContract: log.address,
+        txHash: log.transactionHash,
+        logIndex: Number(BigInt(log.logIndex)),
+        blockNumber,
+        blockHash: log.blockHash,
+        from: `0x${topics[1]!.slice(26)}`,
+        to: `0x${topics[2]!.slice(26)}`,
+        amountRaw: amount.toString(),
       });
-      return DUPLICATE;
     }
-    const asset = this.registry.asset(assetIdOf(chainId, log.address));
+    return { events, refused };
+  }
+
+  /**
+   * Verifies a stored event and attributes it. Split from storing so the page
+   * commit stays one transaction and a receipt failure cannot roll back the
+   * event that proves the payment exists.
+   *
+   * Verification (the receipt) and attribution (the intent) are separate
+   * outcomes:
+   *
+   *  - a **permanent** refusal (`failed`: the transaction reverted) stops here;
+   *  - a **retryable** failure (`uncertain`: the receipt could not be read, or
+   *    did not yet contain the log) leaves the event in the retry set, so the
+   *    next scan tries again instead of losing the payment;
+   *  - attribution is strict: exactly one signed, unexpired intent must match
+   *    `(payer, amount, token, recipient)`. Zero means `unclaimed`; two or more
+   *    means `uncertain`.
+   */
+  private async attribute(event: ChainDepositEvent): Promise<{ attribution: "claimed" | "unclaimed" | "none" }> {
+    const chainId = this.network.chainId;
+    const asset = this.registry.asset(assetIdOf(chainId, event.tokenContract));
     if (!asset || !asset.enabled) {
-      this.store.anomaly({
-        chainId,
-        kind: "bad-log",
-        detail: `log ${log.transactionHash}:${log.logIndex} is from ${log.address}, which is not an enabled asset of chain ${chainId}`,
-        at: this.now().toISOString(),
-      });
-      return DUPLICATE;
+      // The token was disabled between storing and attributing; it cannot be
+      // credited, and the row stays for audit.
+      this.store.setEventStatus(event.id, "manualReview", "the event's token is no longer an enabled asset");
+      return { attribution: "none" };
     }
-    const from = `0x${topics[1]!.slice(26)}`;
-    const to = `0x${topics[2]!.slice(26)}`;
-    const amount = BigInt(log.data);
-    const head = await this.client.blockNumber().catch(() => blockNumber);
-    const confirmations = Math.max(0, head - blockNumber);
-    const { event, created } = this.store.observeEvent({
-      chainId,
-      tokenContract: log.address,
-      txHash: log.transactionHash,
-      logIndex,
-      blockNumber,
-      blockHash: log.blockHash,
-      from,
-      to,
-      amountRaw: amount.toString(),
-      confirmations,
-      at: this.now().toISOString(),
-    });
-    if (!created) return DUPLICATE;
-    // The receipt is the proof that the transaction itself succeeded; a log
-    // from a reverted transaction is not a payment.
-    const receipt = await this.client.receipt(log.transactionHash).catch(() => null);
-    if (!receipt) {
-      this.store.setEventStatus(event.id, "uncertain", "the transaction receipt is unavailable");
-      return stored();
-    }
-    if (receipt.status !== "0x1") {
-      this.store.setEventStatus(event.id, "failed", `the transaction status is ${receipt.status}, not success`);
-      return stored();
-    }
-    const inReceipt = receipt.logs.some((l) => Number(BigInt(l.logIndex)) === logIndex && l.blockHash.toLowerCase() === log.blockHash.toLowerCase());
-    if (!inReceipt) {
-      this.store.setEventStatus(event.id, "uncertain", "the receipt does not contain this log at this block");
-      return stored();
+    const verified = await this.verifyEvent(event);
+    if (verified !== "ok") return { attribution: "none" };
+    // A successful re-verification returns the event to the finality path. An
+    // `uncertain` row that verified but stayed `uncertain` would be claimed and
+    // then never finalised, which is the same permanent loss in a different
+    // place.
+    if (event.status === "uncertain") {
+      this.store.setEventStatus(event.id, "observed", "the receipt was re-read and the log is in it");
     }
     const candidates = this.store.candidatesFor({
       chainId,
-      tokenContract: log.address,
-      recipient: to,
-      payer: from,
-      amountRaw: amount.toString(),
+      tokenContract: event.tokenContract,
+      recipient: event.toAddress,
+      payer: event.fromAddress,
+      amountRaw: event.amountRaw,
       now: this.now(),
     });
     if (candidates.length === 0) {
-      this.store.markUnclaimed(event.id, `no signed, unexpired intent matches ${from} → ${to} of ${amount.toString()} ${asset.symbol}`);
-      return unclaimedStored();
+      this.store.markUnclaimed(event.id, `no signed, unexpired intent matches ${event.fromAddress} → ${event.toAddress} of ${event.amountRaw} ${asset.symbol}`);
+      return { attribution: "unclaimed" };
     }
     if (candidates.length > 1) {
       this.store.setEventStatus(
@@ -473,24 +535,83 @@ export class ChainWatcher {
         "uncertain",
         `${candidates.length} intents match this transfer (${candidates.map((c) => c.invoiceId).join(", ")}); the plugin will not guess`,
       );
-      return stored();
+      return { attribution: "none" };
     }
     const intent = candidates[0]!;
     const verdict = matchesTransfer({
       intent,
       chainId,
-      tokenContract: log.address,
-      recipient: to,
-      from,
-      amountRaw: amount,
+      tokenContract: event.tokenContract,
+      recipient: event.toAddress,
+      from: event.fromAddress,
+      amountRaw: BigInt(event.amountRaw),
       at: this.now(),
     });
     if (!verdict.ok) {
       this.store.markUnclaimed(event.id, verdict.reason ?? "the intent does not match");
-      return unclaimedStored();
+      return { attribution: "unclaimed" };
     }
     this.store.claim({ eventId: event.id, invoiceId: intent.invoiceId, at: this.now().toISOString() });
-    return claimedStored();
+    return { attribution: "claimed" };
+  }
+
+  /**
+   * The receipt check, which is what distinguishes a payment from a log a
+   * reverted transaction left behind.
+   *
+   * `ok`           the transaction succeeded and this exact log is in it
+   * `retryable`    the receipt could not be read, or does not contain the log
+   *                *yet*: an RPC problem or an index catching up, not a refusal
+   * `permanent`    the transaction reverted: this log can never be a payment
+   */
+  private async verifyEvent(event: ChainDepositEvent): Promise<"ok" | "retryable" | "permanent"> {
+    this.store.noteVerifyAttempt(event.id, this.now().toISOString());
+    let receipt: Awaited<ReturnType<EvmClient["receipt"]>>;
+    try {
+      receipt = await this.client.receipt(event.txHash);
+    } catch (e) {
+      // A transport or provider error is never evidence that the payment is
+      // invalid, so the event stays retryable and nothing is credited.
+      this.store.setEventStatus(event.id, "uncertain", `the receipt could not be read: ${String((e as Error).message ?? e).slice(0, 200)}`);
+      return "retryable";
+    }
+    if (!receipt) {
+      this.store.setEventStatus(event.id, "uncertain", "the transaction receipt is not available yet");
+      return "retryable";
+    }
+    if (receipt.status !== "0x1") {
+      this.store.setEventStatus(event.id, "failed", `the transaction status is ${receipt.status}, not success`);
+      return "permanent";
+    }
+    const inReceipt = receipt.logs.some(
+      (l) => Number(BigInt(l.logIndex)) === event.logIndex && l.blockHash.toLowerCase() === event.blockHash.toLowerCase(),
+    );
+    if (!inReceipt) {
+      // The receipt exists but does not carry this log at this block. That is
+      // either a provider index lagging or the log was replaced; both are
+      // retryable, because a later read may settle it and the finality check
+      // will catch a replaced block.
+      this.store.setEventStatus(event.id, "uncertain", "the receipt does not contain this log at this block yet");
+      return "retryable";
+    }
+    return "ok";
+  }
+
+  /**
+   * Re-examines everything stored but not verified. This is what makes a
+   * temporary receipt failure recoverable, including across a restart: the
+   * retry set is a query over persisted rows, not a list in memory.
+   */
+  async verifyPending(): Promise<number> {
+    let done = 0;
+    for (const event of this.store.pendingVerification(this.network.chainId)) {
+      const outcome = await this.attribute(event).catch((e) => {
+        logger.warn(`could not re-verify ${event.id}: ${String(e)}`);
+        return { attribution: "none" as const };
+      });
+      if (outcome.attribution !== "none") done += 1;
+    }
+    return done;
   }
 
   /**
@@ -499,6 +620,10 @@ export class ChainWatcher {
    */
   private async settlePending(result: ScanResult): Promise<void> {
     const chainId = this.network.chainId;
+    // Everything stored but not yet verified is retried here, on every path
+    // including "no new blocks", so a receipt that was briefly unavailable for a
+    // block that has already been scanned still resolves on the next tick.
+    result.reverified += await this.verifyPending();
     const head = await this.client.blockNumber().catch(() => null);
     if (head === null) {
       result.errors.push("the head could not be read while settling finality");
@@ -525,7 +650,7 @@ export class ChainWatcher {
         continue;
       }
       const verdict = finalityVerdict({ policy: this.network.finality, eventBlock: event.blockNumber, head, finalizedBlock });
-      this.store.setEventStatus(event.id, verdict.final ? "finalized" : "confirming", verdict.detail);
+      this.store.setEventStatus(event.id, verdict.final ? "finalized" : "confirming", verdict.detail, this.now().toISOString(), verdict.confirmations);
       if (verdict.final) result.finalized += 1;
     }
     // A credited event whose block is gone must freeze the consumer.
@@ -556,7 +681,12 @@ export class ChainWatcher {
   /**
    * Moves finalized events into the ledger. Idempotent at every step:
    *
+   *  - the chain is re-read first: a `crediting` retry is **not** a licence to
+   *    credit, because a reorg may have happened between the failed attempt and
+   *    this one;
    *  - `depositIntent` with the event's own id is a no-op if it already exists;
+   *  - the conversion uses the rate the **intent** was issued at, never the live
+   *    registry rate, so a later rate edit cannot change an accepted amount;
    *  - the event is marked `credited` only after `applyDeposit` returned;
    *  - a failure leaves it `crediting` so the next scan retries the *same*
    *    deposit id, which cannot double-credit.
@@ -569,20 +699,46 @@ export class ChainWatcher {
         this.store.setEventStatus(event.id, "manualReview", "the event has no intent to credit");
         continue;
       }
+      // B: re-verify the chain *before* crediting, for a first attempt and for a
+      // retry alike. A `crediting` row proves the ledger intent exists, not that
+      // the block still does.
+      const check = await this.reconfirmChain(event);
+      if (check !== "ok") continue;
       const asset = this.registry.asset(assetIdOf(event.chainId, event.tokenContract));
       if (!asset) {
         this.store.setEventStatus(event.id, "manualReview", "the event's token is no longer allowlisted");
         continue;
       }
+      // C: the rate is the one the intent was issued at.
+      const rate = rateForDeposit({ intent, asset });
+      if (!rate.ok) {
+        this.store.setEventStatus(event.id, "manualReview", rate.reason);
+        this.store.anomaly({
+          chainId: event.chainId,
+          kind: "rate-mismatch",
+          eventId: event.id,
+          detail: rate.reason,
+          at: this.now().toISOString(),
+        });
+        continue;
+      }
       let conversion: Conversion;
       try {
-        conversion = convertRawToNanos({ rawAmount: BigInt(event.amountRaw), asset, at: this.now() });
+        conversion = convertRawToNanos({ rawAmount: BigInt(event.amountRaw), asset, nanosPerToken: rate.nanosPerToken, priceVersion: rate.priceVersion, at: this.now() });
       } catch (e) {
         this.store.setEventStatus(event.id, "failed", `conversion failed: ${String((e as Error).message ?? e)}`);
         continue;
       }
       if (conversion.nanos <= 0) {
         this.store.setEventStatus(event.id, "manualReview", "the amount converts to zero nano-USD");
+        continue;
+      }
+      // Freeze the conversion before the ledger sees it, and refuse to proceed if
+      // the event was already converted at a different amount.
+      try {
+        this.store.recordConversion({ id: event.id, nanos: conversion.nanos, nanosPerToken: conversion.nanosPerToken, priceVersion: conversion.priceVersion, at: this.now().toISOString() });
+      } catch (e) {
+        this.store.setEventStatus(event.id, "manualReview", String((e as Error).message ?? e));
         continue;
       }
       // The deposit id is derived from the chain event, so a retry after a crash
@@ -622,6 +778,95 @@ export class ChainWatcher {
       );
     }
     return credited;
+  }
+
+  /**
+   * Re-proves that the event's block is still canonical and that the network's
+   * finality policy is still satisfied, immediately before crediting.
+   *
+   * Three outcomes, and none of them is "assume it is fine":
+   *
+   *  `ok`       the block hash matches and the policy still holds
+   *  `reverted` the block at that height is a different block: the event is
+   *             marked reverted, an anomaly is written, and if a ledger deposit
+   *             was already booked the consumer is frozen (never silently
+   *             un-credited)
+   *  `paused`   the chain could not answer: the event keeps its status and the
+   *             caller skips it, so a retry happens later instead of a credit
+   *             now
+   */
+  private async reconfirmChain(event: ChainDepositEvent): Promise<"ok" | "reverted" | "paused"> {
+    let canonical: Awaited<ReturnType<EvmClient["maybeBlock"]>>;
+    try {
+      canonical = await this.client.maybeBlock(event.blockNumber);
+    } catch (e) {
+      this.store.anomaly({
+        chainId: event.chainId,
+        kind: "finality-unavailable",
+        eventId: event.id,
+        detail: `could not re-read block ${event.blockNumber} before crediting: ${String((e as Error).message ?? e).slice(0, 200)}`,
+        at: this.now().toISOString(),
+      });
+      return "paused";
+    }
+    if (!canonical) {
+      // `maybeBlock` returns null for both "not found" and "the call failed"; a
+      // null is not evidence of a reorg, so it pauses rather than reverting.
+      this.store.anomaly({
+        chainId: event.chainId,
+        kind: "finality-unavailable",
+        eventId: event.id,
+        detail: `block ${event.blockNumber} could not be read before crediting; the credit is paused, not assumed`,
+        at: this.now().toISOString(),
+      });
+      return "paused";
+    }
+    if (canonical.hash.toLowerCase() !== event.blockHash.toLowerCase()) {
+      this.store.setEventStatus(event.id, "reverted", `the block hash at ${event.blockNumber} is ${canonical.hash}, not ${event.blockHash}`);
+      this.store.anomaly({
+        chainId: event.chainId,
+        kind: "reorg",
+        eventId: event.id,
+        detail: `a credit was retried after a reorg: ${event.id} was in ${event.blockHash}, the canonical block is ${canonical.hash}`,
+        at: this.now().toISOString(),
+      });
+      if (event.depositId || event.status === "crediting") {
+        // The ledger may already hold the intent. It is kept for audit and the
+        // consumer is frozen; nothing is deleted and no balance is rewritten.
+        const intent = event.invoiceId ? this.store.intent(event.invoiceId) : null;
+        if (intent) {
+          await this.ledger
+            .freezeConsumer(intent.consumerId, `a booked deposit on chain ${event.chainId} was reverted before it was applied (${event.txHash}:${event.logIndex})`)
+            .catch((e) => logger.error(`could not freeze ${intent.consumerId} after a reorg: ${String(e)}`));
+        }
+      }
+      return "reverted";
+    }
+    const head = await this.client.blockNumber().catch(() => null);
+    if (head === null) {
+      this.store.anomaly({
+        chainId: event.chainId,
+        kind: "finality-unavailable",
+        eventId: event.id,
+        detail: "the head could not be read before crediting; the credit is paused",
+        at: this.now().toISOString(),
+      });
+      return "paused";
+    }
+    const finalized = await this.client.maybeBlock("finalized");
+    const verdict = finalityVerdict({
+      policy: this.network.finality,
+      eventBlock: event.blockNumber,
+      head,
+      finalizedBlock: finalized ? Number(BigInt(finalized.number)) : null,
+    });
+    if (!verdict.final) {
+      // The policy is no longer satisfied (the chain rewound below the depth, or
+      // the finalized tag moved back). Back to confirming; nothing is credited.
+      this.store.setEventStatus(event.id, "confirming", `credit paused: ${verdict.detail}`);
+      return "paused";
+    }
+    return "ok";
   }
 
   /** Every intent this watcher could still see paid, for the status view. */
