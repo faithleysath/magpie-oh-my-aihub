@@ -1,0 +1,141 @@
+{
+ "intent": {
+  "invoiceId": "inv_0e925282-1268-4049-a704-017a3b8d2438",
+  "providerId": "twohost-provider",
+  "consumerId": "fresh-twohost",
+  "chainId": 97,
+  "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+  "tokenContract": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+  "recipientAddress": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+  "expectedAmountRaw": "1000000",
+  "requestedAt": "2026-10-30T05:06:33.648Z",
+  "expiresAt": "2026-10-30T07:06:33.648Z",
+  "payerAddress": null,
+  "attributionStatus": "unsigned",
+  "priceVersion": "fixed:97:tMOCK6:1000000000:v1",
+  "status": "requested",
+  "nonce": "0x9639bb9851788d2ba75d4dc934243616",
+  "digest": "0xb93a2aba31cf18bd4c18cdb5aa3a851f12c98d76282b53773d8da37c571f1349",
+  "createdAt": "2026-10-30T05:06:33.648Z",
+  "rateNanosPerToken": "1000000000",
+  "rateDecimals": 6,
+  "rateAssetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c"
+ },
+ "typedData": {
+  "types": {
+   "EIP712Domain": [
+    {
+     "name": "name",
+     "type": "string"
+    },
+    {
+     "name": "version",
+     "type": "string"
+    },
+    {
+     "name": "chainId",
+     "type": "uint256"
+    },
+    {
+     "name": "verifyingContract",
+     "type": "address"
+    }
+   ],
+   "DepositIntent": [
+    {
+     "name": "invoiceId",
+     "type": "string"
+    },
+    {
+     "name": "consumerId",
+     "type": "string"
+    },
+    {
+     "name": "providerId",
+     "type": "string"
+    },
+    {
+     "name": "chainId",
+     "type": "uint256"
+    },
+    {
+     "name": "assetId",
+     "type": "string"
+    },
+    {
+     "name": "tokenContract",
+     "type": "address"
+    },
+    {
+     "name": "recipient",
+     "type": "address"
+    },
+    {
+     "name": "expectedAmountRaw",
+     "type": "uint256"
+    },
+    {
+     "name": "nonce",
+     "type": "string"
+    },
+    {
+     "name": "requestedAt",
+     "type": "uint64"
+    },
+    {
+     "name": "expiresAt",
+     "type": "uint64"
+    }
+   ]
+  },
+  "primaryType": "DepositIntent",
+  "domain": {
+   "name": "Oh My AI Hub",
+   "version": "1",
+   "chainId": 97,
+   "verifyingContract": "0x000000000000000000000000000000000000a1b2"
+  },
+  "message": {
+   "invoiceId": "inv_0e925282-1268-4049-a704-017a3b8d2438",
+   "consumerId": "fresh-twohost",
+   "providerId": "twohost-provider",
+   "chainId": 97,
+   "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+   "tokenContract": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+   "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+   "expectedAmountRaw": "1000000",
+   "nonce": "0x9639bb9851788d2ba75d4dc934243616",
+   "requestedAt": 1793336793,
+   "expiresAt": 1793343993
+  }
+ },
+ "digest": "0xb93a2aba31cf18bd4c18cdb5aa3a851f12c98d76282b53773d8da37c571f1349",
+ "summary": "Pay 1000000 base units of tMOCK6 (6 decimals, ≈ $1.000000 test USD) on BNB Smart Chain Testnet (chain 97) to 0x3d80C477021E3FA568e91C73bAEC8E806518D9a6. Sign the EIP-712 DepositIntent so the plugin can attribute your payment. Expires 2026-10-30T07:06:33.648Z.",
+ "signature": "0xe4023a70d03ad3c2d67f695d9738bb8aab3d152a6c5068999549bdcead7fc0315dcbbb973d946b56635c57a6e28ba46b0e2a1ed8e9cc274150695fa1a371e6581b",
+ "payer": "0x617c2C85E9D45F1E714855FA051CcB8c538200cd",
+ "verified": {
+  "intent": {
+   "invoiceId": "inv_0e925282-1268-4049-a704-017a3b8d2438",
+   "providerId": "twohost-provider",
+   "consumerId": "fresh-twohost",
+   "chainId": 97,
+   "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+   "tokenContract": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+   "recipientAddress": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+   "expectedAmountRaw": "1000000",
+   "requestedAt": "2026-10-30T05:06:33.648Z",
+   "expiresAt": "2026-10-30T07:06:33.648Z",
+   "payerAddress": "0x617c2c85e9d45f1e714855fa051ccb8c538200cd",
+   "attributionStatus": "signed",
+   "priceVersion": "fixed:97:tMOCK6:1000000000:v1",
+   "status": "signed",
+   "nonce": "0x9639bb9851788d2ba75d4dc934243616",
+   "digest": "0xb93a2aba31cf18bd4c18cdb5aa3a851f12c98d76282b53773d8da37c571f1349",
+   "createdAt": "2026-10-30T05:06:33.648Z",
+   "rateNanosPerToken": "1000000000",
+   "rateDecimals": 6,
+   "rateAssetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c"
+  },
+  "payer": "0x617c2c85e9d45f1e714855fa051ccb8c538200cd"
+ }
+}

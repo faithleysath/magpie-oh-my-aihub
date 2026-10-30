@@ -1,0 +1,22 @@
+[
+ {
+  "chainId": 97,
+  "token": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+  "decimals": 6,
+  "rpc": "https://bsc-testnet-rpc.publicnode.com",
+  "invoiceId": "inv_0e925282-1268-4049-a704-017a3b8d2438",
+  "amountRaw": "1000000",
+  "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+  "payer": "0x617c2C85E9D45F1E714855FA051CcB8c538200cd"
+ },
+ {
+  "chainId": 84532,
+  "token": "0x2379D65e90B21D4EcB7EF1Ad007d6f30A5f17c4F",
+  "decimals": 18,
+  "rpc": "https://base-sepolia-rpc.publicnode.com",
+  "invoiceId": "inv_02d8754c-5285-4d6c-be78-e356564aa24a",
+  "amountRaw": "1000000000000000000",
+  "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+  "payer": "0x617c2C85E9D45F1E714855FA051CcB8c538200cd"
+ }
+]

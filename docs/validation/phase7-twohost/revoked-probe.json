@@ -1,0 +1,6 @@
+{
+  "at": "2026-10-30T05:33:29.473527+00:00",
+  "status": 401,
+  "body": "{\"error\":{\"code\":null,\"message\":\"the API key ending in [REDACTED-SUFFIX] is not an enabled magpie gateway key: it is disabled, removed or mistyped\",\"param\":null,\"type\":\"authentication_error\"}}\n",
+  "ingress": "real EasyTier mapped forward with original revoked Gateway Key"
+}

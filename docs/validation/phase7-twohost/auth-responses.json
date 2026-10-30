@@ -1,0 +1,6 @@
+{
+  "mapped-no-key.body": "{\"error\":{\"code\":null,\"message\":\"no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)\",\"param\":null,\"type\":\"authentication_error\"}}",
+  "mapped-no-key.headers": "HTTP/1.1 401 Unauthorized\nContent-Type: application/json\nDate: Fri, 30 Oct 2026 05:06:30 GMT\nContent-Length: 172",
+  "mapped-wrong-key.body": "{\"error\":{\"code\":null,\"message\":\"the API key ending in rong is not an enabled magpie gateway key: it is disabled, removed or mistyped\",\"param\":null,\"type\":\"authentication_error\"}}",
+  "mapped-wrong-key.headers": "HTTP/1.1 401 Unauthorized\nContent-Type: application/json\nDate: Fri, 30 Oct 2026 05:06:30 GMT\nContent-Length: 180"
+}

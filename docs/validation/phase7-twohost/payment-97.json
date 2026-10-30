@@ -1,0 +1,41 @@
+{
+ "at": "2026-10-30T05:08:48.536Z",
+ "status": "mined",
+ "kind": "payment",
+ "payment": {
+  "chainId": 97,
+  "token": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+  "decimals": 6,
+  "rpc": "https://bsc-testnet-rpc.publicnode.com",
+  "invoiceId": "inv_0e925282-1268-4049-a704-017a3b8d2438",
+  "amountRaw": "1000000",
+  "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+  "payer": "0x617c2C85E9D45F1E714855FA051CcB8c538200cd"
+ },
+ "nonce": "2",
+ "txHash": "0xe5edb6d3510056b47bde2d14344c8c36f65d38ccd0a9c147951b7a6c04309820",
+ "receipt": {
+  "transactionHash": "0xe5edb6d3510056b47bde2d14344c8c36f65d38ccd0a9c147951b7a6c04309820",
+  "blockNumber": "0x8545e6a",
+  "blockHash": "0x1ace2db11e4f34ad11ceb0d4ecd098e442bf6837262f4a643f722e3dd030720b",
+  "status": "0x1",
+  "logs": [
+   {
+    "address": "0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+    "topics": [
+     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+     "0x000000000000000000000000617c2c85e9d45f1e714855fa051ccb8c538200cd",
+     "0x0000000000000000000000003d80c477021e3fa568e91c73baec8e806518d9a6"
+    ],
+    "data": "0x00000000000000000000000000000000000000000000000000000000000f4240",
+    "blockHash": "0x1ace2db11e4f34ad11ceb0d4ecd098e442bf6837262f4a643f722e3dd030720b",
+    "blockNumber": "0x8545e6a",
+    "blockTimestamp": "0x6ae4265f",
+    "transactionHash": "0xe5edb6d3510056b47bde2d14344c8c36f65d38ccd0a9c147951b7a6c04309820",
+    "transactionIndex": "0x3",
+    "logIndex": "0x47",
+    "removed": false
+   }
+  ]
+ }
+}

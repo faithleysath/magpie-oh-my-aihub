@@ -1,0 +1,49 @@
+{
+  "at": "2026-10-30T05:33:36.049570+00:00",
+  "status": "VERIFIED",
+  "labKeyRemoved": true,
+  "revokedKeyRemoteHttpStatus": 401,
+  "localOwnedProcesses": [
+    {
+      "kind": "mock",
+      "pid": 36920,
+      "stopped": true
+    },
+    {
+      "kind": "gateway",
+      "pid": 48187,
+      "stopped": true
+    },
+    {
+      "kind": "provider-easytier",
+      "pid": 40462,
+      "stopped": true
+    }
+  ],
+  "localLabPortsFree": [
+    3448,
+    19082,
+    15897,
+    13549
+  ],
+  "remote": {
+    "at": "2026-10-30T05:33:33.227117+00:00",
+    "status": "VERIFIED",
+    "containerRemoved": true,
+    "ownedEasyTierStopped": true,
+    "labPortsFree": [
+      3449,
+      11078,
+      13448,
+      13458,
+      13459,
+      15898
+    ],
+    "firewallMatchesBefore": true,
+    "firewallBefore": "Status: active\n\nTo                         Action      From\n--                         ------      ----\n22/tcp                     ALLOW       Anywhere                   # SSH management\n80/tcp                     ALLOW       Anywhere                   # Direct-origin HTTP\n443/tcp                    ALLOW       Anywhere                   # Direct-origin HTTPS\n22/tcp (v6)                ALLOW       Anywhere (v6)              # SSH management\n80/tcp (v6)                ALLOW       Anywhere (v6)              # Direct-origin HTTP\n443/tcp (v6)               ALLOW       Anywhere (v6)              # Direct-origin HTTPS\n\n",
+    "firewallAfter": "Status: active\n\nTo                         Action      From\n--                         ------      ----\n22/tcp                     ALLOW       Anywhere                   # SSH management\n80/tcp                     ALLOW       Anywhere                   # Direct-origin HTTP\n443/tcp                    ALLOW       Anywhere                   # Direct-origin HTTPS\n22/tcp (v6)                ALLOW       Anywhere (v6)              # SSH management\n80/tcp (v6)                ALLOW       Anywhere (v6)              # Direct-origin HTTP\n443/tcp (v6)               ALLOW       Anywhere (v6)              # Direct-origin HTTPS\n\n",
+    "gatewayKeyHandoffRemoved": true,
+    "consumerConfigRemoved": true,
+    "remainingListeners": "State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess                                                                            \nLISTEN 0      511          0.0.0.0:80        0.0.0.0:*    users:((\"nginx\",pid=39495,fd=5),(\"nginx\",pid=39494,fd=5),(\"nginx\",pid=39493,fd=5))\nLISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:((\"sshd\",pid=39516,fd=3))                                                   \nLISTEN 0      511          0.0.0.0:443       0.0.0.0:*    users:((\"nginx\",pid=39495,fd=7),(\"nginx\",pid=39494,fd=7),(\"nginx\",pid=39493,fd=7))\nLISTEN 0      511             [::]:80           [::]:*    users:((\"nginx\",pid=39495,fd=6),(\"nginx\",pid=39494,fd=6),(\"nginx\",pid=39493,fd=6))\nLISTEN 0      128             [::]:22           [::]:*    users:((\"sshd\",pid=39516,fd=4))                                                   \nLISTEN 0      511             [::]:443          [::]:*    users:((\"nginx\",pid=39495,fd=8),(\"nginx\",pid=39494,fd=8),(\"nginx\",pid=39493,fd=8))\n"
+  }
+}
