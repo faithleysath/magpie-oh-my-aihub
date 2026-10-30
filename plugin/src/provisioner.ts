@@ -14,6 +14,22 @@ import {
   type PriceSnapshot,
 } from "./pricing.ts";
 
+/**
+ * The accounting check could not read what it needs (Magpie's key limit, the
+ * price source). This is not evidence that the books are wrong, but it is also
+ * not a healthy result: the caller must count the check as failed.
+ */
+export class VerificationUnavailableError extends Error {
+  constructor(
+    readonly consumerId: string,
+    readonly what: string,
+    override readonly cause: unknown,
+  ) {
+    super(`${consumerId}: cannot verify ${what}: ${String((cause as Error)?.message ?? cause)}`);
+    this.name = "VerificationUnavailableError";
+  }
+}
+
 export type PauseReason =
   | "price-mismatch"
   | "window-rollover"
@@ -145,6 +161,8 @@ export interface ConsumerView {
     openSettlements: number;
     /** a log gap or an unreadable log means charges may be missing */
     uncertain: string | null;
+    /** every recorded gap, resolved or not, with the audit note */
+    gaps: { logId: string; reason: string; resolvedAt: string | null; note: string | null }[];
   } | null;
   /** the key secret is never returned by the status view */
 }
@@ -255,6 +273,7 @@ function view(c: ConsumerRecord, status: LimitStatus | null, ledger?: Ledger): C
         unpricedCalls: unpriced,
         openSettlements: unsettled.length,
         uncertain: c.ledgerUncertain ?? null,
+        gaps: ledger.gaps(c.consumerId),
       };
     }
   }
@@ -551,8 +570,15 @@ export class Provisioner {
   private async ledgerCheck(
     rec: ConsumerRecord,
     opts: { pause: boolean } = { pause: true },
-  ): Promise<{ window: LedgerWindow | null; status: LimitStatus | null; reason: string | null }> {
-    if (!this.ledger) return { window: null, status: null, reason: null };
+  ): Promise<{
+    window: LedgerWindow | null;
+    status: LimitStatus | null;
+    reason: string | null;
+    /** false when the key's own numbers could not be read: never a pass */
+    verified: boolean;
+    unverified: string | null;
+  }> {
+    if (!this.ledger) return { window: null, status: null, reason: null, verified: true, unverified: null };
     if (rec.paused) {
       // A paused consumer has no live key, but a request that was in flight when
       // it was stopped still settles. Import it, or the charge is lost; the
@@ -564,13 +590,13 @@ export class Provisioner {
         this.ledger.setPaused(rec.consumerId, `log-gap: ${settlement.gap}`);
         this.persist();
       }
-      return { window: null, status: null, reason: rec.paused.reason };
+      return { window: null, status: null, reason: rec.paused.reason, verified: true, unverified: null };
     }
     let window = this.ledger.openWindowFor(rec.consumerId);
     if (!window) window = await this.seedLedger(rec);
     if (!window) {
       if (opts.pause) await this.pause(rec, "manual", "ledger account has no open window");
-      return { window: null, status: null, reason: "no-window" };
+      return { window: null, status: null, reason: "no-window", verified: true, unverified: null };
     }
     // Import every window that can still be billed against, not only the open
     // one: a request that started before a rotation settles afterwards, and its
@@ -584,15 +610,20 @@ export class Provisioner {
     }
     if (!this.magpie.keyById(rec.keyId)) {
       if (opts.pause) await this.pause(rec, "manual", "the key was removed outside the plugin");
-      return { window, status: null, reason: "missing-key" };
+      return { window, status: null, reason: "missing-key", verified: true, unverified: null };
     }
     let status: LimitStatus | null = null;
     try {
       status = await this.verify(rec);
     } catch (e) {
-      // A transient read failure is not evidence of a price/window problem.
-      logger.warn(`cannot read ${rec.consumerId}'s key yet: ${String(e)}`);
-      return { window, status: null, reason: "unreadable" };
+      // A read failure is not evidence of a price/window problem, so the key is
+      // not paused for it. It is also not a pass: the caller is told the check
+      // could not verify, and the periodic check counts it as a failure.
+      const unverified = `cannot read the key's limit: ${String((e as Error)?.message ?? e)}`;
+      rec.ledgerUncertain = unverified;
+      this.persist();
+      logger.warn(`${rec.consumerId}: ${unverified}`);
+      return { window, status: null, reason: "unreadable", verified: false, unverified };
     }
     const snap = await this.snapshotFor(rec.models);
     let reason: PauseReason | null = null;
@@ -637,7 +668,7 @@ export class Provisioner {
       }
     }
     if (reason && opts.pause) await this.pause(rec, reason, detail);
-    return { window, status, reason };
+    return { window, status, reason, verified: true, unverified: null };
   }
 
   /**
@@ -679,6 +710,10 @@ export class Provisioner {
         // such a proof.
         await this.trySettleWindow(window);
       }
+    }
+    if (!gap) {
+      const open = ledger.openGaps(rec.consumerId);
+      if (open.length > 0) gap = open[0].reason;
     }
     if (lateNanos > 0) {
       logger.warn(`${rec.consumerId}: ${nanosToUsd(lateNanos)} USD settled against an older window`);
@@ -1013,9 +1048,53 @@ export class Provisioner {
       await this.reconcile(rec);
       if (this.ledger) {
         const check = await this.ledgerCheck(rec);
+        if (!check.verified) {
+          // The caller (the periodic check) must count this as a failure, not a
+          // healthy result. A paused consumer has no key to read, so it is
+          // reported as verified-by-absence rather than throwing.
+          throw new VerificationUnavailableError(rec.consumerId, "the gateway key's limit", check.unverified);
+        }
         return view(rec, check.status, this.ledger);
       }
       return view(rec, await this.verify(rec), this.ledger);
+    });
+  }
+
+  /**
+   * The audited way out of a usage-log gap: an operator states what happened.
+   * It records the note and nothing else — the missing charges are not
+   * reconstructed, and the balance is not adjusted (no compensation in this
+   * phase). A reissue is possible afterwards, and it carries only the recorded
+   * balance.
+   */
+  async resolveUsageGap(
+    consumerId: string,
+    opts: { logId: string; resolvedBy: string; note: string; acceptedOffset?: number },
+  ): Promise<ConsumerView> {
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec || rec.revokedAt) throw new Error(`no active consumer ${consumerId}`);
+      if (!this.ledger) throw new Error("resolveUsageGap requires the durable ledger");
+      if (!opts.resolvedBy?.trim() || !opts.note?.trim()) {
+        throw new Error("resolving a usage gap needs who resolved it and a note");
+      }
+      // The operator accepts everything the log currently holds as accounted
+      // for (usually written off). Without that baseline the next read would
+      // rediscover the same truncation.
+      const path = this.usageLog();
+      const acceptedOffset =
+        opts.acceptedOffset !== undefined ? Math.max(0, Math.trunc(opts.acceptedOffset)) : existsSync(path) ? statSync(path).size : 0;
+      this.ledger.resolveGap({
+        consumerId,
+        logId: opts.logId,
+        resolvedBy: opts.resolvedBy.trim(),
+        note: opts.note.trim(),
+        acceptedOffset,
+      });
+      rec.ledgerUncertain = this.ledger.openGaps(consumerId)[0]?.reason ?? null;
+      this.persist();
+      logger.warn(`usage gap of ${consumerId} on ${opts.logId} resolved by ${opts.resolvedBy}: ${opts.note}`);
+      return view(rec, rec.paused ? null : await this.verify(rec), this.ledger);
     });
   }
 
@@ -1230,6 +1309,19 @@ export class Provisioner {
       if (oldWindow) {
         ledger.markWindowDraining(oldWindow.id);
         ledger.importUsage({ consumerId, window: oldWindow, logPath: this.usageLog() });
+      }
+      // A gap means charges may be missing. Reissuing would grant a balance the
+      // plugin cannot prove, so it is refused until an operator resolves the
+      // gap with an audited note. The trusted balance is not touched and no key
+      // is created; the old key (if any) is left exactly as it was.
+      const gaps = ledger.openGaps(consumerId);
+      if (gaps.length > 0) {
+        rec.ledgerUncertain = gaps[0].reason;
+        this.persist();
+        throw new Error(
+          `cannot reissue ${consumerId}: its usage log has an unresolved gap (${gaps[0].reason}). ` +
+            `The recorded charges may be incomplete; resolve the gap with an audit note before reissuing. No key was created.`,
+        );
       }
       // A key is revoked first: no new request may enter while its usage is
       // being finalized. The secret is kept so the consumer does not reconfigure.

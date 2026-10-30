@@ -250,6 +250,18 @@ CREATE TABLE IF NOT EXISTS usage_cursors (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (log_id, key_id)
 );
+CREATE TABLE IF NOT EXISTS usage_gaps (
+  consumer_id TEXT NOT NULL,
+  log_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  resolved_at TEXT,
+  resolved_by TEXT,
+  resolution_note TEXT,
+  PRIMARY KEY (consumer_id, log_id)
+);
 `;
 
 function mapAccount(r: AccountRow): LedgerAccount {
@@ -697,7 +709,11 @@ export class Ledger {
       .get(logId, input.window.keyId) as { offset: number } | null;
     let offset = input.fromOffset ?? cursor?.offset ?? 0;
     if (!existsSync(path)) {
-      return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap: offset > 0 ? `${logId} is missing` : null };
+      const missing = offset > 0 ? `${logId} is missing` : null;
+      // Persist on every path: a gap discovered by an early return is just as
+      // real as one found while parsing, and must survive the process.
+      if (missing) this.recordGap(input.consumerId, logId, missing, nowIso());
+      return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap: missing };
     }
     const size = statSync(path).size;
     let gap: string | null = null;
@@ -705,7 +721,10 @@ export class Ledger {
       gap = `${logId} shrank from ${offset} to ${size} bytes (truncated or replaced)`;
       offset = 0;
     }
-    if (size === offset) return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap };
+    if (size === offset) {
+      if (gap) this.recordGap(input.consumerId, logId, gap, nowIso());
+      return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap };
+    }
     const length = Math.min(size - offset, input.maxBytes ?? 8 * 1024 * 1024);
     const buf = Buffer.allocUnsafe(length);
     const fd = openSync(path, "r");
@@ -728,7 +747,10 @@ export class Ledger {
       rows.push({ line: chunk.subarray(pos, nl).toString("utf8"), at: offset + pos });
       pos = nl + 1;
     }
-    if (rows.length === 0) return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap };
+    if (rows.length === 0) {
+      if (gap) this.recordGap(input.consumerId, logId, gap, nowIso());
+      return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap };
+    }
 
     let imported = 0;
     let skipped = 0;
@@ -785,8 +807,124 @@ export class Ledger {
         if (result.changes > 0) imported += 1;
       }
       this.advanceCursor(logId, input.window.keyId, offset + pos, at);
+      if (gap) this.recordGap(input.consumerId, logId, gap, at);
     });
+    if (skipped > 0 && !gap) {
+      // A complete line that is not valid JSON. Its tokens cannot be read, so
+      // its cost cannot be proven; the window is uncertain, never "zero cost".
+      gap = `${skipped} complete line(s) in ${logId} could not be parsed, so their cost cannot be proven`;
+      this.recordGap(input.consumerId, logId, gap, at);
+    }
     return { imported, skipped, unpriced, lastOffset: offset + pos, gap };
+  }
+
+  /**
+   * Records that charges may be missing. A gap is never cleared by the log
+   * coming back or by reading more rows: only `resolveGap()` with an operator's
+   * note does, and the note is kept.
+   */
+  private recordGap(consumerId: string, logId: string, reason: string, at: string): void {
+    this.db
+      .query(
+        `INSERT INTO usage_gaps(consumer_id,log_id,reason,first_seen_at,last_seen_at,occurrences,resolved_at,resolved_by,resolution_note)
+         VALUES(?,?,?,?,?,1,NULL,NULL,NULL)
+         ON CONFLICT(consumer_id,log_id) DO UPDATE SET
+           reason=excluded.reason,
+           last_seen_at=excluded.last_seen_at,
+           occurrences=usage_gaps.occurrences+1,
+           resolved_at=NULL,
+           resolved_by=NULL,
+           resolution_note=NULL`,
+      )
+      .run(consumerId, logId, reason.slice(0, 500), at, at);
+  }
+
+  /** Every gap that has not been resolved by an audited action. */
+  openGaps(consumerId: string): { logId: string; reason: string; firstSeenAt: string; lastSeenAt: string; occurrences: number }[] {
+    const rows = this.db
+      .query("SELECT * FROM usage_gaps WHERE consumer_id=? AND resolved_at IS NULL ORDER BY first_seen_at")
+      .all(consumerId) as {
+      log_id: string;
+      reason: string;
+      first_seen_at: string;
+      last_seen_at: string;
+      occurrences: number;
+    }[];
+    return rows.map((r) => ({
+      logId: r.log_id,
+      reason: r.reason,
+      firstSeenAt: r.first_seen_at,
+      lastSeenAt: r.last_seen_at,
+      occurrences: r.occurrences,
+    }));
+  }
+
+  /** All gaps, resolved ones included, for the status view. */
+  gaps(consumerId: string): { logId: string; reason: string; resolvedAt: string | null; note: string | null }[] {
+    const rows = this.db
+      .query("SELECT * FROM usage_gaps WHERE consumer_id=? ORDER BY first_seen_at")
+      .all(consumerId) as {
+      log_id: string;
+      reason: string;
+      resolved_at: string | null;
+      resolution_note: string | null;
+    }[];
+    return rows.map((r) => ({ logId: r.log_id, reason: r.reason, resolvedAt: r.resolved_at, note: r.resolution_note }));
+  }
+
+  /**
+   * The only way out of a gap. It records who resolved it and why; the missing
+   * charges are NOT reconstructed, so the operator must account for them out of
+   * band before reissuing. This phase implements the marker, not compensation.
+   */
+  resolveGap(input: {
+    consumerId: string;
+    logId: string;
+    resolvedBy: string;
+    note: string;
+    /** the byte offset the operator accepts as fully accounted for */
+    acceptedOffset: number;
+    at?: string;
+  }): void {
+    const at = input.at ?? nowIso();
+    const offset = Math.max(0, Math.trunc(input.acceptedOffset) || 0);
+    this.tx(() => {
+      const result = this.db
+        .query("UPDATE usage_gaps SET resolved_at=?,resolved_by=?,resolution_note=? WHERE consumer_id=? AND log_id=? AND resolved_at IS NULL")
+        .run(at, input.resolvedBy.slice(0, 120), input.note.slice(0, 500), input.consumerId, input.logId);
+      if (result.changes === 0) throw new Error(`no open usage gap for ${input.consumerId} on ${input.logId}`);
+      // The operator has stated that everything up to `acceptedOffset` is
+      // accounted for (typically written off). Without moving the cursor, the
+      // next read would rediscover the same truncation and the resolution
+      // would be meaningless. Both the old and the accepted position are kept.
+      const keys = this.db.query("SELECT DISTINCT key_id FROM windows WHERE consumer_id=?").all(input.consumerId) as {
+        key_id: string;
+      }[];
+      for (const k of keys) {
+        const previous = this.cursorFor2(input.logId, k.key_id);
+        this.advanceCursor(input.logId, k.key_id, offset, at);
+        this.event(input.consumerId, "usage-gap-baseline", {
+          logId: input.logId,
+          keyId: k.key_id,
+          previousOffset: previous,
+          acceptedOffset: offset,
+        });
+      }
+      this.event(input.consumerId, "usage-gap-resolved", {
+        logId: input.logId,
+        resolvedBy: input.resolvedBy.slice(0, 120),
+        note: input.note.slice(0, 500),
+        acceptedOffset: offset,
+      });
+    });
+  }
+
+  /** A cursor by log id rather than path, for callers that already have it. */
+  private cursorFor2(logId: string, keyId: string): number {
+    const row = this.db.query("SELECT offset FROM usage_cursors WHERE log_id=? AND key_id=?").get(logId, keyId) as {
+      offset: number;
+    } | null;
+    return row?.offset ?? 0;
   }
 
   private advanceCursor(logId: string, keyId: string, offset: number, at: string): void {

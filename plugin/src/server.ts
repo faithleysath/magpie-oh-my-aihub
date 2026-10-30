@@ -250,6 +250,26 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
         if (!consumerId || typeof usd !== "number") return json({ error: "consumerId and usd are required" }, 400);
         return json(await svc.topUp(consumerId, usd, depositId));
       }
+      case "/consumers/resolve-gap": {
+        const { consumerId, logId, resolvedBy, note, acceptedOffset } = body as {
+          consumerId?: string;
+          logId?: string;
+          resolvedBy?: string;
+          note?: string;
+          acceptedOffset?: number;
+        };
+        if (!consumerId || !logId || !resolvedBy || !note) {
+          return json({ error: "consumerId, logId, resolvedBy and note are required" }, 400);
+        }
+        return json(
+          await svc.resolveConsumerGap(consumerId, {
+            logId,
+            resolvedBy,
+            note,
+            ...(typeof acceptedOffset === "number" ? { acceptedOffset } : {}),
+          }),
+        );
+      }
       case "/consumers/reissue": {
         const { consumerId, acceptPriceVersion, acceptQuoteHash } = body as {
           consumerId?: string;

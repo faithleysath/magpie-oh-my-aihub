@@ -6,8 +6,8 @@ remains the only charging point. Phase 5 added opt-in peer discovery and a read-
 catalogue. Phase 4 turned the two mutually exclusive roles into two independent capabilities on one
 node (share my Magpie, consume other Magpies) and replaced the single consumer wiring with a set of
 remote providers. Everything measured in phase 3 still holds; the phase-4 decisions are 5–12, the
-phase-5 decisions are 13–17, the phase-6 decisions are 18–20 and the phase-6 review patch's are
-21–24. Evidence is in
+phase-5 decisions are 13–17, the phase-6 decisions are 18–20, the phase-6 review patch's are 21–24
+and the final targeted patch's are 25–26. Evidence is in
 [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
 [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md) and
 [`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md).
@@ -596,6 +596,46 @@ check withdraws the export too, and a withdrawal that fails is reported, never t
 `consumers.json` now uses the same atomic writer as `state.json` (temp file, fsync, rename,
 directory fsync, `.prev`). It used a plain `writeFileSync`, which a crash could truncate.
 
+## Decision 25 — An unverifiable check is a failed check
+
+`ledgerCheck` used to return `reason: "unreadable"` when `GET /v1/magpie/limit` threw, and
+`checkConsumer` turned that into a normal view. The periodic check therefore counted an unreadable
+key as **healthy**: a gateway that kept accepting AI calls while its limit endpoint failed could
+serve indefinitely with nobody able to prove the books.
+
+- `ledgerCheck` now reports `verified: false` with the reason, and `checkConsumer` throws
+  `VerificationUnavailableError`. A transient read error and a real cap mismatch stay different
+  things (the first does not pause a key; the second does), but **neither is a pass**.
+- The service counts every throw as a failure. `lastOkAt` only moves on a check that verified every
+  consumer; `failures`, `uncertain`, `uncertainReason` and `serving` are updated from the real
+  result. After `accountingFailureBudget` consecutive failures the export is withdrawn.
+- A passing check re-verifies every consumer before republishing. A paused consumer has no key to
+  read and is verified by absence, not by a read that cannot fail.
+- A key whose charges cannot be read is not paused for that alone (a read outage is not evidence of
+  fraud), but it is marked `ledgerUncertain`, so it is not reported as healthy either.
+
+Measured on the isolated Magpie with the plugin pointed at a closed port: `checkConsumer` rejected,
+the gateway still answered a real AI call `200` during the outage, and the state returned to healthy
+only after the read worked again.
+
+## Decision 26 — A usage-log gap is persistent and blocks reissue
+
+A gap means the log no longer holds what the cursor had already passed, or a complete line cannot be
+parsed: charges may be missing. It used to live only in a function's return value, so `reissue()`
+could ignore it and grant a balance the plugin could not prove.
+
+- Gaps are stored in SQLite (`usage_gaps`, per consumer and log, with first/last seen and an
+  occurrence count) on **every** path that finds one, including an early return.
+- `reissue()` refuses while any gap is unresolved, before creating a key and without touching the
+  recorded balance. The refusal survives a restart because the row does.
+- The log coming back, or reading some rows again, does not clear it: only
+  `resolveGap()` does, and only with `resolvedBy` and a note. It records the accepted byte offset as
+  the new baseline (otherwise the next read would rediscover the same truncation) and keeps the
+  previous offset in the event log. **No money is reconstructed or compensated** in this phase; the
+  reissue that follows carries the recorded balance only.
+- A complete line that is not valid JSON marks the same uncertainty instead of being skipped as a
+  zero-cost call.
+
 ## Preferred dataflow
 
 ```
@@ -703,6 +743,13 @@ refuses an unlisted platform or a hash mismatch.
     Magpie serves a loopback caller with the same secret. If removal and rotation both fail, the
     level is `capRestricted` (the key still answers 200) or `safetyUncertain`; the export is then
     withdrawn and the failure is reported instead of being called a stop.
+21. **A usage-log gap is permanent until an operator resolves it.** The missing charges are never
+    reconstructed: resolution records who accepted what and the byte offset treated as accounted
+    for, and the reissue that follows carries the recorded balance. A gap inside the accounting
+    check's own read path is not silently retried into health.
+22. **An unreadable limit endpoint is a failed check, not a healthy one.** It does not pause the key
+    by itself (an outage is not evidence of fraud), but it counts against the failure budget and
+    withdraws the export after the threshold.
 
 ## References
 

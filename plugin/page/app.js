@@ -139,7 +139,7 @@ function renderStatus(s) {
           fmtUsd(c.leftUsd ?? 0),
           fmtUsd(c.ledger?.balanceUsd ?? c.capUsd - (c.usedUsd ?? 0)),
           c.ledger?.uncertain
-            ? "uncertain: charges may be missing"
+            ? `uncertain: charges may be missing${c.ledger?.gaps?.length ? ` (${c.ledger.gaps.filter((g) => !g.resolvedAt).length} unresolved gap(s))` : ""}`
             : (c.ledger?.openSettlements ?? 0) > 0
               ? `${c.ledger?.openSettlements} window(s) not proven settled`
               : "settled",

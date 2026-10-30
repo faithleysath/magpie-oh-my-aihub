@@ -102,6 +102,18 @@ Magpie data directory.
   `Limit.Window` arithmetic, but is not a wall-clock observation);
 - Magpie on Windows/Linux (this lab is macOS arm64 only).
 
+## Final targeted check (one minimal run)
+
+`final-verification.ts` proves the last two fixes against the real binary: an unreadable limit
+endpoint fails the check while the gateway still answers a real AI call, and a truncated usage log
+blocks reissue across a restart until an audited resolution. It backs up and restores the lab's
+`usage.jsonl`.
+
+```sh
+MAGPIE_DATA="$LAB/data" MAGPIE_BIN="$BIN" MAGPIE_ADDR=127.0.0.1:3446 \
+  bun docs/validation/lab/phase6/final-verification.ts finallab
+```
+
 ## Review-patch check (one consolidated run)
 
 `review-verification.ts` proves the three behaviours the review asked for against the real binary:

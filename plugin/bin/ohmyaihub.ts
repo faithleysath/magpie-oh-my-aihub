@@ -15,6 +15,7 @@
 //   ... consumers add <id> <model[,model]> <capUsd> [--quote-hash <sha256> --quote-price-version <sha256>]
 //   ... consumers models <id> <model[,model]>
 //   ... consumers reissue <id> [--accept-price-version <sha256>] [--accept-quote-hash <sha256>]
+//   ... consumers resolve-gap <id> --log-id <id> --by <who> --note <text> [--accepted-offset N]
 //   ... topup <id> <usd> [--deposit-id <id>]
 //   ... revoke <id>
 //   ... accounting                the periodic accounting check's state
@@ -293,6 +294,23 @@ switch (cmd) {
         acceptQuoteHash: flag("accept-quote-hash"),
       });
       console.log(JSON.stringify(c, null, 2));
+    } else if (rest[1] === "resolve-gap") {
+      const id = positional(2)[0];
+      const logId = flag("log-id");
+      const resolvedBy = flag("by");
+      const note = flag("note");
+      if (!id || !logId || !resolvedBy || !note) {
+        throw new Error("consumers resolve-gap <id> --log-id <id> --by <who> --note <what happened> [--accepted-offset N]");
+      }
+      const offset = flag("accepted-offset");
+      const c = await call("POST", "/consumers/resolve-gap", {
+        consumerId: id,
+        logId,
+        resolvedBy,
+        note,
+        ...(offset ? { acceptedOffset: Number(offset) } : {}),
+      });
+      console.log(JSON.stringify(c, null, 2));
     } else if (rest[1] === "models") {
       const [id, models] = positional(2);
       if (!id || !models) throw new Error("consumers models <id> <model[,model]>");
@@ -403,7 +421,7 @@ switch (cmd) {
   default:
     console.error(
       "usage: status | providers | provider add|update|rm|reconcile | share on|off|models | consume on|off | " +
-        "configure | consumers [add|models|reissue] | topup | accounting | secret | revoke | guard | checks | start | stop",
+        "configure | consumers [add|models|reissue|resolve-gap] | topup | accounting | secret | revoke | guard | checks | start | stop",
     );
     process.exit(2);
 }

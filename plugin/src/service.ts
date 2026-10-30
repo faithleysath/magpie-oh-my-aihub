@@ -2341,6 +2341,20 @@ export class Service {
    * only the ledger balance. A price change requires the new version to be
    * accepted explicitly; a window boundary does not, because no price changed.
    */
+  /**
+   * Records an audited resolution of a usage-log gap. It does not reconstruct
+   * the missing charges or adjust the balance; it states what the operator
+   * accepted, so a later reissue can proceed on the recorded balance.
+   */
+  async resolveConsumerGap(
+    consumerId: string,
+    opts: { logId: string; resolvedBy: string; note: string; acceptedOffset?: number },
+  ): Promise<ConsumerView> {
+    const view = await this.provisioner.resolveUsageGap(consumerId, opts);
+    this.writeSnapshot();
+    return view;
+  }
+
   async reissueConsumer(consumerId: string, acceptPriceVersion?: string, acceptQuoteHash?: string): Promise<ConsumerView> {
     const view = await this.provisioner.reissue(consumerId, { acceptPriceVersion, acceptQuoteHash });
     this.writeSnapshot();

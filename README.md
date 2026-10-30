@@ -41,6 +41,9 @@ The measured price/window behaviour, the three candidate strategies and the exac
 The accounting-safety review patch (periodic check, late-row settlement, log-position identity,
 enforcement levels, crash recovery) is in
 [`docs/validation/2026-10-30-phase6-review-fixes.md`](docs/validation/2026-10-30-phase6-review-fixes.md).
+The final targeted patch (an unreadable limit fails the check; a usage-log gap blocks reissue until
+an audited resolution) is in
+[`docs/validation/2026-10-30-phase6-final-fixes.md`](docs/validation/2026-10-30-phase6-final-fixes.md).
 **GO for testnet accounting development; NO-GO for real USDC until the native price-lock blocker is
 solved.**
 

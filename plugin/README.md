@@ -211,6 +211,12 @@ What the plugin enforces on every key (the architecture's non-negotiables):
   stays down;
 - a row that settles after a rotation is charged at that window's frozen price, reopens a window that
   had been called settled, and tightens the live key's cap or pauses it;
+- an unreadable `GET /v1/magpie/limit` is a **failed** accounting check (it counts against the
+  failure budget and withdraws the export at the threshold), never a healthy one;
+- a usage-log gap is stored in SQLite and blocks `consumers reissue` — across a restart, and even if
+  the log comes back — until an operator records an audited resolution
+  (`consumers resolve-gap <id> --log-id <id> --by <who> --note <text>`); it never reconstructs or
+  compensates the missing charges;
 - a key whose whitelist or cap cannot be applied is **deleted**, never handed over,
 - a hand-over runs the share guard first, then re-reads the key from Magpie: a key revoked during
   the check is never delivered, an empty (all-models) whitelist is repaired first, and the returned
