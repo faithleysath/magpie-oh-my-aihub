@@ -216,6 +216,7 @@ export class Wallet {
   private scanTimers = new Map<number, ReturnType<typeof setInterval>>();
   private inFlight = new Set<number>();
   private scanPromises = new Map<number, Promise<ScanResult>>();
+  private rpcGeneration = new Map<number, number>();
   private started = false;
 
   constructor(deps: WalletDeps) {
@@ -256,6 +257,12 @@ export class Wallet {
   setRpcEndpoints(chainId: number, endpoints: string[]): NetworkRecord {
     const restart = this.started && this.running.has(chainId);
     const net = this.registry.setRpcEndpoints(chainId, endpoints);
+    // Measurements belong to the previous endpoint set. Durable scan progress
+    // remains historical evidence, but a new endpoint has no measured head or
+    // finality until its own probe completes.
+    this.rpcGeneration.set(chainId, (this.rpcGeneration.get(chainId) ?? 0) + 1);
+    this.lastHealth.delete(chainId);
+    this.lastScan.delete(chainId);
     // Remember running intent before stopping the sole active chain.
     this.stopChain(chainId);
     if (net.enabled && restart) {
@@ -526,8 +533,9 @@ export class Wallet {
     const existing = this.scanPromises.get(chainId);
     if (existing) return existing;
     this.inFlight.add(chainId);
+    const generation = this.rpcGeneration.get(chainId) ?? 0;
     const promise = Promise.resolve().then(() => watcher.scan()).then(result => {
-      this.lastScan.set(chainId, result);
+      if ((this.rpcGeneration.get(chainId) ?? 0) === generation) this.lastScan.set(chainId, result);
       return result;
     }).finally(() => { this.inFlight.delete(chainId); this.scanPromises.delete(chainId); });
     this.scanPromises.set(chainId, promise);
@@ -568,10 +576,16 @@ export class Wallet {
         initialLookback: this.initialLookback,
         now: this.now,
       });
+      const generation = this.rpcGeneration.get(net.chainId) ?? 0;
       try {
         const health = await watcher.health();
-        this.lastHealth.set(net.chainId, health);
-        out.push(health);
+        if ((this.rpcGeneration.get(net.chainId) ?? 0) === generation) {
+          this.lastHealth.set(net.chainId, health);
+          out.push(health);
+        } else {
+          // An old in-flight endpoint probe must not repopulate invalidated evidence.
+          out.push(this.localHealth(this.registry.network(net.chainId) ?? net));
+        }
       } catch (e) {
         out.push({
           chainId: net.chainId,

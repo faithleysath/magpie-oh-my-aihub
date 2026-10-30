@@ -5,7 +5,8 @@ import { DEPOSIT_DOMAIN_NAME, DEPOSIT_DOMAIN_VERSION, DEPOSIT_TYPES, DEPOSIT_VER
 import { typedDataDigest } from "./eip712.ts";
 import { recoverAddress } from "./secp256k1.ts";
 import { fromHex } from "./keccak.ts";
-import { formatTokenAmount, parseTokenAmount, usdForRaw } from "./walletamount.ts";
+import { formatTokenAmount, parseTokenAmount } from "./walletamount.ts";
+import { convertRawToNanos } from "./watcher.ts";
 import type { AssetRecord, NetworkRecord } from "./networks.ts";
 import type { ConsumerView } from "./provisioner.ts";
 
@@ -28,10 +29,10 @@ export function walletAddress(value: unknown): string {
   if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value) || /^0x0{40}$/i.test(value)) return walletBad("需要有效的非零钱包地址");
   return value;
 }
-export function boundedWalletDocument(value: unknown): Record<string, any> {
+export function boundedWalletDocument(value: unknown, maxBytes = 32 * 1024): Record<string, any> {
   let encoded: string;
   try { encoded = JSON.stringify(value); } catch { return walletBad("文件无法读取"); }
-  if (!encoded || Buffer.byteLength(encoded) > 32 * 1024) return walletBad("文件过大，最多 32 KiB");
+  if (!encoded || Buffer.byteLength(encoded) > maxBytes) return walletBad(`文件过大，最多 ${maxBytes / 1024} KiB`);
   return walletObject(value);
 }
 
@@ -73,13 +74,20 @@ export function planWalletIntent(input: {
   const parsed = parseTokenAmount(input.amount, asset.decimals);
   if (!parsed.ok) return walletBad("数量必须是可精确表示的普通小数，不能超过代币精度");
   if (BigInt(parsed.raw) <= 0n) walletBad("数量必须大于零");
+  if (BigInt(parsed.raw) >= 1n << 256n) walletBad("数量超过 ERC-20 的 uint256 范围");
   if (!/^\d+$/.test(asset.pricing.nanosPerToken) || BigInt(asset.pricing.nanosPerToken) <= 0n) walletBad("代币测试兑换率不可用");
+  // Validate exactly the conversion the watcher will later book, before the
+  // caller reserves a durable operation or creates an invoice. Predictable
+  // numeric refusals are input errors, never an uncertain reserved operation.
+  let convertedNanos: number;
+  try { convertedNanos = convertRawToNanos({ rawAmount: BigInt(parsed.raw), asset }).nanos; }
+  catch { return walletBad("数量按固定测试汇率换算后超出可安全记账范围"); }
   const binding = { consumerId: consumer.consumerId, models: consumer.models, priceVersion: consumer.priceVersion,
     providerId, chainId: network.chainId, assetId: asset.assetId, contractAddress: asset.contractAddress,
     amountRaw: parsed.raw, amountTokens: parsed.normalised, recipientAddress, decimals: asset.decimals,
     symbol: asset.symbol, rate: asset.pricing, ttlSec: input.ttlSec,
     paused: consumer.paused, pending: pending.map(i => ({ invoiceId: i.invoiceId, status: i.status, expiresAt: i.expiresAt })) };
-  return { ...binding, previewHash: walletHash(binding), estimatedUsd: usdForRaw({ raw: parsed.raw, decimals: asset.decimals, nanosPerToken: asset.pricing.nanosPerToken }),
+  return { ...binding, previewHash: walletHash(binding), estimatedUsd: convertedNanos / 1_000_000_000,
     blockers: pending.length ? ["已有未完成的充值请求，请继续或取消原请求"] : [] };
 }
 
@@ -120,6 +128,7 @@ export function previewDepositDocument(raw: unknown, localConsumerId: string | n
   const parsed = parseTokenAmount(amount.tokens, asset.decimals);
   if (!parsed.ok) return walletBad("显示数量不能精确表示");
   if (parsed.raw !== amount.raw || BigInt(parsed.raw) <= 0n) return walletBad("显示数量与签名原始数量不一致");
+  if (BigInt(parsed.raw) >= 1n << 256n) walletBad("数量超过 ERC-20 的 uint256 范围");
   if (!/^0x[0-9a-fA-F]{32}$/.test(message.nonce) || !Number.isSafeInteger(message.requestedAt) || !Number.isSafeInteger(message.expiresAt) || message.expiresAt <= message.requestedAt || message.expiresAt - message.requestedAt > 604800) walletBad("请求时间或随机数无效");
   if (typeof d.expiresAt !== "string" || Math.floor(Date.parse(d.expiresAt)/1000) !== message.expiresAt || Date.parse(d.expiresAt) <= now.getTime()) walletBad("请求已过期或到期时间不一致");
   const expectedMessage = { invoiceId, consumerId, providerId, chainId: d.chainId, assetId: asset.assetId,

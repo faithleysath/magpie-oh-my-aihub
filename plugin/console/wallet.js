@@ -215,6 +215,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
       const contract = field("完整代币合约地址"); const symbol = field("测试代币符号（test / mock 或 t 前缀）"); const name = field("测试代币名称");
       const decimals = field("预期小数位", "number"); decimals.input.min = "0"; decimals.input.max = "36"; decimals.input.step = "1";
       const rate = field("每个完整 token 的 nanoUSD（正整数字符串）"); rate.input.inputMode = "numeric";
+      rate.label.append(el("small", "单位换算：1 USD = 1,000,000,000 nanoUSD。例如每个 token 按 1 USD 计，填写 1,000,000,000 对应的纯数字（去掉逗号）。此处仅设置固定测试汇率。"));
       const note = field("固定测试汇率说明"); const agree = check("我确认这是所选测试网上的测试代币，且已核对合约和汇率");
       root.append(contract.label, symbol.label, name.label, decimals.label, rate.label, note.label, agree.label, button("核对链上小数位并注册", () => {
         if (!agree.input.checked || !/^0x[0-9a-fA-F]{40}$/.test(contract.input.value.trim()) || !/^\d+$/.test(decimals.input.value) || !/^[1-9]\d*$/.test(rate.input.value.trim()) || !symbol.input.value.trim() || !name.input.value.trim() || !note.input.value.trim()) { fail("请完整填写测试代币字段并明确确认，汇率必须是正整数字符串。"); return; }
@@ -410,7 +411,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
       row.append(top, details("申请、地址与金额", [["申请编号", intent.invoiceId], ["资产身份", intent.assetId], ["原始金额", intent.expectedAmountRaw], ["完整收款地址", intent.recipientAddress], ["付款地址", intent.payerAddress], ["有效期", intent.expiresAt], ["更新时间", journey?.updatedAt]]), p(journeyNext(journey?.state || intent.status)));
       if (journey) {
         const timeline = el("ol", null, "wallet-timeline");
-        for (const step of rows(journey.steps)) { const item = el("li", null, `timeline-${step.state}`); item.append(el("strong", stepLabels[step.id] || "核验步骤"), pill(stepStates[step.state] || "未知"), p(stamp(step.at))); if (step.detail) item.append(details("核验详情", [["证据", step.detail]])); timeline.append(item); }
+        for (const step of rows(journey.steps)) { const item = el("li", null, `timeline-${step.state}`); item.append(el("strong", stepLabels[step.id] || "核验步骤"), pill(stepStates[step.state] || "未知"), p(step.at ? stamp(step.at) : "未记录核验时间")); if (step.detail) item.append(details("核验详情", [["证据", step.detail]])); timeline.append(item); }
         row.append(timeline);
         if (journey.keyUsable) row.append(el("p", "最近证据曾核验密钥覆盖本次入账；仍需查看当前计费状态与共享发布状态。", "soft-note"));
       }

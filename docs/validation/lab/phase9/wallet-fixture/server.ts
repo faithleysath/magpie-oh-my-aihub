@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, rmSync, wr
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createConsoleHandler, ConsoleInputError } from "../../../../../plugin/src/console-server.ts";
 import { acquireHostLock } from "../../../../../plugin/src/lock.ts";
+import type { FixtureModelOptions } from "./model.ts";
 import { atomicPrivateJson, chainId, fields, FixtureInputError, FixtureModel, object, SIMULATION_LABEL } from "./model.ts";
 import { reviewDeposit, reviewTransfer, SyntheticSigner } from "./signer.ts";
 
@@ -56,7 +57,7 @@ export interface FixtureRuntime {
 export interface RunningFixture { runtimePath: string; runtime: FixtureRuntime; stop(): void }
 
 /** Tests use disposable directories. Parent alone starts the actual actor fixture. */
-export function startFixture(directory: string, port = 0): RunningFixture {
+export function startFixture(directory: string, port = 0, options: FixtureModelOptions = {}): RunningFixture {
   if (!isAbsolute(directory)) throw new Error("absolute private fixture directory required");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (lstatSync(directory).isSymbolicLink()) throw new Error("fixture directory must not be a symlink");
@@ -85,7 +86,7 @@ export function startFixture(directory: string, port = 0): RunningFixture {
   };
   try {
     prepareAssets(assets);
-    const model = new FixtureModel(join(directory, "chain-state.json"));
+    const model = new FixtureModel(join(directory, "chain-state.json"), options);
     evidence = () => ({ schema: "ohmyaihub.fixture-run-evidence/v1", at: new Date().toISOString(), ...model.snapshot() });
     const stopCapability = randomBytes(32).toString("hex");
     server = Bun.serve({

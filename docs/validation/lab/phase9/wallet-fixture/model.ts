@@ -2,6 +2,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
+import type { FakeTransferInput } from "../../../../../plugin/test/support/fake-chain.ts";
 import { FakeChain, TRANSFER_TOPIC } from "../../../../../plugin/test/support/fake-chain.ts";
 import type { EvmBlock, EvmLog } from "../../../../../plugin/src/evm.ts";
 
@@ -10,6 +11,8 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_BLOCKS = 4096;
+export const DEFAULT_HEIGHT_BASE = 1_000_000_000;
+export interface FixtureModelOptions { initialHeightBase?: number | Partial<Record<ChainId, number>> }
 const MAX_EVENTS = 256;
 const MAX_OPERATIONS = 512;
 const MAX_FILE = 4 * 1024 * 1024;
@@ -18,6 +21,8 @@ interface Flags { failAll: boolean; failLogs: boolean; receipt: "normal" | "miss
 interface ChainSnapshot {
   chainId: ChainId; contract: string; decimals: number; blocks: EvmBlock[];
   txs: ReturnType<LocalChain["transactions"]>; finalizedAt: number; flags: Flags;
+  /** Missing in the original low-height store; those stores preserve base0. */
+  heightBase?: number;
 }
 interface SavedOperation { id: string; fingerprint: string; result: unknown }
 interface Snapshot { schema: "ohmyaihub.local-fixture/v1"; chains: ChainSnapshot[]; operations: SavedOperation[] }
@@ -54,19 +59,31 @@ function quantity(input: unknown): number {
 /** Reuses FakeChain event/receipt encoding; time and RPC perimeter are corrected here. */
 class LocalChain extends FakeChain {
   flags: Flags = { failAll: false, failLogs: false, receipt: "normal", wrongChain: false, wrongDecimals: false };
+  heightBase = 0;
+  override get head(): number { return this.heightBase + this.blocks.length - 1; }
+  blockAt(number: number): EvmBlock | null { return this.blocks[number - this.heightBase] ?? null; }
+  override transfer(input: FakeTransferInput): { txHash: string; logIndex: number; block: number } {
+    const logical = input.block ?? this.head;
+    requireInput(this.blockAt(logical), "transfer block outside stored fixture range");
+    const result = super.transfer({ ...input, block: logical - this.heightBase });
+    this.txs.get(result.txHash)!.block = logical;
+    return { ...result, block: logical };
+  }
   override mine(parent?: string): EvmBlock {
     if (this.blocks.length >= MAX_BLOCKS) throw new FixtureInputError("fixture block limit reached");
-    const block = super.mine(parent);
+    const block = super.mine(parent ?? (this.blocks.length === 0 && this.heightBase > 0 ? "0x" + digest([this.chainId, this.heightBase, "synthetic-parent"]) : undefined));
+    block.number = "0x" + (this.heightBase + this.blocks.length - 1).toString(16);
     block.timestamp = "0x" + Math.floor(Date.now() / 1000).toString(16);
     return block;
   }
   transactions() { return [...this.txs.values()]; }
   snapshot(): ChainSnapshot {
-    return { chainId: chainId(this.chainId), contract: this.contract, decimals: this.decimals, blocks: this.blocks, txs: this.transactions(), finalizedAt: this.finalizedAt ?? 0, flags: this.flags };
+    return { chainId: chainId(this.chainId), contract: this.contract, decimals: this.decimals, heightBase: this.heightBase, blocks: this.blocks, txs: this.transactions(), finalizedAt: this.finalizedAt ?? this.heightBase, flags: this.flags };
   }
 }
 function restore(snapshot: ChainSnapshot): LocalChain {
   const chain = new LocalChain({ chainId: snapshot.chainId, contract: snapshot.contract, decimals: snapshot.decimals, height: 0, finalizedAt: snapshot.finalizedAt });
+  chain.heightBase = snapshot.heightBase ?? 0;
   chain.blocks = snapshot.blocks;
   chain.txs = new Map(snapshot.txs.map((tx) => [tx.hash, tx]));
   chain.flags = snapshot.flags;
@@ -80,16 +97,17 @@ function validateSnapshot(input: unknown): Snapshot {
   const ids = new Set<number>();
   for (const raw of value.chains) {
     const c = object(raw);
-    fields(c, ["chainId", "contract", "decimals", "blocks", "txs", "finalizedAt", "flags"]);
+    fields(c, ["chainId", "contract", "decimals", "blocks", "txs", "finalizedAt", "flags", "heightBase"], ["chainId", "contract", "decimals", "blocks", "txs", "finalizedAt", "flags"]);
+    const heightBase = c.heightBase === undefined ? 0 : integer(c.heightBase, 0, Number.MAX_SAFE_INTEGER - MAX_BLOCKS);
     const id = chainId(c.chainId);
     requireInput(!ids.has(id), "duplicate fixture chain"); ids.add(id);
     address(c.contract);
     requireInput(c.decimals === (id === 97 ? 6 : 18), "invalid fixture decimals");
     requireInput(Array.isArray(c.blocks) && c.blocks.length > 0 && c.blocks.length <= MAX_BLOCKS && Array.isArray(c.txs) && c.txs.length <= MAX_EVENTS, "invalid fixture bounds");
-    integer(c.finalizedAt, 0, c.blocks.length - 1);
+    integer(c.finalizedAt, heightBase, heightBase + c.blocks.length - 1);
     for (const [index, rawBlock] of c.blocks.entries()) {
       const b = object(rawBlock); fields(b, ["number", "hash", "parentHash", "timestamp"]);
-      requireInput(quantity(b.number) === index && typeof b.hash === "string" && HASH.test(b.hash) && typeof b.parentHash === "string" && HASH.test(b.parentHash), "invalid block");
+      requireInput(quantity(b.number) === heightBase + index && typeof b.hash === "string" && HASH.test(b.hash) && typeof b.parentHash === "string" && HASH.test(b.parentHash), "invalid block");
       quantity(b.timestamp);
       if (index > 0) requireInput(b.parentHash === c.blocks[index - 1].hash, "broken fixture block ancestry");
     }
@@ -97,12 +115,12 @@ function validateSnapshot(input: unknown): Snapshot {
     for (const rawTx of c.txs) {
       const tx = object(rawTx); fields(tx, ["hash", "block", "status", "logs"]);
       requireInput(typeof tx.hash === "string" && HASH.test(tx.hash) && !txIds.has(tx.hash), "invalid transaction"); txIds.add(tx.hash);
-      integer(tx.block, 0, c.blocks.length - 1);
+      integer(tx.block, heightBase, heightBase + c.blocks.length - 1);
       requireInput((tx.status === "0x1" || tx.status === "0x0") && Array.isArray(tx.logs) && tx.logs.length === 1, "invalid receipt");
       const log = object(tx.logs[0]); fields(log, ["address", "topics", "data", "blockNumber", "blockHash", "transactionHash", "logIndex"]);
       address(log.address);
       requireInput(Array.isArray(log.topics) && log.topics.length === 3 && log.topics[0] === TRANSFER_TOPIC && log.topics.every((t) => typeof t === "string" && HASH.test(t)) && typeof log.data === "string" && HASH.test(log.data), "invalid transfer");
-      requireInput(quantity(log.blockNumber) === tx.block && log.blockHash === c.blocks[tx.block as number].hash && log.transactionHash === tx.hash && log.logIndex === "0x0", "inconsistent transfer");
+      requireInput(quantity(log.blockNumber) === tx.block && log.blockHash === c.blocks[(tx.block as number) - heightBase].hash && log.transactionHash === tx.hash && log.logIndex === "0x0", "inconsistent transfer");
     }
     const flags = object(c.flags); fields(flags, ["failAll", "failLogs", "receipt", "wrongChain", "wrongDecimals"]);
     requireInput(["normal", "missing", "unavailable"].includes(String(flags.receipt)) && [flags.failAll, flags.failLogs, flags.wrongChain, flags.wrongDecimals].every((v) => typeof v === "boolean"), "invalid error flags");
@@ -139,7 +157,7 @@ export class FixtureModel {
   private data: Snapshot;
   private failed = false;
   private calls: Record<string, number> = {};
-  constructor(private readonly file: string) {
+  constructor(private readonly file: string, options: FixtureModelOptions = {}) {
     requireInput(isAbsolute(file), "absolute private fixture path required");
     try {
       const stat = lstatSync(file);
@@ -149,13 +167,20 @@ export class FixtureModel {
       chmodSync(file, 0o600);
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("fixture store unavailable");
-      const chains = ([97, 84532] as const).map((id) => new LocalChain({ chainId: id, contract: "0x" + randomBytes(20).toString("hex"), decimals: id === 97 ? 6 : 18, height: 20, finalizedAt: 0 }).snapshot());
+      const chains = ([97, 84532] as const).map((id) => {
+        const configured = typeof options.initialHeightBase === "number" ? options.initialHeightBase : options.initialHeightBase?.[id];
+        const heightBase = integer(configured ?? DEFAULT_HEIGHT_BASE, 0, Number.MAX_SAFE_INTEGER - MAX_BLOCKS);
+        const chain = new LocalChain({ chainId: id, contract: "0x" + randomBytes(20).toString("hex"), decimals: id === 97 ? 6 : 18, height: 0, finalizedAt: heightBase });
+        chain.heightBase = heightBase;
+        chain.mineN(20);
+        return chain.snapshot();
+      });
       this.data = { schema: "ohmyaihub.local-fixture/v1", chains, operations: [] };
       atomicPrivateJson(file, this.data);
     }
   }
   snapshot() {
-    return { label: SIMULATION_LABEL, chains: this.data.chains.map((c) => ({ chainId: c.chainId, contractAddress: c.contract, symbol: c.decimals === 6 ? "tFIX6" : "tFIX18", name: `Local Fixture Mock${c.decimals}`, decimals: c.decimals, nanosPerToken: String(10 ** 9), head: c.blocks.length - 1, finalized: c.finalizedAt, flags: c.flags, events: c.txs.map((tx) => ({ txHash: tx.hash, block: tx.block, from: "0x" + tx.logs[0]!.topics[1]!.slice(-40), to: "0x" + tx.logs[0]!.topics[2]!.slice(-40), amountRaw: BigInt(tx.logs[0]!.data).toString(), tokenContract: tx.logs[0]!.address })) })), operations: this.data.operations.length, rpcCounts: { ...this.calls } };
+    return { label: SIMULATION_LABEL, chains: this.data.chains.map((c) => ({ chainId: c.chainId, contractAddress: c.contract, symbol: c.decimals === 6 ? "tFIX6" : "tFIX18", name: `Local Fixture Mock${c.decimals}`, decimals: c.decimals, nanosPerToken: String(10 ** 9), heightBase: c.heightBase ?? 0, storedBlocks: c.blocks.length, head: (c.heightBase ?? 0) + c.blocks.length - 1, finalized: c.finalizedAt, flags: c.flags, events: c.txs.map((tx) => ({ txHash: tx.hash, block: tx.block, from: "0x" + tx.logs[0]!.topics[1]!.slice(-40), to: "0x" + tx.logs[0]!.topics[2]!.slice(-40), amountRaw: BigInt(tx.logs[0]!.data).toString(), tokenContract: tx.logs[0]!.address })) })), operations: this.data.operations.length, rpcCounts: { ...this.calls } };
   }
   control(name: string, input: Record<string, unknown>, operationId: unknown): unknown {
     requireInput(!this.failed, "fixture store unavailable");
@@ -211,7 +236,7 @@ export class FixtureModel {
       requireInput(body.params.length === 2 && body.params[1] === false, "RPC block params invalid");
       const tag = body.params[0];
       const at = tag === "finalized" ? chain.finalizedAt! : tag === "latest" || tag === "safe" ? chain.head : quantity(tag);
-      return reply(chain.blocks[at] ?? null);
+      return reply(chain.blockAt(at));
     }
     if (method === "eth_call") {
       requireInput(body.params.length === 2 && body.params[1] === "latest", "RPC call params invalid");
@@ -223,7 +248,10 @@ export class FixtureModel {
       requireInput(body.params.length === 1 && typeof body.params[0] === "string" && HASH.test(body.params[0]), "RPC receipt params invalid");
       if (chain.flags.receipt === "missing") return reply(null);
       if (chain.flags.receipt === "unavailable") return { status: 503, body: { error: "synthetic missing receipt service" } };
-      return { status: 200, body: await (await chain.fetch("local-fixture", { body: JSON.stringify(body) })).json() };
+      const tx = chain.txs.get(body.params[0]);
+      if (!tx) return reply(null);
+      const block = chain.blockAt(tx.block)!;
+      return reply({ transactionHash: tx.hash, blockNumber: block.number, blockHash: block.hash, status: tx.status, logs: tx.logs });
     }
     if (method === "eth_getLogs") {
       requireInput(body.params.length === 1, "RPC logs params invalid");

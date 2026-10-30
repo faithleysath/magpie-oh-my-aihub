@@ -3,10 +3,13 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync, statSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { FixtureModel, SIMULATION_LABEL } from "./model.ts";
+import { DEFAULT_HEIGHT_BASE, FixtureModel, SIMULATION_LABEL } from "./model.ts";
 import { reviewDeposit, reviewTransfer, SyntheticSigner } from "./signer.ts";
 import { startFixture } from "./server.ts";
 import { EvmClient } from "../../../../../plugin/src/evm.ts";
+import { NetworkRegistry } from "../../../../../plugin/src/networks.ts";
+import { ChainStore } from "../../../../../plugin/src/chainstore.ts";
+import { ChainWatcher } from "../../../../../plugin/src/watcher.ts";
 import { DEFAULT_NETWORKS, assetIdOf } from "../../../../../plugin/src/networks.ts";
 import type { AssetRecord } from "../../../../../plugin/src/networks.ts";
 import { buildIntent, intentDigest, intentTypedData, verifyIntentSignature } from "../../../../../plugin/src/deposits.ts";
@@ -16,7 +19,7 @@ const folders: string[] = [];
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
 function folder() { const value = mkdtempSync(join(tmpdir(), "ohmyaihub-wallet-fixture-test-")); folders.push(value); return value; }
 const FROM = "0x" + "11".repeat(20), TO = "0x" + "33".repeat(20);
-function model() { const dir = folder(); return { dir, file: join(dir, "chain.json"), model: new FixtureModel(join(dir, "chain.json")) }; }
+function model() { const dir = folder(); return { dir, file: join(dir, "chain.json"), model: new FixtureModel(join(dir, "chain.json"), { initialHeightBase: 0 }) }; }
 async function rpc(m: FixtureModel, chainId: 97 | 84532, method: string, params: unknown[] = []) {
   return m.rpc(chainId, { jsonrpc: "2.0", id: 1, method, params });
 }
@@ -58,6 +61,40 @@ describe("standalone fixture RPC model", () => {
     const bscPolicy = DEFAULT_NETWORKS.find((n) => n.chainId === 97)!.finality;
     expect(finalityVerdict({ policy: bscPolicy, eventBlock: 20, head: 34, finalizedBlock: null }).final).toBe(false);
     expect(finalityVerdict({ policy: bscPolicy, eventBlock: 20, head: 35, finalizedBlock: null }).final).toBe(true);
+  });
+
+  test("default sparse high base retains bounded arrays, logical receipts/logs and restart while legacy stores retain low heights", async () => {
+    const dir = folder(), file = join(dir, "high.json");
+    const m = new FixtureModel(file);
+    for (const c of m.snapshot().chains) {
+      expect(c.heightBase).toBe(DEFAULT_HEIGHT_BASE);
+      expect(c.head).toBe(DEFAULT_HEIGHT_BASE + 19);
+      expect(c.storedBlocks).toBe(20);
+      const event = transfer(m, c.chainId);
+      expect(event.block).toBe(DEFAULT_HEIGHT_BASE + 20);
+      const receipt = (await rpc(m, c.chainId, "eth_getTransactionReceipt", [event.txHash])).body as any;
+      expect(Number(BigInt(receipt.result.blockNumber))).toBe(event.block);
+      const block = (await rpc(m, c.chainId, "eth_getBlockByNumber", [receipt.result.blockNumber, false])).body as any;
+      expect(receipt.result.blockHash).toBe(block.result.hash);
+      expect(receipt.result.logs[0].blockNumber).toBe(receipt.result.blockNumber);
+      expect(Math.abs(Number(BigInt(block.result.timestamp)) * 1000 - Date.now())).toBeLessThan(5000);
+      m.control("mine", { chainId: c.chainId, blocks: 15 }, randomUUID());
+      expect(m.snapshot().chains.find((chain) => chain.chainId === c.chainId)!.finalized).toBe(DEFAULT_HEIGHT_BASE);
+      m.control("finalize", { chainId: c.chainId, block: event.block }, randomUUID());
+    }
+    const restarted = new FixtureModel(file, { initialHeightBase: 42 });
+    expect(restarted.snapshot().chains[0]!.head).toBe(DEFAULT_HEIGHT_BASE + 35);
+    expect(restarted.snapshot().chains[0]!.events).toHaveLength(1);
+    expect(JSON.parse(readFileSync(file, "utf8")).chains[0].blocks).toHaveLength(36);
+    const low = model();
+    transfer(low.model, 97);
+    const legacy = JSON.parse(readFileSync(low.file, "utf8"));
+    for (const chain of legacy.chains) delete chain.heightBase;
+    writeFileSync(low.file, JSON.stringify(legacy));
+    const legacyReloaded = new FixtureModel(low.file);
+    expect(legacyReloaded.snapshot().chains[0]!.head).toBe(20);
+    expect(legacyReloaded.snapshot().chains[0]!.heightBase).toBe(0);
+    expect(readFileSync(low.file, "utf8")).toBe(JSON.stringify(legacy));
   });
 
   test("new-block event+receipt survives restart, event UUID replay never appends twice, topic filters exact", async () => {
@@ -161,12 +198,31 @@ describe("private standalone HTTP adapter", () => {
       const c = m.snapshot().chains[0]!;
       const client = new EvmClient({ chainId: 97, endpoints: [fixture.runtime.origin + "/rpc/97"] });
       await client.verifyChain();
-      expect(await client.blockNumber()).toBe(19);
+      expect(await client.blockNumber()).toBe(DEFAULT_HEIGHT_BASE + 19);
       expect(await client.callData(c.contractAddress, "0x313ce567")).toBe("0x" + "6".padStart(64, "0"));
-      expect(Number(BigInt((await client.block("finalized")).number))).toBe(0);
+      expect(Number(BigInt((await client.block("finalized")).number))).toBe(DEFAULT_HEIGHT_BASE);
       expect(fixture.runtime.label).toBe(SIMULATION_LABEL);
     } finally { fixture.stop(); }
     await expect(fetch(fixture.runtime.origin)).rejects.toThrow();
+  });
+
+  test("production watcher with no assets advances existing public-height cursor to sparse fixture head without scanning historical pages", async () => {
+    const dir = folder(), fixture = startFixture(dir);
+    const store = new ChainStore(join(dir, "disposable-watcher.sqlite"));
+    try {
+      const network = { ...DEFAULT_NETWORKS.find((n) => n.chainId === 97)!, rpcEndpoints: [fixture.runtime.origin + "/rpc/97"] };
+      const registry = new NetworkRegistry({ version: 1, networks: [network], assets: [] } as any);
+      store.advanceCursor({ chainId: 97, block: 139799924, blockHash: null, at: new Date().toISOString() });
+      const forbidden = () => { throw new Error("no credit operation authorized by empty-asset scan"); };
+      const watcher = new ChainWatcher({ network, registry, store, ledger: { depositIntent: forbidden, applyDeposit: forbidden, freezeConsumer: forbidden, balance: forbidden } });
+      const result = await watcher.scan();
+      expect(result.partial).toBe(false);
+      expect(result.logs).toBe(0);
+      expect(store.cursor(97)!.lastBlock).toBe(DEFAULT_HEIGHT_BASE + 19);
+      const client = new EvmClient({ chainId: 97, endpoints: network.rpcEndpoints });
+      const latest = await client.block("latest");
+      expect(Number(BigInt(latest.number))).toBe(DEFAULT_HEIGHT_BASE + 19);
+    } finally { store.close(); fixture.stop(); }
   });
 
   test("external wallet page handlers require file review+consent, download real signature and clear input", async () => {
@@ -268,6 +324,12 @@ describe("private standalone HTTP adapter", () => {
       const input = { chainId: 97, from: payer, to: TO, amountRaw: "1000000", tokenContract: c.contractAddress };
       const eventInput = { name: "transfer", input, operationId, consent: true };
       const event = (await (await action("chain-control", eventInput)).json()).result;
+      expect(event.block).toBe(DEFAULT_HEIGHT_BASE + 20);
+      const client = new EvmClient({ chainId: 97, endpoints: [origin + "/rpc/97"] });
+      const receipt = await client.receipt(event.txHash);
+      expect(Number(BigInt(receipt!.blockNumber))).toBe(event.block);
+      expect((await client.block(event.block)).hash).toBe(receipt!.blockHash);
+      expect(await client.logs({ address: c.contractAddress, topics: [receipt!.logs[0]!.topics[0]!], fromBlock: event.block, toBlock: event.block })).toEqual(receipt!.logs);
       const replay = (await (await action("chain-control", eventInput)).json()).result;
       expect(replay).toEqual(event);
       const rpcResponse = await post("/rpc/97", { jsonrpc: "2.0", id: 2, method: "eth_getTransactionReceipt", params: [event.txHash] });

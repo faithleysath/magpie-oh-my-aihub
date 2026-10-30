@@ -76,6 +76,23 @@ describe("wallet presentation semantics", () => {
   });
 });
 
+test("verified timeline step without timestamp stays verified and missing evidence elsewhere stays unknown", async () => {
+  const state = stateFixture();
+  state.wallet.intents = [{ invoiceId: "signed-invoice", consumerId: "friend", chainId: 97, status: "signed" }];
+  state.wallet.view.deposits = [{ invoiceId: "signed-invoice", state: "payment-not-seen", steps: [{ id: "signature", state: "done", at: null, detail: "signature verified" }, { id: "payment", state: "pending", at: null }] }];
+  const r = runtime(state);
+  try {
+    const root = r.roots["wallet-panel"];
+    const signature = all(root, "li").find((node) => node.className === "timeline-done");
+    expect(signature.textContent).toContain("付款方签名已验证未记录核验时间");
+    expect(signature.textContent).not.toContain("尚未验证");
+    expect(root.textContent).toContain("最近主动核验：尚未验证");
+    await all(root, "button").find((node) => node.textContent === "注册测试代币").click();
+    expect(r.dialog.textContent).toContain("1 USD = 1,000,000,000 nanoUSD");
+    expect(r.calls).toHaveLength(0);
+  } finally { r.cleanup(); }
+});
+
 describe("real mounted wallet handlers", () => {
   test("create has no automatic chain/consumer/asset and rejects excess precision before any action", async () => {
     const r = runtime();
