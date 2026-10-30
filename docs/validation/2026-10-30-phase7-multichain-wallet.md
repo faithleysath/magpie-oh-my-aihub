@@ -452,5 +452,37 @@ New test files and what they cover:
 | `test/watcher.test.ts` | 36 | scanning, dedupe, reorg, finality, crash/restart, RPC failure, chain independence, decimals check |
 | `test/chain-credit.test.ts` | 7 | the closing loop: chain → ledger → cap → 200/429 → new deposit → 200 |
 
-Commit, PR and the Actions run are linked in the PR description rather than here, because this file
-is written before the final push.
+| Item | Value |
+| --- | --- |
+| PR | https://github.com/faithleysath/magpie-oh-my-aihub/pull/8 |
+| Commit | `14b68da8ab68b61e83b4caffc12676d2a0f2e76e` (`feature/multichain-testnet-wallet`) |
+| Actions | https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40994031453 |
+| `plugin (linux, bun 1.4.3)` | SUCCESS |
+| `plugin (macos, bun 1.4.3)` | SUCCESS |
+| Merge state | `MERGEABLE` / `CLEAN` against `main` at `4f264d3` |
+| Tests | 370 passing, 0 failing, 1352 assertions, 23 files |
+| Base commit | `4f264d3` — the merge of PR #7, whose head was the accepted `2fdd6b2` |
+
+## 15. Cleanup
+
+- The anvil node used for the lab was a local process on `127.0.0.1:8547`; its chain data is in a
+  temporary directory and no key was written to the repository.
+- The throwaway provider/consumer keys used by the lab live only in `/tmp` (`0600`) and are not in
+  the tree: `bun run secret-scan` passes, and it was proved to fail on a leaked key both as a labelled
+  `privateKey = "0x…"` and as a bare 64-hex line in a keys file.
+- `plugin/lab/chain/out/` and `cache/` (forge artefacts) are gitignored and were removed.
+- The one anvil reorg left that node's chain in a reorged state; it was discarded with the temporary
+  directory rather than reused.
+- No testnet transaction exists to clean up, because none was made (§9.2).
+
+## 16. GO / NO-GO
+
+**GO for continued development of the multichain testnet deposit flow.** The registry is genuinely
+equal-network, the uniqueness and attribution rules are database constraints with tests behind them,
+a crash at any point retries the same deposit instead of minting a second one, and the whole pipeline
+ran end to end on a real EVM node including a reorg.
+
+**NO-GO for real funds**, unchanged from phase 6 and for the additional reasons in §13: Magpie still
+has no price lock, overshoot has no closed form, no real-testnet deposit has ever executed, BSC's
+finality policy is a substitute rather than a measurement, in-flight and interrupted calls are still
+unbilled, and the watcher has no consensus read.
