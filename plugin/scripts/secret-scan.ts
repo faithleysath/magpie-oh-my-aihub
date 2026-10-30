@@ -58,7 +58,10 @@ function* walk(dir: string): Generator<string> {
 
 const hits: string[] = [];
 for (const file of walk(repo)) {
-  if (!/\.(ts|js|json|toml|md|sh|yml|yaml|py|html|css)$/.test(file)) continue;
+  // `log` and `txt` are here for the validation evidence: the sanitized lab
+  // transcripts are committed as .log files, and a scan that skipped them would
+  // stop covering the only place a raw tool output could carry a credential.
+  if (!/\.(ts|js|json|toml|md|sh|yml|yaml|py|html|css|log|txt)$/.test(file)) continue;
   let text: string;
   try {
     text = readFileSync(file, "utf8");

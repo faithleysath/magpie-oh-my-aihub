@@ -1,0 +1,123 @@
+{
+  "at": "2026-10-30T07:52:33.348Z",
+  "platform": {
+    "os": "26.6.2",
+    "arch": "arm64",
+    "bun": "1.4.3"
+  },
+  "magpie": {
+    "app": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app",
+    "bin": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie",
+    "version": "magpie 0.1.2038",
+    "sha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15"
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "zipSha256": "4be1882d1aa36d31c1d6ba0596f2cf8a097e371f8da124212324b2e0f8df7e4b",
+    "cache": "/Users/laysath/Projects/lab/et/easytier-macos-aarch64"
+  },
+  "plugin": {
+    "commit": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+    "dirty": true
+  },
+  "network": "phase8-lab-37684",
+  "isolation": {
+    "nodes": [
+      "P",
+      "C",
+      "P2"
+    ],
+    "pluginCopyPerNode": true,
+    "userProfileTouched": false
+  },
+  "lab": {
+    "root": null,
+    "evidence": "/Users/laysath/Projects/magpie-oh-my-aihub-import/docs/validation/phase8-live",
+    "magpie": {
+      "app": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app",
+      "bin": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie",
+      "version": "magpie 0.1.2038",
+      "sha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15"
+    },
+    "plugin": {
+      "commit": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+      "dirty": true
+    },
+    "platform": {
+      "os": "26.6.2",
+      "arch": "arm64",
+      "bun": "1.4.3"
+    },
+    "ports": {
+      "P": {
+        "gateway": 33437,
+        "upstream": 24442,
+        "listen": 11902,
+        "catalog": 0
+      },
+      "C": {
+        "gateway": 46287,
+        "upstream": 27760,
+        "listen": 17757,
+        "socks": 0
+      },
+      "P2": {
+        "gateway": 58174,
+        "upstream": 23718,
+        "listen": 11425
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "P: fresh Magpie 0.1.2038, own plugin copy, real host and EasyTier 2.6.4",
+      "ok": false,
+      "detail": "timed out waiting for P plugin API",
+      "ms": 49247,
+      "required": true
+    }
+  ],
+  "summary": {
+    "passed": 0,
+    "failed": 1
+  },
+  "http": [
+    {
+      "at": "2026-10-30T07:51:44.860Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:24442/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:51:46.063Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:24442/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:51:46.497Z",
+      "method": "GET",
+      "url": "http://<lan>:33437/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:51:47.699Z",
+      "method": "GET",
+      "url": "http://<lan>:33437/v1/models",
+      "status": 401,
+      "note": ""
+    }
+  ],
+  "wallet": {
+    "ran": false
+  },
+  "claims": {
+    "realRemoteMagpie": "UNKNOWN",
+    "walletTypedData": "UNKNOWN",
+    "trustRace": "not observed"
+  },
+  "secrets": "redacted; raw state stayed in the disposable lab root"
+}

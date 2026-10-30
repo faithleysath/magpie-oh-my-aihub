@@ -1,0 +1,1540 @@
+# environment: darwin arm64 · Bun 1.4.3 · macOS 26.6.2
+# magpie: /Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie (0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15)
+# lab: /tmp/ohmyaihub-phase8-49883
+# P: mock upstream on 127.0.0.1:23597; native p/p-model priced 1000/1000
+$ P: magpie plugin add <own copy>
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> setup --check --json
+{
+  "at": "2026-10-30T07:55:28.304Z",
+  "platform": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "bun": "1.4.3",
+    "verifiedBun": "1.4.3"
+  },
+  "magpie": {
+    "bin": "/tmp/ohmyaihub-phase8-49883/P/Magpie.app/Contents/MacOS/magpie",
+    "version": "0.1.2038",
+    "verifiedVersion": "0.1.2038",
+    "matches": true,
+    "error": null
+  },
+  "host": {
+    "dataDir": "/tmp/ohmyaihub-phase8-49883/P/home/.config/magpie",
+    "reachable": true,
+    "port": "34518",
+    "error": null
+  },
+  "state": {
+    "path": "/tmp/ohmyaihub-phase8-49883/P/home/.config/magpie/oh-my-aihub/state.json",
+    "exists": false,
+    "version": null,
+    "configured": false,
+    "networkName": null,
+    "nodeId": null,
+    "legacy": false,
+    "error": null
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "platformSupported": true,
+    "installed": true,
+    "verified": true,
+    "running": false,
+    "coreVersion": null,
+    "rpcPort": null,
+    "error": null
+  },
+  "network": {
+    "lanIpv4": "192.168.132.218",
+    "gatewayPort": 50584,
+    "gatewayKeyRequired": true,
+    "error": null
+  },
+  "checks": {
+    "available": true,
+    "at": "2026-10-30T07:55:28.309Z",
+    "items": [
+      {
+        "name": "configured",
+        "ok": false,
+        "detail": "no overlay configuration yet",
+        "kind": "local",
+        "at": "2026-10-30T07:55:28.309Z"
+      }
+    ],
+    "error": null
+  },
+  "readiness": {
+    "state": "blocked",
+    "checkedAt": "2026-10-30T07:55:28.309Z",
+    "ageMs": 0,
+    "source": "cached",
+    "reasons": [
+      "no overlay configuration yet"
+    ],
+    "providers": []
+  },
+  "blockers": [],
+  "warnings": [
+    "cached checks contain 1 failure(s)"
+  ]
+}
+# C: mock upstream on 127.0.0.1:20512; native c/c-model priced 1000/1000
+$ C: magpie plugin add <own copy>
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> setup --network phase8-lab-49883 --secret-file /tmp/ohmyaihub-phase8-49883/network.secret --listen 127.0.0.1:12902 --share --no-consume --ports 50584 --no-catalog-publish --json
+{
+  "at": "2026-10-30T07:55:37.204Z",
+  "platform": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "bun": "1.4.3",
+    "verifiedBun": "1.4.3"
+  },
+  "magpie": {
+    "bin": "/tmp/ohmyaihub-phase8-49883/P/Magpie.app/Contents/MacOS/magpie",
+    "version": "0.1.2038",
+    "verifiedVersion": "0.1.2038",
+    "matches": true,
+    "error": null
+  },
+  "host": {
+    "dataDir": "/tmp/ohmyaihub-phase8-49883/P/home/.config/magpie",
+    "reachable": true,
+    "port": "34518",
+    "error": null
+  },
+  "state": {
+    "path": "/tmp/ohmyaihub-phase8-49883/P/home/.config/magpie/oh-my-aihub/state.json",
+    "exists": false,
+    "version": null,
+    "configured": false,
+    "networkName": null,
+    "nodeId": null,
+    "legacy": false,
+    "error": null
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "platformSupported": true,
+    "installed": true,
+    "verified": true,
+    "running": false,
+    "coreVersion": null,
+    "rpcPort": null,
+    "error": null
+  },
+  "network": {
+    "lanIpv4": "192.168.132.218",
+    "gatewayPort": 50584,
+    "gatewayKeyRequired": true,
+    "error": null
+  },
+  "checks": {
+    "available": true,
+    "at": "2026-10-30T07:55:37.209Z",
+    "items": [
+      {
+        "name": "configured",
+        "ok": false,
+        "detail": "no overlay configuration yet",
+        "kind": "local",
+        "at": "2026-10-30T07:55:37.209Z"
+      }
+    ],
+    "error": null
+  },
+  "readiness": {
+    "state": "blocked",
+    "checkedAt": "2026-10-30T07:55:37.209Z",
+    "ageMs": 0,
+    "source": "cached",
+    "reasons": [
+      "no overlay configuration yet"
+    ],
+    "providers": []
+  },
+  "blockers": [],
+  "warnings": [
+    "cached checks contain 1 failure(s)"
+  ]
+}
+
+applying: network phase8-lab-49883, share=true, consume=false, peers=unchanged
+{
+  "configured": true,
+  "status": {
+    "plugin": {
+      "version": "0.4.0",
+      "pid": 50210,
+      "dataDir": "/private/tmp/ohmyaihub-phase8-49883/P/home/.config/magpie",
+      "startedAt": "2026-10-30T07:55:27.215Z",
+      "stateVersion": 3
+    },
+    "magpie": {
+      "version": "magpie 0.1.2038",
+      "gateway": "http://192.168.132.218:50584"
+    },
+    "config": {
+      "role": "provider",
+      "sharingEnabled": true,
+      "sharingActive": true,
+      "shareSuspended": null,
+      "consumingEnabled": false,
+      "nodeId": "dacdc3f7",
+      "hostname": "ohmyaihub-dacdc3f7",
+      "networkName": "phase8-lab-49883",
+      "peers": [],
+      "listenAddr": "tcp://127.0.0.1:12902",
+      "virtualIpv4": "10.77.0.172/24",
+      "proxyCidr": "192.168.132.218/32",
+      "mappedCidr": "10.66.162.31/32",
+      "publishedPorts": [
+        50584
+      ],
+      "secureMode": true,
+      "rpcPort": 17888,
+      "share": {
+        "models": [
+          "*"
+        ]
+      },
+      "nativeProviders": [
+        "p"
+      ],
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> status --json
+{
+  "sharing": true,
+  "sharingActive": true,
+  "shareSuspended": null,
+  "consuming": false,
+  "node": {
+    "id": "dacdc3f7",
+    "hostname": "ohmyaihub-dacdc3f7",
+    "virtualIpv4": "10.77.0.172/24",
+    "mappedCidr": "10.66.162.31/32",
+    "publishedPorts": [
+      50584
+    ]
+  },
+  "network": "phase8-lab-49883",
+  "shareModels": [
+    "*"
+  ],
+  "nativeProviders": [
+    "p"
+  ],
+  "remoteProviders": [],
+  "easytier": {
+    "running": true,
+    "pid": 50759,
+    "version": "easytier-core 2.6.4-8428a89d",
+    "virtualIpv4": "10.77.0.172/24",
+    "export": "192.168.132.218/32 -> 10.66.162.31/32",
+    "aclOk": true,
+    "aclProblems": [],
+    "peers": [
+      "ohmyaihub-dacdc3f7 10.77.0.172 Local -ms"
+    ]
+  },
+  "providers": [],
+  "consumers": [],
+  "catalog": {
+    "publishing": false,
+    "server": {
+      "running": false,
+      "port": null,
+      "address": null,
+      "error": null
+    },
+    "quote": null,
+    "peers": [],
+    "lastRefreshAt": null
+  },
+  "checks": [
+    {
+      "name": "core-running",
+      "ok": true,
+      "detail": "pid 50759",
+      "at": "2026-10-30T07:55:38.373Z",
+      "kind": "local"
+    },
+    {
+      "name": "acl",
+      "ok": true,
+      "detail": "Inbound Drop (no rules), Forward Drop with published ports, forwards loopback-only",
+      "at": "2026-10-30T07:55:38.373Z",
+      "kind": "local"
+    },
+    {
+      "name": "gateway-key-required",
+      "ok": true,
+      "detail": "GET http://192.168.132.218:50584/v1/models without a key must answer 401",
+      "at": "2026-10-30T07:55:38.373Z",
+      "kind": "local"
+    },
+    {
+      "name": "mapped-cidr",
+      "ok": true,
+      "detail": "10.66.162.31/32",
+      "at": "2026-10-30T07:55:38.373Z",
+      "kind": "local"
+    },
+    {
+      "name": "published-gateway",
+      "ok": true,
+      "detail": "the gateway answers on 50584; published ports are [50584]",
+      "at": "2026-10-30T07:55:38.373Z",
+      "kind": "local"
+    },
+    {
+      "name": "shared-models-native-only",
+      "ok": true,
+      "detail": "0 key(s) name only native, allowed models",
+      "at": "2026-10-30T07:55:38.373Z",
+      "kind": "local"
+    },
+    {
+      "name": "share-guard-cadence",
+      "ok": true,
+      "detail": "provider-id/type changes are noticed on the 15s tick; a direct edit of a Gateway Key's model whitelist is noticed by the full guard on the reconcile pass (about 45s) or at the next hand-over",
+      "at": "2026-10-30T07:55:38.373Z",
+      "kind": "local"
+    }
+  ],
+  "checksAt": "2026-10-30T07:55:38.373Z",
+  "readiness": {
+    "state": "ready",
+    "checkedAt": "2026-10-30T07:55:38.373Z",
+    "ageMs": 1,
+    "source": "cached",
+    "reasons": [],
+    "providers": []
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> catalog config --port 3542 --display-name Phase8 P
+{
+  "ok": true,
+  "catalog": {
+    "config": {
+      "enabled": false,
+      "discoveryEnabled": false,
+      "displayName": "Phase8 P",
+      "contact": null,
+      "port": 3542,
+      "socksPort": 13400,
+      "refreshSec": 20,
+      "minTopUpUsd": 1
+    },
+    "publishing": false,
+    "server": {
+      "running": false,
+      "port": null,
+      "address": null,
+      "error": null
+    },
+    "quote": null,
+    "peers": [],
+    "lastRefreshAt": null,
+    "refreshing": false,
+    "error": null
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> share setup --all-priced --publish --json
+1. p/p-model  $1000/$1000 per 1M in/out · cache 0/0
+selected 1 native model(s): p/p-model
+{
+  "models": [
+    "p/p-model"
+  ],
+  "policy": [
+    "p/p-model"
+  ],
+  "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+  "priceLocked": false,
+  "published": true,
+  "serverRunning": true,
+  "quote": {
+    "version": 1,
+    "contentHash": "03aad22df2291223ca962594663c66966938b62f96b4b2d7c157e6a2abc4f545",
+    "updatedAt": "2026-10-30T07:55:40.197Z",
+    "identityFingerprint": "f73041a927a0ef80b317ce5a8e96787a7417cea1afa71fea29cf8ff13261d72f",
+    "modelCount": 1
+  },
+  "blocking": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> setup --network phase8-lab-49883 --secret-file /tmp/ohmyaihub-phase8-49883/network.secret --peer tcp://127.0.0.1:12902 --listen 127.0.0.1:11204 --no-share --consume --catalog-discover --json
+{
+  "at": "2026-10-30T07:55:40.325Z",
+  "platform": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "bun": "1.4.3",
+    "verifiedBun": "1.4.3"
+  },
+  "magpie": {
+    "bin": "/tmp/ohmyaihub-phase8-49883/C/Magpie.app/Contents/MacOS/magpie",
+    "version": "0.1.2038",
+    "verifiedVersion": "0.1.2038",
+    "matches": true,
+    "error": null
+  },
+  "host": {
+    "dataDir": "/tmp/ohmyaihub-phase8-49883/C/home/.config/magpie",
+    "reachable": true,
+    "port": "34517",
+    "error": null
+  },
+  "state": {
+    "path": "/tmp/ohmyaihub-phase8-49883/C/home/.config/magpie/oh-my-aihub/state.json",
+    "exists": false,
+    "version": null,
+    "configured": false,
+    "networkName": null,
+    "nodeId": null,
+    "legacy": false,
+    "error": null
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "platformSupported": true,
+    "installed": true,
+    "verified": true,
+    "running": false,
+    "coreVersion": null,
+    "rpcPort": null,
+    "error": null
+  },
+  "network": {
+    "lanIpv4": "192.168.132.218",
+    "gatewayPort": 46536,
+    "gatewayKeyRequired": true,
+    "error": null
+  },
+  "checks": {
+    "available": true,
+    "at": "2026-10-30T07:55:40.329Z",
+    "items": [
+      {
+        "name": "configured",
+        "ok": false,
+        "detail": "no overlay configuration yet",
+        "kind": "local",
+        "at": "2026-10-30T07:55:40.329Z"
+      }
+    ],
+    "error": null
+  },
+  "readiness": {
+    "state": "blocked",
+    "checkedAt": "2026-10-30T07:55:40.329Z",
+    "ageMs": 0,
+    "source": "cached",
+    "reasons": [
+      "no overlay configuration yet"
+    ],
+    "providers": []
+  },
+  "blockers": [],
+  "warnings": [
+    "cached checks contain 1 failure(s)"
+  ]
+}
+
+applying: network phase8-lab-49883, share=false, consume=true, peers=tcp://127.0.0.1:12902
+{
+  "configured": true,
+  "status": {
+    "plugin": {
+      "version": "0.4.0",
+      "pid": 50746,
+      "dataDir": "/private/tmp/ohmyaihub-phase8-49883/C/home/.config/magpie",
+      "startedAt": "2026-10-30T07:55:36.163Z",
+      "stateVersion": 3
+    },
+    "magpie": {
+      "version": "magpie 0.1.2038",
+      "gateway": "http://192.168.132.218:46536"
+    },
+    "config": {
+      "role": "consumer",
+      "sharingEnabled": false,
+      "sharingActive": false,
+      "shareSuspended": null,
+      "consumingEnabled": true,
+      "nodeId": "c185695d",
+      "hostname": "ohmyaihub-c185695d",
+      "networkName": "phase8-lab-49883",
+      "peers": [
+        "tcp://127.0.0.1:12902"
+      ],
+      "listenAddr": "tcp://127.0.0.1:11204",
+      "virtualIpv4": "10.77.0.214/24",
+      "proxyCidr": null,
+      "mappedCidr": null,
+      "publishedPorts": [
+        46536
+      ],
+      "secureMode": true,
+      "rpcPort": 17889,
+      "share": {
+        "models": [
+          "*"
+        ]
+      },
+      "nativeProviders": [
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> catalog config --socks-port 13460
+{
+  "ok": true,
+  "catalog": {
+    "config": {
+      "enabled": false,
+      "discoveryEnabled": true,
+      "displayName": null,
+      "contact": null,
+      "port": 3426,
+      "socksPort": 13460,
+      "refreshSec": 20,
+      "minTopUpUsd": 1
+    },
+    "publishing": false,
+    "server": {
+      "running": false,
+      "port": null,
+      "address": null,
+      "error": null
+    },
+    "quote": null,
+    "peers": [],
+    "lastRefreshAt": null,
+    "refreshing": false,
+    "error": null
+  }
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> status --json
+{
+  "sharing": false,
+  "sharingActive": false,
+  "shareSuspended": null,
+  "consuming": true,
+  "node": {
+    "id": "c185695d",
+    "hostname": "ohmyaihub-c185695d",
+    "virtualIpv4": "10.77.0.214/24",
+    "mappedCidr": null,
+    "publishedPorts": [
+      46536
+    ]
+  },
+  "network": "phase8-lab-49883",
+  "shareModels": [
+    "*"
+  ],
+  "nativeProviders": [
+    "c"
+  ],
+  "remoteProviders": [],
+  "easytier": {
+    "running": true,
+    "pid": 51086,
+    "version": "easytier-core 2.6.4-8428a89d",
+    "virtualIpv4": "10.77.0.214/24",
+    "export": null,
+    "aclOk": true,
+    "aclProblems": [],
+    "peers": [
+      "ohmyaihub-c185695d 10.77.0.214 Local -ms"
+    ]
+  },
+  "providers": [],
+  "consumers": [],
+  "catalog": {
+    "publishing": false,
+    "server": {
+      "running": false,
+      "port": null,
+      "address": null,
+      "error": null
+    },
+    "quote": null,
+    "peers": [],
+    "lastRefreshAt": null
+  },
+  "checks": [
+    {
+      "name": "core-running",
+      "ok": true,
+      "detail": "pid 51086",
+      "at": "2026-10-30T07:55:41.999Z",
+      "kind": "local"
+    },
+    {
+      "name": "acl",
+      "ok": true,
+      "detail": "Inbound Drop (no rules); nothing exported",
+      "at": "2026-10-30T07:55:41.999Z",
+      "kind": "local"
+    },
+    {
+      "name": "catalog-socks5-loopback",
+      "ok": true,
+      "detail": "127.0.0.1:13460 (on-demand reads; no per-peer port forward)",
+      "at": "2026-10-30T07:55:41.999Z",
+      "kind": "local"
+    },
+    {
+      "name": "catalog-peers",
+      "ok": true,
+      "detail": "0 online, 0 offline",
+      "at": "2026-10-30T07:55:41.999Z",
+      "kind": "local"
+    },
+    {
+      "name": "forwards-match",
+      "ok": true,
+      "detail": "0 loopback forward(s), all owned by a provider",
+      "at": "2026-10-30T07:55:41.999Z",
+      "kind": "local"
+    }
+  ],
+  "checksAt": "2026-10-30T07:55:41.999Z",
+  "readiness": {
+    "state": "ready",
+    "checkedAt": "2026-10-30T07:55:41.999Z",
+    "ageMs": 1,
+    "source": "cached",
+    "reasons": [],
+    "providers": []
+  }
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.11",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:55:51.275Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:55:51.276Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:56:51.289Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:56:51.289Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:56:51.289Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:56:51.289Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:56:51.289Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:56:51.289Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:56:51.289Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:56:51.289Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:56:51.289Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:56:51.289Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:56:51.289Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:56:51.289Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:56:51.289Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:56:51.289Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-dacdc3f7  10.66.162.31/32:?  unreachable  fp=—  quote=—  no catalogue answer through the overlay: catalogue read timed out after 5000ms
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-dacdc3f7",
+      "virtualIpv4": "10.77.0.172",
+      "peerId": "2122659580",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.162.31/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T07:56:51.289Z",
+      "nodeId": null,
+      "status": "unreachable",
+      "detail": "no catalogue answer through the overlay: catalogue read timed out after 5000ms",
+      "catalogPort": null,
+      "identity": null,
+      "pendingFingerprint": null,
+      "quote": null,
+      "quoteHash": null,
+      "fetchedAt": "2026-10-30T07:56:51.289Z",
+      "connectedProviderId": null
+    }
+  ]
+}

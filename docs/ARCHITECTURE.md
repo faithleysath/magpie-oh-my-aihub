@@ -1,4 +1,4 @@
-# Architecture decision record — updated 2026-10-30 (phase 7)
+# Architecture decision record — updated 2026-10-30 (phase 7; phase 8 onboarding note)
 
 Phase 7 adds the **testnet chain wallet**: a registry in which every network is a peer, a per-chain
 deposit watcher, signed deposit attribution and one bridge into the existing ledger and provisioner.
@@ -14,6 +14,17 @@ the final targeted patch's are 25–26, and the phase-7 decisions are 27–33. E
 [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md) and
 [`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md) and
 [`validation/2026-10-30-phase7-multichain-wallet.md`](validation/2026-10-30-phase7-multichain-wallet.md).
+The fresh cross-host payment/EasyTier/Remote Magpie acceptance is in
+[`validation/2026-10-30-fresh-twohost-wallet.md`](validation/2026-10-30-fresh-twohost-wallet.md); the
+original-payment replay into the real ledger and Magpie key is in
+[`validation/2026-10-30-live-magpie-chain-credit.md`](validation/2026-10-30-live-magpie-chain-credit.md).
+The phase-7 report's earlier “no real-testnet run” section and its older “fresh combined remains
+UNKNOWN” sentence are historical; the current scope is the one in those two reports, and real vendor
+execution is still UNKNOWN.
+
+Phase 8 does not change this architecture. It documents and validates the first-use and operator
+journeys. The page/bridge files were compared with Magpie 0.1.2120, but the host/CLI and the
+pricing/billing pin stay at **0.1.2038**; 0.1.2120 host/CLI behaviour is UNKNOWN.
 
 Supersedes the 2026-10-29 draft. Every claim below is backed by a measured result in
 [`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md) or
@@ -136,8 +147,9 @@ A node has `sharingEnabled` and `consumingEnabled`; both may be on. The phase-3 
 - **Magpie**: providers, models, Remote Magpie, routing groups, Gateway Keys, limits, usage, 429s.
 - **EasyTier**: private encrypted overlay, no-TUN, subnet proxy, port forwards, ACLs.
 - **Plugin** (`plugin/`): one EasyTier supervisor (download/pin/verify, config, lifecycle, peers,
-  forwards, restart), the Gateway Key provisioner, the remote-provider registry, simulated
-  deposits, status, and later the wallet, chain watcher and reconciliation.
+  forwards, restart), the Gateway Key provisioner, the remote-provider registry, manual simulated
+  top-ups, the testnet chain wallet (registry, per-chain watcher, EIP-712 attribution and the
+  ledger bridge), status and the read-only page snapshot.
 - **Relay host** (e.g. an HK VPS): only `easytier-core`. No business service runs there.
 
 ## Decision 6 — Product rules
@@ -225,8 +237,9 @@ provider's identity. What 2.6.4 actually exposes and what the plugin does with i
 The connect path therefore proves, in order: one overlay owner for the prefix, the endpoint
 refuses no key **and a wrong key**, the valid key lists at least one model, and Magpie lists the
 provider's models. The hostname check is a drift alarm, not authentication: a different peer that
-hijacks the prefix still cannot answer with our Gateway Key. Binding a wallet to a peer will need
-the public key exposed upstream (or a signed statement), which is why the wallet phase stays out.
+hijacks the prefix still cannot answer with our Gateway Key. Phase 7's testnet wallet binds a
+deposit to the payer's EIP-712 signature, not to a peer key; binding funds to a peer still needs
+the public key exposed upstream (or a signed statement), and stays out.
 
 ## Decision 10 — Share native models only (no resale, no A→B→A)
 
@@ -383,9 +396,9 @@ raw 32-byte public key) and stores the first-seen key per signed `node.id` in
   operator can mark it accepted locally (`catalog trust <node-id>`), after which
   the page calls it verified-by-TOFU.
 - A different key is never accepted silently: the peer becomes
-  `identity-changed`, the pending fingerprint is shown, `catalog request` and
-  `catalog connect` refuse, and only a local, authenticated `catalog trust`
-  accepts the new key.
+  `identity-changed`, the pending fingerprint is shown, `connect`/`catalog request` and
+  `catalog connect` refuse, and only an explicit local acceptance (guided `connect --trust` with the
+  exact fingerprint and quote, or `catalog trust`) accepts the new key.
 - A signature proves only that the same key signed the document. It does not
   prove a real-world identity, and there is no certificate server or PKI.
 - A valid signature is **not** sufficient: the document is structurally
@@ -405,20 +418,23 @@ raw 32-byte public key) and stores the first-seen key per signed `node.id` in
 ## Decision 16 — The catalogue is display data; connection stays manual
 
 A quote never creates a key, a balance, a charge or a Magpie provider. The flow
-is: discover -> browse -> `catalog request <node>` (a JSON request with the
-consumer's node id, the provider's mapped address, models, quote hash and a
-**structured** approval block; it deliberately contains no shell command) ->
-provider operator approves out of band and runs `consumers add` with a native
-model whitelist and a positive cap -> provider runs `secret` -> consumer runs the
-existing `provider add`/`catalog connect` with that key. The catalogue itself
-has no endpoint that accepts a key, a deposit or a write.
+is: discover -> browse -> guided `connect` displays the full TOFU fingerprint, quote hash,
+`priceLocked:false`, `priceVersion` and models, and requires explicit `--trust --fingerprint …
+--quote …` -> `connect --request-out` writes a structured request with the consumer's node id, the
+provider's mapped address, models, quote hash and a **structured** approval block (no shell command)
+-> the provider reviews it and runs `share approve <request.json> --cap <usd> --yes` with a native
+model whitelist and a provider-chosen positive cap -> `share handover --key-file` writes the key to
+a 0600 file -> the consumer runs `connect --key-file` or `remote add --key-file`. The catalogue
+itself has no endpoint that accepts a key, a deposit or a write.
 
 Price display is read from Magpie's own `settings.json` `modelPrices` (and from
 the local gateway's `magpie_price` when the gateway answers on loopback), in USD
 per 1M tokens, with cache read/write and tiers when present. A model with no
 configured price is published as "no published price", never invented. The
-minimum top-up is a simulated display field (`simulated: true`); no wallet is
-connected. A quote change does not call the provisioner and cannot change a
+minimum top-up is a simulated display field (`simulated: true`). Phase 7 adds a
+separate testnet watcher that credits mock test tokens after finality; there is
+still no fiat or mainnet payment path. A quote change does not call the
+provisioner and cannot change a
 Gateway Key's cost cap. Since phase 6 the quote also carries
 `billing.priceVersion` (recomputed by the reader) and `billing.priceLocked:
 false`; a consumer's accepted quote hash/price version is bound to its key, and
@@ -807,17 +823,24 @@ methods, none of which is a key operation.
   phase-6 ledger does this for every imported usage row.
 - Window rollover and price changes need explicit reconciliation, not a blind reset. A boundary is a
   key reissue with `cap = ledger balance`; a price change is a pause plus explicit version accept.
-- Real funds stay blocked until the price-lock blocker is solved; simulated credit only.
+- Real funds stay blocked until the price-lock blocker is solved; testnet chain credit only, no
+  mainnet asset.
 
 ## Pinned versions
 
-| Component | Version | Identity |
+| Component | Version | Scope and identity |
 | --- | --- | --- |
-| Magpie | 0.1.2038 (verified) | tag `v0.1.2038` = `8c63c5b7873c6aa7aa797aa17f481d5fa8301876` |
-| EasyTier | 2.6.4 (verified) | tag `v2.6.4` = `8428a89d2dabc94c97d370ec607c6ca142473626` |
+| Magpie | 0.1.2038 | **host/CLI and pricing/billing pin**; tag `v0.1.2038` = `8c63c5b7873c6aa7aa797aa17f481d5fa8301876` |
+| Magpie | 0.1.2057 | official Linux no-GUI container, **consumer only**; `ghcr.io/yetone/magpie@sha256:900711e2867299e6dbc7d9b02112e86d0a00add626f61bacfad83be0da5fbe5e`; see the fresh two-host report |
+| Magpie | 0.1.2120 | **page/bridge source comparison**; tag `v0.1.2120` = `eed140c4d9a7916a77e382d8a9c8b3f071f602b2`; full host/CLI UNKNOWN |
+| Magpie | 0.1.2171 | isolated `magpie web` **page/CSP/Save browser evidence only**; no host/CLI verification; desktop WKWebView UNKNOWN |
+| EasyTier | 2.6.4 | tag `v2.6.4` = `8428a89d2dabc94c97d370ec607c6ca142473626` |
+| Bun | 1.4.3 | operator CLI and CI |
+| Foundry | 1.8.6 | testnet wallet labs; commit `6bad0a66de7c83f7b33695044138f0f5fa4c5990` |
 
 The plugin pins the EasyTier release assets by SHA-256 in `plugin/src/easytier-manifest.ts` and
-refuses an unlisted platform or a hash mismatch.
+refuses an unlisted platform or a hash mismatch. The 0.1.2120 comparison does not change the
+0.1.2038 billing pin. The 0.1.2171 browser run is page evidence, not a host/CLI compatibility claim.
 
 ## Known blockers / open questions
 
@@ -832,11 +855,14 @@ refuses an unlisted platform or a hash mismatch.
 3. **Interrupted calls** that never produce a usage row are unbilled on both sides. A call that
    completes after a window boundary does produce a row with the request-start time; the ledger
    imports it, but the native new window does not count it (Decision 19).
-4. Windows and Linux **Magpie** provider behaviour is untested; Linux EasyTier is verified.
+4. **Platform coverage is not symmetric.** Linux EasyTier is verified; the official Linux Magpie
+   0.1.2057 **consumer** container is verified; Linux Magpie **GUI/provider** behaviour is untested;
+   Windows is untested. Magpie 0.1.2120 is a page/bridge comparison; 0.1.2171 has an isolated `magpie web` page run only (desktop WKWebView UNKNOWN).
 5. `easytier-cli acl set` is absent in 2.6.4 (restart required).
 6. The community plugin **page cannot reach the network** (`internal/gui/pluginpage.go`, CSP
-   `connect-src 'none'`), so the page is settings-only; live status needs a generated snapshot file
-   or a future first-class bridge.
+   `connect-src 'none'`). It is read-only after onboarding and renders a generated snapshot; the
+   official options bridge is only for the initial setup and display preferences. A live fetch needs
+   a future first-class bridge.
 7. **Remote provider identity is not cryptographic in 2.6.4**: the CLI does not expose a peer's
    `noise_static_pubkey`, and `peer_id` changes on every start. The mapped prefix + hostname check +
    Gateway Key is what this phase can prove; binding funds to a peer needs the public key exposed
@@ -861,33 +887,8 @@ refuses an unlisted platform or a hash mismatch.
     use it to reach the private overlay while discovery is on. It creates no persistent forward and
     is stopped when discovery is off; local process isolation is out of scope.
 
-Phase-7 additions:
+Phase-6 ledger and accounting additions:
 
-14. **Real-testnet → real Magpie integration replay is VERIFIED, not fresh cross-host acceptance.**
-    Original finalized BSC/Base payments and original signed intents were replayed into a fresh
-    SQLite Ledger, raising the same real portable Magpie key and reproducing 200 → 429 → credit →
-    200 with zero duplicate credits. The upstream was a local deterministic mock and ingress was
-    loopback with a forwarding header, not a new EasyTier/two-host run. See
-    [`validation/2026-10-30-live-magpie-chain-credit.md`](validation/2026-10-30-live-magpie-chain-credit.md).
-    Fresh live-payment/P2P/vendor acceptance and local EVM reorg evidence remain separate claims.
-15. **BSC testnet's finality policy is a substitute.** Its RPCs report `finalized` == `latest`, so 15
-    confirmations is a conservative choice, not a measured chain guarantee. No BSC testnet reorg
-    distribution was observed.
-16. **The verification retry set is bounded per tick** (100 verify, 50 credit). A large backlog
-    drains over several scans; the deposit is never lost, but it can take time.
-17. **Two identical intents from one payer are ambiguous by design.** The plugin marks the event
-    `uncertain` and credits nothing. Safe, but a real usability limit; per-consumer addresses or
-    amount uniqueness would fix it and are explicitly out of scope for this phase.
-18. **Attribution depends on the consumer keeping their wallet key.** A payment from an exchange
-    withdrawal address is `unclaimed` forever without manual review. There is an anomaly table and a
-    CLI, not a resolution workflow.
-19. **The watcher trusts the configured RPC for a log's existence.** It cross-checks the receipt and
-    re-reads the block at finality time, and reports endpoint health, but a provider that lies
-    consistently about a block and its hash would not be caught. There is no consensus read.
-20. **The wallet page is read-only.** Enabling a network, registering an asset, creating or signing an
-    intent are CLI/API operations, because the page cannot reach the network (`connect-src 'none'`).
-21. **No HD wallet, no per-consumer addresses, no key custody.** The plugin stores no private key for
-    either side; the provider's receiving address is one they already own.
 14. **A native window boundary is not atomic with a cap rebase.** Phase 6 removes the key and
     requires `reissue`; it does not silently adjust the cap at the computed reset time. A consumer
     is therefore briefly refused at a boundary (and after a price change) until reissue. A 3650-day
@@ -922,6 +923,36 @@ Phase-7 additions:
     by itself (an outage is not evidence of fraud), but it counts against the failure budget and
     withdraws the export after the threshold.
 
+Phase-7 testnet-wallet additions:
+
+23. **Fresh cross-host payment acceptance is VERIFIED for the mock-upstream scope.** New BSC and Base
+    Sepolia payments credited the same real Gateway Key through two independent hosts, real EasyTier
+    no-TUN and a real native Remote Magpie, with automatic watchers, restart recovery, duplicate
+    scans and cleanup. See
+    [`validation/2026-10-30-fresh-twohost-wallet.md`](validation/2026-10-30-fresh-twohost-wallet.md).
+    The earlier original-payment replay into the real ledger/Magpie key is a separate VERIFIED
+    claim ([`validation/2026-10-30-live-magpie-chain-credit.md`](validation/2026-10-30-live-magpie-chain-credit.md)).
+    Real vendor/paid model execution and a local EVM reorg remain separate; the two-host run used a
+    deterministic mock upstream.
+24. **BSC testnet's finality policy is a substitute.** Its RPCs report `finalized` == `latest`, so 15
+    confirmations is a conservative choice, not a measured chain guarantee. No BSC testnet reorg
+    distribution was observed.
+25. **The verification retry set is bounded per tick** (100 verify, 50 credit). A large backlog
+    drains over several scans; the deposit is never lost, but it can take time.
+26. **Two identical intents from one payer are ambiguous by design.** The plugin marks the event
+    `uncertain` and credits nothing. Safe, but a real usability limit; per-consumer addresses or
+    amount uniqueness would fix it and are explicitly out of scope for this phase.
+27. **Attribution depends on the consumer keeping their wallet key.** A payment from an exchange
+    withdrawal address is `unclaimed` forever without manual review. There is an anomaly table and a
+    CLI, not a resolution workflow.
+28. **The watcher trusts the configured RPC for a log's existence.** It cross-checks the receipt and
+    re-reads the block at finality time, and reports endpoint health, but a provider that lies
+    consistently about a block and its hash would not be caught. There is no consensus read.
+29. **The wallet page is read-only.** Enabling a network, registering an asset, creating or signing an
+    intent are CLI/API operations, because the page cannot reach the network (`connect-src 'none'`).
+30. **No HD wallet, no per-consumer addresses, no key custody.** The plugin stores no private key for
+    either side; the provider's receiving address is one they already own.
+
 ## References
 
 - Magpie: https://github.com/yetone/magpie (pin above)
@@ -931,5 +962,11 @@ Phase-7 additions:
   [`validation/2026-10-30-plugin-phase3.md`](validation/2026-10-30-plugin-phase3.md),
   [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
   [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md),
-  [`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md)
+  [`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md),
+  [`validation/2026-10-30-phase7-multichain-wallet.md`](validation/2026-10-30-phase7-multichain-wallet.md),
+  [`validation/2026-10-30-testnet-handoff.md`](validation/2026-10-30-testnet-handoff.md),
+  [`validation/2026-10-30-live-magpie-chain-credit.md`](validation/2026-10-30-live-magpie-chain-credit.md),
+  [`validation/2026-10-30-fresh-twohost-wallet.md`](validation/2026-10-30-fresh-twohost-wallet.md),
+  [`validation/phase8-journey-plan.md`](validation/phase8-journey-plan.md),
+  [`validation/2026-10-30-phase8-onboarding-ux.md`](validation/2026-10-30-phase8-onboarding-ux.md)
 - Corrected provider config: [`validation/lab/provider-acl.toml`](validation/lab/provider-acl.toml)

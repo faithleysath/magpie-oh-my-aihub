@@ -1,0 +1,129 @@
+{
+  "ok": true,
+  "note": "sha256 captured from the immutable per-node copy at creation, re-hashed before cleanup and compared with the repo source at report time; a null or changed hash fails the run.",
+  "gitHead": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+  "dirty": true,
+  "capturedAt": "2026-10-30T08:26:53.708Z",
+  "files": [
+    {
+      "file": "src/service.ts",
+      "tested": "94c47705de79067273e2d9b44672e4cc788c99bea47073a928a1e5a0a97bc240",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "94c47705de79067273e2d9b44672e4cc788c99bea47073a928a1e5a0a97bc240",
+      "unchangedSinceCopy": true,
+      "repoNow": "94c47705de79067273e2d9b44672e4cc788c99bea47073a928a1e5a0a97bc240",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "src/provisioner.ts",
+      "tested": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+      "unchangedSinceCopy": true,
+      "repoNow": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "src/server.ts",
+      "tested": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+      "unchangedSinceCopy": true,
+      "repoNow": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "src/catalog.ts",
+      "tested": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+      "unchangedSinceCopy": true,
+      "repoNow": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "src/walletview.ts",
+      "tested": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+      "unchangedSinceCopy": true,
+      "repoNow": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "src/wallet.ts",
+      "tested": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+      "unchangedSinceCopy": true,
+      "repoNow": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "bin/ohmyaihub.ts",
+      "tested": "7257de6f6a9cfedc01bc798485aacc48f6d03bd5338d434eda617738958c56c8",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "7257de6f6a9cfedc01bc798485aacc48f6d03bd5338d434eda617738958c56c8",
+      "unchangedSinceCopy": true,
+      "repoNow": "7257de6f6a9cfedc01bc798485aacc48f6d03bd5338d434eda617738958c56c8",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "bin/operator-lib.ts",
+      "tested": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+      "unchangedSinceCopy": true,
+      "repoNow": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "bin/operator-setup.ts",
+      "tested": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+      "unchangedSinceCopy": true,
+      "repoNow": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "bin/operator-share.ts",
+      "tested": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+      "unchangedSinceCopy": true,
+      "repoNow": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "bin/operator-connect.ts",
+      "tested": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+      "unchangedSinceCopy": true,
+      "repoNow": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "bin/operator-remote.ts",
+      "tested": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+      "unchangedSinceCopy": true,
+      "repoNow": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+      "sameAsRepoAtEnd": true
+    },
+    {
+      "file": "bin/wallet-wizard.ts",
+      "tested": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+      "allNodeCopiesEqual": true,
+      "capturedAtCopy": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+      "unchangedSinceCopy": true,
+      "repoNow": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+      "sameAsRepoAtEnd": true
+    }
+  ],
+  "allNodeCopiesEqual": true,
+  "allUnchangedSinceCopy": true,
+  "allSameAsRepoAtEnd": true
+}

@@ -1,0 +1,899 @@
+{
+  "at": "2026-10-30T08:12:12.493Z",
+  "platform": {
+    "os": "26.6.2",
+    "arch": "arm64",
+    "bun": "1.4.3"
+  },
+  "magpie": {
+    "app": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app",
+    "bin": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie",
+    "version": "magpie 0.1.2038",
+    "sha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15"
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "zipSha256": "4be1882d1aa36d31c1d6ba0596f2cf8a097e371f8da124212324b2e0f8df7e4b",
+    "cache": "/Users/laysath/Projects/lab/et/easytier-macos-aarch64"
+  },
+  "plugin": {
+    "commit": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+    "dirty": true,
+    "testedCopy": {
+      "ok": true,
+      "note": "sha256 captured from the immutable per-node copy at creation, re-hashed before cleanup and compared with the repo source at report time; a null or changed hash fails the run.",
+      "gitHead": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+      "dirty": true,
+      "capturedAt": "2026-10-30T08:12:12.460Z",
+      "files": [
+        {
+          "file": "src/service.ts",
+          "tested": "6b4811e2cfe15246775c9caabbf77eb0fc4f8054084a185b8c5f6031cb0ca0a6",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "6b4811e2cfe15246775c9caabbf77eb0fc4f8054084a185b8c5f6031cb0ca0a6",
+          "unchangedSinceCopy": true,
+          "repoNow": "6b4811e2cfe15246775c9caabbf77eb0fc4f8054084a185b8c5f6031cb0ca0a6",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "src/provisioner.ts",
+          "tested": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+          "unchangedSinceCopy": true,
+          "repoNow": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "src/server.ts",
+          "tested": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+          "unchangedSinceCopy": true,
+          "repoNow": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "src/catalog.ts",
+          "tested": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+          "unchangedSinceCopy": true,
+          "repoNow": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "src/walletview.ts",
+          "tested": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+          "unchangedSinceCopy": true,
+          "repoNow": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "src/wallet.ts",
+          "tested": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+          "unchangedSinceCopy": true,
+          "repoNow": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "bin/ohmyaihub.ts",
+          "tested": "76a296083ac83048d5878b33c1d3212f9d65f9e62d4ac8199a215ac294d9b107",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "76a296083ac83048d5878b33c1d3212f9d65f9e62d4ac8199a215ac294d9b107",
+          "unchangedSinceCopy": true,
+          "repoNow": "76a296083ac83048d5878b33c1d3212f9d65f9e62d4ac8199a215ac294d9b107",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "bin/operator-lib.ts",
+          "tested": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+          "unchangedSinceCopy": true,
+          "repoNow": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "bin/operator-setup.ts",
+          "tested": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+          "unchangedSinceCopy": true,
+          "repoNow": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "bin/operator-share.ts",
+          "tested": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+          "unchangedSinceCopy": true,
+          "repoNow": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "bin/operator-connect.ts",
+          "tested": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+          "unchangedSinceCopy": true,
+          "repoNow": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "bin/operator-remote.ts",
+          "tested": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+          "unchangedSinceCopy": true,
+          "repoNow": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+          "sameAsRepoAtEnd": true
+        },
+        {
+          "file": "bin/wallet-wizard.ts",
+          "tested": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+          "allNodeCopiesEqual": true,
+          "capturedAtCopy": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+          "unchangedSinceCopy": true,
+          "repoNow": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+          "sameAsRepoAtEnd": true
+        }
+      ],
+      "allNodeCopiesEqual": true,
+      "allUnchangedSinceCopy": true,
+      "allSameAsRepoAtEnd": true
+    }
+  },
+  "sourceManifest": {
+    "ok": true,
+    "note": "sha256 captured from the immutable per-node copy at creation, re-hashed before cleanup and compared with the repo source at report time; a null or changed hash fails the run.",
+    "gitHead": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+    "dirty": true,
+    "capturedAt": "2026-10-30T08:12:12.460Z",
+    "files": [
+      {
+        "file": "src/service.ts",
+        "tested": "6b4811e2cfe15246775c9caabbf77eb0fc4f8054084a185b8c5f6031cb0ca0a6",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "6b4811e2cfe15246775c9caabbf77eb0fc4f8054084a185b8c5f6031cb0ca0a6",
+        "unchangedSinceCopy": true,
+        "repoNow": "6b4811e2cfe15246775c9caabbf77eb0fc4f8054084a185b8c5f6031cb0ca0a6",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "src/provisioner.ts",
+        "tested": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+        "unchangedSinceCopy": true,
+        "repoNow": "5b4d391208ea9bde6af5ca996cffbb8a9612f14feed0962f3855979ca984b947",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "src/server.ts",
+        "tested": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+        "unchangedSinceCopy": true,
+        "repoNow": "59dac181ffd847ee627ded71573d0cce9d3f7dfaa259431eaa02fa997e691849",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "src/catalog.ts",
+        "tested": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+        "unchangedSinceCopy": true,
+        "repoNow": "abf3b2b5e1fa5b5b68eeb57cdb50343e0ffbc71422165ca5ff19e38cad704b2f",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "src/walletview.ts",
+        "tested": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+        "unchangedSinceCopy": true,
+        "repoNow": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "src/wallet.ts",
+        "tested": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+        "unchangedSinceCopy": true,
+        "repoNow": "7f36ee6064d487e523e57f00d0684bf0e92a3de584782a9d6927f5699f4b77ea",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "bin/ohmyaihub.ts",
+        "tested": "76a296083ac83048d5878b33c1d3212f9d65f9e62d4ac8199a215ac294d9b107",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "76a296083ac83048d5878b33c1d3212f9d65f9e62d4ac8199a215ac294d9b107",
+        "unchangedSinceCopy": true,
+        "repoNow": "76a296083ac83048d5878b33c1d3212f9d65f9e62d4ac8199a215ac294d9b107",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "bin/operator-lib.ts",
+        "tested": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+        "unchangedSinceCopy": true,
+        "repoNow": "0e60f44f2c76df5cfda1337685d135060cf0ea8e4b2cb5cf83eb74d19cf032d4",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "bin/operator-setup.ts",
+        "tested": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+        "unchangedSinceCopy": true,
+        "repoNow": "463743a8fccac7737387f973a63d11a61305de80fa56b61453b4ac2909f36695",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "bin/operator-share.ts",
+        "tested": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+        "unchangedSinceCopy": true,
+        "repoNow": "e2f797de3f80979279299ab6907a4b86c0bd20fdf4d1925cc3f3b44eea5be8f2",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "bin/operator-connect.ts",
+        "tested": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+        "unchangedSinceCopy": true,
+        "repoNow": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "bin/operator-remote.ts",
+        "tested": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+        "unchangedSinceCopy": true,
+        "repoNow": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+        "sameAsRepoAtEnd": true
+      },
+      {
+        "file": "bin/wallet-wizard.ts",
+        "tested": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+        "allNodeCopiesEqual": true,
+        "capturedAtCopy": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+        "unchangedSinceCopy": true,
+        "repoNow": "4f0b8ffbe11c34afc30408e7f238960322071296e89d4b544b1f71b1be3b480a",
+        "sameAsRepoAtEnd": true
+      }
+    ],
+    "allNodeCopiesEqual": true,
+    "allUnchangedSinceCopy": true,
+    "allSameAsRepoAtEnd": true
+  },
+  "network": "phase8-lab-85924",
+  "scope": {
+    "newPublicPayments": 0,
+    "chainWrites": 0,
+    "walletSignatures": 0,
+    "vendorRequests": 0,
+    "thirdPartyAssetsUsed": false,
+    "privateKeysHeldByPlugin": false,
+    "note": "The only chain interaction was read-only decimals()/RPC resolution during test-asset registration; no transaction was signed or broadcast."
+  },
+  "isolation": {
+    "nodes": [
+      "P",
+      "C",
+      "P2"
+    ],
+    "pluginCopyPerNode": true,
+    "userProfileTouched": false
+  },
+  "lab": {
+    "root": null,
+    "evidence": "/Users/laysath/Projects/magpie-oh-my-aihub-import/docs/validation/phase8-live",
+    "magpie": {
+      "app": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app",
+      "bin": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie",
+      "version": "magpie 0.1.2038",
+      "sha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15"
+    },
+    "plugin": {
+      "commit": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+      "dirty": true
+    },
+    "platform": {
+      "os": "26.6.2",
+      "arch": "arm64",
+      "bun": "1.4.3"
+    },
+    "provider": {
+      "nodeId": "63d686da",
+      "mappedCidr": "10.66.35.28/32",
+      "gatewayPort": 31652,
+      "catalogPort": 35190,
+      "quoteHash": "6db94acbe3c0ff52846ee560de004784c1295591223a4f11c0861c845d96f37c",
+      "fingerprint": "0630ffeede12b5e7a441b0a1c729086a5396d312ca4e8dff4b05f2eee699c8a3",
+      "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33"
+    },
+    "consumer": {
+      "nodeId": "b8bf9f15",
+      "hostname": "b8bf9f15",
+      "socksPort": 13581
+    },
+    "calls": {
+      "first": 200,
+      "spent": 429,
+      "afterTopup": 200,
+      "upstreamCalls": 2
+    },
+    "secondProvider": {
+      "nodeId": "7e3aa16c",
+      "mappedCidr": "10.66.37.184/32",
+      "gatewayPort": 56343,
+      "call": 200
+    },
+    "ports": {
+      "P": {
+        "gateway": 31652,
+        "upstream": 19643,
+        "listen": 14940,
+        "catalog": 35190
+      },
+      "C": {
+        "gateway": 37884,
+        "upstream": 27328,
+        "listen": 15316,
+        "catalog": 35189,
+        "socks": 13581
+      },
+      "P2": {
+        "gateway": 56343,
+        "upstream": 20733,
+        "listen": 12232,
+        "catalog": 35191
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "P: fresh Magpie 0.1.2038, own plugin copy, real host and EasyTier 2.6.4",
+      "ok": true,
+      "detail": "preflight: Magpie 0.1.2038, EasyTier 2.6.4 verified, host true, no overlay yet",
+      "ms": 10125,
+      "required": true
+    },
+    {
+      "name": "C: second fresh Magpie, own plugin copy, gateway enforces a key",
+      "ok": true,
+      "detail": "C gateway 192.168.132.218:37884 answered 401 without a key",
+      "ms": 9816,
+      "required": true
+    },
+    {
+      "name": "P setup: provider overlay, sharing, published native model",
+      "ok": true,
+      "detail": "P 63d686da exports 10.66.35.28/32; quote v1 6db94acbe3c0…, priceVersion 148dca967ca6…, priceLocked false",
+      "ms": 3008,
+      "required": true
+    },
+    {
+      "name": "C setup: same overlay, consume-only, discovery on",
+      "ok": true,
+      "detail": "C b8bf9f15 joined; discovery base port 35189, SOCKS 13581; P catalogue at 35190",
+      "ms": 1946,
+      "required": true
+    },
+    {
+      "name": "C discovers P through EasyTier; TOFU fingerprint and quote hash are shown",
+      "ok": true,
+      "detail": "P 63d686da unverified; fingerprint 0630ffeede12b5e7a441b0a1c729086a5396d312ca4e8dff4b05f2eee699c8a3; quote 6db94acbe3c0ff52…; mapped 10.66.35.28/32",
+      "ms": 15219,
+      "required": true
+    },
+    {
+      "name": "TOFU: unverified is refused, then the exact fingerprint is accepted",
+      "ok": true,
+      "detail": "unverified refused; wrong fingerprint refused; accepted 0630ffeede12b5e7… and quote 6db94acbe3c0ff52…; request 0600",
+      "ms": 62,
+      "required": true
+    },
+    {
+      "name": "provider approves the request and hands over a 0600 key file",
+      "ok": true,
+      "detail": "consumer b8bf9f15: p/p-model cap $0.0001; handover 0600, key not printed",
+      "ms": 549,
+      "required": true
+    },
+    {
+      "name": "an invalid or stale approval request is refused and issues no key",
+      "ok": true,
+      "detail": "stale quote hash refused; no consumer deadbeef was created (existing 1)",
+      "ms": 253,
+      "required": true
+    },
+    {
+      "name": "consumer connects with the key file and the same accepted fingerprint/quote",
+      "ok": true,
+      "detail": "peer-p 10.66.35.28/32:31652 -> 127.0.0.1:13425; limit {\"period\":\"days\",\"calls\":0,\"cost\":0,\"costLimit\":0.0001,\"costLeft\":0.0001,\"tokens\":0,\"spent\":false,\"reset\":\"2036-10-27T16:10:55.964863+08:00\"}",
+      "ms": 307,
+      "required": true
+    },
+    {
+      "name": "remote test/models are read-only and target only peer-p",
+      "ok": true,
+      "detail": "test connected; models [p/p-model]",
+      "ms": 167,
+      "required": true
+    },
+    {
+      "name": "consumer Magpie calls the real Remote Magpie: 200 → native 429 → topup → 200",
+      "ok": true,
+      "detail": "200 ({\"id\":\"c1\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"p…), native 429 \"Remote magpie: magpie gateway key \"ohmyaihub-b8bf9f15\" has used $0.01 of its $0.…\", topup cap $1.0001, 200; P upstream count 2",
+      "ms": 396,
+      "required": true
+    },
+    {
+      "name": "key enforcement: no key 401, wrong key 401, the handed key 200",
+      "ok": true,
+      "detail": "401 / 401 / 200 on 192.168.132.218:31652",
+      "ms": 1,
+      "required": true
+    },
+    {
+      "name": "setup is idempotent: an existing config is never reset",
+      "ok": true,
+      "detail": "nodeId 63d686da, instanceId 74411b52-074e-4c57-9c6b-6b31a1f89937, mapped 10.66.35.28/32, secure public key unchanged",
+      "ms": 302,
+      "required": true
+    },
+    {
+      "name": "restart: both real Magpies recover the same identity, provider and call",
+      "ok": true,
+      "detail": "P 63d686da / C b8bf9f15; peer-p connected; call 200",
+      "ms": 11530,
+      "required": true
+    },
+    {
+      "name": "manual providers survive consume off/on; the plugin-owned provider returns",
+      "ok": true,
+      "detail": "manual-local kept; peer-p unregistered then reconnected; call 200",
+      "ms": 10567,
+      "required": true
+    },
+    {
+      "name": "second provider P2: independent Magpie, overlay and key",
+      "ok": true,
+      "detail": "P2 7e3aa16c 10.66.37.184/32; peer-p2 connected; call 200",
+      "ms": 18262,
+      "required": true
+    },
+    {
+      "name": "single-provider fault: peer-p stays 200 while peer-p2 degrades; remove is targeted",
+      "ok": true,
+      "detail": "peer-p connected/200 with P2 down; peer-p2 degraded/removed; peer-p still 200",
+      "ms": 21781,
+      "required": true
+    },
+    {
+      "name": "wallet wizard: real typedData on 97 and 84532, no signature and no transfer",
+      "ok": false,
+      "detail": "P CLI wallet statement b8bf9f15 --out /tmp/ohmyaihub-phase8-85924/wallet-statement.json failed (1): error: statement verification failed: accounting has an unexpected field serving",
+      "ms": 4779,
+      "required": true
+    }
+  ],
+  "summary": {
+    "passed": 17,
+    "failed": 1
+  },
+  "http": [
+    {
+      "at": "2026-10-30T08:10:16.116Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:19643/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:10:17.318Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:19643/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:24.349Z",
+      "method": "GET",
+      "url": "http://<lan>:31652/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:10:25.551Z",
+      "method": "GET",
+      "url": "http://<lan>:31652/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:25.552Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34517/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:26.310Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:27328/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:10:27.511Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:27328/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:34.210Z",
+      "method": "GET",
+      "url": "http://<lan>:37884/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:10:35.411Z",
+      "method": "GET",
+      "url": "http://<lan>:37884/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:35.413Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:35.413Z",
+      "method": "GET",
+      "url": "http://<lan>:37884/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.029Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:19643/count",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.034Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.036Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 429,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.036Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:19643/count",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.320Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.320Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:19643/count",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.321Z",
+      "method": "GET",
+      "url": "http://<lan>:31652/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.321Z",
+      "method": "GET",
+      "url": "http://<lan>:31652/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:10:57.321Z",
+      "method": "GET",
+      "url": "http://<lan>:31652/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:01.749Z",
+      "method": "GET",
+      "url": "http://<lan>:31652/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:01.749Z",
+      "method": "GET",
+      "url": "http://<lan>:37884/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:01.751Z",
+      "method": "GET",
+      "url": "http://<lan>:31652/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:02.952Z",
+      "method": "GET",
+      "url": "http://<lan>:31652/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:02.954Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34517/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:02.955Z",
+      "method": "GET",
+      "url": "http://<lan>:37884/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:04.157Z",
+      "method": "GET",
+      "url": "http://<lan>:37884/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:04.157Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:05.359Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:06.560Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:07.761Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:08.965Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:09.153Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:19.720Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:20.392Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:20733/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:21.596Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:20733/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:29.474Z",
+      "method": "GET",
+      "url": "http://<lan>:56343/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:11:30.676Z",
+      "method": "GET",
+      "url": "http://<lan>:56343/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:30.679Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34519/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:37.982Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:45.294Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:11:53.295Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 0,
+      "note": "The operation timed out."
+    },
+    {
+      "at": "2026-10-30T08:11:59.763Z",
+      "method": "POST",
+      "url": "http://<lan>:37884/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    }
+  ],
+  "wallet": {
+    "ran": true,
+    "chains": [
+      {
+        "chainId": 97,
+        "asset": "tMOCK6",
+        "decimals": 6,
+        "amountRaw": "1000000",
+        "digest": "0xc1b5e06c22a0d0b581f4aeed0a954623219f60b0a7e3148c47c6bf8048a84d6c"
+      },
+      {
+        "chainId": 84532,
+        "asset": "tMOCK18",
+        "decimals": 18,
+        "amountRaw": "1000000000000000000",
+        "digest": "0xa2ea5eeb09c5667f0a30af9ab945036ca09e74493760e2859b3b952970d663d7"
+      }
+    ]
+  },
+  "cleanup": {
+    "ownedBefore": [
+      {
+        "pid": 87156,
+        "command": "/tmp/ohmyaihub-phase8-85924/P/Magpie.app/Contents/MacOS/magpie serve"
+      },
+      {
+        "pid": 87230,
+        "command": "/tmp/ohmyaihub-phase8-85924/P/home/.cache/magpie/bun/1.4.2/magpie-bun run /tmp/ohmyaihub-phase8-85924/P/home/.cache/magpie/plugin-host/host-"
+      },
+      {
+        "pid": 87233,
+        "command": "/private/tmp/ohmyaihub-phase8-85924/P/home/.config/magpie/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private/tmp/ohmyaihub-p"
+      },
+      {
+        "pid": 87287,
+        "command": "/tmp/ohmyaihub-phase8-85924/C/Magpie.app/Contents/MacOS/magpie serve"
+      },
+      {
+        "pid": 87298,
+        "command": "/tmp/ohmyaihub-phase8-85924/C/home/.cache/magpie/bun/1.4.2/magpie-bun run /tmp/ohmyaihub-phase8-85924/C/home/.cache/magpie/plugin-host/host-"
+      },
+      {
+        "pid": 88467,
+        "command": "/private/tmp/ohmyaihub-phase8-85924/C/home/.config/magpie/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private/tmp/ohmyaihub-p"
+      }
+    ],
+    "remainingAfter": [],
+    "ports": {
+      "P": {
+        "gateway": 31652,
+        "upstream": 19643,
+        "listen": 14940,
+        "catalog": 35190
+      },
+      "C": {
+        "gateway": 37884,
+        "upstream": 27328,
+        "listen": 15316,
+        "catalog": 35189,
+        "socks": 13581
+      },
+      "P2": {
+        "gateway": 56343,
+        "upstream": 20733,
+        "listen": 12232,
+        "catalog": 35191
+      }
+    },
+    "portsFree": {
+      "P.gateway": true,
+      "P.upstream": true,
+      "P.listen": true,
+      "P.catalog": true,
+      "C.gateway": true,
+      "C.upstream": true,
+      "C.listen": true,
+      "C.catalog": true,
+      "C.socks": true,
+      "P2.gateway": true,
+      "P2.upstream": true,
+      "P2.listen": true,
+      "P2.catalog": true
+    },
+    "kept": false,
+    "labRoot": null,
+    "removed": true
+  },
+  "claims": {
+    "realRemoteMagpie": "REPRODUCED on this run",
+    "walletTypedData": "REPRODUCED on this run; no chain write",
+    "trustRace": "not observed",
+    "setupIdempotent": true,
+    "restartRecovery": true,
+    "manualProviderPreserved": true,
+    "multiProviderFaultIsolation": true,
+    "invalidApprovalRefused": true
+  },
+  "secrets": "redacted; raw state stayed in the disposable lab root"
+}

@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "kind": "oh-my-aihub.consumer-statement",
+  "generatedAt": "2026-10-30T08:26:45.799Z",
+  "providerId": "p",
+  "consumerId": "3aaeaa82",
+  "networks": [
+    {
+      "chainId": 97,
+      "displayName": "BNB Smart Chain Testnet",
+      "networkType": "testnet",
+      "blockExplorer": "https://testnet.bscscan.com",
+      "finality": {
+        "mode": "confirmations",
+        "confirmations": 15,
+        "rationale": "BSC testnet RPCs report finalized == latest, so the tag proves nothing. Parlia BFT gives one-block finality in principle; 15 blocks of depth is the conservative, verifiable substitute."
+      }
+    },
+    {
+      "chainId": 84532,
+      "displayName": "Base Sepolia",
+      "networkType": "testnet",
+      "blockExplorer": "https://sepolia.basescan.org",
+      "finality": {
+        "mode": "finalized-tag",
+        "confirmations": 0,
+        "rationale": "Base is an L2: its `finalized` tag tracks L1 finality and lags ~17 min, and three providers agree on it. Waiting for the tag is the real condition, so a block count would only be a guess."
+      }
+    }
+  ],
+  "assets": [
+    {
+      "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+      "chainId": 97,
+      "symbol": "tMOCK6",
+      "decimals": 6,
+      "nanosPerToken": "1000000000",
+      "priceVersion": "fixed:97:tMOCK6:1000000000:v1"
+    },
+    {
+      "assetId": "eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+      "chainId": 84532,
+      "symbol": "tMOCK18",
+      "decimals": 18,
+      "nanosPerToken": "1000000000",
+      "priceVersion": "fixed:84532:tMOCK18:1000000000:v1"
+    }
+  ],
+  "requests": [
+    {
+      "invoiceId": "inv_9742d0d0-9d3c-4fd3-8891-40b2e8fab550",
+      "chainId": 84532,
+      "assetId": "eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+      "amountRaw": "1000000000000000000",
+      "requestedAt": "2026-10-30T08:26:45.766Z",
+      "expiresAt": "2026-10-30T09:26:45.766Z",
+      "status": "cancelled",
+      "payerAddress": null
+    },
+    {
+      "invoiceId": "inv_1aaaf173-eb96-4162-91a3-e89f2941e867",
+      "chainId": 97,
+      "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+      "amountRaw": "1000000",
+      "requestedAt": "2026-10-30T08:26:42.526Z",
+      "expiresAt": "2026-10-30T09:26:42.526Z",
+      "status": "cancelled",
+      "payerAddress": null
+    }
+  ],
+  "deposits": [],
+  "totals": {
+    "creditedUsd": 0,
+    "appliedUsd": 1.0001,
+    "consumedUsd": 0.072,
+    "balanceUsd": 0.9281,
+    "overdraftUsd": 0,
+    "unsettledUsd": 0,
+    "pendingDeposits": 0,
+    "unclaimedEvents": 0,
+    "uncertainEvents": 0,
+    "revertedEvents": 0
+  },
+  "key": {
+    "keyName": "ohmyaihub-3aaeaa82",
+    "models": [
+      "p/p-model"
+    ],
+    "capUsd": 1.0001,
+    "usedUsd": 0.072,
+    "leftUsd": 0.9281,
+    "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+    "windowEnd": "2036-10-27T16:25:37.002448+08:00",
+    "readbackAt": "2026-10-30T08:26:45.799Z",
+    "fromGateway": true,
+    "paused": null,
+    "revokedAt": null
+  },
+  "accounting": {
+    "state": "ok",
+    "reason": null,
+    "openSettlements": 1
+  },
+  "verify": [
+    "Check every transaction hash and amount on the chain's block explorer, not in this file.",
+    "Recompute the credit from amountRaw, the asset decimals and the priceVersion recorded here.",
+    "Compare capUsd/usedUsd/leftUsd with what your own Magpie reports for this key; they are the provider's read-back, not an independent authority.",
+    "A transfer that does not match a signed request exactly (chain, token, recipient, amount, payer) is unclaimed and is not credit."
+  ],
+  "signed": false,
+  "digest": "1e72d3f3278d474bee4e0e5999d8c56c43e31559db69808eaab11ad478cc5f9a",
+  "disclaimer": "Unsigned statement. The SHA-256 digest detects hand edits only; it is not a signature, not proof of payment and not an identity claim."
+}

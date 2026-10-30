@@ -18,6 +18,16 @@ import { resolveMagpieBin } from "./paths.ts";
 import { acquireHostLock } from "./lock.ts";
 import { Service } from "./service.ts";
 import { startApi } from "./server.ts";
+import {
+  decideOptions,
+  parseOptions,
+  pageOptionsView,
+  readAppliedRecord,
+  withPreviousApplied,
+  writeAppliedRecord,
+  writePageOptions,
+  type AppliedRecord,
+} from "./plugin-options.ts";
 
 interface PluginInput {
   directory?: string;
@@ -28,27 +38,6 @@ interface PluginInput {
   };
 }
 
-interface PluginOptions {
-  /** phase-3 shorthand: provider = share only, consumer = consume only */
-  role?: "provider" | "consumer";
-  sharingEnabled?: boolean;
-  consumingEnabled?: boolean;
-  networkName?: string;
-  networkSecret?: string;
-  peers?: string[] | string;
-  listenAddr?: string;
-  publishedPorts?: number[] | string;
-  secureMode?: boolean;
-  shareModels?: string[] | string;
-  rpcPort?: number;
-  apiPort?: number;
-  catalogEnabled?: boolean;
-  catalogDiscovery?: boolean;
-  catalogDisplayName?: string;
-  catalogContact?: string;
-  catalogPort?: number;
-}
-
 interface Running {
   service: Service;
   api: { port: number; stop: () => void };
@@ -57,7 +46,7 @@ interface Running {
 const g = globalThis as unknown as { __ohMyAIHub?: Promise<Running>; __ohMyAIHubStopped?: boolean };
 
 /** Starts the plugin once per host process. */
-export async function boot(input?: PluginInput, options?: PluginOptions): Promise<Running> {
+export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<Running> {
   if (g.__ohMyAIHub) return g.__ohMyAIHub;
   g.__ohMyAIHub = (async () => {
     const bin = resolveMagpieBin();
@@ -72,71 +61,89 @@ export async function boot(input?: PluginInput, options?: PluginOptions): Promis
     }
     process.on("exit", () => lock.release());
 
+    const startedAt = new Date().toISOString();
     const service = new Service({ magpie, magpieVersion: version });
 
-    const opt = options ?? {};
-    const current = service.config();
-    const sharingEnabled = opt.sharingEnabled ?? (opt.role === "provider" ? true : opt.role === "consumer" ? false : (current?.sharingEnabled ?? true));
-    const consumingEnabled = opt.consumingEnabled ?? (opt.role === "consumer" ? true : opt.role === "provider" ? false : (current?.consumingEnabled ?? false));
-    const fromOptions = {
-      sharingEnabled,
-      consumingEnabled,
-      networkName: opt.networkName ? String(opt.networkName) : "",
-      networkSecret: opt.networkSecret ? String(opt.networkSecret) : "",
-      peers: toList(opt.peers),
-      listenAddr: opt.listenAddr ? String(opt.listenAddr) : null,
-      publishedPorts: toList(opt.publishedPorts).map(Number).filter(Boolean),
-      secureMode: opt.secureMode !== false,
-      shareModels: toList(opt.shareModels),
-      catalogEnabled: opt.catalogEnabled ?? current?.catalog.enabled ?? false,
-      catalogDiscovery: opt.catalogDiscovery ?? current?.catalog.discoveryEnabled ?? false,
-      catalogDisplayName: opt.catalogDisplayName ?? current?.catalog.displayName ?? null,
-      catalogContact: opt.catalogContact ?? current?.catalog.contact ?? null,
-      catalogPort: opt.catalogPort ?? current?.catalog.port ?? 3426,
-    };
-    const changed =
-      !current ||
-      current.sharingEnabled !== fromOptions.sharingEnabled ||
-      current.consumingEnabled !== fromOptions.consumingEnabled ||
-      current.networkName !== fromOptions.networkName ||
-      current.networkSecret !== fromOptions.networkSecret ||
-      JSON.stringify(current.peers) !== JSON.stringify(fromOptions.peers.map((p) => (p.includes("://") ? p : `tcp://${p}`))) ||
-      (current.listenAddr ?? null) !== (fromOptions.listenAddr ? (fromOptions.listenAddr.includes("://") ? fromOptions.listenAddr : `tcp://${fromOptions.listenAddr}`) : null) ||
-      JSON.stringify(current.publishedPorts) !== JSON.stringify(fromOptions.sharingEnabled ? fromOptions.publishedPorts : current.publishedPorts) ||
-      current.secureMode !== fromOptions.secureMode ||
-      current.catalog.enabled !== fromOptions.catalogEnabled ||
-      current.catalog.discoveryEnabled !== fromOptions.catalogDiscovery ||
-      current.catalog.displayName !== fromOptions.catalogDisplayName ||
-      current.catalog.contact !== fromOptions.catalogContact ||
-      current.catalog.port !== fromOptions.catalogPort ||
-      (fromOptions.shareModels.length > 0 && JSON.stringify(current.share.models) !== JSON.stringify(fromOptions.shareModels));
-
-    if (opt.networkName && opt.networkSecret && changed) {
-      await service
-        .configure({
-          sharingEnabled,
-          consumingEnabled,
-          networkName: String(opt.networkName),
-          networkSecret: String(opt.networkSecret),
-          peers: toList(opt.peers),
-          listenAddr: opt.listenAddr ? String(opt.listenAddr) : null,
-          publishedPorts: toList(opt.publishedPorts).map(Number).filter(Boolean),
-          secureMode: opt.secureMode !== false,
-          shareModels: fromOptions.shareModels.length ? fromOptions.shareModels : undefined,
-          rpcPort: opt.rpcPort ? Number(opt.rpcPort) : undefined,
-          catalogEnabled: fromOptions.catalogEnabled,
-          catalogDiscovery: fromOptions.catalogDiscovery,
-          catalogDisplayName: fromOptions.catalogDisplayName,
-          catalogContact: fromOptions.catalogContact,
-          catalogPort: fromOptions.catalogPort,
-        })
-        .catch((e) => logger.error(`configure from plugin options failed: ${String(e)}`));
+    // What to do with plugins.json's options is decided in plugin-options.ts:
+    // seed a node that has no configuration, apply a *new* save as a patch of
+    // the keys that actually changed, or leave an already-configured node alone
+    // (the state that is serving wins over a stale blob). A value this plugin
+    // cannot use is refused, never quietly rewritten.
+    const parsed = parseOptions(optionsRaw);
+    const opt = parsed.options;
+    const before = readAppliedRecord();
+    const decision = decideOptions({
+      options: opt,
+      configured: Boolean(service.config()),
+      record: before,
+      problems: parsed.problems,
+    });
+    if (parsed.problems.length) logger.warn(`plugin options refused: ${parsed.problems.join("; ")}`);
+    let failure: string | null = null;
+    let finalRecord: AppliedRecord | null = decision.record ?? before;
+    if (decision.kind === "seed" || decision.kind === "patch") {
+      // Two writes: "pending" now, the result after configure. A crash in
+      // between leaves a record that says the attempt did not finish, so the
+      // next boot retries it instead of believing a configuration never made.
+      // Neither write may move `applied` before configure succeeded: the retry
+      // diffs against the configuration that is actually running.
+      const attempt = withPreviousApplied(decision.record, before);
+      writeAppliedRecord({ ...attempt, phase: "pending" });
+      logger.info(
+        `plugin options: ${decision.kind} from plugins.json (${Object.keys(decision.patch).join(",") || "nothing"})`,
+      );
+      try {
+        await service.configure(decision.patch as Parameters<Service["configure"]>[0]);
+        // Read back: a key this plugin does not actually accept must not pass
+        // silently, so the seed has to be visible in the stored configuration.
+        const cfg = service.config();
+        const want = decision.patch as { networkName?: string };
+        if (want.networkName && cfg?.networkName !== want.networkName) {
+          throw new Error(`the overlay did not take networkName ${want.networkName} (stored ${String(cfg?.networkName)})`);
+        }
+        finalRecord = { ...decision.record, phase: "done" };
+        writeAppliedRecord(finalRecord);
+        logger.info(
+          `plugin options: ${decision.kind} applied; network ${cfg?.networkName ?? "?"}, ` +
+            `sharing ${cfg?.sharingEnabled ? "on" : "off"}, consuming ${cfg?.consumingEnabled ? "on" : "off"}`,
+        );
+      } catch (e) {
+        failure = String((e as Error)?.message ?? e);
+        finalRecord = { ...attempt, phase: "done", error: failure.slice(0, 300) };
+        writeAppliedRecord(finalRecord);
+        logger.error(`plugin options (${decision.kind}) were not applied: ${failure}; the stored state stays in force`);
+      }
     } else {
-      await service.start();
+      if (decision.record) {
+        // "preferences only", a migration, or a save that changed only page
+        // preferences: the running configuration is still the previous snapshot.
+        // A first migration records the options as observed. Dropping that
+        // baseline would replay every stale value on the next preference save.
+        finalRecord = before ? withPreviousApplied(decision.record, before) : decision.record;
+        writeAppliedRecord(finalRecord);
+      }
+      if (decision.reason) logger.info(`plugin options not applied: ${decision.reason}`);
     }
+
+    // configure() applies an overlay patch; every fresh host must also recover
+    // issued keys, reconcile Remote Magpies and start its chain watchers.
+    await service.start();
 
     const api = startApi({ port: opt.apiPort ? Number(opt.apiPort) : undefined, service });
     service.writeSnapshot();
+    writePageOptions(
+      pageOptionsView({
+        options: opt,
+        record: finalRecord,
+        decision: failure ? { kind: "none", reason: `the saved values were not applied: ${failure}` } : decision,
+        problems: parsed.problems,
+        networkConfigured: Boolean(service.config()),
+        secretSet: Boolean(service.config()?.networkSecret),
+        nodeId: service.config()?.nodeId ?? null,
+        hostPid: process.pid,
+        hostStartedAt: startedAt,
+      }),
+    );
 
     // Disabling the plugin (or quitting Magpie) stops the EasyTier this host
     // started: a plugin that is off must not leave a VPN behind. A core that
@@ -175,20 +182,11 @@ export async function boot(input?: PluginInput, options?: PluginOptions): Promis
   return g.__ohMyAIHub;
 }
 
-function toList(v: string[] | string | number[] | undefined): string[] {
-  if (!v) return [];
-  if (Array.isArray(v)) return v.map(String);
-  return String(v)
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 /**
  * Magpie imports the package's main and calls what it exports with OpenCode's
  * plugin input. Returning quickly matters: the host waits for it while it loads.
  */
-export default function plugin(input: PluginInput, options?: PluginOptions): Record<string, never> {
+export default function plugin(input: PluginInput, options?: unknown): Record<string, never> {
   boot(input, options).catch((e) => logger.error(`plugin failed to start: ${String(e)}`));
   return {};
 }

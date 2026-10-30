@@ -1,36 +1,214 @@
-:root { color-scheme: light dark; }
-body {
-  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-  margin: 0 auto; padding: 24px; max-width: 860px;
-  background: var(--magpie-bg, Canvas); color: var(--magpie-fg, CanvasText);
-}
-h1 { font-size: 20px; margin: 0 0 4px; }
-h2 { font-size: 15px; margin: 28px 0 8px; }
-.sub, .muted { color: var(--magpie-dim, GrayText); }
-section { border-top: 1px solid var(--magpie-border, color-mix(in srgb, CanvasText 15%, Canvas)); padding-top: 8px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 4px 8px; vertical-align: top; border-bottom: 1px solid var(--magpie-border, color-mix(in srgb, CanvasText 12%, Canvas)); }
-th { font-weight: 600; width: 34%; }
-.bad { color: #c0392b; font-weight: 600; }
-form { display: grid; gap: 10px; max-width: 520px; }
-label { display: grid; gap: 4px; font-weight: 500; }
-label.row { display: flex; gap: 8px; align-items: center; font-weight: 400; }
-input, select, button { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--magpie-border, color-mix(in srgb, CanvasText 20%, Canvas)); background: var(--magpie-input, Field); color: inherit; }
-button { cursor: pointer; font-weight: 500; padding: 6px 14px; }
-.actions { display: flex; gap: 12px; align-items: center; }
-pre { background: var(--magpie-code, color-mix(in srgb, CanvasText 6%, Canvas)); padding: 10px 12px; border-radius: 8px; overflow: auto; font-size: 12px; }
-code { font-size: 12px; }
+/* Oh My AIHub page styles. Magpie's bridge already prepends a :where() base
+ * sheet (font, colours, tables, buttons), so only layout and the few marks this
+ * page adds live here. Everything reads through --magpie-* tokens. */
 
-/* The external asset guides. Plain links, no card, no form, no tracking. */
-.links {
-  margin: 0.5rem 0 0.5rem 1.25rem;
-  padding: 0;
+body {
+  max-width: 72rem;
 }
-.links li {
-  margin-bottom: 0.5rem;
-  line-height: 1.5;
+
+header .sub {
+  max-width: 60rem;
 }
-.links a[rel~="external"]::after {
-  content: " ↗";
-  font-size: 0.85em;
+
+nav.toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 12px 0 18px;
+  padding: 8px 10px;
+  border: 1px solid var(--magpie-line, ButtonBorder);
+  border-radius: 8px;
+  background: var(--magpie-card, Canvas);
+  font-size: 12px;
+}
+
+nav.toc a {
+  text-decoration: none;
+}
+
+section {
+  margin: 0 0 28px;
+  padding: 0 0 4px;
+  border-bottom: 1px solid var(--magpie-line, ButtonBorder);
+}
+
+h3 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+}
+
+table th {
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+table td {
+  vertical-align: top;
+}
+
+table tr.warn-row td:last-child {
+  color: var(--magpie-warn, #b4690e);
+}
+
+.tag {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  font-size: 10px;
+  line-height: 16px;
+  vertical-align: 1px;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+.tag.local {
+  color: #2f6f4f;
+}
+
+.tag.remote {
+  color: #1f5d8a;
+}
+
+.tag.unknown {
+  color: #8a5a1f;
+}
+
+.tag.missing {
+  color: #8a2f2f;
+}
+
+.at {
+  color: var(--magpie-muted, GrayText);
+  font-size: 11px;
+}
+
+.note {
+  color: var(--magpie-muted, GrayText);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.note.bad {
+  color: #8a2f2f;
+}
+
+.ok {
+  color: #2f6f4f;
+  font-weight: 500;
+}
+
+.bad {
+  color: #8a2f2f;
+  font-weight: 500;
+}
+
+code.fp {
+  font-size: 11px;
+  word-break: break-all;
+}
+
+pre.cmd {
+  position: relative;
+  cursor: pointer;
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+pre.cmd:hover,
+pre.cmd:focus {
+  border-color: var(--magpie-accent, Highlight);
+}
+
+pre.cmd.copied::after,
+pre.cmd[data-note]::after {
+  content: attr(data-note);
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 10px;
+  color: var(--magpie-muted, GrayText);
+}
+
+pre.logs {
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.cmds {
+  margin: 6px 0 0;
+}
+
+.banner {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--magpie-line, ButtonBorder);
+  background: var(--magpie-card, Canvas);
+}
+
+.banner strong {
+  font-weight: 600;
+}
+
+.banner.ok {
+  border-color: #2f6f4f;
+}
+
+.banner.warn {
+  border-color: #b4690e;
+}
+
+.banner.bad {
+  border-color: #8a2f2f;
+}
+
+fieldset {
+  margin: 0 0 14px;
+  padding: 8px 12px 12px;
+  border: 1px solid var(--magpie-line, ButtonBorder);
+  border-radius: 8px;
+}
+
+legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--magpie-muted, GrayText);
+}
+
+label.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+label.row input:not([type="checkbox"]) {
+  flex: 1 1 22rem;
+  min-width: 12rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+/* advanced rows are hidden unless the page preference asks for them */
+body:not(.advanced) .advanced-only {
+  display: none;
+}
+
+ul.links {
+  padding-left: 18px;
+}
+
+ul.links li {
+  margin: 6px 0;
 }

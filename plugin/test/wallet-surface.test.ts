@@ -28,7 +28,18 @@ function emptySink(): CreditSink {
 function wallet() {
   const dir = mkdtempSync(join(tmpdir(), "wallet-surface-"));
   const store = new ChainStore(join(dir, "chain.sqlite"));
-  return new Wallet({ credit: emptySink(), registry: defaultRegistry(), store });
+  // No watcher is ever built: this suite asserts the module's surface, and a
+  // watcher would open an RPC connection to the default testnet endpoints. A
+  // test must not depend on the public internet, so `status()` (the live health
+  // probe) is never called here; `statusLocal()` is the zero-RPC status.
+  return new Wallet({
+    credit: emptySink(),
+    registry: defaultRegistry(),
+    store,
+    makeWatcher: () => {
+      throw new Error("the wallet surface tests must not build a watcher");
+    },
+  });
 }
 
 describe("wallet surface", () => {
@@ -72,14 +83,18 @@ describe("wallet surface", () => {
     w.close();
   });
 
-  test("status reports every registered chain and says when nothing is enabled", async () => {
+  test("status reports every registered chain and says when nothing is enabled", () => {
+    // `statusLocal()` is the page's status: synchronous and with no RPC. The
+    // authenticated `status()` performs a live chain probe, which belongs in a
+    // health check, not in a unit test that must pass offline.
     const w = wallet();
-    const s = await w.status();
+    const s = w.statusLocal();
     expect(s.registry.networks.map((n) => n.chainId)).toEqual([97, 84532]);
     expect(s.disabled).toBe(false);
+    expect(s.chains.every((c) => c.head === null && c.endpoints.length === 0)).toBe(true);
     w.setNetworkEnabled(97, false);
     w.setNetworkEnabled(84532, false);
-    const off = await w.status();
+    const off = w.statusLocal();
     expect(off.disabled).toBe(true);
     expect(off.registry.networks.every((n) => !n.enabled)).toBe(true);
     w.close();
@@ -127,23 +142,38 @@ describe("the page's product claims", () => {
   });
 
   test("there is no buy, swap, bridge or fiat affordance", () => {
-    // A form, a button or an input that could start a purchase. The page has a
-    // settings form only, and the wallet section is rendered as tables.
+    // The page has exactly two buttons — the snapshot reload and this plugin's own
+    // settings Save — and neither can move money: the form writes plugin options,
+    // nothing else. The wallet section is rendered as tables.
     const buttons = [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1]!.replace(/<[^>]+>/g, "").trim());
-    // The only two buttons are the snapshot reload and the settings form's Save.
-    // Neither can move money: the form writes plugin options, nothing else.
-    expect(buttons).toEqual(["Reload snapshot", "Save"]);
-    for (const word of ["Buy", "Swap", "Bridge", "Purchase", "Top up with", "Pay now"]) {
+    expect(buttons).toEqual(["保存", "Reload 快照"]);
+    for (const id of ["save", "reload"]) expect(html).toContain(`id="${id}"`);
+    for (const word of ["Buy", "Swap", "Bridge", "Purchase", "Pay now", "立即购买", "兑换", "跨链桥", "下单"]) {
       expect(html).not.toContain(`>${word}`);
+      expect(app).not.toContain(`">${word}`);
     }
     expect(app).not.toMatch(/\b(fetch|XMLHttpRequest)\(/);
+    // and the page says so itself
+    expect(html).toContain("不买、不卖、不兑换、不跨链桥接");
   });
 
   test("the page states it is testnet only and that the tokens are not real", () => {
-    expect(html).toContain("Testnet only");
-    expect(html).toContain("not USDC");
-    expect(html).toContain("not worth anything");
-    expect(html).toContain("does not sell, buy, swap or bridge");
-    expect(html).toContain("Peer is not affiliated with this project");
+    expect(html).toContain("只有测试网");
+    expect(html).toContain("不是 USDC");
+    expect(html).toContain("不值钱");
+    expect(html).toContain("不买、不卖、不兑换、不跨链桥接");
+    // the third party is named as independent and liable for its own service
+    expect(html).toContain("与本项目没有合作、代理或背书关系");
+    expect(html).toContain("由第三方负责");
+    expect(html).toContain("当地法律");
+  });
+
+  test("the page never shows a key, an address list or a payment association", () => {
+    // the page may print a *command* that registers a receiving address; it must
+    // never render one, nor an intent's payer or a transaction
+    for (const field of ["payerAddress", "recipientAddress", "txHash", ".receiving", "wallet.intents", "wallet.events"]) {
+      expect(app).not.toContain(field);
+    }
+    expect(html).toContain("不显示任何 Gateway Key");
   });
 });

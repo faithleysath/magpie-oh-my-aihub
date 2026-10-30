@@ -21,9 +21,11 @@ import { lanIPv4 } from "./paths.ts";
 import { logger, registerSecret, writePageStatus } from "./log.ts";
 import { gatewayBaseURL, type CatalogModelMeta, type LimitStatus, type Magpie } from "./magpie.ts";
 import { Provisioner, type ConsumerView } from "./provisioner.ts";
-import { Ledger } from "./ledger.ts";
+import { Ledger, type LedgerDeposit } from "./ledger.ts";
 import { catalogPriceVersion, nanosToUsd, priceSnapshot, usdToNanos } from "./pricing.ts";
 import { Wallet, type WalletStatus } from "./wallet.ts";
+import type { KeyReadback } from "./walletview.ts";
+import { buildStatement, type ConsumerStatement } from "./walletstatement.ts";
 import type { CreditSink } from "./watcher.ts";
 import type { AssetRecord, NetworkRecord } from "./networks.ts";
 import type { ChainDepositEvent } from "./chainstore.ts";
@@ -197,6 +199,44 @@ export interface AccountingStatus {
   serving: boolean;
 }
 
+/** One operator check. `at` is when the evidence was collected, never when a page was written. */
+export interface OperatorCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  /** local evidence (state/ACL) or a probe of a remote provider */
+  kind?: "local" | "remote";
+  at?: string;
+}
+
+/** What the page may say without doing any network work. */
+export interface ReadinessSnapshot {
+  state: "ready" | "degraded" | "blocked" | "unknown";
+  checkedAt: string | null;
+  ageMs: number | null;
+  source: "cached" | "none";
+  reasons: string[];
+  providers: { id: string; reachability: "reachable" | "unreachable" | "UNKNOWN" }[];
+}
+
+export interface ShareCandidate {
+  id: string;
+  displayName: string | null;
+  provider: string;
+  pricing: CatalogModel["pricing"];
+  completePrice: boolean;
+  allowedByPolicy: boolean;
+}
+
+export interface ShareCandidatesView {
+  policy: string[];
+  models: ShareCandidate[];
+  /** SHA-256 of the priced, policy-allowed models; null when none can back a key */
+  priceVersion: string | null;
+  priceLocked: false;
+  blocking: { id: string; reason: string }[];
+}
+
 export interface StatusSnapshot {
   plugin: { version: string; pid: number; dataDir: string; startedAt: string; stateVersion: number };
   magpie: { version: string; gateway: string };
@@ -232,7 +272,11 @@ export interface StatusSnapshot {
   wallet: WalletStatus | null;
   /** the phase-3 field, kept for older clients: the first provider, or null */
   wiring: { id: string; mappedCidr: string; url: string; createdAt: string } | null;
-  checks: { name: string; ok: boolean; detail: string }[];
+  /** cached result; `checksAt` is when the probes actually ran */
+  checks: OperatorCheck[];
+  checksAt: string | null;
+  checksDurationMs: number | null;
+  readiness: ReadinessSnapshot;
   logs: string[];
 }
 
@@ -271,6 +315,7 @@ export interface CatalogStatus {
     contentHash: string;
     modelCount: number;
     models: CatalogModel[];
+    billing: CatalogQuoteBody["billing"];
     identity: { fingerprint: string; keyId: string; publicKey: string; createdAt: string } | null;
   } | null;
   peers: CatalogPeerView[];
@@ -288,6 +333,13 @@ export interface ProviderInput {
   key: string;
   providerPort?: number;
   localPort?: number;
+}
+
+/** The exact identity/quote a human saw and accepted before request/connect. */
+export interface CatalogAcceptance {
+  fingerprint: string;
+  quoteHash: string;
+  priceVersion?: string;
 }
 
 interface RouteOwner {
@@ -349,6 +401,11 @@ export class Service {
    */
   private walletInstance: Wallet | null | undefined = undefined;
   private walletStatusCache: WalletStatus | null = null;
+  /** Checks are expensive: the page and snapshots render this cache with its real timestamp. */
+  private cachedChecks: OperatorCheck[] = [];
+  private cachedChecksAt: string | null = null;
+  private cachedChecksDurationMs: number | null = null;
+  private cachedChecksError: string | null = null;
 
   constructor(private deps: ServiceDeps) {
     this.state = loadState().state;
@@ -408,6 +465,23 @@ export class Service {
 
   provider(id: string): ProviderConnection | undefined {
     return this.state.providers.find((p) => p.id === id);
+  }
+
+  /**
+   * The models one remote provider serves through its own loopback forward and
+   * Gateway Key. Read-only: it never re-registers, removes or re-routes this or
+   * any other provider.
+   */
+  async providerModels(id: string): Promise<{ id: string; models: string[]; status: string; detail: string | null; limit: ProviderLimitView | null }> {
+    const rec = this.provider(id);
+    if (!rec) throw new Error(`no remote provider ${id}`);
+    const key = getProviderKey(id);
+    if (!key) throw new Error(`provider ${id} has no stored Gateway Key; update the provider first`);
+    const models = await this.probes.remoteModelIds(rec.localPort, key, 15_000);
+    if (!models || models.length === 0) {
+      throw new Error(`provider ${id} served no model for its key (offline, revoked or a different provider)`);
+    }
+    return { id, models, status: rec.status, detail: rec.detail, limit: rec.limit ?? null };
   }
 
   /** The gateway port this Magpie answers on (3425 unless told). */
@@ -531,6 +605,132 @@ export class Service {
 
   walletStatusSync(): WalletStatus | null {
     return this.walletStatusCache;
+  }
+
+  /**
+   * The local projection for a page snapshot. It must never open an RPC or
+   * construct a wallet that was not already built: a page write is not a
+   * network event. The wallet owner supplies `statusLocal()`; until then the
+   * last cached async result is the only thing we can honestly show.
+   */
+  private walletLocalStatus(): WalletStatus | null {
+    // `walletInstance` is undefined until startWallet/walletStatus; the test
+    // seam may already hold a wallet, and asking it for a local view constructs
+    // nothing and opens no RPC.
+    const source = this.walletInstance === undefined ? this.deps.wallet : this.walletInstance;
+    const w = source as (Wallet & { statusLocal?: () => WalletStatus | null }) | null | undefined;
+    if (!w || typeof w.statusLocal !== "function") return this.walletStatusCache;
+    try {
+      return w.statusLocal() ?? this.walletStatusCache;
+    } catch (e) {
+      logger.warn(`local wallet snapshot failed: ${String(e)}`);
+      return this.walletStatusCache;
+    }
+  }
+
+  /**
+   * The authenticated local evidence a CLI needs to prove a credit:
+   * `WalletStatus`, the provisioner's consumers, ledger deposits per consumer,
+   * gateway read-backs and the accounting state. It is read-only and contains
+   * no key material; the caller must already hold the API token.
+   */
+  async walletEvidence(opts: { consumerId?: string } = {}): Promise<{
+    wallet: WalletStatus;
+    consumers: ConsumerView[];
+    deposits: Record<string, LedgerDeposit[]>;
+    readbacks: Record<string, KeyReadback>;
+    accounting: { state: "ok" | "uncertain" | "unknown"; reason: string | null; serving: boolean };
+  } | null> {
+    const w = this.walletModule();
+    if (!w) return null;
+    // No refreshAll()/verify(): those reconcile pending deposits and persist
+    // lastCheck. Evidence is a token-protected GET; it reads the gateway limit
+    // directly and never changes another consumer's record.
+    const all = this.provisioner.all();
+    const consumers = opts.consumerId ? all.filter((c) => c.consumerId === opts.consumerId) : all;
+    const wallet = w.statusLocal({ consumerIds: consumers.map((c) => c.consumerId) });
+    const deposits: Record<string, LedgerDeposit[]> = {};
+    const readbacks: Record<string, KeyReadback> = {};
+    for (const c of consumers) {
+      deposits[c.consumerId] = this.ledger?.depositsFor(c.consumerId) ?? [];
+      const rec = this.provisioner.find(c.consumerId);
+      if (!rec?.secret || rec.revokedAt || rec.paused) continue;
+      try {
+        const status = await this.deps.magpie.limitStatus(rec.secret);
+        const lim = status.limit;
+        if (
+          status.limited === true &&
+          typeof lim?.costLimit === "number" &&
+          typeof lim.cost === "number" &&
+          typeof lim.costLeft === "number"
+        ) {
+          readbacks[c.consumerId] = {
+            at: new Date().toISOString(),
+            capUsd: lim.costLimit,
+            usedUsd: lim.cost,
+            leftUsd: lim.costLeft,
+            fromGateway: true,
+          };
+        }
+      } catch {
+        // Unreadable key: omit the read-back; the view says unproven, never zero.
+      }
+    }
+    const a = this.accountingStatus();
+    return {
+      wallet,
+      consumers,
+      deposits,
+      readbacks,
+      accounting: {
+        state: a.uncertain ? "uncertain" : a.lastCheckAt ? "ok" : "unknown",
+        reason: a.uncertainReason,
+        serving: a.serving,
+      },
+    };
+  }
+
+  /**
+   * One consumer's out-of-band statement, built by the host that owns the
+   * ledger. The builder refuses rows that belong to another consumer; this
+   * method passes only that consumer's intents, events and deposits.
+   */
+  async walletStatement(consumerId: string): Promise<ConsumerStatement | null> {
+    // Scope the evidence to this consumer so one statement cannot read another
+    // account's key, or reconcile another account.
+    const evidence = await this.walletEvidence({ consumerId });
+    if (!evidence) return null;
+    const w = this.walletModule();
+    if (!w) return null;
+    const consumer = evidence.consumers.find((c) => c.consumerId === consumerId);
+    if (!consumer) throw new Error(`no consumer ${consumerId}`);
+    // A statement is a historical record, not the wallet's 50-row preview.
+    const intents = w.chainStore().intentsFor(consumerId, 1_000_000);
+    const providerIds = [...new Set(intents.map((i) => i.providerId))];
+    if (providerIds.length > 1) {
+      throw new Error(`consumer ${consumerId} has deposit intents from more than one provider: ${providerIds.join(", ")}`);
+    }
+    const providerId = providerIds[0] ?? this.state.config?.nodeId;
+    if (!providerId) throw new Error(`consumer ${consumerId} has no provider/deposit intent to state`);
+    return buildStatement({
+      providerId,
+      consumerId,
+      generatedAt: new Date().toISOString(),
+      networks: w.networks(),
+      assets: w.allAssets(),
+      intents,
+      events: w.chainStore().eventsForConsumer(consumerId, 1_000_000),
+      deposits: evidence.deposits[consumerId] ?? [],
+      consumer,
+      // The statement schema allows exactly state/reason/openSettlements.
+      // `serving` belongs to the live accounting view, not to a historical file.
+      accounting: {
+        state: evidence.accounting.state,
+        reason: evidence.accounting.reason,
+        openSettlements: consumer.ledger?.openSettlements ?? 0,
+      },
+      readback: evidence.readbacks[consumerId] ?? null,
+    });
   }
 
   /** The wallet module for the API, or an error when this node runs none. */
@@ -713,6 +913,11 @@ export class Service {
     // Do not make boot wait for peers: the directory fills in the background.
     void this.catalogTick();
     this.writeSnapshot();
+    // The page has no network. Fill the cached checks once after boot so its
+    // first snapshot is evidence with a real timestamp, not an empty list.
+    void this.checks()
+      .then(() => this.writeSnapshot())
+      .catch((e) => logger.warn(`checks after boot failed: ${String(e)}`));
   }
 
   /**
@@ -886,6 +1091,11 @@ export class Service {
   }): Promise<StatusSnapshot> {
     return this.serialize(async () => {
       const prev = this.state.config;
+      // Snapshot only what this operation owns. A failed wizard must restore the
+      // previous config without undoing a guard narrowing, un-registering a
+      // provider, deleting a key or editing the ledger.
+      const previousConfig = prev ? structuredClone(prev) : null;
+      const previousSuspension = this.state.shareSuspended ? { ...this.state.shareSuspended } : null;
       const role = input.role;
       if (role !== undefined && role !== "provider" && role !== "consumer") {
         throw new Error("role must be provider or consumer");
@@ -980,25 +1190,73 @@ export class Service {
       registerSecret(networkSecret);
       saveState(this.state);
 
-      await this.applyConfig(cfg);
-      await this.applyCatalog();
-      // A new configuration can change what is shareable (and a previous
-      // suspension may have to be lifted or re-applied).
-      if (cfg.sharingEnabled) {
-        await this.guardSharedKeys().catch((e) => logger.warn(`share guard after configure: ${String(e)}`));
-        this.lastProviderFingerprint = this.providerFingerprint();
-        await this.publishCatalogNow().catch((e) => logger.warn(`catalogue rebuild after configure: ${String(e)}`));
+      try {
+        await this.applyConfig(cfg);
+        await this.applyCatalog();
+        // A new configuration can change what is shareable (and a previous
+        // suspension may have to be lifted or re-applied).
+        if (cfg.sharingEnabled) {
+          await this.guardSharedKeys().catch((e) => logger.warn(`share guard after configure: ${String(e)}`));
+          this.lastProviderFingerprint = this.providerFingerprint();
+          await this.publishCatalogNow().catch((e) => logger.warn(`catalogue rebuild after configure: ${String(e)}`));
+        }
+        logger.info(
+          `configured ${describeRole(cfg)} on ${networkName}; peers ${peers.join(",") || "none"}`,
+        );
+        // A configured node must run the accounting check even when it was not
+        // started through start() (the API path in index.ts).
+        this.startLoops();
+        const snapshot = await this.status();
+        // Turning consumption off must cut the remote providers this node added,
+        // and nothing else: a provider the operator made by hand stays. Do it
+        // after every fallible step, so a failed status read cannot leave the
+        // old config restored but its registrations already dropped.
+        if (!consumingEnabled) await this.dropRemoteRegistrations("consumption disabled");
+        return snapshot;
+      } catch (e) {
+        const why = (e as Error)?.message ?? String(e);
+        this.state.config = previousConfig;
+        // Never clear a stricter suspension produced while applying the
+        // candidate: restoring the old config must not restore the "safe"
+        // label. Keep the current suspension if one exists, otherwise keep the
+        // old one (which was also not a proof of safety).
+        this.state.shareSuspended = this.state.shareSuspended ?? previousSuspension;
+        registerSecret(previousConfig?.networkSecret);
+        saveState(this.state);
+        try {
+          if (previousConfig) {
+            // Guard first. It may resume sharing only after proving the old
+            // config safe, and `resumeSharing()` applies that config itself. If
+            // it cannot prove safety, the suspension stays and the apply below
+            // writes a config that exports nothing.
+            if (previousConfig.sharingEnabled) {
+              await this.guardSharedKeys().catch(async (guardError) => {
+                logger.error(`configure rollback guard could not prove safety; withdrawing sharing: ${String(guardError)}`);
+                await this.suspendSharing(`configure rollback could not prove safety: ${(guardError as Error)?.message ?? String(guardError)}`).catch(
+                  (suspendError) => logger.error(`could not withdraw sharing after the failed rollback guard: ${String(suspendError)}`),
+                );
+              });
+            }
+            await this.applyConfig(previousConfig);
+            await this.applyCatalog();
+            this.lastProviderFingerprint = this.providerFingerprint();
+          } else {
+            this.stopCatalogServer();
+            await this.supervisor.stop();
+          }
+          logger.error(`configure failed; the previous configuration was restored: ${why}`);
+        } catch (restoreError) {
+          const restoreWhy = (restoreError as Error)?.message ?? String(restoreError);
+          logger.error(
+            `configure failed (${why}) and restoring the previous configuration also failed (${restoreWhy})`,
+          );
+          throw new Error(
+            `configure failed: ${why}; restoring the previous configuration also failed: ${restoreWhy}. ` +
+              `The previous config is retained on disk; run setup --resume and checks before retrying.`,
+          );
+        }
+        throw new Error(`configure failed: ${why}; the previous configuration was restored`);
       }
-      // Turning consumption off must cut the remote providers this node added,
-      // and nothing else: a provider the operator made by hand stays.
-      if (!consumingEnabled) await this.dropRemoteRegistrations("consumption disabled");
-      logger.info(
-        `configured ${describeRole(cfg)} on ${networkName}; peers ${peers.join(",") || "none"}`,
-      );
-      // A configured node must run the accounting check even when it was not
-      // started through start() (the API path in index.ts).
-      this.startLoops();
-      return this.status();
     });
   }
 
@@ -1131,6 +1389,51 @@ export class Service {
     });
   }
 
+  /**
+   * The native models this node could share, with the effective price and
+   * whether that price is complete enough to back a capped key. Read-only: it
+   * never creates a key, publishes a quote or changes the allow list.
+   */
+  async shareCandidates(): Promise<ShareCandidatesView> {
+    const cfg = this.state.config;
+    if (!cfg) throw new Error("configure this node first");
+    const metas = await this.probes.catalogModels().catch((e) => {
+      throw new Error(`cannot read Magpie's native models: ${(e as Error).message}`);
+    });
+    const native = this.deps.magpie.nativeProviderIds();
+    const remote = this.deps.magpie.remoteProviderIds();
+    const models: ShareCandidate[] = [];
+    for (const meta of metas) {
+      if (!meta.id.includes("/")) continue;
+      const provider = meta.id.split("/")[0];
+      if (provider === "group" || provider === "auto") continue;
+      if (remote.has(provider) || !native.has(provider)) continue;
+      const model = catalogModel(meta);
+      if (!model) continue;
+      models.push({
+        id: meta.id,
+        displayName: meta.displayName,
+        provider,
+        pricing: model.pricing,
+        completePrice: priceSnapshot([meta], [meta.id]) !== null,
+        allowedByPolicy: allowedByPolicy(meta.id, cfg.share),
+      });
+    }
+    models.sort((a, b) => a.id.localeCompare(b.id));
+    const selected = models.filter((m) => m.allowedByPolicy && m.completePrice);
+    const priceVersion = catalogPriceVersion(selected.map((m) => ({ id: m.id, pricing: m.pricing })));
+    const blocking = models
+      .filter((m) => m.allowedByPolicy && !m.completePrice)
+      .map((m) => ({ id: m.id, reason: "no complete effective price; a capped key cannot be issued" }));
+    return {
+      policy: [...cfg.share.models],
+      models,
+      priceVersion,
+      priceLocked: false,
+      blocking,
+    };
+  }
+
   // --- read-only catalogue ---------------------------------------------------
 
   /** Whether the catalogue should be on the network right now. */
@@ -1233,6 +1536,9 @@ export class Service {
             contentHash: this.catalogQuoteHash ?? "",
             modelCount: this.catalogQuote.models.length,
             models: this.catalogQuote.models.map((m) => ({ ...m })),
+            // Safe read-only clone: the page needs the quote's real billing
+            // version/lock flags; it must never be able to mutate the signed body.
+            billing: { ...this.catalogQuote.billing },
             identity: this.catalogQuote.identity,
           }
         : null,
@@ -1257,18 +1563,27 @@ export class Service {
     return this.peersInDirectory();
   }
 
-  async trustCatalogPeer(nodeId: string, fingerprint?: string): Promise<CatalogTrustRecord> {
+  async trustCatalogPeer(nodeId: string, fingerprint: string): Promise<CatalogTrustRecord> {
     if (!isValidNodeId(nodeId)) throw new Error("a catalogue node id must be 8-64 lowercase hex characters");
+    if (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fingerprint)) {
+      throw new Error("trustCatalogPeer requires the exact 64 lowercase hex fingerprint the operator reviewed");
+    }
     const trust = loadCatalogTrust();
     if (!Object.hasOwn(trust, nodeId)) throw new Error(`no catalogue identity is known for node ${nodeId}`);
     const rec = trust[nodeId];
     if (!rec.pending) {
+      // First-seen acceptance is still explicit: the caller must name the
+      // fingerprint already in the trust record. A wrong value changes nothing.
+      if (fingerprint !== rec.fingerprint) {
+        throw new Error(`the seen fingerprint is ${rec.fingerprint}, not ${fingerprint}`);
+      }
       rec.accepted = true;
       saveCatalogTrust(trust);
+      this.syncTrustedPeerCache(nodeId, rec);
       return rec;
     }
-    if (fingerprint && fingerprint !== rec.pending.fingerprint) {
-      throw new Error(`the seen fingerprint is ${rec.pending.fingerprint}, not ${fingerprint}`);
+    if (fingerprint !== rec.pending.fingerprint) {
+      throw new Error(`the pending fingerprint is ${rec.pending.fingerprint}, not ${fingerprint}`);
     }
     rec.publicKey = rec.pending.publicKey;
     rec.fingerprint = rec.pending.fingerprint;
@@ -1284,12 +1599,30 @@ export class Service {
     rec.quoteHash = null;
     saveCatalogTrust(trust);
     logger.warn(`accepted a changed catalogue identity for ${nodeId}: ${rec.fingerprint}`);
+    // The cached quote still carries the old identity after a change. Do not
+    // relabel it; only a new read may mark the new identity verified.
+    this.syncTrustedPeerCache(nodeId, rec);
     await this.refreshCatalogPeers().catch(() => {});
     return rec;
   }
 
+  /** Update the in-memory peer status only when the cached quote really belongs to the accepted key. */
+  private syncTrustedPeerCache(nodeId: string, rec: CatalogTrustRecord): void {
+    for (const peer of this.catalogPeers) {
+      if (peer.nodeId !== nodeId && peer.hostname !== rec.overlayHostname) continue;
+      if (peer.status === "stale" || peer.status === "conflict") continue;
+      if (peer.nodeId !== nodeId) continue;
+      if (!peer.identity || peer.identity.fingerprint !== rec.fingerprint) continue;
+      if (!peer.quote || peer.quote.identity?.fingerprint !== rec.fingerprint) continue;
+      if (peer.status === "unverified") {
+        peer.status = "verified";
+        peer.detail = "accepted locally; same Ed25519 key as before (TOFU)";
+      }
+    }
+  }
+
   /** A manual connection request; never creates a key or a paid account. */
-  catalogRequest(nodeId: string, models?: string[]): Record<string, unknown> {
+  catalogRequest(nodeId: string, models?: string[], acceptance?: CatalogAcceptance): Record<string, unknown> {
     const peer = this.catalogPeers.find((p) => p.identity?.keyId === nodeId || p.nodeId === nodeId || p.hostname === nodeId);
     if (!peer) throw new Error(`no discovered catalogue peer ${nodeId}; refresh the directory first`);
     if (!peer.online) throw new Error(`${peer.hostname} is offline; refresh the directory when it returns`);
@@ -1298,6 +1631,7 @@ export class Service {
     }
     if (peer.status === "stale") throw new Error(`${peer.hostname} offered an older or replayed quote; refresh the directory first`);
     if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
+    assertCatalogAcceptance(peer, acceptance);
     if (models !== undefined && !Array.isArray(models)) throw new Error("models must be an array of provider/model ids");
     const available = peer.quote.models.map((m) => m.id);
     const wanted = models && models.length ? models : available;
@@ -1311,6 +1645,12 @@ export class Service {
     // A quote's billing.priceVersion covers every quoted model; a request may
     // choose a subset. Bind the key to the version of exactly those models.
     const selectedPriceVersion = catalogPriceVersion(peer.quote.models.filter((m) => wanted.includes(m.id)));
+    if (acceptance?.priceVersion !== undefined && acceptance.priceVersion !== selectedPriceVersion) {
+      throw new Error(
+        `the accepted price version is ${acceptance.priceVersion}, but these models are ${selectedPriceVersion ?? "unpriced"}; ` +
+          `re-read the quote and select the models again`,
+      );
+    }
     const cfg = this.state.config;
     if (!cfg || !isValidNodeId(cfg.nodeId)) throw new Error("this node has no valid node id");
     const consumerId = cfg.nodeId;
@@ -1338,8 +1678,15 @@ export class Service {
         quotedPriceVersion: peer.quote.billing.priceVersion ?? null,
         priceLocked: false,
         identityFingerprint: peer.quote.identity.fingerprint,
-        identityStatus: peer.status === "verified" || peer.status === "connected" ? "trusted-on-first-use" : "unverified",
+        identityStatus: "trusted-on-first-use",
         warning: "A self-signed catalogue proves only that this key signed this quote. It is not a real-world identity, and the quote does not charge anything by itself.",
+      },
+      acceptance: {
+        fingerprint: acceptance.fingerprint,
+        quoteHash: acceptance.quoteHash,
+        priceVersion: selectedPriceVersion,
+        acceptedAt: new Date().toISOString(),
+        trust: "local-tofu",
       },
       models: wanted,
       minTopUpUsd: peer.quote.topUp.minUsd,
@@ -1364,13 +1711,18 @@ export class Service {
   }
 
   /** Adds a provider from a discovered quote using the existing connect path. */
-  async catalogConnect(nodeId: string, key: string, opts: { id?: string } = {}): Promise<ProviderView> {
+  async catalogConnect(
+    nodeId: string,
+    key: string,
+    opts: { id?: string; acceptance?: CatalogAcceptance } = {},
+  ): Promise<ProviderView> {
     const peer = this.catalogPeers.find((p) => p.identity?.keyId === nodeId || p.nodeId === nodeId || p.hostname === nodeId);
     if (!peer) throw new Error(`no discovered catalogue peer ${nodeId}; refresh the directory first`);
     if (!peer.online) throw new Error(`${peer.hostname} is offline; refresh the directory when it returns`);
     if (peer.status === "identity-changed") throw new Error("the provider's catalogue identity changed; trust it explicitly before connecting");
     if (peer.status === "stale") throw new Error(`${peer.hostname} offered an older or replayed quote; refresh the directory first`);
     if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
+    assertCatalogAcceptance(peer, opts.acceptance);
     const id = opts.id ?? `peer-${peer.quote.node.id.replace(/[^a-z0-9-]/gi, "").slice(0, 20)}`;
     return this.addProvider({
       id: id.toLowerCase(),
@@ -1474,7 +1826,9 @@ export class Service {
     const topUp = {
       minUsd: cfg.catalog.minTopUpUsd,
       simulated: true as const,
-      note: "Simulated configuration only. No wallet, payment network, deposit or real credit is connected in this phase.",
+      note:
+        "Minimum top-up is a test-credit quote. BSC/Base Sepolia mock testnet deposits may be configured separately; " +
+        "there is no mainnet or real-money credit.",
     };
     const priceVersion = catalogPriceVersion(models);
     const billing = {
@@ -1486,21 +1840,25 @@ export class Service {
       priceVersion,
       priceLocked: false as const,
     };
-    const contentHash = sha256Hex(canonicalJson({ schema: "ohmyaihub.catalog/v1", node, models, topUp, billing, identity: identity.summary }));
+    // The version/dirty check must not include `publication`: it carries the
+    // timestamp/version that this very check produces. Keep this material hash
+    // for savePublishState only; the hash a reader receives is the full unsigned
+    // body (including publication), exactly what verifySignedCatalog computes.
+    const materialHash = sha256Hex(canonicalJson({ schema: "ohmyaihub.catalog/v1", node, models, topUp, billing, identity: identity.summary }));
     const prev = loadPublishState();
     let version = prev.versionNumber;
     let updatedAt = prev.updatedAt ?? now;
     let publishedAt = prev.publishedAt ?? now;
-    if (contentHash !== prev.contentHash) {
+    if (materialHash !== prev.contentHash) {
       version = Math.max(1, prev.versionNumber + 1);
       updatedAt = now;
       publishedAt = prev.publishedAt ?? now;
-      savePublishState({ version: 1, publishedAt, versionNumber: version, updatedAt, contentHash });
+      savePublishState({ version: 1, publishedAt, versionNumber: version, updatedAt, contentHash: materialHash });
     } else if (!version) {
       version = 1;
       updatedAt = now;
       publishedAt = prev.publishedAt ?? now;
-      savePublishState({ version: 1, publishedAt, versionNumber: version, updatedAt, contentHash });
+      savePublishState({ version: 1, publishedAt, versionNumber: version, updatedAt, contentHash: materialHash });
     }
     const body: CatalogQuoteBody = {
       schema: "ohmyaihub.catalog/v1",
@@ -1519,8 +1877,12 @@ export class Service {
       billing,
       identity: identity.summary,
     };
-    this.catalogQuote = signCatalog(body, identity);
-    this.catalogQuoteHash = contentHash;
+    const signed = signCatalog(body, identity);
+    // Same bytes the peer's verifySignedCatalog hashes: full unsigned body,
+    // including publication. `materialHash` above remains the version input.
+    const verified = verifySignedCatalog(signed);
+    this.catalogQuote = signed;
+    this.catalogQuoteHash = verified.contentHash;
     this.catalogQuoteVersion = version;
     this.catalogQuoteUpdatedAt = updatedAt;
     this.catalogNextQuoteAt = Date.now() + Math.max(30, cfg.catalog.refreshSec) * 1000;
@@ -2087,11 +2449,13 @@ export class Service {
    * changed does not disturb the others: each one gets its own status, and the
    * loop below never lets one failure escape.
    */
-  async reconcileProviders(opts: { quiet?: boolean; verifyModels?: boolean } = {}): Promise<ProviderView[]> {
-    this.lastReconcileAt = Date.now();
+  async reconcileProviders(opts: { quiet?: boolean; verifyModels?: boolean; only?: string } = {}): Promise<ProviderView[]> {
+    if (!opts.only) this.lastReconcileAt = Date.now();
     const cfg = this.state.config;
     if (!cfg) return [];
+    if (opts.only && !this.provider(opts.only)) throw new Error(`no remote provider ${opts.only}`);
     if (!cfg.consumingEnabled) {
+      if (opts.only) throw new Error("consumption is disabled on this node; enable it before testing a provider");
       for (const p of this.state.providers) {
         if (p.status !== "disabled") {
           p.status = "disabled";
@@ -2117,6 +2481,7 @@ export class Service {
     }
     let changed = false;
     for (const conn of [...this.state.providers]) {
+      if (opts.only && conn.id !== opts.only) continue;
       if (this.connectionsBusy.has(conn.id)) continue;
       this.connectionsBusy.add(conn.id);
       try {
@@ -2134,7 +2499,7 @@ export class Service {
     // A reconcile is also a full safety re-check (provider list and the keys
     // Magpie actually holds), so a manual `/providers/reconcile` catches an
     // external change even when the 15 s tick has not run yet.
-    if (cfg.sharingEnabled) {
+    if (cfg.sharingEnabled && !opts.only) {
       this.lastProviderFingerprint = this.providerFingerprint();
       await this.guardSharedKeys().catch((e) => logger.warn(`share guard after a provider change failed: ${String(e)}`));
     }
@@ -2516,9 +2881,83 @@ export class Service {
 
   // --- checks ----------------------------------------------------------------
 
+  /**
+   * Runs the checks and caches the evidence with the time it was collected.
+   * The page snapshot renders this cache; it never claims a cached result is
+   * current, and it never invents a reachable provider before a probe.
+   */
+  async checks(): Promise<OperatorCheck[]> {
+    const started = Date.now();
+    try {
+      const out = await this.runChecks();
+      const at = new Date().toISOString();
+      for (const check of out) {
+        check.at = at;
+        check.kind ??= check.name.startsWith("provider:") ? "remote" : "local";
+      }
+      this.cachedChecks = out;
+      this.cachedChecksAt = at;
+      this.cachedChecksDurationMs = Date.now() - started;
+      this.cachedChecksError = null;
+      return out;
+    } catch (e) {
+      this.cachedChecksError = (e as Error)?.message ?? String(e);
+      throw e;
+    }
+  }
+
+  /** The last cached checks and a readiness verdict derived from them. */
+  readinessSnapshot(): ReadinessSnapshot {
+    const checkedAt = this.cachedChecksAt;
+    const ageMs = checkedAt ? Math.max(0, Date.now() - Date.parse(checkedAt)) : null;
+    const source: "cached" | "none" = checkedAt ? "cached" : "none";
+    const providers = this.providerReadiness();
+    if (!this.state.config) {
+      return {
+        state: "blocked",
+        checkedAt,
+        ageMs,
+        source,
+        reasons: ["no overlay configuration yet"],
+        providers,
+      };
+    }
+    if (!checkedAt) {
+      return {
+        state: "unknown",
+        checkedAt: null,
+        ageMs: null,
+        source,
+        reasons: [this.cachedChecksError ?? "checks have not run yet"],
+        providers,
+      };
+    }
+    const blocked = this.cachedChecks.filter((c) => !c.ok && isCriticalCheck(c.name)).map((c) => `${c.name}: ${c.detail}`);
+    const remote = this.cachedChecks.filter((c) => !c.ok && !isCriticalCheck(c.name) && c.kind === "remote").map((c) => `${c.name}: ${c.detail}`);
+    const reasons = [...blocked, ...remote];
+    if (this.cachedChecksError) reasons.push(`last check failed to complete: ${this.cachedChecksError}`);
+    const state: ReadinessSnapshot["state"] = blocked.length
+      ? "blocked"
+      : remote.length || this.cachedChecksError
+        ? "degraded"
+        : "ready";
+    return { state, checkedAt, ageMs, source, reasons, providers };
+  }
+
+  /** Remote reachability is a claim only after a probe; otherwise it is UNKNOWN. */
+  private providerReadiness(): ReadinessSnapshot["providers"] {
+    return this.state.providers.map((p) => {
+      const check = this.cachedChecks.find((c) => c.name === `provider:${p.id}:status`);
+      return {
+        id: p.id,
+        reachability: check ? (check.ok ? "reachable" : "unreachable") : "UNKNOWN",
+      };
+    });
+  }
+
   /** The checks that decide whether this node may serve or consume at all. */
-  async checks(): Promise<{ name: string; ok: boolean; detail: string }[]> {
-    const out: { name: string; ok: boolean; detail: string }[] = [];
+  private async runChecks(): Promise<OperatorCheck[]> {
+    const out: OperatorCheck[] = [];
     const cfg = this.state.config;
     const et = this.supervisor.snapshot();
     if (!cfg) {
@@ -2702,12 +3141,15 @@ export class Service {
     if (this.deps.magpieVersion.includes("unknown")) {
       this.deps.magpieVersion = await this.deps.magpie.detectVersion();
     }
-    const checks = await this.checks().catch(() => [] as { name: string; ok: boolean; detail: string }[]);
+    const checks = await this.checks().catch(() => this.cachedChecks);
     const snap: StatusSnapshot = {
       ...this.lightStatus(),
       consumers: await this.provisioner.refreshAll(),
       accounting: this.accountingStatus(),
       checks,
+      checksAt: this.cachedChecksAt,
+      checksDurationMs: this.cachedChecksDurationMs,
+      readiness: this.readinessSnapshot(),
     };
     this.lastSnapshot = snap;
     return snap;
@@ -2749,7 +3191,7 @@ export class Service {
       accounting: this.accountingStatus(),
       providers: this.providers(),
       catalog: this.catalogStatus(),
-      wallet: this.walletStatusCache,
+      wallet: this.walletLocalStatus(),
       wiring: this.state.providers[0]
         ? {
             id: this.state.providers[0].id,
@@ -2758,7 +3200,10 @@ export class Service {
             createdAt: this.state.providers[0].createdAt,
           }
         : null,
-      checks: [],
+      checks: this.cachedChecks,
+      checksAt: this.cachedChecksAt,
+      checksDurationMs: this.cachedChecksDurationMs,
+      readiness: this.readinessSnapshot(),
       logs: [],
     };
   }
@@ -3059,6 +3504,68 @@ function catalogModel(meta: CatalogModelMeta): CatalogModel | null {
     pricing,
     capabilitiesSource: meta.capabilitiesSource,
   };
+}
+
+/**
+ * A request/connect is only allowed for an identity the operator accepted and a
+ * quote they actually reviewed. Without this, a quote could change between the
+ * display and the click while the command still looked safe.
+ */
+function assertCatalogAcceptance(
+  peer: CatalogPeerView,
+  acceptance?: CatalogAcceptance,
+): asserts acceptance is CatalogAcceptance {
+  if (!acceptance) {
+    throw new Error(
+      `pass the catalogue fingerprint and quote hash you reviewed for ${peer.hostname} ` +
+        `(\`--accept-fingerprint <sha256> --accept-quote <sha256>\`); no identity or quote is accepted implicitly`,
+    );
+  }
+  if (!/^[0-9a-f]{64}$/.test(acceptance.fingerprint)) throw new Error("the accepted fingerprint must be 64 lowercase hex characters");
+  if (!/^[0-9a-f]{64}$/.test(acceptance.quoteHash)) throw new Error("the accepted quote hash must be 64 lowercase hex characters");
+  if (!peer.identity) throw new Error(`no catalogue identity from ${peer.hostname} yet`);
+  if (peer.status === "unverified") {
+    throw new Error(
+      `${peer.hostname} is first-seen and self-signed (TOFU). Run \`catalog trust <node-id> --fingerprint ` +
+        `${peer.identity.fingerprint}\` before requesting or connecting`,
+    );
+  }
+  if (peer.status !== "verified" && peer.status !== "connected") {
+    throw new Error(`${peer.hostname} is ${peer.status}; its identity/quote is not acceptable`);
+  }
+  if (acceptance.fingerprint !== peer.identity.fingerprint) {
+    throw new Error(
+      `the accepted fingerprint ${acceptance.fingerprint} is not the fingerprint ${peer.hostname} presents ` +
+        `(${peer.identity.fingerprint}); re-read the catalogue`,
+    );
+  }
+  if (!peer.quoteHash || acceptance.quoteHash !== peer.quoteHash) {
+    throw new Error(
+      `the accepted quote hash ${acceptance.quoteHash} is not the current quote from ${peer.hostname} ` +
+        `(${peer.quoteHash ?? "none"}); re-read the catalogue and accept it again`,
+    );
+  }
+}
+
+/** Checks whose failure blocks serving; provider-only failures degrade instead. */
+function isCriticalCheck(name: string): boolean {
+  return (
+    name === "configured" ||
+    name === "core-running" ||
+    name === "acl" ||
+    name === "sharing-suspended" ||
+    name === "gateway-key-required" ||
+    name === "mapped-cidr" ||
+    name === "published-gateway" ||
+    name === "shared-models-native-only" ||
+    name === "catalog-published" ||
+    name === "catalog-forward-port" ||
+    name === "catalog-quote" ||
+    name === "catalog-identity" ||
+    name === "catalog-socks5-loopback" ||
+    name === "forwards-match" ||
+    name === "no-orphan-forwards"
+  );
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {

@@ -1,0 +1,5 @@
+# environment: darwin arm64 · Bun 1.4.3 · macOS 26.6.2
+# magpie: /Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie (0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15)
+# lab: /tmp/ohmyaihub-phase8-37684
+# P: mock upstream on 127.0.0.1:24442; native p/p-model priced 1000/1000
+$ P: magpie plugin add <own copy>

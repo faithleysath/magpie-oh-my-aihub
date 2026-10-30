@@ -362,7 +362,15 @@ describe("catalogue publication", () => {
     expect(quote.identity.fingerprint).toHaveLength(64);
     expect(quote.billing.priceLocked).toBe(false);
     expect(quote.billing.priceVersion).toBeNull(); // alpha/b has no price
-    expect(verifySignedCatalog(quote).quote.node.mappedCidr).toBe(s.config()!.mappedCidr ?? "");
+    expect(st.quote!.billing.priceLocked).toBe(false);
+    expect(st.quote!.billing.priceVersion).toBe(quote.billing.priceVersion);
+    expect(st.quote!.billing.quoteOnly).toBe(true);
+    const verified = verifySignedCatalog(quote);
+    expect(verified.quote.node.mappedCidr).toBe(s.config()!.mappedCidr ?? "");
+    // The public hash is the full unsigned body (including publication), not the
+    // material hash used for version/dirty detection.
+    expect(st.quote!.contentHash).toBe(verified.contentHash);
+    expect(st.quote!.contentHash).toMatch(/^[0-9a-f]{64}$/);
     const text = JSON.stringify(quote);
     expect(text).not.toContain("catalog-lab-secret");
     expect(text).not.toContain("sk-");
@@ -394,6 +402,7 @@ describe("catalogue publication", () => {
     expect(v2).toBe(v1 + 1);
     expect(s.localCatalog()!.models.map((m) => m.id)).toEqual(["alpha/a"]);
     expect(s.localCatalog()!.billing.priceVersion).toMatch(/^[0-9a-f]{64}$/);
+    expect(s.catalogStatus().quote!.contentHash).toBe(verifySignedCatalog(s.localCatalog()!).contentHash);
   });
 
   test("publishing without sharing is refused", async () => {
@@ -423,11 +432,19 @@ describe("peer discovery", () => {
     expect(c.quote!.models[0].id).toBe("beta/c");
     expect(probed.sort()).toEqual(["10.66.1.3", "10.66.1.4"]);
 
-    const trusted = await s.trustCatalogPeer("bbbbbbbb");
+    await expect(s.trustCatalogPeer("bbbbbbbb", "0".repeat(64))).rejects.toThrow(/seen fingerprint/);
+    expect(loadCatalogTrust()["bbbbbbbb"].accepted).toBe(false);
+    const trusted = await s.trustCatalogPeer("bbbbbbbb", b.identity!.fingerprint);
     expect(trusted.accepted).toBe(true);
+    // The next command in the same process must not race the cache: the
+    // correctly matching cached quote becomes verified immediately.
+    expect(s.peersInDirectory().find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!.status).toBe("verified");
     peers = await s.refreshCatalog();
     expect(peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!.status).toBe("verified");
-    const request = s.catalogRequest("bbbbbbbb");
+    const request = s.catalogRequest("bbbbbbbb", undefined, {
+      fingerprint: b.identity!.fingerprint,
+      quoteHash: b.quoteHash!,
+    });
     expect(JSON.stringify(request)).not.toContain("sk-");
     expect(request.provider).toMatchObject({ mappedCidr: "10.66.1.3/32", gatewayPort: 3425 });
     expect(request.providerCommand).toBeUndefined();
@@ -436,7 +453,12 @@ describe("peer discovery", () => {
     expect((request.approval as { quotePriceVersion?: string }).quotePriceVersion).toBe(
       (request.quote as { priceVersion?: string }).priceVersion,
     );
-    expect(() => s.catalogRequest("bbbbbbbb", ["alpha/b; touch /tmp/pwn"])).toThrow(/safe provider\/model/);
+    expect(() =>
+      s.catalogRequest("bbbbbbbb", ["alpha/b; touch /tmp/pwn"], {
+        fingerprint: b.identity!.fingerprint,
+        quoteHash: b.quoteHash!,
+      }),
+    ).toThrow(/safe provider\/model/);
 
     // C disappears from EasyTier's peer list: its last quote is kept, marked offline.
     sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
@@ -458,10 +480,41 @@ describe("peer discovery", () => {
     expect(changed.identity!.fingerprint).toBe(idC.summary.fingerprint);
     expect(loadCatalogTrust()["cccccccc"].fingerprint).toBe(idC.summary.fingerprint);
     expect(() => s.catalogRequest("cccccccc")).toThrow(/identity/);
+    await expect(s.trustCatalogPeer("cccccccc", "0".repeat(64))).rejects.toThrow(/pending fingerprint/);
+    expect(loadCatalogTrust()["cccccccc"].fingerprint).toBe(idC.summary.fingerprint);
     await s.trustCatalogPeer("cccccccc", idC2.summary.fingerprint);
     peers = await s.refreshCatalog();
     expect(peers.find((p) => p.hostname === "ohmyaihub-cccccccc")!.status).toBe("verified");
-    expect(() => s.catalogRequest("cccccccc")).not.toThrow();
+    const acceptedC = peers.find((p) => p.hostname === "ohmyaihub-cccccccc")!;
+    expect(() =>
+      s.catalogRequest("cccccccc", undefined, { fingerprint: acceptedC.identity!.fingerprint, quoteHash: acceptedC.quoteHash! }),
+    ).not.toThrow();
+  });
+
+  test("request and connect require the exact trusted fingerprint and quote hash", async () => {
+    const idB = identity();
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3")));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    let peers = await s.refreshCatalog();
+    let b = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    const accepted = { fingerprint: b.identity!.fingerprint, quoteHash: b.quoteHash! };
+
+    // First sight: not trusted, and no implicit acceptance.
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, accepted)).toThrow(/first-seen|trust/i);
+    await s.trustCatalogPeer("bbbbbbbb", accepted.fingerprint);
+    peers = await s.refreshCatalog();
+    b = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, { ...accepted, fingerprint: "0".repeat(64) })).toThrow(/fingerprint/);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, { ...accepted, quoteHash: "0".repeat(64) })).toThrow(/quote hash/);
+    expect(() => s.catalogRequest("bbbbbbbb")).toThrow(/fingerprint and quote hash/);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, accepted)).not.toThrow();
+
+    await expect(
+      s.catalogConnect("bbbbbbbb", "sk-test-provider-0001", { acceptance: { ...accepted, fingerprint: "0".repeat(64) } }),
+    ).rejects.toThrow(/fingerprint/);
   });
 
   test("a malformed quote invalidates only that peer", async () => {
@@ -539,7 +592,7 @@ describe("peer discovery", () => {
     sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
     const s = await service({ discovery: true });
     await s.refreshCatalog();
-    await s.trustCatalogPeer("bbbbbbbb");
+    await s.trustCatalogPeer("bbbbbbbb", old.summary.fingerprint);
 
     fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", fresh, "10.66.1.3/32", [model("beta/c")], "10.77.0.3", { version: 1 })));
     let peers = await s.refreshCatalog();
@@ -556,7 +609,7 @@ describe("peer discovery", () => {
   test("prototype-pollution node ids are refused and cannot touch trust", async () => {
     const s = await service({ discovery: true });
     for (const id of ["__proto__", "constructor", "prototype"]) {
-      await expect(s.trustCatalogPeer(id)).rejects.toThrow(/node id/);
+      await expect(s.trustCatalogPeer(id, "0".repeat(64))).rejects.toThrow(/node id/);
     }
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
     expect(Object.getPrototypeOf(loadCatalogTrust())).toBeNull();
@@ -624,7 +677,7 @@ describe("restart", () => {
     sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
     const first = await service({ discovery: true });
     await first.refreshCatalog();
-    await first.trustCatalogPeer("bbbbbbbb");
+    await first.trustCatalogPeer("bbbbbbbb", idB.summary.fingerprint);
     const version = first.catalogStatus().quote!.version;
     expect(verifySignedCatalog(first.localCatalog()!).quote.node.id).toBe(first.config()!.nodeId);
     await first.stop();

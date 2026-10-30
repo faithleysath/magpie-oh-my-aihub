@@ -6,11 +6,22 @@ once, and optionally discovers peers' read-only catalogues. It is not an AI gate
 request goes consumer agent → consumer Magpie → EasyTier → provider Magpie, and Magpie itself does
 the authentication, cost/token accounting and 429s.
 
-- Verified against Magpie **0.1.2038** and EasyTier **2.6.4** (pinned; see
-  `src/easytier-manifest.ts`).
-- macOS is tested end to end (phase 3 and the phase-4 lab). Linux uses the same code paths and the
-  same pinned EasyTier build and runs in CI; Windows is untested.
-- No wallet, no chain, no automatic top-up. "Top up" is a local, simulated credit.
+- Magpie **0.1.2038** is the host/CLI and pricing/billing pin; EasyTier **2.6.4** is pinned by
+  SHA-256 in `src/easytier-manifest.ts`. A Linux Magpie **0.1.2057** official container was verified
+  as a consumer. Magpie **0.1.2120** is compared for the page/bridge source; an isolated `magpie web`
+  browser run on **0.1.2171** verified the page/CSP/Save flow, but full host/CLI behaviour on
+  0.1.2120/0.1.2171 is **UNKNOWN** (desktop WKWebView not measured).
+- macOS is tested end to end (phase 3 and the phase-4 lab). Linux EasyTier and the Linux consumer
+  container are tested; Linux Magpie GUI/provider behaviour is **untested**. Windows is untested.
+- Manual `topup` is simulated credit. A separate **testnet chain wallet** can credit mock test tokens
+  after that chain's own finality; it holds no private key and never touches a mainnet asset. Real
+  funds remain blocked.
+
+Start with [onboarding](../docs/ONBOARDING.md) for the five-minute install and the two roles, then
+keep [operations](../docs/OPERATIONS.md) for the daily loop, anomalies, revocation, backup/restore
+and network exit. The phase-8 acceptance evidence is in
+[`../docs/validation/2026-10-30-phase8-onboarding-ux.md`](../docs/validation/2026-10-30-phase8-onboarding-ux.md).
+The page is the read-only view; the loopback API/CLI is the operator interface.
 
 ## The two capabilities (both may be on)
 
@@ -44,23 +55,44 @@ Two things happen on install:
 Turn it off and on with `magpie plugin off|on <spec>`. A host whose Magpie is gone (or a plugin
 that is off) stops its EasyTier and exits within a few seconds.
 
-Requirements: Magpie's own Bun (`magpie plugin add` downloads it) and a network path between the
-nodes. The plugin downloads EasyTier itself on first start (see below).
+Requirements:
+
+- Magpie 0.1.2038 for the verified host/CLI path (0.1.2120 page/bridge only; see above), and a
+  network path between the nodes. Magpie must let its gateway listen on a non-loopback address
+  (Settings → Share on local network), or the plugin's `gateway-key-required` check fails.
+- **Bun 1.4.3 on `PATH`** for the operator CLI (`bun bin/ohmyaihub.ts …`). Magpie's internal Bun is
+  not installed as a shell command; `magpie plugin add` does not create one.
+
+The plugin downloads EasyTier itself on first start (see below).
+
+After the first start, the page shows the snapshot and the setup form. **The form submits the whole
+options object; leaving a field unchanged is fine, but blanking a field is a real change, not a way
+to keep the old value.** The host records the applied options and applies only changed keys, so a
+stale page does not silently revert a later CLI change. The network secret is part of that object
+and is shown as a password field; never screenshot or share the page.
+
+A save makes Magpie restart the shared plugin host: the EasyTier core, the overlay and the local
+operator API disappear for a few seconds, and Magpie starts the host again only when something asks
+it (opening the page does). Reload the page after the restart. Do not save while an AI request is in
+flight. After onboarding, use the CLI for state changes.
 
 ## Configure
 
 Either the plugin page (**Oh My AIHub** in Magpie's sidebar: both capabilities, network name,
 secret, initial peers, listen address, published ports, shared models, Secure Mode), or the
-loopback API/CLI. Options in the page are read when the plugin host starts; Magpie restarts the host
-when a plugin is set, installed or updated.
+loopback API/CLI. Options in the page are read when the plugin host starts; a save of the page's
+setup options also restarts the shared plugin host (the overlay and loopback API are briefly gone),
+and Magpie restarts it when a plugin is set, installed or updated. After onboarding, use the CLI for
+state changes.
 
 ```sh
-# a node that both shares its Magpie and uses remote ones
-bun bin/ohmyaihub.ts --data ~/.config/magpie configure \
-  --network my-private-net --secret 'a long network secret' \
+# a node that both shares its Magpie and uses remote ones; secret is hidden or 0600-file input
+bun bin/ohmyaihub.ts --data ~/.config/magpie setup \
+  --network my-private-net --prompt-secret \
   --peer tcp://relay.example.com:11010 \
-  --share --consume --listen 127.0.0.1:11010 --ports 3425
+  --share --consume --listen 0.0.0.0:11010 --ports 3425
 
+bun bin/ohmyaihub.ts --data ~/.config/magpie share setup --all-priced
 bun bin/ohmyaihub.ts --data ~/.config/magpie share on|off
 bun bin/ohmyaihub.ts --data ~/.config/magpie share models 'provider/*,other/model'
 bun bin/ohmyaihub.ts --data ~/.config/magpie consume on|off
@@ -119,8 +151,9 @@ bun bin/ohmyaihub.ts --data ~/.config/magpie catalog config --display-name "My M
 bun bin/ohmyaihub.ts --data ~/.config/magpie catalog publish on
 bun bin/ohmyaihub.ts --data ~/.config/magpie catalog discover on
 bun bin/ohmyaihub.ts --data ~/.config/magpie catalog peers
-bun bin/ohmyaihub.ts --data ~/.config/magpie catalog request <node-id>
-bun bin/ohmyaihub.ts --data ~/.config/magpie catalog trust <node-id> [--fingerprint <sha256>]
+bun bin/ohmyaihub.ts --data ~/.config/magpie connect
+bun bin/ohmyaihub.ts --data ~/.config/magpie connect --node <node-id> \
+  --trust --fingerprint <64-hex> --quote <64-hex> --request-out "$HOME/request.json"
 ```
 
 - It is **not** a gateway and **not** the management API: one `GET /catalog/v1`, bound to the
@@ -129,32 +162,41 @@ bun bin/ohmyaihub.ts --data ~/.config/magpie catalog trust <node-id> [--fingerpr
 - It is one document in `catalog-identity.json` signed with a persisted Ed25519 key. First sight is
   **unverified (TOFU)**; a changed fingerprint is `identity-changed` and is never accepted silently.
   The signature is not a real-world identity.
-- A quote never issues a key, charges, deposits or changes a Magpie provider. `catalog request`
-  only produces connection information; the provider still runs `consumers add` and `secret`, and
-  the consumer still uses `provider add`/`catalog connect` with that key.
+- A quote never issues a key, charges, deposits or changes a Magpie provider. The guided `connect`
+  shows the full TOFU fingerprint and quote hash, requires an explicit `--trust --fingerprint …
+  --quote …` acceptance, and writes a structured request with `--request-out`. The provider approves
+  it with `share approve <request.json> --cap <usd> --yes` and hands the key over with `share handover`
+  (a 0600 file); the consumer then uses `connect --key-file` or `remote add --key-file`. The legacy
+  `catalog request`/`catalog connect --key` path fails closed until the same acceptance is supplied.
 - The discovery client uses EasyTier's own SOCKS5 listener (`socks5_proxy = socks5://127.0.0.1:…`),
   so a catalogue read creates no port forward and no listener EasyTier 2.6.4 cannot remove. The
-  listener is loopback-only and off unless discovery is enabled.
+  listener is loopback-only and off unless discovery is enabled. Discovery probes the configured
+  base port and the next four only; the default **3426** is the interoperable choice.
 
 ### Consuming
 
-Hand the provider's `mappedCidr` and this consumer's Gateway Key over (out of band; the provider
-operator reads both with `secret <consumer>`):
+Hand the provider's `mappedCidr` and the Gateway Key over out of band. The provider writes the key
+with `share handover`; the consumer reads it from that 0600 file:
 
 ```sh
-bun bin/ohmyaihub.ts --data ~/.config/magpie provider add peer-b \
-  --cidr 10.66.12.34/32 --key 'sk-…' --port 3425 [--local-port 13425]
+bun bin/ohmyaihub.ts --data ~/.config/magpie remote add peer-b \
+  --cidr 10.66.12.34/32 --key-file "$HOME/peer-b.key" --port 3425 [--local-port 13425]
 
-bun bin/ohmyaihub.ts --data ~/.config/magpie providers
-bun bin/ohmyaihub.ts --data ~/.config/magpie provider update peer-b --key 'sk-…'
-bun bin/ohmyaihub.ts --data ~/.config/magpie provider rm peer-b
+bun bin/ohmyaihub.ts --data ~/.config/magpie remote list
+bun bin/ohmyaihub.ts --data ~/.config/magpie remote test peer-b
+bun bin/ohmyaihub.ts --data ~/.config/magpie remote models peer-b
+bun bin/ohmyaihub.ts --data ~/.config/magpie remote update-key peer-b --key-file "$HOME/peer-b-new.key"
+bun bin/ohmyaihub.ts --data ~/.config/magpie remote remove peer-b
 ```
 
-`provider add` adds a `127.0.0.1:<port>` → `<mappedCidr>:<provider port>` forward through EasyTier,
+`remote add` adds a `127.0.0.1:<port>` → `<mappedCidr>:<provider port>` forward through EasyTier,
 registers the provider as a native **Remote Magpie**, and refuses to finish unless the ingress
 answers 401 without a key **and** with a wrong key, and the valid key lists at least one model.
 Each provider gets its own loopback port and its own key; adding the same id again is idempotent.
 A failure restores the previous registration of that id and leaves the other providers alone.
+`remote test`/`remote models` are read-only and touch only the named provider; `remote recover`
+re-runs reconcile. The low-level `provider add --key`/`secret` path remains for compatibility but
+puts the key in shell history; prefer the file-based path.
 
 **Ownership.** The plugin only replaces or removes a Magpie provider it can prove it wrote: the
 connection record must exist, the entry must be a Remote Magpie, its URL must be exactly this
@@ -175,13 +217,13 @@ starts announcing a provider's mapped prefix from a different hostname, that pro
 `identity-mismatch` and is unregistered until its own hostname is back (the Gateway Key is the real
 guard; see the identity note below).
 
-## Consumers and simulated credit
+## Consumers, manual top-up and the testnet wallet
 
 ```sh
 # one provider-owned key per consumer: model whitelist + positive cost cap
 bun bin/ohmyaihub.ts --data ~/.config/magpie consumers add alice deepseek/deepseek-flash 1
-# the key to hand to the consumer (never printed in logs)
-bun bin/ohmyaihub.ts --data ~/.config/magpie secret alice
+# the key to hand to the consumer: a new 0600 file, never stdout
+bun bin/ohmyaihub.ts --data ~/.config/magpie share handover alice --key-file "$HOME/alice.key"
 # add credit: recomputes cap = native used + ledger balance, keeps the window
 bun bin/ohmyaihub.ts --data ~/.config/magpie topup alice 1 --deposit-id mock-2026-10-30-1
 # fail-closed recovery after a price change or window boundary
@@ -229,19 +271,85 @@ What the plugin enforces on every key (the architecture's non-negotiables):
 
 Magpie's own 429 is the only refusal: the plugin adds no per-request budget, proxy or gate.
 
+### Testnet chain credit
+
+The manual `topup` above is simulated. The optional chain wallet is a separate, **testnet-only**
+path: a provider publishes one receiving address per chain, a consumer signs an EIP-712 deposit
+intent with their own wallet, sends mock test tokens, and the plugin credits the ledger only after
+that chain's own finality condition and only when exactly one signed intent matches the transfer.
+
+The wizard runs on the **provider's** node, never on the consumer's:
+
+1. P creates the typed data (`wallet wizard --batch … --no-watch`) and sends it to C. One pending
+   request per consumer is the safe default; cancel it or complete it before creating another, or
+   use `--force` only when the chain/amount differ and you accept the ambiguity warning.
+2. C signs externally and returns a file with `signature` and `payerAddress`.
+3. P resumes with `wallet wizard --batch --consumer … --invoice … --signature-file … --payer …`, then sends
+   the exact transfer instructions to C; C sends the transfer from their wallet.
+4. P observes `wallet status`/`wallet scan`/`wallet credit` and may send C an unsigned
+   `wallet statement` (a digest is not proof of payment).
+
+C does not run P's wizard and does not access P's loopback API. The explicit commands below remain
+the two-chain reference path.
+
+```sh
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet networks
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet assets
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet wizard --batch \
+  --consumer alice --provider provider-p --chain 97 --asset <assetId> --amount 1 --no-watch
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet wizard --batch --consumer alice --invoice <id> \
+  --signature-file "$HOME/alice-signature.json" --payer 0x<payer>
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet status
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet statement alice --out "$HOME/alice-statement.json"
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet receiving provider-a 97 0x…
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet intent provider-a alice 97 eip155:97:0x… 2500000
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet sign <invoiceId> 0x… 0x…
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet events --chain 97
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet anomalies
+```
+
+- Only testnet 97 (BSC) and 84532 (Base Sepolia) are enabled; mainnet 56/8453 exist only as
+  always-disabled reserved records and are refused on three separate paths.
+- No private key or mnemonic is stored. The provider's receiving address is one they already own;
+  the consumer signs with their own wallet. There is no HD wallet and no per-consumer address.
+- A test token must be registered only after the chain answers `decimals()`. A symbol that pretends
+  to be a real token is refused; no contract address ships in this repository.
+- Base Sepolia waits for the real `finalized` tag (measured ~17–24 minutes); BSC testnet uses 15
+  confirmations as a stated substitute because its `finalized` tag equals `latest`.
+- An unsigned payer, an exchange withdrawal, a contract payer or two identical intents stay
+  `unclaimed`/`uncertain` and are **never** credited automatically.
+- The statement is unsigned: its digest proves only that the file was not edited by hand, not that a
+  payment happened. `wallet statement --out` treats a `.json` path as an exact exclusive 0600 file;
+  any other path is a directory (the parent must exist). The wizard never signs, sends or retries a
+  transfer for you.
+- If a cap write fails after the deposit was booked, keep the same deposit and retry `wallet scan` /
+  `wallet credit`; do not create a second deposit. A reorg freezes the consumer and keeps the
+  deposit for audit. Historical `failed` rows do not automatically turn back into credits; they
+  need a manual audit.
+- This is not a buy, swap, bridge, fiat or mainnet path, and real funds remain **NO-GO**.
+
+See [onboarding](../docs/ONBOARDING.md#6-advanced-testnet-credit-two-chains) for the full two-chain
+walkthrough and [operations](../docs/OPERATIONS.md#2-balance-anomalies) for anomaly recovery.
+
 ## Status
 
 ```sh
 bun bin/ohmyaihub.ts --data ~/.config/magpie status     # JSON summary
 bun bin/ohmyaihub.ts --data ~/.config/magpie checks     # PASS/FAIL, exits 1 on failure
-bun bin/ohmyaihub.ts --data ~/.config/magpie providers  # one line per remote provider
-bun bin/ohmyaihub.ts --data ~/.config/magpie provider reconcile
+bun bin/ohmyaihub.ts --data ~/.config/magpie remote list       # one line per remote provider
+bun bin/ohmyaihub.ts --data ~/.config/magpie remote recover    # targeted/all reconcile
+bun bin/ohmyaihub.ts --data ~/.config/magpie setup --check     # read-only preflight
+bun bin/ohmyaihub.ts --data ~/.config/magpie accounting # periodic accounting state
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet     # testnet registry, health, totals
+bun bin/ohmyaihub.ts --data ~/.config/magpie wallet networks
 bun bin/ohmyaihub.ts --data ~/.config/magpie stop|start # supervisor only
 ```
 
-The host API listens on `127.0.0.1:<port>` (port file `<data>/oh-my-aihub/api-port`) and requires
-`Authorization: Bearer <token>` (`<data>/oh-my-aihub/api-token`, mode 0600) for mutations.
-Read-only `GET /status`, `/checks`, `/providers` and `/consumers` are open on loopback.
+The host API listens on `127.0.0.1:<port>` (port file `<data>/oh-my-aihub/api-port`). Every route
+except `GET /health` requires `Authorization: Bearer <token>` (`<data>/oh-my-aihub/api-token`, mode
+0600), and a non-loopback `Host` is refused. The status still exposes operator data to the token
+holder, so do not port-forward, proxy or expose the API, and do not share the plugin page capability
+URL or screenshots.
 
 Checks include: the core is running; the **effective** ACL (read back from the running core, not
 just the file) has Inbound Drop with no rules, Forward Drop with exactly the published ports, and
@@ -252,8 +360,8 @@ proven); each remote provider has a loopback forward, a Remote Magpie entry the 
 healthy status; and no loopback listener is left without a provider.
 
 The plugin page cannot fetch any of this: Magpie serves plugin pages with `connect-src 'none'`.
-The host writes `page/status.js` and the page reloads to show it. This is a Magpie limitation, not a
-choice (see `docs/ARCHITECTURE.md`).
+The host writes an allowlisted `page/status.js` (no payer addresses, keys or secrets) and the page
+reloads to show it. This is a Magpie limitation, not a choice (see `docs/ARCHITECTURE.md`).
 
 ## EasyTier supervisor
 
@@ -315,14 +423,25 @@ All under `<magpie data>/oh-my-aihub/`, mode 0600:
 | `provider-keys.json` | the Gateway Key of each remote provider, by connection id (`keyRef` points here) |
 | `consumers.json` | provider-owned consumer keys: whitelist, cap, deposits, pending intent, pause |
 | `ledger.sqlite` | immutable prepaid ledger: deposits, windows, settled usage snapshots, events |
-| `easytier/` | the verified binaries, the generated `current.toml`, the supervisor's pid state |
+| `networks.json` | testnet registry: enabled chains, RPC endpoints, registered test assets and rates |
+| `chain.sqlite` | deposit intents, observed transfer events, scan cursors, receiving addresses, anomalies |
+| `catalog-identity.json`, `catalog-publish.json`, `catalog-trust.json` | the Ed25519 catalogue identity, the signed publication state and the TOFU trust records |
+| `applied-options.json` | the page-options digest the host last applied/observed, so a stale page save cannot silently revert the CLI |
+| `easytier/`, `easytier-state.json` | the verified binaries, the generated `current.toml` and the supervisor's pid state |
 | `api-token`, `api-port` | loopback API credentials |
+| `host.lock` | the single owner of this data directory |
 | `plugin.log` | redacted log |
 
 Writes are atomic (temporary file + fsync + rename + directory fsync), the previous document is kept
 as `.prev`, and a `state.json` that cannot be parsed is recovered from it. A migration to the
 current schema writes `state.json.bak-<timestamp>` first. The key store is separate so a status
 view, a log line or a page snapshot never has to touch a secret.
+
+**Backup warning.** This directory contains Gateway Keys, the network secret, the ledger and the
+chain store. A backup is a secret. Stop Magpie completely before copying it, and include Magpie's
+own `caller-keys.json`, `providers.json`, `settings.json` and `usage.jsonl`; copying only
+`oh-my-aihub/` can restore a ledger that no longer matches Magpie. See
+[operations](../docs/OPERATIONS.md#5-backup-and-restore).
 
 ## Layout
 
@@ -336,15 +455,24 @@ src/easytier.ts         supervisor, TOML generation, ACL checks, addresses, forw
 src/easytier-manifest.ts pinned release assets and SHA-256
 src/magpie.ts           argv-only Magpie CLI wrapper + /v1/magpie/limit + provider/model views
 src/provisioner.ts      consumer keys: create, cap, verify, top-up, revoke, whitelist updates
+src/wallet.ts           testnet registry, receiving addresses, intents, watchers, status
+src/watcher.ts          one chain watcher: scan, attribute, finality, credit
+src/chainstore.ts       SQLite deposit events, intents, cursors, receiving addresses, anomalies
+src/deposits.ts         EIP-712 deposit intent and signature verification
+src/networks.ts         equal testnet registry, assets, finality policies, mainnet refusal
+src/evm.ts              chain-id verification, blocks, logs, receipts, decimals()
+src/keccak.ts, secp256k1.ts, eip712.ts  signature primitives (no wallet dependency)
 src/server.ts           loopback HTTP API
 src/acl.ts              strict verifier of the generated and the running configuration
 src/lock.ts             one host per data directory, stale takeover
 src/run.ts              process runner without a shell
 src/log.ts              redacting log + page snapshot writer
-page/                   the plugin page (settings + read-only status snapshot)
+page/                   the plugin page (read-only status snapshot + settings form)
 bin/ohmyaihub.ts        operator CLI
-test/                   bun tests (state migration, ACL invariants, keys, providers, addresses)
-docs/validation/lab/phase4/  the three-instance end-to-end lab
+test/                   bun tests (state, ACL, keys, providers, catalog, ledger, wallet, chain)
+docs/validation/lab/phase4/  historical three-instance end-to-end lab
+../docs/ONBOARDING.md    the first-use/provider/consumer/testnet-wallet journey
+../docs/OPERATIONS.md    the daily loop, anomalies, exit and backup/restore
 ```
 
 ## CI
@@ -361,8 +489,9 @@ macOS for every pull request that touches `plugin/`.
   open the page) before the supervisor runs again.
 - A host that a `magpie` CLI started (e.g. `plugin add`) is adopted by the next Magpie start if it
   is still alive; the lock plus the orphan watchdog keep one owner per data directory.
-- Plugin pages cannot reach the network, so there is no live status in the page and no button that
-  performs an action. The loopback API/CLI is the operator interface.
+- Plugin pages cannot fetch, so status is a generated snapshot rather than a live read, and only
+  the official setup options can be written from the page. The loopback API/CLI is the operator
+  interface for sharing, keys, providers and the wallet.
 - The provider must let its Magpie listen on a non-loopback address (Settings → Share on local
   network) for the subnet-proxy path to reach it; the check `gateway-key-required` fails loudly if
   it does not.
@@ -385,6 +514,18 @@ macOS for every pull request that touches `plugin/`.
   Do not change prices while credit is outstanding. The plugin's ledger preserves the USD balance
   and pauses after detection, but this is **not a real-time price lock**; real funds remain blocked
   (see `docs/validation/2026-10-30-phase6-pricing-window.md`).
-- Windows is untested; Linux EasyTier is tested, Linux Magpie is not (its release binary needs a
-  desktop stack; the official container works). The phase-4 lab ran on macOS with three isolated
-  Magpie instances, not three physical machines.
+- Linux EasyTier is tested, and the official Linux Magpie 0.1.2057 **consumer** container is
+  tested. Linux Magpie **GUI/provider** behaviour is untested; Windows is untested. The phase-4 lab
+  ran on macOS with three isolated Magpie instances, not three physical machines.
+- Magpie 0.1.2120/0.1.2171 are page/browser evidence only (0.1.2171 via isolated `magpie web`;
+  desktop WKWebView unmeasured). The host/CLI and billing pin stay at 0.1.2038; a new Magpie may
+  change a command, price or limit semantic and must be re-measured first.
+- The chain wallet is testnet-only. Base Sepolia finality takes ~17–24 minutes; an unsigned payer,
+  an exchange withdrawal, an ambiguous amount or a duplicate intent is `unclaimed`/`uncertain` and
+  is never credited automatically. There is no HD wallet or per-consumer address.
+- There is no supported backup/restore command in this release. Use the stopped-host procedure in
+  [operations](../docs/OPERATIONS.md#5-backup-and-restore); a live copy of `ledger.sqlite` or
+  `chain.sqlite` can be inconsistent.
+- The page cannot fetch and cannot perform state changes except the official setup options. Saving
+  them restarts the shared plugin host; the overlay and loopback API are briefly gone. The CLI is
+  the operator interface for the daily loop.

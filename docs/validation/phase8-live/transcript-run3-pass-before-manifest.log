@@ -1,0 +1,2412 @@
+# environment: darwin arm64 · Bun 1.4.3 · macOS 26.6.2
+# magpie: /Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie (0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15)
+# lab: /tmp/ohmyaihub-phase8-62866
+# P: mock upstream on 127.0.0.1:25696; native p/p-model priced 1000/1000
+$ P: magpie plugin add <own copy>
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> setup --check --json
+{
+  "at": "2026-10-30T07:59:55.334Z",
+  "platform": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "bun": "1.4.3",
+    "verifiedBun": "1.4.3"
+  },
+  "magpie": {
+    "bin": "/tmp/ohmyaihub-phase8-62866/P/Magpie.app/Contents/MacOS/magpie",
+    "version": "0.1.2038",
+    "verifiedVersion": "0.1.2038",
+    "matches": true,
+    "error": null
+  },
+  "host": {
+    "dataDir": "/tmp/ohmyaihub-phase8-62866/P/home/.config/magpie",
+    "reachable": true,
+    "port": "34517",
+    "error": null
+  },
+  "state": {
+    "path": "/tmp/ohmyaihub-phase8-62866/P/home/.config/magpie/oh-my-aihub/state.json",
+    "exists": false,
+    "version": null,
+    "configured": false,
+    "networkName": null,
+    "nodeId": null,
+    "legacy": false,
+    "error": null
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "platformSupported": true,
+    "installed": true,
+    "verified": true,
+    "running": false,
+    "coreVersion": null,
+    "rpcPort": null,
+    "error": null
+  },
+  "network": {
+    "lanIpv4": "192.168.132.218",
+    "gatewayPort": 55469,
+    "gatewayKeyRequired": true,
+    "error": null
+  },
+  "checks": {
+    "available": true,
+    "at": "2026-10-30T07:59:55.341Z",
+    "items": [
+      {
+        "name": "configured",
+        "ok": false,
+        "detail": "no overlay configuration yet",
+        "kind": "local",
+        "at": "2026-10-30T07:59:55.341Z"
+      }
+    ],
+    "error": null
+  },
+  "readiness": {
+    "state": "blocked",
+    "checkedAt": "2026-10-30T07:59:55.341Z",
+    "ageMs": 0,
+    "source": "cached",
+    "reasons": [
+      "no overlay configuration yet"
+    ],
+    "providers": []
+  },
+  "blockers": [],
+  "warnings": [
+    "cached checks contain 1 failure(s)"
+  ]
+}
+# C: mock upstream on 127.0.0.1:20240; native c/c-model priced 1000/1000
+$ C: magpie plugin add <own copy>
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> setup --network phase8-lab-62866 --secret-file /tmp/ohmyaihub-phase8-62866/network.secret --listen 127.0.0.1:17685 --share --no-consume --ports 55469 --no-catalog-publish --json
+{
+  "at": "2026-10-30T08:00:04.506Z",
+  "platform": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "bun": "1.4.3",
+    "verifiedBun": "1.4.3"
+  },
+  "magpie": {
+    "bin": "/tmp/ohmyaihub-phase8-62866/P/Magpie.app/Contents/MacOS/magpie",
+    "version": "0.1.2038",
+    "verifiedVersion": "0.1.2038",
+    "matches": true,
+    "error": null
+  },
+  "host": {
+    "dataDir": "/tmp/ohmyaihub-phase8-62866/P/home/.config/magpie",
+    "reachable": true,
+    "port": "34517",
+    "error": null
+  },
+  "state": {
+    "path": "/tmp/ohmyaihub-phase8-62866/P/home/.config/magpie/oh-my-aihub/state.json",
+    "exists": false,
+    "version": null,
+    "configured": false,
+    "networkName": null,
+    "nodeId": null,
+    "legacy": false,
+    "error": null
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "platformSupported": true,
+    "installed": true,
+    "verified": true,
+    "running": false,
+    "coreVersion": null,
+    "rpcPort": null,
+    "error": null
+  },
+  "network": {
+    "lanIpv4": "192.168.132.218",
+    "gatewayPort": 55469,
+    "gatewayKeyRequired": true,
+    "error": null
+  },
+  "checks": {
+    "available": true,
+    "at": "2026-10-30T08:00:04.510Z",
+    "items": [
+      {
+        "name": "configured",
+        "ok": false,
+        "detail": "no overlay configuration yet",
+        "kind": "local",
+        "at": "2026-10-30T08:00:04.510Z"
+      }
+    ],
+    "error": null
+  },
+  "readiness": {
+    "state": "blocked",
+    "checkedAt": "2026-10-30T08:00:04.510Z",
+    "ageMs": 0,
+    "source": "cached",
+    "reasons": [
+      "no overlay configuration yet"
+    ],
+    "providers": []
+  },
+  "blockers": [],
+  "warnings": [
+    "cached checks contain 1 failure(s)"
+  ]
+}
+
+applying: network phase8-lab-62866, share=true, consume=false, peers=unchanged
+{
+  "configured": true,
+  "status": {
+    "plugin": {
+      "version": "0.4.0",
+      "pid": 63244,
+      "dataDir": "/private/tmp/ohmyaihub-phase8-62866/P/home/.config/magpie",
+      "startedAt": "2026-10-30T07:59:54.316Z",
+      "stateVersion": 3
+    },
+    "magpie": {
+      "version": "magpie 0.1.2038",
+      "gateway": "http://192.168.132.218:55469"
+    },
+    "config": {
+      "role": "provider",
+      "sharingEnabled": true,
+      "sharingActive": true,
+      "shareSuspended": null,
+      "consumingEnabled": false,
+      "nodeId": "b4f95acf",
+      "hostname": "ohmyaihub-b4f95acf",
+      "networkName": "phase8-lab-62866",
+      "peers": [],
+      "listenAddr": "tcp://127.0.0.1:17685",
+      "virtualIpv4": "10.77.0.200/24",
+      "proxyCidr": "192.168.132.218/32",
+      "mappedCidr": "10.66.254.78/32",
+      "publishedPorts": [
+        55469
+      ],
+      "secureMode": true,
+      "rpcPort": 17888,
+      "share": {
+        "models": [
+          "*"
+        ]
+      },
+      "nativeProviders": [
+        "p"
+      ],
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> status --json
+{
+  "sharing": true,
+  "sharingActive": true,
+  "shareSuspended": null,
+  "consuming": false,
+  "node": {
+    "id": "b4f95acf",
+    "hostname": "ohmyaihub-b4f95acf",
+    "virtualIpv4": "10.77.0.200/24",
+    "mappedCidr": "10.66.254.78/32",
+    "publishedPorts": [
+      55469
+    ]
+  },
+  "network": "phase8-lab-62866",
+  "shareModels": [
+    "*"
+  ],
+  "nativeProviders": [
+    "p"
+  ],
+  "remoteProviders": [],
+  "easytier": {
+    "running": true,
+    "pid": 63484,
+    "version": "easytier-core 2.6.4-8428a89d",
+    "virtualIpv4": "10.77.0.200/24",
+    "export": "192.168.132.218/32 -> 10.66.254.78/32",
+    "aclOk": true,
+    "aclProblems": [],
+    "peers": [
+      "ohmyaihub-b4f95acf 10.77.0.200 Local -ms"
+    ]
+  },
+  "providers": [],
+  "consumers": [],
+  "catalog": {
+    "publishing": false,
+    "server": {
+      "running": false,
+      "port": null,
+      "address": null,
+      "error": null
+    },
+    "quote": null,
+    "peers": [],
+    "lastRefreshAt": null
+  },
+  "checks": [
+    {
+      "name": "core-running",
+      "ok": true,
+      "detail": "pid 63484",
+      "at": "2026-10-30T08:00:05.161Z",
+      "kind": "local"
+    },
+    {
+      "name": "acl",
+      "ok": true,
+      "detail": "Inbound Drop (no rules), Forward Drop with published ports, forwards loopback-only",
+      "at": "2026-10-30T08:00:05.161Z",
+      "kind": "local"
+    },
+    {
+      "name": "gateway-key-required",
+      "ok": true,
+      "detail": "GET http://192.168.132.218:55469/v1/models without a key must answer 401",
+      "at": "2026-10-30T08:00:05.161Z",
+      "kind": "local"
+    },
+    {
+      "name": "mapped-cidr",
+      "ok": true,
+      "detail": "10.66.254.78/32",
+      "at": "2026-10-30T08:00:05.161Z",
+      "kind": "local"
+    },
+    {
+      "name": "published-gateway",
+      "ok": true,
+      "detail": "the gateway answers on 55469; published ports are [55469]",
+      "at": "2026-10-30T08:00:05.161Z",
+      "kind": "local"
+    },
+    {
+      "name": "shared-models-native-only",
+      "ok": true,
+      "detail": "0 key(s) name only native, allowed models",
+      "at": "2026-10-30T08:00:05.161Z",
+      "kind": "local"
+    },
+    {
+      "name": "share-guard-cadence",
+      "ok": true,
+      "detail": "provider-id/type changes are noticed on the 15s tick; a direct edit of a Gateway Key's model whitelist is noticed by the full guard on the reconcile pass (about 45s) or at the next hand-over",
+      "at": "2026-10-30T08:00:05.161Z",
+      "kind": "local"
+    }
+  ],
+  "checksAt": "2026-10-30T08:00:05.161Z",
+  "readiness": {
+    "state": "ready",
+    "checkedAt": "2026-10-30T08:00:05.161Z",
+    "ageMs": 0,
+    "source": "cached",
+    "reasons": [],
+    "providers": []
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> catalog config --port 3426 --display-name Phase8 P
+{
+  "ok": true,
+  "catalog": {
+    "config": {
+      "enabled": false,
+      "discoveryEnabled": false,
+      "displayName": "Phase8 P",
+      "contact": null,
+      "port": 3426,
+      "socksPort": 13400,
+      "refreshSec": 20,
+      "minTopUpUsd": 1
+    },
+    "publishing": false,
+    "server": {
+      "running": false,
+      "port": null,
+      "address": null,
+      "error": null
+    },
+    "quote": null,
+    "peers": [],
+    "lastRefreshAt": null,
+    "refreshing": false,
+    "error": null
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> share setup --all-priced --publish --json
+1. p/p-model  $1000/$1000 per 1M in/out · cache 0/0
+selected 1 native model(s): p/p-model
+{
+  "models": [
+    "p/p-model"
+  ],
+  "policy": [
+    "p/p-model"
+  ],
+  "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+  "priceLocked": false,
+  "published": true,
+  "serverRunning": true,
+  "quote": {
+    "version": 1,
+    "contentHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+    "updatedAt": "2026-10-30T08:00:06.186Z",
+    "identityFingerprint": "005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+    "modelCount": 1
+  },
+  "blocking": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> setup --network phase8-lab-62866 --secret-file /tmp/ohmyaihub-phase8-62866/network.secret --peer tcp://127.0.0.1:17685 --listen 127.0.0.1:14556 --no-share --consume --catalog-discover --json
+{
+  "at": "2026-10-30T08:00:06.308Z",
+  "platform": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "bun": "1.4.3",
+    "verifiedBun": "1.4.3"
+  },
+  "magpie": {
+    "bin": "/tmp/ohmyaihub-phase8-62866/C/Magpie.app/Contents/MacOS/magpie",
+    "version": "0.1.2038",
+    "verifiedVersion": "0.1.2038",
+    "matches": true,
+    "error": null
+  },
+  "host": {
+    "dataDir": "/tmp/ohmyaihub-phase8-62866/C/home/.config/magpie",
+    "reachable": true,
+    "port": "34518",
+    "error": null
+  },
+  "state": {
+    "path": "/tmp/ohmyaihub-phase8-62866/C/home/.config/magpie/oh-my-aihub/state.json",
+    "exists": false,
+    "version": null,
+    "configured": false,
+    "networkName": null,
+    "nodeId": null,
+    "legacy": false,
+    "error": null
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "platformSupported": true,
+    "installed": true,
+    "verified": true,
+    "running": false,
+    "coreVersion": null,
+    "rpcPort": null,
+    "error": null
+  },
+  "network": {
+    "lanIpv4": "192.168.132.218",
+    "gatewayPort": 43871,
+    "gatewayKeyRequired": true,
+    "error": null
+  },
+  "checks": {
+    "available": true,
+    "at": "2026-10-30T08:00:06.312Z",
+    "items": [
+      {
+        "name": "configured",
+        "ok": false,
+        "detail": "no overlay configuration yet",
+        "kind": "local",
+        "at": "2026-10-30T08:00:06.312Z"
+      }
+    ],
+    "error": null
+  },
+  "readiness": {
+    "state": "blocked",
+    "checkedAt": "2026-10-30T08:00:06.312Z",
+    "ageMs": 0,
+    "source": "cached",
+    "reasons": [
+      "no overlay configuration yet"
+    ],
+    "providers": []
+  },
+  "blockers": [],
+  "warnings": [
+    "cached checks contain 1 failure(s)"
+  ]
+}
+
+applying: network phase8-lab-62866, share=false, consume=true, peers=tcp://127.0.0.1:17685
+{
+  "configured": true,
+  "status": {
+    "plugin": {
+      "version": "0.4.0",
+      "pid": 63403,
+      "dataDir": "/private/tmp/ohmyaihub-phase8-62866/C/home/.config/magpie",
+      "startedAt": "2026-10-30T08:00:03.462Z",
+      "stateVersion": 3
+    },
+    "magpie": {
+      "version": "magpie 0.1.2038",
+      "gateway": "http://192.168.132.218:43871"
+    },
+    "config": {
+      "role": "consumer",
+      "sharingEnabled": false,
+      "sharingActive": false,
+      "shareSuspended": null,
+      "consumingEnabled": true,
+      "nodeId": "d54c959b",
+      "hostname": "ohmyaihub-d54c959b",
+      "networkName": "phase8-lab-62866",
+      "peers": [
+        "tcp://127.0.0.1:17685"
+      ],
+      "listenAddr": "tcp://127.0.0.1:14556",
+      "virtualIpv4": "10.77.0.26/24",
+      "proxyCidr": null,
+      "mappedCidr": null,
+      "publishedPorts": [
+        43871
+      ],
+      "secureMode": true,
+      "rpcPort": 17889,
+      "share": {
+        "models": [
+          "*"
+        ]
+      },
+      "nativeProviders": [
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> catalog config --socks-port 13583
+{
+  "ok": true,
+  "catalog": {
+    "config": {
+      "enabled": false,
+      "discoveryEnabled": true,
+      "displayName": null,
+      "contact": null,
+      "port": 3426,
+      "socksPort": 13583,
+      "refreshSec": 20,
+      "minTopUpUsd": 1
+    },
+    "publishing": false,
+    "server": {
+      "running": false,
+      "port": null,
+      "address": null,
+      "error": null
+    },
+    "quote": null,
+    "peers": [],
+    "lastRefreshAt": null,
+    "refreshing": false,
+    "error": null
+  }
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> status --json
+{
+  "sharing": false,
+  "sharingActive": false,
+  "shareSuspended": null,
+  "consuming": true,
+  "node": {
+    "id": "d54c959b",
+    "hostname": "ohmyaihub-d54c959b",
+    "virtualIpv4": "10.77.0.26/24",
+    "mappedCidr": null,
+    "publishedPorts": [
+      43871
+    ]
+  },
+  "network": "phase8-lab-62866",
+  "shareModels": [
+    "*"
+  ],
+  "nativeProviders": [
+    "c"
+  ],
+  "remoteProviders": [],
+  "easytier": {
+    "running": true,
+    "pid": 63833,
+    "version": "easytier-core 2.6.4-8428a89d",
+    "virtualIpv4": "10.77.0.26/24",
+    "export": null,
+    "aclOk": true,
+    "aclProblems": [],
+    "peers": [
+      "ohmyaihub-d54c959b 10.77.0.26 Local -ms"
+    ]
+  },
+  "providers": [],
+  "consumers": [],
+  "catalog": {
+    "publishing": false,
+    "server": {
+      "running": false,
+      "port": null,
+      "address": null,
+      "error": null
+    },
+    "quote": null,
+    "peers": [],
+    "lastRefreshAt": null
+  },
+  "checks": [
+    {
+      "name": "core-running",
+      "ok": true,
+      "detail": "pid 63833",
+      "at": "2026-10-30T08:00:07.983Z",
+      "kind": "local"
+    },
+    {
+      "name": "acl",
+      "ok": true,
+      "detail": "Inbound Drop (no rules); nothing exported",
+      "at": "2026-10-30T08:00:07.983Z",
+      "kind": "local"
+    },
+    {
+      "name": "catalog-socks5-loopback",
+      "ok": true,
+      "detail": "127.0.0.1:13583 (on-demand reads; no per-peer port forward)",
+      "at": "2026-10-30T08:00:07.983Z",
+      "kind": "local"
+    },
+    {
+      "name": "catalog-peers",
+      "ok": true,
+      "detail": "0 online, 0 offline",
+      "at": "2026-10-30T08:00:07.983Z",
+      "kind": "local"
+    },
+    {
+      "name": "forwards-match",
+      "ok": true,
+      "detail": "0 loopback forward(s), all owned by a provider",
+      "at": "2026-10-30T08:00:07.983Z",
+      "kind": "local"
+    }
+  ],
+  "checksAt": "2026-10-30T08:00:07.983Z",
+  "readiness": {
+    "state": "ready",
+    "checkedAt": "2026-10-30T08:00:07.983Z",
+    "ageMs": 0,
+    "source": "cached",
+    "reasons": [],
+    "providers": []
+  }
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+no catalogue peers. Enable discovery and wait for a refresh, or connect with a mapped CIDR + key.
+{
+  "peers": []
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-b4f95acf  10.66.254.78/32:55469  unverified  fp=005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c  quote=1  first seen: self-signed key (TOFU), not a real-world identity
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-b4f95acf",
+      "virtualIpv4": "10.77.0.200",
+      "peerId": "3301682939",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.254.78/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T08:00:18.581Z",
+      "nodeId": "b4f95acf",
+      "status": "unverified",
+      "detail": "first seen: self-signed key (TOFU), not a real-world identity",
+      "catalogPort": 3426,
+      "identity": {
+        "fingerprint": "005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+        "keyId": "005feb18463829aa",
+        "publicKey": "/VEsk2DZxHcGhTFQ353k2T8JFM3K/nWicyuBJa9E3oA=",
+        "firstSeenAt": "2026-10-30T08:00:18.582Z"
+      },
+      "pendingFingerprint": null,
+      "quote": {
+        "schema": "ohmyaihub.catalog/v1",
+        "node": {
+          "id": "b4f95acf",
+          "displayName": "Phase8 P",
+          "hostname": "ohmyaihub-b4f95acf",
+          "virtualIpv4": "10.77.0.200",
+          "mappedCidr": "10.66.254.78/32",
+          "gatewayPort": 55469,
+          "catalogPort": 3426,
+          "contact": null
+        },
+        "publication": {
+          "status": "published",
+          "version": 1,
+          "updatedAt": "2026-10-30T08:00:06.186Z",
+          "publishedAt": "2026-10-30T08:00:06.186Z",
+          "note": "Read-only display data. Real charging requires a manually approved, model-scoped, capped Gateway Key and a later price-lock check; this quote never changes a key's limit or creates an account."
+        },
+        "models": [
+          {
+            "id": "p/p-model",
+            "displayName": null,
+            "gatewayApis": [
+              "chat",
+              "responses",
+              "anthropic"
+            ],
+            "nativeApis": null,
+            "contextWindow": null,
+            "maxOutputTokens": null,
+            "images": null,
+            "modalities": null,
+            "reasoningLevels": null,
+            "pricing": {
+              "unit": "USD per 1M tokens",
+              "input": 1000,
+              "output": 1000,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "source": "magpie-settings"
+            },
+            "capabilitiesSource": "magpie-settings"
+          }
+        ],
+        "topUp": {
+          "minUsd": 1,
+          "simulated": true,
+          "note": "Minimum top-up is a test-credit quote. BSC/Base Sepolia mock testnet deposits may be configured separately; there is no mainnet or real-money credit."
+        },
+        "billing": {
+          "quoteOnly": true,
+          "charged": false,
+          "note": "Display only. A prepaid key is issued only when every quoted model has a complete effective price; the price version binds this quote to those prices, but Magpie itself has no price pinning.",
+          "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+          "priceLocked": false
+        },
+        "identity": {
+          "algorithm": "ed25519",
+          "publicKey": "/VEsk2DZxHcGhTFQ353k2T8JFM3K/nWicyuBJa9E3oA=",
+          "fingerprint": "005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+          "keyId": "005feb18463829aa",
+          "createdAt": "2026-10-30T08:00:06.079Z"
+        },
+        "signature": "zQnTJP0KJyyjxFNVjv+fnYH4adq10KERVauvQvSOWoPgydHjPS11diOH6+M6hyOwMF6G5htQXJCexv1R4A12CQ=="
+      },
+      "quoteHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+      "fetchedAt": "2026-10-30T08:00:18.582Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --json
+1. ohmyaihub-b4f95acf  10.66.254.78/32:55469  unverified  fp=005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c  quote=1  first seen: self-signed key (TOFU), not a real-world identity
+{
+  "peers": [
+    {
+      "hostname": "ohmyaihub-b4f95acf",
+      "virtualIpv4": "10.77.0.200",
+      "peerId": "3301682939",
+      "online": true,
+      "route": "direct",
+      "cost": "p2p",
+      "latencyMs": "0.15",
+      "loss": "0.0%",
+      "tunnel": "tcp",
+      "nat": "FullCone",
+      "mappedCidr": "10.66.254.78/32",
+      "conflict": null,
+      "lastSeenAt": "2026-10-30T08:00:18.581Z",
+      "nodeId": "b4f95acf",
+      "status": "unverified",
+      "detail": "first seen: self-signed key (TOFU), not a real-world identity",
+      "catalogPort": 3426,
+      "identity": {
+        "fingerprint": "005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+        "keyId": "005feb18463829aa",
+        "publicKey": "/VEsk2DZxHcGhTFQ353k2T8JFM3K/nWicyuBJa9E3oA=",
+        "firstSeenAt": "2026-10-30T08:00:18.582Z"
+      },
+      "pendingFingerprint": null,
+      "quote": {
+        "schema": "ohmyaihub.catalog/v1",
+        "node": {
+          "id": "b4f95acf",
+          "displayName": "Phase8 P",
+          "hostname": "ohmyaihub-b4f95acf",
+          "virtualIpv4": "10.77.0.200",
+          "mappedCidr": "10.66.254.78/32",
+          "gatewayPort": 55469,
+          "catalogPort": 3426,
+          "contact": null
+        },
+        "publication": {
+          "status": "published",
+          "version": 1,
+          "updatedAt": "2026-10-30T08:00:06.186Z",
+          "publishedAt": "2026-10-30T08:00:06.186Z",
+          "note": "Read-only display data. Real charging requires a manually approved, model-scoped, capped Gateway Key and a later price-lock check; this quote never changes a key's limit or creates an account."
+        },
+        "models": [
+          {
+            "id": "p/p-model",
+            "displayName": null,
+            "gatewayApis": [
+              "chat",
+              "responses",
+              "anthropic"
+            ],
+            "nativeApis": null,
+            "contextWindow": null,
+            "maxOutputTokens": null,
+            "images": null,
+            "modalities": null,
+            "reasoningLevels": null,
+            "pricing": {
+              "unit": "USD per 1M tokens",
+              "input": 1000,
+              "output": 1000,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "source": "magpie-settings"
+            },
+            "capabilitiesSource": "magpie-settings"
+          }
+        ],
+        "topUp": {
+          "minUsd": 1,
+          "simulated": true,
+          "note": "Minimum top-up is a test-credit quote. BSC/Base Sepolia mock testnet deposits may be configured separately; there is no mainnet or real-money credit."
+        },
+        "billing": {
+          "quoteOnly": true,
+          "charged": false,
+          "note": "Display only. A prepaid key is issued only when every quoted model has a complete effective price; the price version binds this quote to those prices, but Magpie itself has no price pinning.",
+          "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+          "priceLocked": false
+        },
+        "identity": {
+          "algorithm": "ed25519",
+          "publicKey": "/VEsk2DZxHcGhTFQ353k2T8JFM3K/nWicyuBJa9E3oA=",
+          "fingerprint": "005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+          "keyId": "005feb18463829aa",
+          "createdAt": "2026-10-30T08:00:06.079Z"
+        },
+        "signature": "zQnTJP0KJyyjxFNVjv+fnYH4adq10KERVauvQvSOWoPgydHjPS11diOH6+M6hyOwMF6G5htQXJCexv1R4A12CQ=="
+      },
+      "quoteHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+      "fetchedAt": "2026-10-30T08:00:18.582Z",
+      "connectedProviderId": null
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --node b4f95acf
+peer        ohmyaihub-b4f95acf (b4f95acf)
+status      unverified
+fingerprint 005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c  (self-signed, local TOFU)
+quote       v1 · hash 03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448
+billing     priceVersion 148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33 · priceLocked false
+address     10.66.254.78/32:55469 · catalogue port 3426
+models      1
+  - p/p-model  $1000/$1000 per 1M in/out · cache 0/0
+error: ohmyaihub-b4f95acf is unverified. First sight is self-signed TOFU, not an identity. Review the fingerprint/quote above, then re-run with --trust --fingerprint <sha256> --quote <sha256>.
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --node b4f95acf --trust --fingerprint 1111111111111111111111111111111111111111111111111111111111111111 --quote 03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448 --request-out /tmp/ohmyaihub-phase8-62866/wrong.request.json
+peer        ohmyaihub-b4f95acf (b4f95acf)
+status      unverified
+fingerprint 005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c  (self-signed, local TOFU)
+quote       v1 · hash 03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448
+billing     priceVersion 148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33 · priceLocked false
+address     10.66.254.78/32:55469 · catalogue port 3426
+models      1
+  - p/p-model  $1000/$1000 per 1M in/out · cache 0/0
+error: the accepted fingerprint is not 005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --node b4f95acf --trust --fingerprint 005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c --quote 03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448 --request-out /tmp/ohmyaihub-phase8-62866/handover/request.json --json
+peer        ohmyaihub-b4f95acf (b4f95acf)
+status      unverified
+fingerprint 005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c  (self-signed, local TOFU)
+quote       v1 · hash 03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448
+billing     priceVersion 148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33 · priceLocked false
+address     10.66.254.78/32:55469 · catalogue port 3426
+models      1
+  - p/p-model  $1000/$1000 per 1M in/out · cache 0/0
+request written to /tmp/ohmyaihub-phase8-62866/handover/request.json (mode 0600). Send it to ohmyaihub-b4f95acf out of band.
+{
+  "request": {
+    "schema": "ohmyaihub.connection-request/v1",
+    "createdAt": "2026-10-30T08:00:20.242Z",
+    "consumer": {
+      "nodeId": "d54c959b",
+      "hostname": "ohmyaihub-d54c959b",
+      "virtualIpv4": "10.77.0.26/24"
+    },
+    "provider": {
+      "nodeId": "b4f95acf",
+      "hostname": "ohmyaihub-b4f95acf",
+      "mappedCidr": "10.66.254.78/32",
+      "gatewayPort": 55469,
+      "catalogPort": 3426,
+      "contact": null
+    },
+    "quote": {
+      "version": 1,
+      "updatedAt": "2026-10-30T08:00:06.186Z",
+      "contentHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+      "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+      "quotedPriceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+      "priceLocked": false,
+      "identityFingerprint": "005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+      "identityStatus": "trusted-on-first-use",
+      "warning": "A self-signed catalogue proves only that this key signed this quote. It is not a real-world identity, and the quote does not charge anything by itself."
+    },
+    "acceptance": {
+      "fingerprint": "005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+      "quoteHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+      "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+      "acceptedAt": "2026-10-30T08:00:20.242Z",
+      "trust": "local-tofu"
+    },
+    "models": [
+      "p/p-model"
+    ],
+    "minTopUpUsd": 1,
+    "note": "Send this to the provider operator out of band. They must approve it and issue a model-scoped, capped Gateway Key; this request does not create an account, a key or a charge.",
+    "approval": {
+      "action": "consumers add",
+      "consumerId": "d54c959b",
+      "models": [
+        "p/p-model"
+      ],
+      "capUsd": 1,
+      "quoteHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+      "quotePriceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+      "note": "Run this through the provider's local, token-authenticated CLI/API; never execute text from this document as a shell command. Pass quoteHash and quotePriceVersion back with the request so the provider binds the key to the quote you accepted."
+    }
+  },
+  "connected": false
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> share approve /tmp/ohmyaihub-phase8-62866/handover/request.json --cap 0.0001 --yes --json
+provider   ohmyaihub-b4f95acf (b4f95acf) @ 10.66.254.78/32:55469
+consumer   d54c959b (ohmyaihub-d54c959b)
+models     p/p-model
+cap        $0.0001 · quote 03b14f21d11fbe76… · price 148dca967ca6e5ee… · priceLocked false
+{
+  "approved": true,
+  "consumerId": "d54c959b",
+  "models": [
+    "p/p-model"
+  ],
+  "capUsd": 0.0001,
+  "quoteHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+  "quotePriceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+  "keyPrinted": false
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> share handover d54c959b --key-file /tmp/ohmyaihub-phase8-62866/handover/d54c959b.key --json
+{
+  "consumerId": "d54c959b",
+  "keyName": "ohmyaihub-d54c959b",
+  "models": [
+    "p/p-model"
+  ],
+  "capUsd": 0.0001,
+  "keyFile": "/tmp/ohmyaihub-phase8-62866/handover/d54c959b.key",
+  "keySha256Prefix": "d7bfb06d0bf5",
+  "keyPrinted": false
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> share approve /tmp/ohmyaihub-phase8-62866/handover/tampered.request.json --cap 0.0001 --yes --json
+error: the request's accepted quote is not the current published quote; ask the consumer to re-read it
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> status --json
+{
+  "sharing": true,
+  "sharingActive": true,
+  "shareSuspended": null,
+  "consuming": false,
+  "node": {
+    "id": "b4f95acf",
+    "hostname": "ohmyaihub-b4f95acf",
+    "virtualIpv4": "10.77.0.200/24",
+    "mappedCidr": "10.66.254.78/32",
+    "publishedPorts": [
+      55469
+    ]
+  },
+  "network": "phase8-lab-62866",
+  "shareModels": [
+    "p/p-model"
+  ],
+  "nativeProviders": [
+    "p"
+  ],
+  "remoteProviders": [],
+  "easytier": {
+    "running": true,
+    "pid": 63575,
+    "version": "easytier-core 2.6.4-8428a89d",
+    "virtualIpv4": "10.77.0.200/24",
+    "export": "192.168.132.218/32 -> 10.66.254.78/32",
+    "aclOk": true,
+    "aclProblems": [],
+    "peers": [
+      "ohmyaihub-b4f95acf 10.77.0.200 Local -ms",
+      "ohmyaihub-d54c959b 10.77.0.26 p2p 0.14ms"
+    ]
+  },
+  "providers": [],
+  "consumers": [
+    {
+      "consumerId": "d54c959b",
+      "keyName": "ohmyaihub-d54c959b",
+      "keyId": "28b099eaa2d730da57c6f0fe",
+      "models": [
+        "p/p-model"
+      ],
+      "window": "3650d",
+      "capUsd": 0.0001,
+      "creditedUsd": 0,
+      "createdAt": "2026-10-30T08:00:20.424Z",
+      "revokedAt": null,
+      "usedUsd": 0,
+      "leftUsd": 0.0001,
+      "calls": 0,
+      "spent": false,
+      "reset": "2036-10-27T16:00:20.565984+08:00",
+      "pending": false,
+      "paused": null,
+      "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+      "acceptedQuoteHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+      "ledger": {
+        "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+        "windowId": "6e7cdeb1-0b6c-48ad-9368-efa75124fd5d",
+        "start": "2026-10-30T16:00:20.565984+08:00",
+        "reset": "2036-10-27T16:00:20.565984+08:00",
+        "depositedUsd": 0.0001,
+        "consumedUsd": 0,
+        "balanceUsd": 0.0001,
+        "overdraftUsd": 0,
+        "unsettledUsd": 0,
+        "unpricedCalls": 0,
+        "openSettlements": 1,
+        "uncertain": null,
+        "gaps": []
+      }
+    }
+  ],
+  "catalog": {
+    "publishing": true,
+    "server": {
+      "running": true,
+      "port": 3426,
+      "address": "192.168.132.218:3426",
+      "error": null
+    },
+    "quote": {
+      "version": 1,
+      "updatedAt": "2026-10-30T08:00:06.186Z",
+      "publishedAt": "2026-10-30T08:00:06.186Z",
+      "contentHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+      "modelCount": 1,
+      "models": [
+        {
+          "id": "p/p-model",
+          "displayName": null,
+          "gatewayApis": [
+            "chat",
+            "responses",
+            "anthropic"
+          ],
+          "nativeApis": null,
+          "contextWindow": null,
+          "maxOutputTokens": null,
+          "images": null,
+          "modalities": null,
+          "reasoningLevels": null,
+          "pricing": {
+            "unit": "USD per 1M tokens",
+            "input": 1000,
+            "output": 1000,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "source": "magpie-settings"
+          },
+          "capabilitiesSource": "magpie-settings"
+        }
+      ],
+      "billing": {
+        "quoteOnly": true,
+        "charged": false,
+        "note": "Display only. A prepaid key is issued only when every quoted model has a complete effective price; the price version binds this quote to those prices, but Magpie itself has no price pinning.",
+        "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> connect --node b4f95acf --key-file /tmp/ohmyaihub-phase8-62866/C/home/approved.key --id peer-p --fingerprint 005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c --quote 03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448 --json
+{
+  "connected": true,
+  "provider": {
+    "id": "peer-p",
+    "remoteMagpieId": "peer-p",
+    "mappedCidr": "10.66.254.78/32",
+    "providerPort": 55469,
+    "localPort": 13425,
+    "url": "http://127.0.0.1:13425",
+    "keyRef": "provider-keys.json#peer-p",
+    "status": "connected",
+    "detail": null,
+    "fingerprint": {
+      "hostname": "ohmyaihub-b4f95acf",
+      "virtualIpv4": "10.77.0.200",
+      "peerId": "3301682939"
+    },
+    "limit": {
+      "period": "days",
+      "calls": 0,
+      "cost": 0,
+      "costLimit": 0.0001,
+      "costLeft": 0.0001,
+      "tokens": 0,
+      "spent": false,
+      "reset": "2036-10-27T16:00:20.565984+08:00"
+    },
+    "createdAt": "2026-10-30T08:00:22.380Z",
+    "updatedAt": "2026-10-30T08:00:22.380Z",
+    "lastConnectedAt": "2026-10-30T08:00:22.380Z"
+  }
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote test peer-p --json
+{
+  "provider": {
+    "id": "peer-p",
+    "remoteMagpieId": "peer-p",
+    "mappedCidr": "10.66.254.78/32",
+    "providerPort": 55469,
+    "localPort": 13425,
+    "url": "http://127.0.0.1:13425",
+    "keyRef": "provider-keys.json#peer-p",
+    "status": "connected",
+    "detail": null,
+    "fingerprint": {
+      "hostname": "ohmyaihub-b4f95acf",
+      "virtualIpv4": "10.77.0.200",
+      "peerId": "3301682939"
+    },
+    "limit": {
+      "period": "days",
+      "calls": 0,
+      "cost": 0,
+      "costLimit": 0.0001,
+      "costLeft": 0.0001,
+      "tokens": 0,
+      "spent": false,
+      "reset": "2036-10-27T16:00:20.565984+08:00"
+    },
+    "createdAt": "2026-10-30T08:00:22.380Z",
+    "updatedAt": "2026-10-30T08:00:22.380Z",
+    "lastConnectedAt": "2026-10-30T08:00:22.380Z",
+    "limitText": "limit $0.0000 used / $0.0001 cap",
+    "limitUnsafe": false,
+    "limitUnknown": false
+  },
+  "providers": [
+    {
+      "id": "peer-p",
+      "remoteMagpieId": "peer-p",
+      "mappedCidr": "10.66.254.78/32",
+      "providerPort": 55469,
+      "localPort": 13425,
+      "url": "http://127.0.0.1:13425",
+      "keyRef": "provider-keys.json#peer-p",
+      "status": "connected",
+      "detail": null,
+      "fingerprint": {
+        "hostname": "ohmyaihub-b4f95acf",
+        "virtualIpv4": "10.77.0.200",
+        "peerId": "3301682939"
+      },
+      "limit": {
+        "period": "days",
+        "calls": 0,
+        "cost": 0,
+        "costLimit": 0.0001,
+        "costLeft": 0.0001,
+        "tokens": 0,
+        "spent": false,
+        "reset": "2036-10-27T16:00:20.565984+08:00"
+      },
+      "createdAt": "2026-10-30T08:00:22.380Z",
+      "updatedAt": "2026-10-30T08:00:22.380Z",
+      "lastConnectedAt": "2026-10-30T08:00:22.380Z"
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote models peer-p --json
+{
+  "id": "peer-p",
+  "models": [
+    "p/p-model"
+  ],
+  "status": "connected",
+  "detail": null,
+  "limit": {
+    "period": "days",
+    "calls": 0,
+    "cost": 0,
+    "costLimit": 0.0001,
+    "costLeft": 0.0001,
+    "tokens": 0,
+    "spent": false,
+    "reset": "2036-10-27T16:00:20.565984+08:00"
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> topup d54c959b 1 --deposit-id phase8-62866-topup --json
+{
+  "consumerId": "d54c959b",
+  "keyName": "ohmyaihub-d54c959b",
+  "keyId": "28b099eaa2d730da57c6f0fe",
+  "models": [
+    "p/p-model"
+  ],
+  "window": "3650d",
+  "capUsd": 1.0001,
+  "creditedUsd": 1,
+  "createdAt": "2026-10-30T08:00:20.424Z",
+  "revokedAt": null,
+  "usedUsd": 0.012,
+  "leftUsd": 0.9881,
+  "calls": 1,
+  "spent": false,
+  "reset": "2036-10-27T16:00:20.565984+08:00",
+  "pending": false,
+  "paused": null,
+  "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+  "acceptedQuoteHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+  "ledger": {
+    "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33",
+    "windowId": "6e7cdeb1-0b6c-48ad-9368-efa75124fd5d",
+    "start": "2026-10-30T16:00:20.565984+08:00",
+    "reset": "2036-10-27T16:00:20.565984+08:00",
+    "depositedUsd": 1.0001,
+    "consumedUsd": 0.012,
+    "balanceUsd": 0.9881,
+    "overdraftUsd": 0,
+    "unsettledUsd": 0,
+    "unpricedCalls": 0,
+    "openSettlements": 1,
+    "uncertain": null,
+    "gaps": []
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> setup --network phase8-lab-62866 --share --no-consume --ports 55469
+platform      darwin-arm64 · Bun 1.4.3 (tested 1.4.3)
+Magpie        0.1.2038 · tested 0.1.2038 · match
+host          reachable on 127.0.0.1:34517
+state         v3, configured (phase8-lab-62866)
+EasyTier      2.6.4 (8428a89d2dab) · installed & verified · running easytier-core 2.6.4-8428a89d
+RPC           17888
+network       LAN 192.168.132.218 · gateway 55469 · keyed probe 401 (ok)
+checks        11/11 pass · evidence 2026-10-30T08:00:22.948Z
+
+This node already has a configuration. Nothing was changed.
+Use `setup --reconfigure` to submit a change, or `resume` to start/check it.
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> setup --resume --json
+{
+  "at": "2026-10-30T08:00:23.081Z",
+  "platform": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "bun": "1.4.3",
+    "verifiedBun": "1.4.3"
+  },
+  "magpie": {
+    "bin": "/tmp/ohmyaihub-phase8-62866/P/Magpie.app/Contents/MacOS/magpie",
+    "version": "0.1.2038",
+    "verifiedVersion": "0.1.2038",
+    "matches": true,
+    "error": null
+  },
+  "host": {
+    "dataDir": "/tmp/ohmyaihub-phase8-62866/P/home/.config/magpie",
+    "reachable": true,
+    "port": "34517",
+    "error": null
+  },
+  "state": {
+    "path": "/tmp/ohmyaihub-phase8-62866/P/home/.config/magpie/oh-my-aihub/state.json",
+    "exists": true,
+    "version": 3,
+    "configured": true,
+    "networkName": "phase8-lab-62866",
+    "nodeId": "b4f95acf",
+    "legacy": false,
+    "error": null
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "platformSupported": true,
+    "installed": true,
+    "verified": true,
+    "running": true,
+    "coreVersion": "easytier-core 2.6.4-8428a89d",
+    "rpcPort": 17888,
+    "error": null
+  },
+  "network": {
+    "lanIpv4": "192.168.132.218",
+    "gatewayPort": 55469,
+    "gatewayKeyRequired": true,
+    "error": null
+  },
+  "checks": {
+    "available": true,
+    "at": "2026-10-30T08:00:23.085Z",
+    "items": [
+      {
+        "name": "core-running",
+        "ok": true,
+        "detail": "pid 63575",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "acl",
+        "ok": true,
+        "detail": "Inbound Drop (no rules), Forward Drop with published ports, forwards loopback-only",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "gateway-key-required",
+        "ok": true,
+        "detail": "GET http://192.168.132.218:55469/v1/models without a key must answer 401",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "mapped-cidr",
+        "ok": true,
+        "detail": "10.66.254.78/32",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "published-gateway",
+        "ok": true,
+        "detail": "the gateway answers on 55469; published ports are [55469]",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "shared-models-native-only",
+        "ok": true,
+        "detail": "1 key(s) name only native, allowed models",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "share-guard-cadence",
+        "ok": true,
+        "detail": "provider-id/type changes are noticed on the 15s tick; a direct edit of a Gateway Key's model whitelist is noticed by the full guard on the reconcile pass (about 45s) or at the next hand-over",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "catalog-published",
+        "ok": true,
+        "detail": "192.168.132.218:3426/catalog/v1 (Forward ACL allows tcp/3426)",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "catalog-forward-port",
+        "ok": true,
+        "detail": "catalogue port 3426; Forward ACL ports [55469, 3426]",
+        "kind": "local",
+        "at": "2026-10-30T08:00:23.085Z"
+      },
+      {
+        "name": "catalog-quote",
+        "ok": true,
+        "detail": "version 1, 1 model(s), updated 2026-10-30T08:00:06.186Z, identity 005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+        "kind": "local",
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote test peer-p --json
+{
+  "provider": {
+    "id": "peer-p",
+    "remoteMagpieId": "peer-p",
+    "mappedCidr": "10.66.254.78/32",
+    "providerPort": 55469,
+    "localPort": 13425,
+    "url": "http://127.0.0.1:13425",
+    "keyRef": "provider-keys.json#peer-p",
+    "status": "connected",
+    "detail": null,
+    "fingerprint": {
+      "hostname": "ohmyaihub-b4f95acf",
+      "virtualIpv4": "10.77.0.200",
+      "peerId": "3301682939"
+    },
+    "limit": {
+      "period": "days",
+      "calls": 2,
+      "cost": 0.024,
+      "costLimit": 1.0001,
+      "costLeft": 0.9761,
+      "tokens": 24,
+      "spent": false,
+      "reset": "2036-10-27T16:00:20.565984+08:00"
+    },
+    "createdAt": "2026-10-30T08:00:22.380Z",
+    "updatedAt": "2026-10-30T08:00:34.772Z",
+    "lastConnectedAt": "2026-10-30T08:00:34.772Z",
+    "limitText": "limit $0.0240 used / $1.0001 cap",
+    "limitUnsafe": false,
+    "limitUnknown": false
+  },
+  "providers": [
+    {
+      "id": "peer-p",
+      "remoteMagpieId": "peer-p",
+      "mappedCidr": "10.66.254.78/32",
+      "providerPort": 55469,
+      "localPort": 13425,
+      "url": "http://127.0.0.1:13425",
+      "keyRef": "provider-keys.json#peer-p",
+      "status": "connected",
+      "detail": null,
+      "fingerprint": {
+        "hostname": "ohmyaihub-b4f95acf",
+        "virtualIpv4": "10.77.0.200",
+        "peerId": "3301682939"
+      },
+      "limit": {
+        "period": "days",
+        "calls": 2,
+        "cost": 0.024,
+        "costLimit": 1.0001,
+        "costLeft": 0.9761,
+        "tokens": 24,
+        "spent": false,
+        "reset": "2036-10-27T16:00:20.565984+08:00"
+      },
+      "createdAt": "2026-10-30T08:00:22.380Z",
+      "updatedAt": "2026-10-30T08:00:34.772Z",
+      "lastConnectedAt": "2026-10-30T08:00:34.772Z"
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> consume off --json
+{
+  "ok": true,
+  "consuming": false,
+  "providers": [
+    {
+      "id": "peer-p",
+      "remoteMagpieId": "peer-p",
+      "mappedCidr": "10.66.254.78/32",
+      "providerPort": 55469,
+      "localPort": 13425,
+      "url": "http://127.0.0.1:13425",
+      "keyRef": "provider-keys.json#peer-p",
+      "status": "disabled",
+      "detail": "consumption is disabled",
+      "fingerprint": {
+        "hostname": "ohmyaihub-b4f95acf",
+        "virtualIpv4": "10.77.0.200",
+        "peerId": "3301682939"
+      },
+      "limit": {
+        "period": "days",
+        "calls": 2,
+        "cost": 0.024,
+        "costLimit": 1.0001,
+        "costLeft": 0.9761,
+        "tokens": 24,
+        "spent": false,
+        "reset": "2036-10-27T16:00:20.565984+08:00"
+      },
+      "createdAt": "2026-10-30T08:00:22.380Z",
+      "updatedAt": "2026-10-30T08:00:35.324Z",
+      "lastConnectedAt": "2026-10-30T08:00:34.772Z"
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> consume on --json
+{
+  "ok": true,
+  "consuming": true,
+  "providers": [
+    {
+      "id": "peer-p",
+      "remoteMagpieId": "peer-p",
+      "mappedCidr": "10.66.254.78/32",
+      "providerPort": 55469,
+      "localPort": 13425,
+      "url": "http://127.0.0.1:13425",
+      "keyRef": "provider-keys.json#peer-p",
+      "status": "connected",
+      "detail": null,
+      "fingerprint": {
+        "hostname": "ohmyaihub-b4f95acf",
+        "virtualIpv4": "10.77.0.200",
+        "peerId": "3301682939"
+      },
+      "limit": {
+        "period": "days",
+        "calls": 3,
+        "cost": 0.036000000000000004,
+        "costLimit": 1.0001,
+        "costLeft": 0.9641,
+        "tokens": 36,
+        "spent": false,
+        "reset": "2036-10-27T16:00:20.565984+08:00"
+      },
+      "createdAt": "2026-10-30T08:00:22.380Z",
+      "updatedAt": "2026-10-30T08:00:45.092Z",
+      "lastConnectedAt": "2026-10-30T08:00:45.092Z"
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote test peer-p --json
+{
+  "provider": {
+    "id": "peer-p",
+    "remoteMagpieId": "peer-p",
+    "mappedCidr": "10.66.254.78/32",
+    "providerPort": 55469,
+    "localPort": 13425,
+    "url": "http://127.0.0.1:13425",
+    "keyRef": "provider-keys.json#peer-p",
+    "status": "connected",
+    "detail": null,
+    "fingerprint": {
+      "hostname": "ohmyaihub-b4f95acf",
+      "virtualIpv4": "10.77.0.200",
+      "peerId": "3301682939"
+    },
+    "limit": {
+      "period": "days",
+      "calls": 3,
+      "cost": 0.036000000000000004,
+      "costLimit": 1.0001,
+      "costLeft": 0.9641,
+      "tokens": 36,
+      "spent": false,
+      "reset": "2036-10-27T16:00:20.565984+08:00"
+    },
+    "createdAt": "2026-10-30T08:00:22.380Z",
+    "updatedAt": "2026-10-30T08:00:45.092Z",
+    "lastConnectedAt": "2026-10-30T08:00:45.092Z",
+    "limitText": "limit $0.0360 used / $1.0001 cap",
+    "limitUnsafe": false,
+    "limitUnknown": false
+  },
+  "providers": [
+    {
+      "id": "peer-p",
+      "remoteMagpieId": "peer-p",
+      "mappedCidr": "10.66.254.78/32",
+      "providerPort": 55469,
+      "localPort": 13425,
+      "url": "http://127.0.0.1:13425",
+      "keyRef": "provider-keys.json#peer-p",
+      "status": "connected",
+      "detail": null,
+      "fingerprint": {
+        "hostname": "ohmyaihub-b4f95acf",
+        "virtualIpv4": "10.77.0.200",
+        "peerId": "3301682939"
+      },
+      "limit": {
+        "period": "days",
+        "calls": 3,
+        "cost": 0.036000000000000004,
+        "costLimit": 1.0001,
+        "costLeft": 0.9641,
+        "tokens": 36,
+        "spent": false,
+        "reset": "2036-10-27T16:00:20.565984+08:00"
+      },
+      "createdAt": "2026-10-30T08:00:22.380Z",
+      "updatedAt": "2026-10-30T08:00:45.092Z",
+      "lastConnectedAt": "2026-10-30T08:00:45.092Z"
+    }
+  ]
+}
+# P2: mock upstream on 127.0.0.1:26295; native p2/p2-model priced 1000/1000
+$ P2: magpie plugin add <own copy>
+$ P2: bun plugin/bin/ohmyaihub.ts --data <own data> setup --network phase8-lab-62866 --secret-file /tmp/ohmyaihub-phase8-62866/network.secret --peer tcp://127.0.0.1:17685 --listen 127.0.0.1:11566 --share --no-consume --ports 34945 --share-models p2/p2-model --json
+{
+  "at": "2026-10-30T08:00:56.752Z",
+  "platform": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "bun": "1.4.3",
+    "verifiedBun": "1.4.3"
+  },
+  "magpie": {
+    "bin": "/tmp/ohmyaihub-phase8-62866/P2/Magpie.app/Contents/MacOS/magpie",
+    "version": "0.1.2038",
+    "verifiedVersion": "0.1.2038",
+    "matches": true,
+    "error": null
+  },
+  "host": {
+    "dataDir": "/tmp/ohmyaihub-phase8-62866/P2/home/.config/magpie",
+    "reachable": true,
+    "port": "34519",
+    "error": null
+  },
+  "state": {
+    "path": "/tmp/ohmyaihub-phase8-62866/P2/home/.config/magpie/oh-my-aihub/state.json",
+    "exists": false,
+    "version": null,
+    "configured": false,
+    "networkName": null,
+    "nodeId": null,
+    "legacy": false,
+    "error": null
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "platformSupported": true,
+    "installed": true,
+    "verified": true,
+    "running": false,
+    "coreVersion": null,
+    "rpcPort": null,
+    "error": null
+  },
+  "network": {
+    "lanIpv4": "192.168.132.218",
+    "gatewayPort": 34945,
+    "gatewayKeyRequired": true,
+    "error": null
+  },
+  "checks": {
+    "available": true,
+    "at": "2026-10-30T08:00:56.758Z",
+    "items": [
+      {
+        "name": "configured",
+        "ok": false,
+        "detail": "no overlay configuration yet",
+        "kind": "local",
+        "at": "2026-10-30T08:00:56.758Z"
+      }
+    ],
+    "error": null
+  },
+  "readiness": {
+    "state": "blocked",
+    "checkedAt": "2026-10-30T08:00:56.758Z",
+    "ageMs": 1,
+    "source": "cached",
+    "reasons": [
+      "no overlay configuration yet"
+    ],
+    "providers": []
+  },
+  "blockers": [],
+  "warnings": [
+    "cached checks contain 1 failure(s)"
+  ]
+}
+
+applying: network phase8-lab-62866, share=true, consume=false, peers=tcp://127.0.0.1:17685
+{
+  "configured": true,
+  "status": {
+    "plugin": {
+      "version": "0.4.0",
+      "pid": 65071,
+      "dataDir": "/private/tmp/ohmyaihub-phase8-62866/P2/home/.config/magpie",
+      "startedAt": "2026-10-30T08:00:55.694Z",
+      "stateVersion": 3
+    },
+    "magpie": {
+      "version": "magpie 0.1.2038",
+      "gateway": "http://192.168.132.218:34945"
+    },
+    "config": {
+      "role": "provider",
+      "sharingEnabled": true,
+      "sharingActive": true,
+      "shareSuspended": null,
+      "consumingEnabled": false,
+      "nodeId": "8c39659d",
+      "hostname": "ohmyaihub-8c39659d",
+      "networkName": "phase8-lab-62866",
+      "peers": [
+        "tcp://127.0.0.1:17685"
+      ],
+      "listenAddr": "tcp://127.0.0.1:11566",
+      "virtualIpv4": "10.77.0.192/24",
+      "proxyCidr": "192.168.132.218/32",
+      "mappedCidr": "10.66.6.161/32",
+      "publishedPorts": [
+        34945
+      ],
+      "secureMode": true,
+      "rpcPort": 17890,
+      "share": {
+        "models": [
+          "p2/p2-model"
+        ]
+      },
+      "nativeProviders": [
+$ P2: bun plugin/bin/ohmyaihub.ts --data <own data> consumers add c2 p2/p2-model 1 --json
+{
+  "consumerId": "c2",
+  "keyName": "ohmyaihub-c2",
+  "keyId": "c4db786e136c689de30a5d11",
+  "models": [
+    "p2/p2-model"
+  ],
+  "window": "3650d",
+  "capUsd": 1,
+  "creditedUsd": 0,
+  "createdAt": "2026-10-30T08:00:57.859Z",
+  "revokedAt": null,
+  "usedUsd": 0,
+  "leftUsd": 1,
+  "calls": 0,
+  "spent": false,
+  "reset": "2036-10-27T16:00:58.041032+08:00",
+  "pending": false,
+  "paused": null,
+  "priceVersion": "008301d58d3c337946aba9bc742bea4d7604129de81af85287db07d72db41ffa",
+  "acceptedQuoteHash": null,
+  "ledger": {
+    "priceVersion": "008301d58d3c337946aba9bc742bea4d7604129de81af85287db07d72db41ffa",
+    "windowId": "03aae8c7-97ff-40a3-80fe-a66f41210edd",
+    "start": "2026-10-30T16:00:58.041032+08:00",
+    "reset": "2036-10-27T16:00:58.041032+08:00",
+    "depositedUsd": 1,
+    "consumedUsd": 0,
+    "balanceUsd": 1,
+    "overdraftUsd": 0,
+    "unsettledUsd": 0,
+    "unpricedCalls": 0,
+    "openSettlements": 1,
+    "uncertain": null,
+    "gaps": []
+  }
+}
+$ P2: bun plugin/bin/ohmyaihub.ts --data <own data> share handover c2 --key-file /tmp/ohmyaihub-phase8-62866/handover/c2.key --json
+{
+  "consumerId": "c2",
+  "keyName": "ohmyaihub-c2",
+  "models": [
+    "p2/p2-model"
+  ],
+  "capUsd": 1,
+  "keyFile": "/tmp/ohmyaihub-phase8-62866/handover/c2.key",
+  "keySha256Prefix": "b53d6687e2c6",
+  "keyPrinted": false
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote add peer-p2 --cidr 10.66.6.161/32 --key-file /tmp/ohmyaihub-phase8-62866/C/home/c2.key --port 34945 --json
+{
+  "id": "peer-p2",
+  "remoteMagpieId": "peer-p2",
+  "mappedCidr": "10.66.6.161/32",
+  "providerPort": 34945,
+  "localPort": 13426,
+  "url": "http://127.0.0.1:13426",
+  "keyRef": "provider-keys.json#peer-p2",
+  "status": "connected",
+  "detail": null,
+  "fingerprint": null,
+  "limit": {
+    "period": "days",
+    "calls": 0,
+    "cost": 0,
+    "costLimit": 1,
+    "costLeft": 1,
+    "tokens": 0,
+    "spent": false,
+    "reset": "2036-10-27T16:00:58.041032+08:00"
+  },
+  "createdAt": "2026-10-30T08:01:04.088Z",
+  "updatedAt": "2026-10-30T08:01:04.088Z",
+  "lastConnectedAt": "2026-10-30T08:01:04.088Z"
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote models peer-p2 --json
+{
+  "id": "peer-p2",
+  "models": [
+    "p2/p2-model"
+  ],
+  "status": "connected",
+  "detail": null,
+  "limit": {
+    "period": "days",
+    "calls": 0,
+    "cost": 0,
+    "costLimit": 1,
+    "costLeft": 1,
+    "tokens": 0,
+    "spent": false,
+    "reset": "2036-10-27T16:00:58.041032+08:00"
+  }
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote test peer-p --json
+{
+  "provider": {
+    "id": "peer-p",
+    "remoteMagpieId": "peer-p",
+    "mappedCidr": "10.66.254.78/32",
+    "providerPort": 55469,
+    "localPort": 13425,
+    "url": "http://127.0.0.1:13425",
+    "keyRef": "provider-keys.json#peer-p",
+    "status": "connected",
+    "detail": null,
+    "fingerprint": {
+      "hostname": "ohmyaihub-b4f95acf",
+      "virtualIpv4": "10.77.0.200",
+      "peerId": "3301682939"
+    },
+    "limit": {
+      "period": "days",
+      "calls": 4,
+      "cost": 0.048,
+      "costLimit": 1.0001,
+      "costLeft": 0.9521,
+      "tokens": 48,
+      "spent": false,
+      "reset": "2036-10-27T16:00:20.565984+08:00"
+    },
+    "createdAt": "2026-10-30T08:00:22.380Z",
+    "updatedAt": "2026-10-30T08:00:45.092Z",
+    "lastConnectedAt": "2026-10-30T08:00:45.092Z",
+    "limitText": "limit $0.0480 used / $1.0001 cap",
+    "limitUnsafe": false,
+    "limitUnknown": false
+  },
+  "providers": [
+    {
+      "id": "peer-p",
+      "remoteMagpieId": "peer-p",
+      "mappedCidr": "10.66.254.78/32",
+      "providerPort": 55469,
+      "localPort": 13425,
+      "url": "http://127.0.0.1:13425",
+      "keyRef": "provider-keys.json#peer-p",
+      "status": "connected",
+      "detail": null,
+      "fingerprint": {
+        "hostname": "ohmyaihub-b4f95acf",
+        "virtualIpv4": "10.77.0.200",
+        "peerId": "3301682939"
+      },
+      "limit": {
+        "period": "days",
+        "calls": 4,
+        "cost": 0.048,
+        "costLimit": 1.0001,
+        "costLeft": 0.9521,
+        "tokens": 48,
+        "spent": false,
+        "reset": "2036-10-27T16:00:20.565984+08:00"
+      },
+      "createdAt": "2026-10-30T08:00:22.380Z",
+      "updatedAt": "2026-10-30T08:00:45.092Z",
+      "lastConnectedAt": "2026-10-30T08:00:45.092Z"
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote test peer-p2 --json
+{
+  "provider": {
+    "id": "peer-p2",
+    "remoteMagpieId": "peer-p2",
+    "mappedCidr": "10.66.6.161/32",
+    "providerPort": 34945,
+    "localPort": 13426,
+    "url": "http://127.0.0.1:13426",
+    "keyRef": "provider-keys.json#peer-p2",
+    "status": "degraded",
+    "detail": "the provider does not answer with this Gateway Key (offline, revoked or a different provider)",
+    "fingerprint": null,
+    "limit": {
+      "period": "days",
+      "calls": 0,
+      "cost": 0,
+      "costLimit": 1,
+      "costLeft": 1,
+      "tokens": 0,
+      "spent": false,
+      "reset": "2036-10-27T16:00:58.041032+08:00"
+    },
+    "createdAt": "2026-10-30T08:01:04.088Z",
+    "updatedAt": "2026-10-30T08:01:11.337Z",
+    "lastConnectedAt": "2026-10-30T08:01:04.088Z",
+    "limitText": "limit $0.0000 used / $1.0000 cap",
+    "limitUnsafe": false,
+    "limitUnknown": false
+  },
+  "providers": [
+    {
+      "id": "peer-p2",
+      "remoteMagpieId": "peer-p2",
+      "mappedCidr": "10.66.6.161/32",
+      "providerPort": 34945,
+      "localPort": 13426,
+      "url": "http://127.0.0.1:13426",
+      "keyRef": "provider-keys.json#peer-p2",
+      "status": "degraded",
+      "detail": "the provider does not answer with this Gateway Key (offline, revoked or a different provider)",
+      "fingerprint": null,
+      "limit": {
+        "period": "days",
+        "calls": 0,
+        "cost": 0,
+        "costLimit": 1,
+        "costLeft": 1,
+        "tokens": 0,
+        "spent": false,
+        "reset": "2036-10-27T16:00:58.041032+08:00"
+      },
+      "createdAt": "2026-10-30T08:01:04.088Z",
+      "updatedAt": "2026-10-30T08:01:11.337Z",
+      "lastConnectedAt": "2026-10-30T08:01:04.088Z"
+    }
+  ]
+}
+# peer-p2 call while its provider is down: HTTP 0 (0 = client timeout)
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote remove peer-p2 --json
+{
+  "removed": {
+    "id": "peer-p2",
+    "remoteMagpieId": "peer-p2",
+    "mappedCidr": "10.66.6.161/32",
+    "providerPort": 34945,
+    "localPort": 13426,
+    "url": "http://127.0.0.1:13426",
+    "keyRef": "provider-keys.json#peer-p2",
+    "status": "disabled",
+    "detail": "removed",
+    "fingerprint": null,
+    "limit": {
+      "period": "days",
+      "calls": 0,
+      "cost": 0,
+      "costLimit": 1,
+      "costLeft": 1,
+      "tokens": 0,
+      "spent": false,
+      "reset": "2036-10-27T16:00:58.041032+08:00"
+    },
+    "createdAt": "2026-10-30T08:01:04.088Z",
+    "updatedAt": "2026-10-30T08:01:11.337Z",
+    "lastConnectedAt": "2026-10-30T08:01:04.088Z"
+  },
+  "providers": [
+    {
+      "id": "peer-p",
+      "remoteMagpieId": "peer-p",
+      "mappedCidr": "10.66.254.78/32",
+      "providerPort": 55469,
+      "localPort": 13425,
+      "url": "http://127.0.0.1:13425",
+      "keyRef": "provider-keys.json#peer-p",
+      "status": "degraded",
+      "detail": "the provider does not answer with this Gateway Key (offline, revoked or a different provider)",
+      "fingerprint": {
+        "hostname": "ohmyaihub-b4f95acf",
+        "virtualIpv4": "10.77.0.200",
+        "peerId": "3301682939"
+      },
+      "limit": {
+        "period": "days",
+        "calls": 4,
+        "cost": 0.048,
+        "costLimit": 1.0001,
+        "costLeft": 0.9521,
+        "tokens": 48,
+        "spent": false,
+        "reset": "2036-10-27T16:00:20.565984+08:00"
+      },
+      "createdAt": "2026-10-30T08:00:22.380Z",
+      "updatedAt": "2026-10-30T08:01:25.679Z",
+      "lastConnectedAt": "2026-10-30T08:00:45.092Z"
+    }
+  ]
+}
+$ C: bun plugin/bin/ohmyaihub.ts --data <own data> remote test peer-p --json
+{
+  "provider": {
+    "id": "peer-p",
+    "remoteMagpieId": "peer-p",
+    "mappedCidr": "10.66.254.78/32",
+    "providerPort": 55469,
+    "localPort": 13425,
+    "url": "http://127.0.0.1:13425",
+    "keyRef": "provider-keys.json#peer-p",
+    "status": "connected",
+    "detail": null,
+    "fingerprint": {
+      "hostname": "ohmyaihub-b4f95acf",
+      "virtualIpv4": "10.77.0.200",
+      "peerId": "3301682939"
+    },
+    "limit": {
+      "period": "days",
+      "calls": 5,
+      "cost": 0.06,
+      "costLimit": 1.0001,
+      "costLeft": 0.9400999999999999,
+      "tokens": 60,
+      "spent": false,
+      "reset": "2036-10-27T16:00:20.565984+08:00"
+    },
+    "createdAt": "2026-10-30T08:00:22.380Z",
+    "updatedAt": "2026-10-30T08:01:25.869Z",
+    "lastConnectedAt": "2026-10-30T08:01:25.869Z",
+    "limitText": "limit $0.0600 used / $1.0001 cap",
+    "limitUnsafe": false,
+    "limitUnknown": false
+  },
+  "providers": [
+    {
+      "id": "peer-p",
+      "remoteMagpieId": "peer-p",
+      "mappedCidr": "10.66.254.78/32",
+      "providerPort": 55469,
+      "localPort": 13425,
+      "url": "http://127.0.0.1:13425",
+      "keyRef": "provider-keys.json#peer-p",
+      "status": "connected",
+      "detail": null,
+      "fingerprint": {
+        "hostname": "ohmyaihub-b4f95acf",
+        "virtualIpv4": "10.77.0.200",
+        "peerId": "3301682939"
+      },
+      "limit": {
+        "period": "days",
+        "calls": 5,
+        "cost": 0.06,
+        "costLimit": 1.0001,
+        "costLeft": 0.9400999999999999,
+        "tokens": 60,
+        "spent": false,
+        "reset": "2036-10-27T16:00:20.565984+08:00"
+      },
+      "createdAt": "2026-10-30T08:00:22.380Z",
+      "updatedAt": "2026-10-30T08:01:25.869Z",
+      "lastConnectedAt": "2026-10-30T08:01:25.869Z"
+    }
+  ]
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet network 97 --rpc https://bsc-testnet-rpc.publicnode.com --enable
+{
+  "network": {
+    "chainId": 97,
+    "displayName": "BNB Smart Chain Testnet",
+    "family": "evm",
+    "networkType": "testnet",
+    "rpcEndpoints": [
+      "https://bsc-testnet-rpc.publicnode.com"
+    ],
+    "blockExplorer": "https://testnet.bscscan.com",
+    "nativeSymbol": "tBNB",
+    "enabled": true,
+    "finality": {
+      "mode": "confirmations",
+      "confirmations": 15,
+      "reorgDepth": 15,
+      "rationale": "BSC testnet RPCs report finalized == latest, so the tag proves nothing. Parlia BFT gives one-block finality in principle; 15 blocks of depth is the conservative, verifiable substitute.",
+      "measured": {
+        "at": "2026-10-30",
+        "finalizedLagBlocks": 0,
+        "blockTimeSec": 0.44,
+        "source": "publicnode/bnbchain-seed/thirdweb eth_getBlockByNumber(finalized)"
+      }
+    },
+    "scanIntervalSec": 5,
+    "maxBlockRange": 2000,
+    "notes": "Testnet only. Mainnet 56 is not registered in this phase."
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet network 84532 --rpc https://base-sepolia-rpc.publicnode.com --enable
+{
+  "network": {
+    "chainId": 84532,
+    "displayName": "Base Sepolia",
+    "family": "evm",
+    "networkType": "testnet",
+    "rpcEndpoints": [
+      "https://base-sepolia-rpc.publicnode.com"
+    ],
+    "blockExplorer": "https://sepolia.basescan.org",
+    "nativeSymbol": "ETH",
+    "enabled": true,
+    "finality": {
+      "mode": "finalized-tag",
+      "confirmations": 0,
+      "reorgDepth": 0,
+      "rationale": "Base is an L2: its `finalized` tag tracks L1 finality and lags ~17 min, and three providers agree on it. Waiting for the tag is the real condition, so a block count would only be a guess.",
+      "measured": {
+        "at": "2026-10-30",
+        "finalizedLagBlocks": 5093,
+        "blockTimeSec": 0.2,
+        "source": "sepolia.base.org/publicnode/tenderly eth_getBlockByNumber(finalized)"
+      }
+    },
+    "scanIntervalSec": 12,
+    "maxBlockRange": 2000,
+    "notes": "Testnet only. Mainnet 8453 is not registered in this phase."
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet asset-register 97 0xD711ca4EcD966bb83B572616aC6008795dD4E26C tMOCK6 Mock Test Dollar 6 --nanos-per-token 1000000000 --note phase8 read-only test asset
+{
+  "asset": {
+    "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+    "chainId": 97,
+    "contractAddress": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+    "symbol": "tMOCK6",
+    "name": "Mock Test Dollar",
+    "decimals": 6,
+    "issuerType": "mock",
+    "testnetOnly": true,
+    "enabled": true,
+    "pricing": {
+      "nanosPerToken": "1000000000",
+      "version": "fixed:97:tMOCK6:1000000000:v1",
+      "kind": "fixed-test-rate",
+      "note": "phase8 read-only test asset"
+    }
+  },
+  "onchainDecimals": 6
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet asset-register 84532 0x2379D65e90B21D4EcB7EF1Ad007d6f30A5f17c4F tMOCK18 Mock Test Dollar 18 --nanos-per-token 1000000000 --note phase8 read-only test asset
+{
+  "asset": {
+    "assetId": "eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+    "chainId": 84532,
+    "contractAddress": "0x2379D65e90B21D4EcB7EF1Ad007d6f30A5f17c4F",
+    "symbol": "tMOCK18",
+    "name": "Mock Test Dollar",
+    "decimals": 18,
+    "issuerType": "mock",
+    "testnetOnly": true,
+    "enabled": true,
+    "pricing": {
+      "nanosPerToken": "1000000000",
+      "version": "fixed:84532:tMOCK18:1000000000:v1",
+      "kind": "fixed-test-rate",
+      "note": "phase8 read-only test asset"
+    }
+  },
+  "onchainDecimals": 18
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet receiving p 97 0x3d80C477021E3FA568e91C73bAEC8E806518D9a6
+{
+  "receiving": {
+    "providerId": "p",
+    "chainId": 97,
+    "address": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+    "addedAt": "2026-10-30T08:01:27.111Z"
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet receiving p 84532 0x3d80C477021E3FA568e91C73bAEC8E806518D9a6
+{
+  "receiving": {
+    "providerId": "p",
+    "chainId": 84532,
+    "address": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+    "addedAt": "2026-10-30T08:01:27.127Z"
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet wizard --batch --consumer d54c959b --provider p --chain 97 --asset tMOCK6 --amount 1 --yes --no-watch
+Networks (equal peers, no default):
+  1) chain 97 BNB Smart Chain Testnet — testnet — finality confirmations(15) — tMOCK6 (6 decimals)
+  2) chain 84532 Base Sepolia — testnet — finality finalized-tag — tMOCK18 (18 decimals)
+Request: 1 tMOCK6 — raw 1000000 base units — ≈ 1.000000 test USD at the recorded test rate
+Recipient: 0x3d80C477021E3FA568e91C73bAEC8E806518D9a6 on chain 97 (BNB Smart Chain Testnet), asset eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c
+
+Pay 1000000 base units of tMOCK6 (6 decimals, ≈ $1.000000 test USD) on BNB Smart Chain Testnet (chain 97) to 0x3d80C477021E3FA568e91C73bAEC8E806518D9a6. Sign the EIP-712 DepositIntent so the plugin can attribute your payment. Expires 2026-10-30T09:01:28.385Z.
+invoice inv_2564f36c-5ea6-4888-a5ec-cd09b3973679
+expires 2026-10-30T09:01:28.385Z
+Sign this EIP-712 document with the wallet that will pay:
+{
+  "types": {
+    "EIP712Domain": [
+      {
+        "name": "name",
+        "type": "string"
+      },
+      {
+        "name": "version",
+        "type": "string"
+      },
+      {
+        "name": "chainId",
+        "type": "uint256"
+      },
+      {
+        "name": "verifyingContract",
+        "type": "address"
+      }
+    ],
+    "DepositIntent": [
+      {
+        "name": "invoiceId",
+        "type": "string"
+      },
+      {
+        "name": "consumerId",
+        "type": "string"
+      },
+      {
+        "name": "providerId",
+        "type": "string"
+      },
+      {
+        "name": "chainId",
+        "type": "uint256"
+      },
+      {
+        "name": "assetId",
+        "type": "string"
+      },
+      {
+        "name": "tokenContract",
+        "type": "address"
+      },
+      {
+        "name": "recipient",
+        "type": "address"
+      },
+      {
+        "name": "expectedAmountRaw",
+        "type": "uint256"
+      },
+      {
+        "name": "nonce",
+        "type": "string"
+      },
+      {
+        "name": "requestedAt",
+        "type": "uint64"
+      },
+      {
+        "name": "expiresAt",
+        "type": "uint64"
+      }
+    ]
+  },
+  "primaryType": "DepositIntent",
+  "domain": {
+    "name": "Oh My AI Hub",
+    "version": "1",
+    "chainId": 97,
+    "verifyingContract": "0x000000000000000000000000000000000000a1b2"
+  },
+  "message": {
+    "invoiceId": "inv_2564f36c-5ea6-4888-a5ec-cd09b3973679",
+    "consumerId": "d54c959b",
+    "providerId": "p",
+    "chainId": 97,
+    "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+    "tokenContract": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+    "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+    "expectedAmountRaw": "1000000",
+    "nonce": "0x870ff2387c4b665e659366854d2794d0",
+    "requestedAt": 1793347288,
+    "expiresAt": 1793350888
+  }
+}
+digest 0x35054f6192753bb3f4c7e335ad0ec0a430f25f363c08a0aaa55c4cb3a89b237b
+
+AWAITING SIGNATURE — the request exists and nothing was signed.
+Nothing must be sent before a signature is recorded: an unsigned transfer is unclaimed and is never credited.
+Resume with the signature later:
+  wallet wizard --consumer d54c959b --invoice inv_2564f36c-5ea6-4888-a5ec-cd09b3973679 --signature <0x…> --payer <0x…>
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet cancel inv_2564f36c-5ea6-4888-a5ec-cd09b3973679 --reason phase8 typedData check
+{
+  "intent": {
+    "invoiceId": "inv_2564f36c-5ea6-4888-a5ec-cd09b3973679",
+    "providerId": "p",
+    "consumerId": "d54c959b",
+    "chainId": 97,
+    "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+    "tokenContract": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+    "recipientAddress": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+    "expectedAmountRaw": "1000000",
+    "requestedAt": "2026-10-30T08:01:28.385Z",
+    "expiresAt": "2026-10-30T09:01:28.385Z",
+    "payerAddress": null,
+    "attributionStatus": "void",
+    "priceVersion": "fixed:97:tMOCK6:1000000000:v1",
+    "status": "cancelled",
+    "nonce": "0x870ff2387c4b665e659366854d2794d0",
+    "digest": "0x35054f6192753bb3f4c7e335ad0ec0a430f25f363c08a0aaa55c4cb3a89b237b",
+    "createdAt": "2026-10-30T08:01:28.385Z",
+    "rateNanosPerToken": "1000000000",
+    "rateDecimals": 6,
+    "rateAssetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c"
+  }
+}
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet wizard --batch --consumer d54c959b --provider p --chain 84532 --asset tMOCK18 --amount 1 --yes --no-watch
+Networks (equal peers, no default):
+  1) chain 97 BNB Smart Chain Testnet — testnet — finality confirmations(15) — tMOCK6 (6 decimals)
+  2) chain 84532 Base Sepolia — testnet — finality finalized-tag — tMOCK18 (18 decimals)
+Request: 1 tMOCK18 — raw 1000000000000000000 base units — ≈ 1.000000 test USD at the recorded test rate
+Recipient: 0x3d80C477021E3FA568e91C73bAEC8E806518D9a6 on chain 84532 (Base Sepolia), asset eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f
+
+Pay 1000000000000000000 base units of tMOCK18 (18 decimals, ≈ $1.000000 test USD) on Base Sepolia (chain 84532) to 0x3d80C477021E3FA568e91C73bAEC8E806518D9a6. Sign the EIP-712 DepositIntent so the plugin can attribute your payment. Expires 2026-10-30T09:01:30.031Z.
+invoice inv_74249722-40b6-4498-99a4-7ca3c36c6c6d
+expires 2026-10-30T09:01:30.031Z
+Sign this EIP-712 document with the wallet that will pay:
+{
+  "types": {
+    "EIP712Domain": [
+      {
+        "name": "name",
+        "type": "string"
+      },
+      {
+        "name": "version",
+        "type": "string"
+      },
+      {
+        "name": "chainId",
+        "type": "uint256"
+      },
+      {
+        "name": "verifyingContract",
+        "type": "address"
+      }
+    ],
+    "DepositIntent": [
+      {
+        "name": "invoiceId",
+        "type": "string"
+      },
+      {
+        "name": "consumerId",
+        "type": "string"
+      },
+      {
+        "name": "providerId",
+        "type": "string"
+      },
+      {
+        "name": "chainId",
+        "type": "uint256"
+      },
+      {
+        "name": "assetId",
+        "type": "string"
+      },
+      {
+        "name": "tokenContract",
+        "type": "address"
+      },
+      {
+        "name": "recipient",
+        "type": "address"
+      },
+      {
+        "name": "expectedAmountRaw",
+        "type": "uint256"
+      },
+      {
+        "name": "nonce",
+        "type": "string"
+      },
+      {
+        "name": "requestedAt",
+        "type": "uint64"
+      },
+      {
+        "name": "expiresAt",
+        "type": "uint64"
+      }
+    ]
+  },
+  "primaryType": "DepositIntent",
+  "domain": {
+    "name": "Oh My AI Hub",
+    "version": "1",
+    "chainId": 84532,
+    "verifyingContract": "0x000000000000000000000000000000000000a1b2"
+  },
+  "message": {
+    "invoiceId": "inv_74249722-40b6-4498-99a4-7ca3c36c6c6d",
+    "consumerId": "d54c959b",
+    "providerId": "p",
+    "chainId": 84532,
+    "assetId": "eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+    "tokenContract": "0x2379D65e90B21D4EcB7EF1Ad007d6f30A5f17c4F",
+    "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+    "expectedAmountRaw": "1000000000000000000",
+    "nonce": "0xa4879ad17eb884e51e036485e666db43",
+    "requestedAt": 1793347290,
+    "expiresAt": 1793350890
+  }
+}
+digest 0xb94f5b3198ca9a5f13d04c9802ef602c654e3f9ac14713324509ca5c6169c7a5
+
+AWAITING SIGNATURE — the request exists and nothing was signed.
+Nothing must be sent before a signature is recorded: an unsigned transfer is unclaimed and is never credited.
+Resume with the signature later:
+  wallet wizard --consumer d54c959b --invoice inv_74249722-40b6-4498-99a4-7ca3c36c6c6d --signature <0x…> --payer <0x…>
+$ P: bun plugin/bin/ohmyaihub.ts --data <own data> wallet cancel inv_74249722-40b6-4498-99a4-7ca3c36c6c6d --reason phase8 typedData check
+{
+  "intent": {
+    "invoiceId": "inv_74249722-40b6-4498-99a4-7ca3c36c6c6d",
+    "providerId": "p",
+    "consumerId": "d54c959b",
+    "chainId": 84532,
+    "assetId": "eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+    "tokenContract": "0x2379D65e90B21D4EcB7EF1Ad007d6f30A5f17c4F",
+    "recipientAddress": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+    "expectedAmountRaw": "1000000000000000000",
+    "requestedAt": "2026-10-30T08:01:30.031Z",
+    "expiresAt": "2026-10-30T09:01:30.031Z",
+    "payerAddress": null,
+    "attributionStatus": "void",
+    "priceVersion": "fixed:84532:tMOCK18:1000000000:v1",
+    "status": "cancelled",
+    "nonce": "0xa4879ad17eb884e51e036485e666db43",
+    "digest": "0xb94f5b3198ca9a5f13d04c9802ef602c654e3f9ac14713324509ca5c6169c7a5",
+    "createdAt": "2026-10-30T08:01:30.031Z",
+    "rateNanosPerToken": "1000000000",
+    "rateDecimals": 18,
+    "rateAssetId": "eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f"
+  }
+}
+
+# result: 18 passed, 0 failed

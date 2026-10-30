@@ -22,5 +22,15 @@
       "icon": "page/icon.svg"
     },
     "permissions": []
-  }
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "page/index.html",
+    "page/app.js",
+    "page/settings.js",
+    "page/style.css",
+    "page/icon.svg",
+    "README.md"
+  ]
 }

@@ -2,7 +2,11 @@
 // Operator CLI for the plugin host API. It never talks to Magpie directly for
 // state changes: Magpie's own plugin does, with its binary and argv arrays.
 //
-//   bun bin/ohmyaihub.ts --data <magpie config dir> status
+//   bun bin/ohmyaihub.ts --data <magpie config dir> setup [--resume|--check|--reconfigure]
+//   ... share setup | share approve <request.json> --cap <usd> | share handover <id> --key-file <0600>
+//   ... connect [--node <id>] [--fingerprint <sha256> --quote <sha256>] [--key-file <0600>]
+//   ... remote list|test|models|update-key|add|remove|recover
+//   ... status
 //   ... providers                                   list remote providers
 //   ... provider add <id> --cidr 10.66.a.b/32 --key sk-… [--port 3425] [--local-port 13425]
 //   ... provider update <id> [--cidr …] [--key …] [--port …]
@@ -37,10 +41,19 @@
 //   ... wallet scan <chainId>
 //   ... wallet start | wallet stop
 //   ... wallet anomalies [--chain <chainId>] | wallet resolve <id> --note <text>
+//   ... wallet status                    view model from local evidence
+//   ... wallet statement <consumerId> [--out <directory>] [--print]
 //   ... wallet credit <consumerId>       chain credit as the ledger sees it
+//   ... wallet wizard                    guided one-deposit request (needs host evidence)
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CliError, fail, limitDisplay, promptText, readSecretFile, writeSecretFile } from "./operator-lib.ts";
+import { runSetup } from "./operator-setup.ts";
+import { runShare } from "./operator-share.ts";
+import { runConnect } from "./operator-connect.ts";
+import { runRemote } from "./operator-remote.ts";
+import { redact } from "../src/log.ts";
 
 const argv = process.argv.slice(2);
 let dataDir = process.env.OH_MY_AIHUB_DATA || "";
@@ -54,31 +67,63 @@ if (!dataDir) {
   process.exit(2);
 }
 
-function read(file: string): string {
-  return readFileSync(join(dataDir, "oh-my-aihub", file), "utf8").trim();
+function fatal(e: unknown): never {
+  const message = (e as Error)?.message ?? String(e);
+  if (process.env.OH_MY_AIHUB_DEBUG === "1") console.error(e);
+  else console.error(`error: ${redact(message)}`);
+  process.exit(1);
 }
-const port = read("api-port");
-const token = read("api-token");
-const base = `http://127.0.0.1:${port}`;
+process.on("uncaughtException", fatal);
+process.on("unhandledRejection", fatal);
 
-async function call(method: string, path: string, body?: unknown): Promise<any> {
-  const res = await fetch(base + path, {
-    method,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  let json: any;
+let credentials: { port: string; token: string } | null = null;
+function apiCredentials(): { port: string; token: string } {
+  if (credentials) return credentials;
   try {
-    json = JSON.parse(text);
+    const port = readFileSync(join(dataDir, "oh-my-aihub", "api-port"), "utf8").trim();
+    const token = readFileSync(join(dataDir, "oh-my-aihub", "api-token"), "utf8").trim();
+    if (!port || !token) fail(`the plugin host credentials in ${join(dataDir, "oh-my-aihub")} are empty`);
+    credentials = { port, token };
+    return credentials;
+  } catch (e) {
+    if (e instanceof CliError) throw e;
+    fail(
+      `the plugin host is not running for ${dataDir} (no api-port/api-token). ` +
+        `Install it with \`magpie plugin add <plugin path>\`, restart Magpie, then retry.`,
+    );
+  }
+}
+
+async function call(method: string, path: string, body?: unknown, timeoutOverride?: number): Promise<any> {
+  const { port, token } = apiCredentials();
+  const timeoutMs = Number(timeoutOverride ?? flag("timeout-ms") ?? process.env.OH_MY_AIHUB_API_TIMEOUT_MS ?? 60_000);
+  let res: Response;
+  try {
+    res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(Math.max(100, timeoutMs)),
+    });
+  } catch (e) {
+    const message = (e as Error)?.message ?? String(e);
+    if (/abort|timeout|timed\s*out/i.test(message)) {
+      fail(`the plugin host did not answer ${method} ${path} within ${timeoutMs}ms; it may still be applying the change — run status/checks before retrying`);
+    }
+    fail(`cannot reach the plugin host on 127.0.0.1:${port}: ${redact(message)}`);
+  }
+  const text = await res.text().catch(() => "");
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
   } catch {
-    json = text;
+    json = null;
   }
   if (!res.ok) {
-    console.error(`HTTP ${res.status}: ${typeof json === "string" ? json : json.error || JSON.stringify(json)}`);
-    process.exit(1);
+    const safe = typeof json?.error === "string" ? redact(json.error).split("\n")[0].slice(0, 400) : "";
+    fail(`HTTP ${res.status}${safe ? `: ${safe}` : " (no safe error message)"}`);
   }
-  return json;
+  return json ?? text;
 }
 
 function flag(name: string): string | undefined {
@@ -88,8 +133,63 @@ function flag(name: string): string | undefined {
 function has(name: string): boolean {
   return rest.includes(`--${name}`);
 }
+function allFlags(name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] !== `--${name}`) continue;
+    const value = rest[i + 1];
+    if (value !== undefined && !value.startsWith("--")) out.push(value);
+  }
+  return out;
+}
+/** A key may come from argv for compatibility or from an owner-only file. */
+function keyFlag(): string | undefined {
+  const direct = flag("key");
+  if (direct) return direct;
+  const file = flag("key-file");
+  return file ? readSecretFile(file, "Gateway Key") : undefined;
+}
 function positional(offset: number): string[] {
   return rest.filter((a, i) => !a.startsWith("--") && !(i > 0 && rest[i - 1].startsWith("--"))).slice(offset);
+}
+
+async function statementFromEvidence(evidence: any, consumerId: string, providerId: string): Promise<any> {
+  const consumer = (evidence.consumers ?? []).find((c: any) => c.consumerId === consumerId);
+  if (!consumer) fail(`no consumer ${consumerId}`);
+  const { buildStatement } = await import("../src/walletstatement.ts");
+  const networks = (evidence.wallet.registry?.networks ?? []).map((n: any) => ({
+    ...n,
+    family: "evm",
+    rpcEndpoints: n.endpoints ?? [],
+    nativeSymbol: "",
+    reorgDepth: n.finality?.confirmations ?? 0,
+    scanIntervalSec: 0,
+    maxBlockRange: 0,
+    notes: null,
+  }));
+  const assets = (evidence.wallet.registry?.assets ?? []).map((a: any) => ({
+    ...a,
+    pricing: { nanosPerToken: a.nanosPerToken, version: a.priceVersion, kind: "fixed-test-rate", note: "" },
+  }));
+  return buildStatement({
+    providerId,
+    consumerId,
+    generatedAt: new Date().toISOString(),
+    networks,
+    assets,
+    intents: evidence.wallet.intents ?? [],
+    events: evidence.wallet.events ?? [],
+    deposits: evidence.deposits?.[consumerId] ?? [],
+    consumer,
+    // The statement allowlist is state/reason/openSettlements; `serving` is a
+    // live view field and is deliberately not written into a historical file.
+    accounting: {
+      state: evidence.accounting.state,
+      reason: evidence.accounting.reason,
+      openSettlements: consumer.ledger?.openSettlements ?? 0,
+    },
+    readback: evidence.readbacks?.[consumerId] ?? null,
+  } as never);
 }
 
 function printProviders(providers: any[]): void {
@@ -99,9 +199,7 @@ function printProviders(providers: any[]): void {
   }
   for (const p of providers) {
     const fp = p.fingerprint ? ` peer=${p.fingerprint.hostname}${p.fingerprint.peerId ? `#${p.fingerprint.peerId}` : ""}` : "";
-    const lim = p.limit
-      ? ` limit=${p.limit.cost ?? "?"}/${p.limit.costLimit ?? "?"} USD${p.limit.spent ? " spent" : ""}`
-      : "";
+    const lim = ` ${limitDisplay(p.limit).text}`;
     console.log(
       `${p.id}  ${p.mappedCidr}:${p.providerPort} -> 127.0.0.1:${p.localPort}  ${p.status}` +
         `${p.detail ? ` (${p.detail})` : ""}${fp}${lim}`,
@@ -124,6 +222,19 @@ function printCatalogPeers(peers: any[]): void {
 }
 
 const cmd = rest[0];
+// Phase-8 journeys. They are separate modules so the legacy switch below stays
+// small; each journey owns its own file and tests.
+if (cmd === "setup") process.exit(await runSetup(rest.slice(1), dataDir));
+if (cmd === "resume") process.exit(await runSetup(["--resume", ...rest.slice(1)], dataDir));
+if (cmd === "preflight" || cmd === "doctor") process.exit(await runSetup(["--check", ...rest.slice(1)], dataDir));
+if (cmd === "connect") process.exit(await runConnect(rest.slice(1), dataDir));
+if (cmd === "remote") process.exit(await runRemote(rest.slice(1), dataDir));
+if (
+  cmd === "share" &&
+  (!rest[1] || rest[1].startsWith("--") || ["setup", "approve", "handover", "list", "status"].includes(rest[1]))
+) {
+  process.exit(await runShare(rest.slice(1), dataDir));
+}
 switch (cmd) {
   case "status": {
     const s = await call("GET", "/status");
@@ -155,7 +266,10 @@ switch (cmd) {
             aclProblems: s.easytier?.aclProblems,
             peers: (s.easytier?.peers || []).map((p: any) => `${p.hostname || p.ipv4} ${p.ipv4} ${p.cost} ${p.latencyMs}ms`),
           },
-          providers: s.providers,
+          providers: (s.providers ?? []).map((p: any) => {
+            const lim = limitDisplay(p.limit);
+            return { ...p, limitText: lim.text, limitUnsafe: lim.unsafe };
+          }),
           consumers: s.consumers,
           catalog: s.catalog
             ? {
@@ -167,6 +281,8 @@ switch (cmd) {
               }
             : null,
           checks: s.checks,
+          checksAt: s.checksAt ?? null,
+          readiness: s.readiness ?? null,
         },
         null,
         2,
@@ -189,7 +305,7 @@ switch (cmd) {
         const p = await call("POST", "/providers/add", {
           id,
           mappedCidr: flag("cidr"),
-          key: flag("key"),
+          key: keyFlag(),
           providerPort: flag("port") ? Number(flag("port")) : undefined,
           localPort: flag("local-port") ? Number(flag("local-port")) : undefined,
         });
@@ -198,7 +314,7 @@ switch (cmd) {
         const p = await call("POST", "/providers/update", {
           id,
           mappedCidr: flag("cidr"),
-          key: flag("key"),
+          key: keyFlag(),
           providerPort: flag("port") ? Number(flag("port")) : undefined,
           localPort: flag("local-port") ? Number(flag("local-port")) : undefined,
         });
@@ -245,20 +361,23 @@ switch (cmd) {
     break;
   }
   case "configure": {
-    const peers = flag("peer") ? [flag("peer")!] : [];
+    const peers = allFlags("peer");
     const role = flag("role");
-    const s = await call("POST", "/configure", {
+    const secretFile = flag("secret-file");
+    const body: Record<string, unknown> = {
       role: role || undefined,
       sharingEnabled: has("share") ? true : has("no-share") ? false : role ? role === "provider" : undefined,
       consumingEnabled: has("consume") ? true : has("no-consume") ? false : role ? role === "consumer" : undefined,
       networkName: flag("network"),
-      networkSecret: flag("secret"),
-      peers,
-      listenAddr: flag("listen") ?? null,
       publishedPorts: flag("ports") ? flag("ports")!.split(",").map(Number) : undefined,
       virtualIpv4: flag("virtual-ip"),
       shareModels: flag("share-models") ? flag("share-models")!.split(",") : undefined,
-    });
+    };
+    if (secretFile) body.networkSecret = readSecretFile(secretFile, "network secret");
+    else if (flag("secret")) body.networkSecret = flag("secret");
+    if (peers.length) body.peers = peers;
+    if (has("listen")) body.listenAddr = flag("listen") ?? "";
+    const s = await call("POST", "/configure", body);
     console.log(
       JSON.stringify(
         {
@@ -358,7 +477,13 @@ switch (cmd) {
   case "secret": {
     const [id] = positional(1);
     const c = await call("POST", "/secret", { consumerId: id });
-    console.log(c.key);
+    const keyFile = flag("key-file");
+    if (keyFile) {
+      const file = writeSecretFile(keyFile, c.key, { force: has("force") });
+      console.log(JSON.stringify({ consumerId: id, keyFile: file, keyName: c.keyName, keyPrinted: false }, null, 2));
+    } else {
+      console.log(c.key);
+    }
     break;
   }
   case "revoke": {
@@ -379,7 +504,123 @@ switch (cmd) {
   }
   case "wallet": {
     const sub = rest[1];
-    if (sub === "network") {
+    if (sub === "wizard") {
+      // The wizard is its own module; this entry only adapts the loopback client
+      // and the visible prompt. A POST whose outcome is unknown is surfaced as
+      // such so the wizard never blindly retries an intent.
+      const { runWalletWizard, WizardApiError } = await import("./wallet-wizard.ts");
+      const wrap = async (run: () => Promise<any>): Promise<any> => {
+        try {
+          return await run();
+        } catch (e) {
+          const message = (e as Error)?.message ?? String(e);
+          const status = Number(/HTTP\s+(\d+)/.exec(message)?.[1] ?? NaN);
+          throw new WizardApiError(message, Number.isFinite(status) ? status : null);
+        }
+      };
+      const code = await runWalletWizard({
+        api: {
+          get: (path) => wrap(() => call("GET", path)),
+          post: (path, body) => wrap(() => call("POST", path, body)),
+        },
+        io: {
+          prompt: async (question, opts) => {
+            const answer = (await promptText(`${question}${opts?.default ? ` [${opts.default}]` : ""}: `)).trim();
+            return answer || opts?.default || "";
+          },
+          print: (text) => console.log(text),
+        },
+        argv: rest.slice(2),
+        evidence: async () => {
+          try {
+            return await call("GET", "/wallet/evidence", undefined, 15_000);
+          } catch {
+            return null;
+          }
+        },
+      });
+      process.exit(code);
+    }
+    if (sub === "statement") {
+      const consumerId = positional(2)[0];
+      if (!consumerId) throw new Error("wallet statement <consumerId> [--out <directory|file.json>] [--provider <id>] [--print]");
+      let statement: any = null;
+      try {
+        const response = await call("GET", `/wallet/statement?consumerId=${encodeURIComponent(consumerId)}`, undefined, 60_000);
+        statement = response?.statement?.statement ? response.statement : response;
+      } catch (e) {
+        if (!/HTTP 404/.test((e as Error).message)) throw e;
+      }
+      if (!statement) {
+        const evidence = await call("GET", "/wallet/evidence", undefined, 60_000);
+        if (!evidence || !evidence.wallet) fail("the host did not return wallet evidence; update the plugin host");
+        const providerId = flag("provider") ?? evidence.wallet.receiving?.[0]?.providerId;
+        if (!providerId) fail("this node has no receiving provider; pass --provider <id>");
+        statement = await statementFromEvidence(evidence, consumerId, providerId);
+      }
+      const { statementText, writeStatementFile, verifyStatement } = await import("../src/walletstatement.ts");
+      const check = verifyStatement(statement);
+      if (!check.ok) fail(`statement verification failed: ${check.reason}`);
+      const out = flag("out");
+      let statementFile: string;
+      if (out && /\.json$/i.test(out)) {
+        // Exact file path: use the statement writer's hardened {path} branch.
+        // --force keeps the older exact-file overwrite escape hatch.
+        statementFile = has("force")
+          ? writeSecretFile(out, statementText(statement), { force: true })
+          : writeStatementFile(statement, { path: out }).path;
+      } else {
+        const outDir = out ?? join(dataDir, "oh-my-aihub", "statements");
+        statementFile = writeStatementFile(statement, { dir: outDir }).path;
+      }
+      console.log(JSON.stringify({ consumerId, statementFile, digest: statement.digest, keyPrinted: false }, null, 2));
+      if (has("print")) console.log(statementText(statement));
+    } else if (sub === "status") {
+      let evidence: any = null;
+      try {
+        evidence = await call("GET", "/wallet/evidence", undefined, 60_000);
+      } catch (e) {
+        if (!/HTTP 404/.test((e as Error).message)) throw e;
+      }
+      if (evidence?.wallet) {
+        const { accountingLine, walletView } = await import("../src/walletview.ts");
+        const view = walletView(evidence);
+        console.log(
+          JSON.stringify(
+            {
+              generatedAt: view.generatedAt,
+              disabled: view.disabled,
+              chains: view.chains,
+              deposits: view.deposits,
+              // The view model already carries every field; the line is the
+              // same accounting sentence the wizard prints, so a status reader
+              // sees credit/consumed/settled/balance/overdraft/unsettled/cap/
+              // used/price/window/key without reconstructing it.
+              consumers: view.consumers.map((c) => ({ ...c, line: accountingLine(c) })),
+              alerts: view.alerts,
+              truncated: view.truncated,
+              evidence: view.evidence,
+            },
+            null,
+            2,
+          ),
+        );
+        break;
+      }
+      const r = await call("GET", "/wallet");
+      const w = r.wallet;
+      if (!w) {
+        console.log("no chain wallet: no network is enabled on this node");
+        break;
+      }
+      console.log(JSON.stringify({
+        disabled: w.disabled,
+        registry: w.registry,
+        chains: w.chains,
+        totals: w.totals,
+        consumers: w.consumers ?? [],
+      }, null, 2));
+    } else if (sub === "network") {
       const chainId = Number(positional(2)[0]);
       if (!Number.isInteger(chainId)) throw new Error("wallet network <chainId> [--enable|--disable] [--rpc url[,url]]");
       const body: Record<string, unknown> = { chainId };
@@ -398,7 +639,7 @@ switch (cmd) {
         symbol,
         name,
         expectedDecimals: Number(decimals),
-        nanosPerToken: flag("nanos-per-token") ?? "1000000000",
+        nanosPerToken: flag("nanos-per-token") ?? String(1_000_000_000),
         pricingNote: flag("note") ?? "fixed test rate: 1 token = 1 test USD",
       });
       console.log(JSON.stringify(r, null, 2));
@@ -418,7 +659,8 @@ switch (cmd) {
       const list = (r.assets as any[]).filter((a) => (chainId ? a.chainId === Number(chainId) : true));
       if (!list.length) console.log("no assets registered");
       for (const a of list) {
-        console.log(`${a.assetId}  ${a.symbol} (${a.decimals}d) ${a.enabled ? "enabled" : "disabled"}  ${a.nanosPerToken} nanos/token  ${a.contractAddress}`);
+        const rate = a.pricing?.nanosPerToken ?? a.nanosPerToken ?? "UNKNOWN";
+        console.log(`${a.assetId}  ${a.symbol} (${a.decimals}d) ${a.enabled ? "enabled" : "disabled"}  ${rate} nanos/token  ${a.contractAddress}`);
       }
     } else if (sub === "networks") {
       const r = await call("GET", "/wallet/networks");
@@ -512,14 +754,20 @@ switch (cmd) {
       if (!consumerId) throw new Error("wallet credit <consumerId>");
       const r = await call("GET", "/wallet");
       const w = r.wallet;
-      const credited = (w?.events ?? []).filter((e: any) => e.status === "credited");
+      const consumers = Array.isArray(w?.consumers) ? w.consumers : [];
+      const credit = consumers.find((c: any) => c.consumerId === consumerId) ?? null;
+      const chainCredit = Array.isArray(credit?.chainCredit) ? credit.chainCredit : [];
+      const creditedEvents = chainCredit.reduce((n: number, c: any) => n + Number(c.credited ?? 0), 0);
       console.log(
         JSON.stringify(
           {
             consumerId,
-            ledgerCredit: w?.consumers?.find?.((c: any) => c.consumerId === consumerId)?.ledger ?? null,
+            chainCredit,
+            chainCreditedNanos: credit?.chainCreditedNanos ?? 0,
+            ledger: credit?.ledger ?? null,
+            updatedAt: credit?.updatedAt ?? null,
             totals: w?.totals ?? null,
-            creditedEvents: credited.length,
+            creditedEvents,
           },
           null,
           2,
@@ -564,18 +812,42 @@ switch (cmd) {
       printCatalogPeers(r.peers);
     } else if (sub === "trust") {
       const [nodeId] = positional(2);
-      if (!nodeId) throw new Error("catalog trust <node-id> [--fingerprint <sha256>]");
+      if (!nodeId) throw new Error("catalog trust <node-id> --fingerprint <64hex>");
+      if (!flag("fingerprint")) throw new Error("catalog trust requires the exact --fingerprint <64hex> you reviewed");
       const r = await call("POST", "/catalog/trust", { nodeId, fingerprint: flag("fingerprint") });
       console.log(JSON.stringify(r, null, 2));
     } else if (sub === "request") {
       const [nodeId] = positional(2);
-      if (!nodeId) throw new Error("catalog request <node-id> [--models a,b]");
+      if (!nodeId) throw new Error("catalog request <node-id> --fingerprint <64hex> --quote <64hex> [--models a,b]");
+      if (!flag("fingerprint") || !flag("quote")) {
+        throw new Error(
+          "catalog request now requires the exact --fingerprint and --quote you reviewed; " +
+            "use the guided `connect` command (or pass both flags) — nothing is accepted implicitly",
+        );
+      }
       const models = flag("models") ? flag("models")!.split(",") : undefined;
-      console.log(JSON.stringify(await call("POST", "/catalog/request", { nodeId, models }), null, 2));
+      const acceptance = flag("fingerprint") && flag("quote")
+        ? { fingerprint: flag("fingerprint"), quoteHash: flag("quote"), ...(flag("price-version") ? { priceVersion: flag("price-version") } : {}) }
+        : undefined;
+      console.log(JSON.stringify(await call("POST", "/catalog/request", { nodeId, models, ...(acceptance ?? {}) }), null, 2));
     } else if (sub === "connect") {
       const [nodeId] = positional(2);
-      if (!nodeId || !flag("key")) throw new Error("catalog connect <node-id> --key sk-… [--id <provider-id>]");
-      const p = await call("POST", "/catalog/connect", { nodeId, key: flag("key"), id: flag("id") });
+      const key = keyFlag();
+      if (!nodeId || !key) throw new Error("catalog connect <node-id> --key-file <0600 file> [--id <provider-id>] --fingerprint <64hex> --quote <64hex>");
+      if (!flag("fingerprint") || !flag("quote")) {
+        throw new Error(
+          "catalog connect now requires the exact --fingerprint and --quote you reviewed; " +
+            "use the guided `connect` command (or pass both flags) — nothing is accepted implicitly",
+        );
+      }
+      const p = await call("POST", "/catalog/connect", {
+        nodeId,
+        key,
+        id: flag("id"),
+        ...(flag("fingerprint") ? { fingerprint: flag("fingerprint") } : {}),
+        ...(flag("quote") ? { quoteHash: flag("quote") } : {}),
+        ...(flag("price-version") ? { priceVersion: flag("price-version") } : {}),
+      });
       console.log(JSON.stringify({ ok: true, provider: p }, null, 2));
     } else if (sub === "peers" || sub === undefined || sub === "status") {
       const r = await call("GET", "/catalog");

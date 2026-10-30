@@ -1,0 +1,57 @@
+Phase 8 — final local CI (frozen tree)
+======================================
+
+Command
+-------
+  cd plugin && bun run ci
+  (= bun run typecheck && bun test && bun run boot-check && bun run secret-scan)
+
+Result: PASS (exit 0)
+Full log: /tmp/phase8-final-ci.log (1344 lines, includes the four stages,
+the per-test lines and the environment block appended at the end)
+
+Environment
+-----------
+  macOS 26.6.2 (25G83), arm64
+  Bun 1.4.3
+  Node v24.21.0 (not the plugin runtime; informational)
+  Installed Magpie 0.1.2171 (/Users/laysath/.local/bin/magpie);
+    the boot-check fixture is a stub that reports 0.1.2038, the project pin
+  Repo: magpie-oh-my-aihub-import
+  Branch: feature/mvp-onboarding-operator-ux
+  HEAD: bf7a27dfd6cc785db61b22808d5a36f625d13419 + the uncommitted Phase-8 tree
+  Lab source manifest: ok=true, 13 files, all node copies identical,
+    unchanged since copy, byte-identical to the repo at report time,
+    gitHead bf7a27d
+  git diff --check: exit 0
+
+Stage 1 — typecheck
+-------------------
+  tsc --noEmit
+  PASS (no output, exit 0)
+
+Stage 2 — unit/integration tests
+--------------------------------
+  573 pass / 0 fail
+  2471 expect() calls
+  573 test cases across 35 files
+  (35 *.test.ts files; plus 4 helper modules under test/support/)
+
+Stage 3 — boot check
+--------------------
+  boot-check PASS: plugin 0.4.0, magpie 0.1.2038 (stub), api 34517,
+    checks 1, page snapshot 0600
+
+Stage 4 — secret scan
+---------------------
+  secret-scan PASS: no credentials in the working tree
+
+Notes
+-----
+- No source change was made for this run; the tree is frozen.
+- The live two-configuration lab (owner: lab agent) is separate evidence:
+  18/18 steps, two real Magpie 0.1.2038 nodes, EasyTier 2.6.4, source manifest
+  identical to this tree. It is not part of `bun run ci` and the lab scripts are
+  not executed by CI (they are only included in typecheck).
+- Not claimed: a real Magpie 0.1.2120/0.1.2154 host/CLI run, a real vendor model
+  call through the overlay, real funds or mainnet.

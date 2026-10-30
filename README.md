@@ -2,7 +2,23 @@
 
 A private-community P2P AI API sharing project based on Magpie, EasyTier no-TUN networking, and wallet-funded Gateway Key quotas.
 
-**Status: phase 7 — one Magpie node can share its own channels, consume several remote Magpies, discover signed read-only model/price catalogues, keep a local immutable prepaid ledger with fail-closed key reissue, and watch **testnet** deposits on BNB Smart Chain testnet and Base Sepolia as two equal networks. Verified against Magpie 0.1.2038, EasyTier 2.6.4 and foundry 1.8.6. Testnet only: no mainnet asset is watched or credited, and real funds are still blocked by the native price-lock finding. The real-testnet deposit run is UNKNOWN — testnet gas could not be obtained; the pipeline is proven on a local EVM node with a real deployed ERC-20.**
+**Status: phase 8 — onboarding and everyday-use journeys for the phase-7 feature set.** One Magpie node can share its own channels, consume several remote Magpies, discover signed read-only model/price catalogues, keep a local immutable prepaid ledger with fail-closed key reissue, and watch **testnet** deposits on BNB Smart Chain testnet and Base Sepolia as two equal networks.
+
+**Current testnet evidence.** Fresh BSC and Base Sepolia payments credited the same real Gateway Key
+through two independent hosts, real EasyTier no-TUN and a real native Remote Magpie, with automatic
+watchers, restart recovery, duplicate scans and cleanup
+([report](docs/validation/2026-10-30-fresh-twohost-wallet.md)). Original finalized payments were also
+replayed into a fresh real SQLite Ledger and the real pinned Magpie key
+([report](docs/validation/2026-10-30-live-magpie-chain-credit.md)). Real vendor/paid model execution is
+still **UNKNOWN**, and **real funds are NO-GO** because Magpie still has no price lock and the other
+phase-6 blockers are unchanged.
+
+**Version scope.** Magpie **0.1.2038** is the host/CLI and pricing/billing pin. A Linux Magpie
+**0.1.2057** official container was verified as a consumer. Magpie **0.1.2120** is compared for the
+page/bridge source; an isolated `magpie web` browser run on **0.1.2171** verified the page/CSP/Save
+flow, but full host/CLI behaviour on 0.1.2120/0.1.2171 is **UNKNOWN**, and the desktop WKWebView
+frame was not measured. EasyTier **2.6.4** and foundry **1.8.6** are the other measured tools. No
+mainnet asset is watched or credited.
 
 ## Current planned division of responsibilities
 
@@ -13,7 +29,13 @@ A private-community P2P AI API sharing project based on Magpie, EasyTier no-TUN 
 
 Do **not** implement a second AI API proxy, token router or charging gateway unless real integration tests demonstrate a hard security/compatibility limit in the native path.
 
-Read [architecture](docs/ARCHITECTURE.md), [verification tasks](docs/VALIDATION.md), and [agent instructions](AGENTS.md).
+New here? Start with [onboarding](docs/ONBOARDING.md) for the five-minute install and the two roles,
+then keep [operations](docs/OPERATIONS.md) for the daily loop, balance anomalies, revocation,
+backup/restore and network exit. The phase-8 guided-flow acceptance (18/18 live steps, browser and
+wallet evidence, and its limits) is in
+[`docs/validation/2026-10-30-phase8-onboarding-ux.md`](docs/validation/2026-10-30-phase8-onboarding-ux.md).
+Read [architecture](docs/ARCHITECTURE.md), [verification tasks](docs/VALIDATION.md), and
+[agent instructions](AGENTS.md) for the design and its limits.
 
 ## Phase 7: testnet chain deposits into the existing ledger
 
@@ -49,15 +71,21 @@ bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet intent provider-a 
 bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet events --tx 0x…
 ```
 
-Evidence, including the measurements behind each finality policy, the local-chain lab with a real
-reorg, and exactly which testnet steps are UNKNOWN, is in
+The measurements behind each finality policy and the local-chain lab with a real reorg are in
 [`docs/validation/2026-10-30-phase7-multichain-wallet.md`](docs/validation/2026-10-30-phase7-multichain-wallet.md).
-**GO for continued testnet wallet development; NO-GO for real funds.**
+That report's earlier “no real-testnet run” section is historical: the funded runs and their
+corrections are in [`2026-10-30-testnet-handoff.md`](docs/validation/2026-10-30-testnet-handoff.md),
+the live-Magpie replay in
+[`2026-10-30-live-magpie-chain-credit.md`](docs/validation/2026-10-30-live-magpie-chain-credit.md),
+and the fresh two-host acceptance in
+[`2026-10-30-fresh-twohost-wallet.md`](docs/validation/2026-10-30-fresh-twohost-wallet.md).
+**Testnet only: GO for a scoped testnet journey; NO-GO for real funds or a real vendor claim.**
 
 ## Phase 6: prepaid credit that survives price changes and window ends
 
-Magpie remains the only charging point. Magpie 0.1.2038 has no price pinning and recomputes a key's
-used cost at today's price, so the plugin now keeps the balance of record itself:
+Magpie remains the only charging point. On the **0.1.2038 billing pin** Magpie has no price pinning
+and recomputes a key's used cost at today's price; that behaviour is **not re-measured on 0.1.2120**.
+The plugin therefore keeps the balance of record itself:
 
 - a local SQLite ledger in `oh-my-aihub/ledger.sqlite` (integer nano-USD, unique deposit and usage
   ids, immutable price snapshot per window);
@@ -103,17 +131,20 @@ bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog config --display-nam
 bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog publish on
 bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog discover on
 bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog peers
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog request <node-id>
+bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie connect
+bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie connect --node <node-id> \
+  --trust --fingerprint <64-hex> --quote <64-hex> --request-out "$HOME/request.json"
 ```
 
 - The catalogue is one read-only `GET /catalog/v1`, bound to the provider's LAN address, not a
 gateway and not the management API. Its port is added to the Forward ACL only while published;
 Inbound stays Drop with no rules, so the virtual-IP/loopback path is not a way in.
 - Quotes are self-signed Ed25519 (TOFU). The first sight is **unverified**; a changed fingerprint is
-  a warning and requires a local `catalog trust`, never silent acceptance. A signature is not a
+  a warning and is never accepted silently. `connect` displays the full fingerprint and quote hash
+  and requires an explicit `--trust --fingerprint … --quote …` acceptance. A signature is not a
   real-world identity.
-- Quotes are display data: they do not create a key, a balance or a charge. The existing manual
-  `consumers add` → `secret` → `provider add` flow still issues every Gateway Key, and a quote price
+- Quotes are display data: they do not create a key, a balance or a charge. The manual
+  `consumers add` → `share handover` → `remote add` flow issues every Gateway Key, and a quote price
   change never alters a key's cost cap. Since phase 6 a quote also carries a recomputable
   `billing.priceVersion` and `priceLocked: false`; a key is bound to the accepted version.
 - The plugin page stays read-only and CSP-compatible: it renders a generated snapshot with the peer
@@ -146,8 +177,9 @@ bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie status
   with a wrong key, and the valid key lists a model.
 
 ```sh
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie providers
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie provider add peer-b --cidr 10.66.1.2/32 --key sk-… --port 3425
+bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie remote list
+bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie remote add peer-b --cidr 10.66.1.2/32 --key-file "$HOME/peer-b.key" --port 3425
+bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie remote test peer-b
 bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie share on
 ```
 - EasyTier 2.6.4 is downloaded and **SHA-256 verified** by the plugin, Secure Mode with a

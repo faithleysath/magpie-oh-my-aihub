@@ -1,0 +1,560 @@
+{
+  "at": "2026-10-30T08:01:30.049Z",
+  "platform": {
+    "os": "26.6.2",
+    "arch": "arm64",
+    "bun": "1.4.3"
+  },
+  "magpie": {
+    "app": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app",
+    "bin": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie",
+    "version": "magpie 0.1.2038",
+    "sha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15"
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "zipSha256": "4be1882d1aa36d31c1d6ba0596f2cf8a097e371f8da124212324b2e0f8df7e4b",
+    "cache": "/Users/laysath/Projects/lab/et/easytier-macos-aarch64"
+  },
+  "plugin": {
+    "commit": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+    "dirty": true
+  },
+  "network": "phase8-lab-62866",
+  "isolation": {
+    "nodes": [
+      "P",
+      "C",
+      "P2"
+    ],
+    "pluginCopyPerNode": true,
+    "userProfileTouched": false
+  },
+  "lab": {
+    "root": null,
+    "evidence": "/Users/laysath/Projects/magpie-oh-my-aihub-import/docs/validation/phase8-live",
+    "magpie": {
+      "app": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app",
+      "bin": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie",
+      "version": "magpie 0.1.2038",
+      "sha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15"
+    },
+    "plugin": {
+      "commit": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+      "dirty": true
+    },
+    "platform": {
+      "os": "26.6.2",
+      "arch": "arm64",
+      "bun": "1.4.3"
+    },
+    "provider": {
+      "nodeId": "b4f95acf",
+      "mappedCidr": "10.66.254.78/32",
+      "gatewayPort": 55469,
+      "catalogPort": 3426,
+      "quoteHash": "03b14f21d11fbe76f4f53eaa286c5d8c53400d7bb049c065ba1d999a03fbd448",
+      "fingerprint": "005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c",
+      "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33"
+    },
+    "consumer": {
+      "nodeId": "d54c959b",
+      "hostname": "d54c959b",
+      "socksPort": 13583
+    },
+    "calls": {
+      "first": 200,
+      "spent": 429,
+      "afterTopup": 200,
+      "upstreamCalls": 2
+    },
+    "secondProvider": {
+      "nodeId": "8c39659d",
+      "mappedCidr": "10.66.6.161/32",
+      "gatewayPort": 34945,
+      "call": 200
+    },
+    "ports": {
+      "P": {
+        "gateway": 55469,
+        "upstream": 25696,
+        "listen": 17685,
+        "catalog": 3426
+      },
+      "C": {
+        "gateway": 43871,
+        "upstream": 20240,
+        "listen": 14556,
+        "socks": 13583
+      },
+      "P2": {
+        "gateway": 34945,
+        "upstream": 26295,
+        "listen": 11566
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "P: fresh Magpie 0.1.2038, own plugin copy, real host and EasyTier 2.6.4",
+      "ok": true,
+      "detail": "preflight: Magpie 0.1.2038, EasyTier 2.6.4 verified, host true, no overlay yet",
+      "ms": 9144,
+      "required": true
+    },
+    {
+      "name": "C: second fresh Magpie, own plugin copy, gateway enforces a key",
+      "ok": true,
+      "detail": "C gateway 192.168.132.218:43871 answered 401 without a key",
+      "ms": 9123,
+      "required": true
+    },
+    {
+      "name": "P setup: provider overlay, sharing, published native model",
+      "ok": true,
+      "detail": "P b4f95acf exports 10.66.254.78/32; quote v1 03b14f21d11f…, priceVersion 148dca967ca6…, priceLocked false",
+      "ms": 1805,
+      "required": true
+    },
+    {
+      "name": "C setup: same overlay, consume-only, discovery on",
+      "ok": true,
+      "detail": "C d54c959b joined; discovery enabled on SOCKS 13583",
+      "ms": 1695,
+      "required": true
+    },
+    {
+      "name": "C discovers P through EasyTier; TOFU fingerprint and quote hash are shown",
+      "ok": true,
+      "detail": "P b4f95acf unverified; fingerprint 005feb18463829aa030845a8b2a116aea4148e3fd11fcc276730d2e19e0e4d4c; quote 03b14f21d11fbe76…; mapped 10.66.254.78/32",
+      "ms": 12200,
+      "required": true
+    },
+    {
+      "name": "TOFU: unverified is refused, then the exact fingerprint is accepted",
+      "ok": true,
+      "detail": "unverified refused; wrong fingerprint refused; accepted 005feb18463829aa… and quote 03b14f21d11fbe76…; request 0600",
+      "ms": 58,
+      "required": true
+    },
+    {
+      "name": "provider approves the request and hands over a 0600 key file",
+      "ok": true,
+      "detail": "consumer d54c959b: p/p-model cap $0.0001; handover 0600, key not printed",
+      "ms": 565,
+      "required": true
+    },
+    {
+      "name": "an invalid or stale approval request is refused and issues no key",
+      "ok": true,
+      "detail": "stale quote hash refused; no consumer deadbeef was created (existing 1)",
+      "ms": 243,
+      "required": true
+    },
+    {
+      "name": "consumer connects with the key file and the same accepted fingerprint/quote",
+      "ok": true,
+      "detail": "peer-p 10.66.254.78/32:55469 -> 127.0.0.1:13425; limit {\"period\":\"days\",\"calls\":0,\"cost\":0,\"costLimit\":0.0001,\"costLeft\":0.0001,\"tokens\":0,\"spent\":false,\"reset\":\"2036-10-27T16:00:20.565984+08:00\"}",
+      "ms": 1332,
+      "required": true
+    },
+    {
+      "name": "remote test/models are read-only and target only peer-p",
+      "ok": true,
+      "detail": "test connected; models [p/p-model]",
+      "ms": 168,
+      "required": true
+    },
+    {
+      "name": "consumer Magpie calls the real Remote Magpie: 200 → native 429 → topup → 200",
+      "ok": true,
+      "detail": "200 ({\"id\":\"c1\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"p…), native 429 \"Remote magpie: magpie gateway key \"ohmyaihub-d54c959b\" has used $0.01 of its $0.…\", topup cap $1.0001, 200; P upstream count 2",
+      "ms": 377,
+      "required": true
+    },
+    {
+      "name": "key enforcement: no key 401, wrong key 401, the handed key 200",
+      "ok": true,
+      "detail": "401 / 401 / 200 on 192.168.132.218:55469",
+      "ms": 1,
+      "required": true
+    },
+    {
+      "name": "setup is idempotent: an existing config is never reset",
+      "ok": true,
+      "detail": "nodeId b4f95acf, instanceId a5a7a082-f843-47c2-95f9-fded0341ccf2, mapped 10.66.254.78/32, secure public key unchanged",
+      "ms": 275,
+      "required": true
+    },
+    {
+      "name": "restart: both real Magpies recover the same identity, provider and call",
+      "ok": true,
+      "detail": "P b4f95acf / C d54c959b; peer-p connected; call 200",
+      "ms": 11577,
+      "required": true
+    },
+    {
+      "name": "manual providers survive consume off/on; the plugin-owned provider returns",
+      "ok": true,
+      "detail": "manual-local kept; peer-p unregistered then reconnected; call 200",
+      "ms": 10473,
+      "required": true
+    },
+    {
+      "name": "second provider P2: independent Magpie, overlay and key",
+      "ok": true,
+      "detail": "P2 8c39659d 10.66.6.161/32; peer-p2 connected; call 200",
+      "ms": 18863,
+      "required": true
+    },
+    {
+      "name": "single-provider fault: peer-p stays 200 while peer-p2 degrades; remove is targeted",
+      "ok": true,
+      "detail": "peer-p connected/200 with P2 down; peer-p2 degraded/removed; peer-p still 200",
+      "ms": 21759,
+      "required": true
+    },
+    {
+      "name": "wallet wizard: real typedData on 97 and 84532, no signature and no transfer",
+      "ok": true,
+      "detail": "97 raw 1000000; 84532 raw 1000000000000000000; both awaiting signature, cancelled; no transfer",
+      "ms": 4172,
+      "required": true
+    }
+  ],
+  "summary": {
+    "passed": 18,
+    "failed": 0
+  },
+  "http": [
+    {
+      "at": "2026-10-30T07:59:46.903Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:25696/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:59:48.106Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:25696/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:59:54.102Z",
+      "method": "GET",
+      "url": "http://<lan>:55469/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:59:55.305Z",
+      "method": "GET",
+      "url": "http://<lan>:55469/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:59:55.307Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34517/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:59:55.967Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:20240/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:59:57.169Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:20240/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:03.282Z",
+      "method": "GET",
+      "url": "http://<lan>:43871/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:04.483Z",
+      "method": "GET",
+      "url": "http://<lan>:43871/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:04.485Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:04.485Z",
+      "method": "GET",
+      "url": "http://<lan>:43871/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.647Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:25696/count",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.652Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.654Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 429,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.654Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:25696/count",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.928Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.928Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:25696/count",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.929Z",
+      "method": "GET",
+      "url": "http://<lan>:55469/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.929Z",
+      "method": "GET",
+      "url": "http://<lan>:55469/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:22.929Z",
+      "method": "GET",
+      "url": "http://<lan>:55469/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:27.378Z",
+      "method": "GET",
+      "url": "http://<lan>:55469/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:27.378Z",
+      "method": "GET",
+      "url": "http://<lan>:43871/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:27.381Z",
+      "method": "GET",
+      "url": "http://<lan>:55469/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:28.582Z",
+      "method": "GET",
+      "url": "http://<lan>:55469/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:28.583Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34517/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:28.584Z",
+      "method": "GET",
+      "url": "http://<lan>:43871/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:29.786Z",
+      "method": "GET",
+      "url": "http://<lan>:43871/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:29.786Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:30.989Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:32.190Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:33.392Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:34.596Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:34.781Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:45.254Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:45.934Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:26295/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:47.136Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:26295/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:55.522Z",
+      "method": "GET",
+      "url": "http://<lan>:34945/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T08:00:56.724Z",
+      "method": "GET",
+      "url": "http://<lan>:34945/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:00:56.726Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34519/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:01:04.117Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:01:11.344Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T08:01:19.345Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 0,
+      "note": "The operation timed out."
+    },
+    {
+      "at": "2026-10-30T08:01:25.876Z",
+      "method": "POST",
+      "url": "http://<lan>:43871/v1/chat/completions",
+      "status": 200,
+      "note": ""
+    }
+  ],
+  "wallet": {
+    "ran": true,
+    "chains": [
+      {
+        "chainId": 97,
+        "asset": "tMOCK6",
+        "decimals": 6,
+        "amountRaw": "1000000",
+        "digest": "0x35054f6192753bb3f4c7e335ad0ec0a430f25f363c08a0aaa55c4cb3a89b237b"
+      },
+      {
+        "chainId": 84532,
+        "asset": "tMOCK18",
+        "decimals": 18,
+        "amountRaw": "1000000000000000000",
+        "digest": "0xb94f5b3198ca9a5f13d04c9802ef602c654e3f9ac14713324509ca5c6169c7a5"
+      }
+    ],
+    "signed": false,
+    "broadcast": false,
+    "note": "Both intents were cancelled after the typedData was captured; no signature, transfer, scan or chain write was performed."
+  },
+  "claims": {
+    "realRemoteMagpie": "REPRODUCED on this run",
+    "walletTypedData": "REPRODUCED on this run; no chain write",
+    "trustRace": "not observed"
+  },
+  "secrets": "redacted; raw state stayed in the disposable lab root"
+}
