@@ -11,7 +11,7 @@ export function capLabel(value) {
 }
 export function priceText(pricing) {
   if (!pricing || ![pricing.input, pricing.output, pricing.cacheRead, pricing.cacheWrite].every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) return "价格不完整，不能授权";
-  return `输入 $${pricing.input} / 输出 $${pricing.output} · 每百万 token`;
+  return `输入 $${pricing.input} / 输出 $${pricing.output} · 每百万 token${items(pricing.tiers).length ? " · 有阶梯价格，查看详情" : ""}`;
 }
 export function validCap(value) {
   const amount = Number(value);
@@ -97,16 +97,36 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     }
     return node;
   };
-  const priceDetails = (model) => details("价格与能力详情", [
-    ["模型", model.id], ["输入 / 输出", priceText(model.pricing)],
-    ["缓存读取", model.pricing ? `$${model.pricing.cacheRead} / 百万 token` : "未提供"],
-    ["缓存写入", model.pricing ? `$${model.pricing.cacheWrite} / 百万 token` : "未提供"],
-    ["上下文", model.contextWindow ?? "未提供"], ["最大输出", model.maxOutputTokens ?? "未提供"],
-    ["图像输入", model.images === true ? "支持" : model.images === false ? "不支持" : "未提供"],
-    ["调用接口", items(model.gatewayApis).join("、") || "未提供"],
-    ["推理级别", items(model.reasoningLevels).join("、") || "未提供"],
-    ["价格锁定", "否（priceLocked: false），以 Magpie 原生计费为准"],
-  ]);
+  const priceValue = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? `$${value} / 百万 token` : "未提供";
+  function priceDetails(model) {
+    const pricing = model.pricing;
+    const entries = [
+      ["模型", model.id], ["输入 / 输出", priceText(pricing)],
+      ["缓存读取", priceValue(pricing?.cacheRead)],
+      ["缓存写入", priceValue(pricing?.cacheWrite)],
+    ];
+    if (pricing && Object.hasOwn(pricing, "cacheWrite1h")) entries.push(["一小时缓存写入", priceValue(pricing.cacheWrite1h)]);
+    entries.push(["价格单位", pricing?.unit ?? "未提供"], ["价格来源", ({ "magpie-gateway": "Magpie 网关（magpie-gateway）", "magpie-settings": "Magpie 模型设置（magpie-settings）" })[pricing?.source] || pricing?.source || "未提供"]);
+    for (const [index, tier] of items(pricing?.tiers).entries()) {
+      const name = `阶梯 ${index + 1}`;
+      entries.push(
+        [`${name} · 门槛`, typeof tier.above === "number" && Number.isFinite(tier.above) ? `超过 ${tier.above} token` : "未提供"],
+        [`${name} · 输入`, priceValue(tier.input)],
+        [`${name} · 输出`, priceValue(tier.output)],
+        [`${name} · 缓存读取`, priceValue(tier.cacheRead)],
+        [`${name} · 缓存写入`, priceValue(tier.cacheWrite)],
+        [`${name} · 一小时缓存写入`, priceValue(tier.cacheWrite1h)],
+      );
+    }
+    entries.push(
+      ["上下文", model.contextWindow ?? "未提供"], ["最大输出", model.maxOutputTokens ?? "未提供"],
+      ["图像输入", model.images === true ? "支持" : model.images === false ? "不支持" : "未提供"],
+      ["调用接口", items(model.gatewayApis).join("、") || "未提供"],
+      ["推理级别", items(model.reasoningLevels).join("、") || "未提供"],
+      ["价格锁定", "否（priceLocked: false），以 Magpie 原生计费为准"],
+    );
+    return details("价格与能力详情", entries);
+  }
   const badge = (text, tone = "neutral") => el("span", text, `pill ${tone}`);
   const roots = Object.fromEntries(["discovery", "sharing", "connections"].map((name) => [name, document.getElementById(name + "-panel")]));
   let state = null;

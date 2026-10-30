@@ -30,15 +30,17 @@
 
 ### Decision 38 — Wallet/accounting browser workflow, no financial scope expansion
 
-Phase 9第三阶段正在开发“测试网钱包”“用量与账单”；本轮 GUI 钱包验收尚未完成。动作沿用 Wallet、ChainWatcher、Ledger、Provisioner 与纯 walletView；普通状态本地投影，RPC/额度读回/扫描显式执行并显示证据时间，秘密 RPC URL 不回显。BSC97/Base84532平等、显式选链，只注册测试资产，无新链、主网、私钥代管或自动转账。
+Phase9实现“测试网钱包”“用量与账单”；Ego/Chromium与WebKit已完成受控本地模拟金融路径，范围见下方验证矩阵和报告。动作沿用 Wallet、ChainWatcher、Ledger、Provisioner 与纯 walletView；普通状态本地投影，RPC/额度读回/扫描显式执行并显示证据时间，秘密 RPC URL 不回显。BSC97/Base84532平等、显式选链，只注册测试资产，无新链、主网、私钥代管或自动转账。
 
 提供方选实际消费者/网络/资产/精确金额，预览再创建一次入账申请，下载真实 EIP-712 文档；使用方导入申请后经本机服务纯校验，下载真实 EIP-712 签名数据，在自己的外部钱包审阅并签署；返回控制台填写公开付款地址和65字节签名，由服务校验摘要/恢复地址并生成签名交付文件，不要求钱包导出 AIHub 格式。提供方导入验证付款地址/签名后才交付精确转账指引。可选注入浏览器钱包在完整文档审阅确认后才请求账户，核对精确链后用服务已验证的文档调用 `eth_signTypedData_v4`；不自动切链、不广播交易，无 WalletConnect/SDK/私钥输入，缺扩展时保留文件流程。目前仅模拟注入钱包测试，实际实验走文件，不声称通用扩展兼容。普通用户不构造 JSON、不提交私钥。待处理/未知创建先恢复或取消，不盲目创建第二份。链最终性、账本应用、Key额度读回和可调用是独立证据，充值不忽略暂停。异常备注不新增信用，日志基线审计不补造消费，消费者账单摘要不是签名/付款证明；普通界面无手动测试充值。
 
 ### Current Phase 9 acceptance boundary
 
-**REPRODUCED，限定本轮范围**：两份全新隔离 Magpie0.1.2171 GUI + EasyTier2.6.4；正常 GitHub UI install/Update；默认系统浏览器、八位码配对、首次配置；提供方发布有价本机模型、使用方完整指纹核对、申请文件交接、手动正额度批准、授权下载/隐藏与导入、原生 Remote Magpie；Magpie原生 Test models 观察到200后429，受控模拟模型上游。不是所有版本/平台/供应商或所有计费语义验收。
+**REPRODUCED，限定本轮范围**：两份全新隔离 Magpie0.1.2171 GUI + EasyTier2.6.4；正常 GitHub UI install/Update；默认系统浏览器、八位码配对、首次配置；提供方发布有价本机模型、使用方完整指纹核对、申请文件交接、手动正额度批准、授权下载/隐藏与导入、原生 Remote Magpie；Magpie原生 Test models 观察到200后429，受控模拟模型上游。WebKit第二提供方完整手动流程、注入内容字面显示不执行、暂停第二方时第一方仍原生200和恢复通过，见[共享报告](validation/phase9-stage2.md)、[安全报告](validation/phase9-security.md)。不是所有版本/平台/供应商或所有计费语义验收。
 
-**UNKNOWN / development**：第三阶段完整浏览器钱包/账目、外部真实钱包适配与本轮新公链付款，Linux GUI/Windows全流程。0.1.2038保留历史价格/计费 pin；0.1.2171未重测完整重定价、并发超额、窗口语义。PR11真实BSC/Base付款及双主机证据仅在其历史报告范围有效；本地模拟RPC/签名器不代表新公链转账。没有本轮最终全面GO或真实资金GO。
+**REPRODUCED，本地模拟金融路径**：Ego以实际EIP712合成外部钱包、BSC/Base受控RPC驱动生产Watcher/Ledger/Provisioner，原生额度1.0001后2.0001；Base增加head20不入账，finalized后入账；重复事件/扫描不重复信用；原生429→入账→200、消费者无签名账单导入及RPC503未知状态通过。WebKit9步真实UI亦完成新增0.5BSC模拟信用、最终性/重放及原生Test models200，见[钱包报告](validation/phase9-wallet.md)和[WebKit记录](validation/phase9-browser/webkit-wallet.json)。
+
+**UNKNOWN / limits**：真实浏览器钱包扩展、原生WKWebView、Linux/Windows桌面与SSH端到端仍未验收；本轮无新公链付款。账单上限48KiB，未知创建预留需高级人工恢复，不由普通UI清除。0.1.2038保留历史价格/计费 pin；0.1.2171未重测完整重定价、并发超额、窗口语义。PR11真实BSC/Base付款及双主机证据仅在其历史报告范围有效；本地模拟RPC/签名器不代表新公链转账。没有本轮最终全面GO或真实资金GO。
 
 ---
 
@@ -878,7 +880,7 @@ methods, none of which is a key operation.
 | Magpie | 0.1.2038 | **host/CLI and pricing/billing pin**; tag `v0.1.2038` = `8c63c5b7873c6aa7aa797aa17f481d5fa8301876` |
 | Magpie | 0.1.2057 | official Linux no-GUI container, **consumer only**; `ghcr.io/yetone/magpie@sha256:900711e2867299e6dbc7d9b02112e86d0a00add626f61bacfad83be0da5fbe5e`; see the fresh two-host report |
 | Magpie | 0.1.2120 | **page/bridge source comparison**; tag `v0.1.2120` = `eed140c4d9a7916a77e382d8a9c8b3f071f602b2`; full host/CLI UNKNOWN |
-| Magpie | 0.1.2171 | Phase9 two fresh real GUI profiles: GitHub install/update, native page/browser/pairing/configure, real EasyTier, provider/consumer authorization and native Test models200→429; mock model upstream; full billing semantics/wallet GUI not revalidated |
+| Magpie | 0.1.2171 | Phase9 two fresh real GUI profiles: GitHub install/update, native page/browser/pairing/configure, real EasyTier, provider/consumer authorization and native Test models200→429; mock model upstream; wallet GUI measured with controlled local simulation in Ego/WebKit; full billing semantics not revalidated |
 | EasyTier | 2.6.4 | tag `v2.6.4` = `8428a89d2dabc94c97d370ec607c6ca142473626` |
 | Bun | 1.4.3 | measured development/CLI/CI; ordinary plugin runtime managed by Magpie, no PATH installation required |
 | Foundry | 1.8.6 | testnet wallet labs; commit `6bad0a66de7c83f7b33695044138f0f5fa4c5990` |
@@ -988,7 +990,7 @@ Phase-7 testnet-wallet additions:
 28. **The watcher trusts the configured RPC for a log's existence.** It cross-checks the receipt and
     re-reads the block at finality time, and reports endpoint health, but a provider that lies
     consistently about a block and its hash would not be caught. There is no consensus read.
-29. **Historical Phase7 native wallet page was read-only.** Phase9 replaces the ordinary-user workflow with independent authenticated browser actions; the native CSP remains unchanged. Wallet/accounting GUI is currently Stage3 development, with full new browser acceptance still UNKNOWN; prior chain/ledger evidence keeps its own scope.
+29. **Historical Phase7 native wallet page was read-only.** Phase9 replaces the ordinary-user workflow with independent authenticated browser actions; the native CSP remains unchanged. Wallet/accounting GUI now has scoped Ego/WebKit controlled-local-simulation evidence; genuine wallet-extension/public-payment/platform limits remain as stated in Decisions34–38 and linked reports. Prior chain/ledger evidence keeps its own scope.
 30. **No HD wallet, no per-consumer addresses, no key custody.** The plugin stores no private key for
     either side; the provider's receiving address is one they already own.
 

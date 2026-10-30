@@ -20,7 +20,7 @@
 | `console/`、`src/console-api.ts` | 浏览器界面与白名单 Service 操作，普通页面读取不主动探测远端 |
 | `src/service.ts`、`easytier.ts` | 一套 EasyTier no-TUN 核心、多提供方连接、目录和原生共享限制 |
 | `src/provisioner.ts`、`ledger.ts` | 沿用现有 Gateway Key 写入/读回与本地不可变预付账本 |
-| `src/wallet.ts`、`watcher.ts`、`networks.ts` | 现有测试网注册表、签名归属、逐链最终性和账本桥接；浏览器操作正在扩展 |
+| `src/wallet.ts`、`watcher.ts`、`networks.ts` | 现有测试网注册表、签名归属、逐链最终性和账本桥接；浏览器操作与证据边界见钱包验证报告 |
 | `bin/` | 保留的高级 CLI，不是普通用户界面的执行后端 |
 
 所有 AI 请求仍经消费方 Magpie → EasyTier → 提供方 Magpie；插件不转发 AI 内容、不计 token、不另写请求账单。Magpie 管理界面从不映射到覆盖网。只共享本机、完整定价的原生模型，拒绝 Remote Magpie、`group/…` 和 `auto/…` 转售。
@@ -37,6 +37,8 @@
 
 本轮普通 GUI 安装/更新、浏览器入口/配对、真实网络、双节点申请审批/授权导入、原生 Remote Magpie 及 Test models 的 200→429 在两份全新 **Magpie 0.1.2171** 环境与 **EasyTier 2.6.4** 上实测；模型上游为受控模拟服务。EasyTier 二进制通过 `src/easytier-manifest.ts` 的 SHA-256 校验。
 
-历史价格/计费基线仍为 Magpie **0.1.2038**；不能把 UI 兼容性扩大成 0.1.2171 全部计费语义已重测。历史 Linux 0.1.2057 消费容器与真实测试网证据保留各自范围；Windows/Linux 图形环境的本轮完整验收、当前第三阶段浏览器钱包仍未完成。钱包只处理测试代币，真实资金与主网不开放。
+Ego 已完成 BSC/Base 受控本地模拟 RPC、实际 EIP-712 合成外部签名、生产观察器/账本/原生额度读回（1.0001→2.0001）、重复扫描、无签名账单交接与 RPC503未知状态；原生模型调用从429恢复200。WebKit 第二提供方完整手动流程，以及字面文本注入不执行、提供方暂停隔离/恢复已通过。[共享报告](../docs/validation/phase9-stage2.md)、[钱包报告](../docs/validation/phase9-wallet.md)、[安全报告](../docs/validation/phase9-security.md)给出逐项范围。本地模拟没有新的公链转账；WebKit钱包9步真实UI复测亦已通过新增0.5BSC模拟入账、最终性/重放和原生Test models200，见[WebKit记录](../docs/validation/phase9-browser/webkit-wallet.json)。最终清理与全面结论由最终报告记录。
+
+历史价格/计费基线仍为 Magpie **0.1.2038**，0.1.2171 未重测全部计费语义。历史 Linux0.1.2057 消费容器及 PR11 真实测试网证据保留独立范围。真实浏览器钱包扩展、原生 WKWebView、Linux/Windows 桌面与 SSH 端到端仍未知。账单上限48KiB；未知入账申请预留需要高级人工恢复，普通界面不清除此阻止。钱包只处理测试代币，真实资金与主网不开放。
 
 维护者开发检查从此目录运行 `bun run ci`；需要 Magpie、EasyTier 源码及平台证据时，使用[架构参考](../docs/ARCHITECTURE.md)中的精确版本和验证报告，而非依赖界面显示推断安全性。

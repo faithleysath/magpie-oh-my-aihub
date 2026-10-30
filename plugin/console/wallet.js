@@ -454,7 +454,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
   heading(accountingRoot, "EVIDENCE BEFORE BALANCE", "用量与账单", "累计入账、已结算用量、余额和原生额度来自既有账本；未知状态不会按零计算。", button("刷新账目检查", () => void run("accounting-refresh", selectedConsumer ? { consumerId: selectedConsumer } : {})));
   const accountingIntro = section("选择本机管理的伙伴", "共享方只查看自己管理的伙伴账目。使用方可导入共享方交付的未签名账单，并在“我的连接”查看对方原生限额回读。");
   const consumerSelect = select("伙伴账目", [], "请选择伙伴，不会自动选择"); accountingIntro.append(consumerSelect.label);
-  consumerSelect.input.addEventListener("change", () => { selectedConsumer = consumerSelect.input.value; renderAccounting(); });
+  consumerSelect.input.addEventListener("change", () => { closeDialog(); selectedConsumer = consumerSelect.input.value; renderAccounting(); });
   const accountContent = el("div"); accountingRoot.append(accountingIntro, accountContent);
   const external = section("使用方 · 已导入的共享方账单", "这是共享方提供的未签名快照。摘要只验证内容一致性，不证明身份、付款或链上最终性；请独立核对。"), externalContent = el("div");
   external.append(button("导入共享方账单", () => importFile("statement")), externalContent); accountingRoot.append(external);
@@ -464,6 +464,34 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     for (const consumer of rows(state.status.consumers)) consumerSelect.input.append(option(consumer.consumerId, `${consumer.consumerId}${consumer.revokedAt ? " · 已撤销" : consumer.paused ? " · 已暂停" : ""}`));
     selectedConsumer = rows(state.status.consumers).some((consumer) => consumer.consumerId === value) ? value : "";
     consumerSelect.input.value = selectedConsumer;
+    if (value !== selectedConsumer) closeDialog();
+  }
+  function showConsumptionHistory(consumerId, cursor = null, previous = []) {
+    openDialog("消费记录", (root) => {
+      root.append(p(`伙伴：${consumerId}。每页最多 50 条；显示账本已记录的费用与价格版本，不按当前价格重新计算。`), p("正在读取消费记录…"));
+      void run("accounting-history", { consumerId, ...(cursor ? { cursor } : {}) }, (result) => {
+        root.replaceChildren(p(`伙伴：${consumerId}。每页最多 50 条；显示账本已记录的费用与价格版本，不按当前价格重新计算。`));
+        const entries = rows(result.rows);
+        if (!entries.length) root.append(p("此页没有已记录的消费。缺失或未结算用量仍需结合账目状态判断，不能据此推断为零。"));
+        for (const row of entries) {
+          const amount = typeof row.amountUsd === "number" && Number.isFinite(row.amountUsd) ? `$${row.amountUsd.toFixed(9)}` : "未知";
+          const tokens = obj(row.tokens);
+          root.append(details(`${stamp(row.recordedAt)} · ${row.kind === "adjustment" ? "历史调整" : "模型调用"} · ${amount}`, [
+            ["模型", row.model], ["记录费用", amount], ["精确费用（nanoUSD）", row.amountNanos],
+            ["记录时间", row.recordedAt], ["价格版本", row.priceVersion], ["原账期窗口", row.windowId],
+            ["价格已核验", row.priceVerified === true ? "已核验" : "未核验，记录金额不能视为最终费用"],
+            ["输入 token", tokens.input], ["输出 token", tokens.output], ["缓存读取 token", tokens.cacheRead],
+            ["缓存写入 token", tokens.cacheWrite], ["一小时缓存写入 token", tokens.cacheWrite1h],
+          ]));
+        }
+        const controls = el("div", null, "workflow-actions");
+        const back = button("上一页", () => showConsumptionHistory(consumerId, previous.at(-1), previous.slice(0, -1)));
+        back.disabled = previous.length === 0;
+        const next = button("下一页", () => showConsumptionHistory(consumerId, result.nextCursor, [...previous, cursor]));
+        next.disabled = typeof result.nextCursor !== "string" || !result.nextCursor;
+        controls.append(back, next); root.append(controls);
+      }, { refresh: false });
+    });
   }
   function renderAccounting() {
     accountContent.replaceChildren();
@@ -482,6 +510,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     card.append(values, details("原生额度、模型与价格窗口", [["最近核验额度上限", capLabel(verifiedCap)], ["最近核验已用", usd(account?.usedUsd)], ["最近核验剩余", usd(account?.leftUsd)], ["记录的额度上限（非当前回读）", capLabel(consumer.capUsd)], ["允许模型", rows(consumer.models).join("、")], ["价格版本", account?.priceVersion || consumer.priceVersion], ["已接受报价", consumer.acceptedQuoteHash], ["窗口结束", account?.windowEnd || consumer.reset], ["待结算窗口", account?.openSettlements ?? ledger.openSettlements], ["计费状态", account?.accounting?.state || "unknown"], ["共享发布", account?.accounting?.serving === true ? "最近证据中发布" : "未知或已撤回"], ["暂停原因", consumer.paused?.reason], ["暂停执行层级", consumer.paused?.enforcement], ["保护已执行", consumer.paused ? consumer.paused.enforced === true ? "已证实撤销或轮换旧密钥" : "未证实完全阻止，需检查网络发布" : "未暂停"], ["计费不确定性", ledger.uncertain]]));
     card.append(el("p", "401 表示访问授权未被接受；429 是 Magpie 原生限额拒绝；RPC 不可读表示链证据未知；计费保护暂停需要核对原因，不能靠重复转账或清零额度解除。", "soft-note"));
     const actions = el("div", null, "workflow-actions");
+    actions.append(button("查看消费记录", () => showConsumptionHistory(consumer.consumerId)));
     actions.append(button("核验此伙伴账目与额度", () => void run("wallet-refresh", { consumerId: consumer.consumerId, probeRpc: false })), button("导出此伙伴账单", () => void run("wallet-statement", { consumerId: consumer.consumerId }, (result) => {
       const document = result.statement?.statement ? result.statement : result.document || result;
       openDialog("导出未签名账单", (root) => { root.append(p("此账单来自本机账本与已获取的核验记录。文件摘要只能用于内容完整性核对，不是签名或付款证明。只包含此伙伴的记录，不包含访问密钥。"), button("下载此伙伴账单", () => download(document, "aihub-consumer-statement.json"), true)); });

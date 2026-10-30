@@ -93,6 +93,32 @@ test("verified timeline step without timestamp stays verified and missing eviden
   } finally { r.cleanup(); }
 });
 
+describe("individual consumption history", () => {
+  test("real selected-consumer button opens immutable rows and pages opaque cursors without background mutation", async () => {
+    const entry = { id: "row-1", kind: "call", model: "native/demo", amountNanos: 1234, amountUsd: .000001234,
+      recordedAt: "2026-10-30T01:00:00.000Z", priceVersion: "frozen-price", windowId: "original-window", priceVerified: true,
+      tokens: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cacheWrite1h: 50 } };
+    const r = runtime(stateFixture(), async (name, input) => ({ rows: [{ ...entry, model: input.cursor ? "native/older" : "native/demo" }], nextCursor: input.cursor ? null : "opaque-page-two" }));
+    try {
+      const select = all(r.roots["accounting-panel"], "select")[0];
+      expect(find(r.roots["accounting-panel"], "button", "查看消费记录")).toBeUndefined();
+      select.value = "friend"; await select.emit("change");
+      await find(r.roots["accounting-panel"], "button", "查看消费记录").click(); await flush();
+      expect(r.calls[0]).toEqual({ name: "accounting-history", input: { consumerId: "friend" } });
+      expect(r.dialog.open).toBeTrue();expect(r.dialog.textContent).toContain("native/demo");expect(r.dialog.textContent).toContain("0.000001234");
+      expect(r.dialog.textContent).toContain("frozen-price");expect(r.dialog.textContent).toContain("original-window");
+      expect(find(r.dialog,"button","上一页").disabled).toBeTrue();
+      await find(r.dialog,"button","下一页").click();await flush();
+      expect(r.calls[1]).toEqual({name:"accounting-history",input:{consumerId:"friend",cursor:"opaque-page-two"}});
+      expect(r.dialog.textContent).toContain("native/older");expect(find(r.dialog,"button","下一页").disabled).toBeTrue();
+      await find(r.dialog,"button","上一页").click();await flush();
+      expect(r.calls[2]).toEqual({name:"accounting-history",input:{consumerId:"friend"}});
+      select.value="";await select.emit("change");expect(r.dialog.open).toBeFalse();expect(r.dialog.textContent).not.toContain("native/demo");
+      r.end();expect(r.dialog.textContent).not.toContain("original-window");
+    } finally {r.cleanup();}
+  });
+});
+
 describe("real mounted wallet handlers", () => {
   test("create has no automatic chain/consumer/asset and rejects excess precision before any action", async () => {
     const r = runtime();

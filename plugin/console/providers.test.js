@@ -157,6 +157,43 @@ describe("real mounted workflow handlers", () => {
     } finally { r.cleanup(); }
   });
 
+  test("actual model details show one-hour cache, every tier price, unit and source without injecting model HTML", () => {
+    const state = baseState();
+    const tiered = { ...model, displayName: '<img src=x onerror="steal()">', pricing: { ...pricing, unit: "USD per 1M tokens", source: "magpie-settings", cacheWrite1h: 1.5, tiers: [{ above: 128000, input: 3, output: 4, cacheRead: 0.3, cacheWrite: 3.5, cacheWrite1h: 5.25 }, { above: 256000, input: 6, output: 8, cacheRead: 0, cacheWrite: 7, cacheWrite1h: null }] } };
+    state.status.catalog.peers[0].quote.models = [tiered]; state.shareCandidates.models = [tiered];
+    const r = runtime(state);
+    try {
+      expect(priceText(tiered.pricing)).toContain("有阶梯价格，查看详情");
+      for (const name of ["discovery", "sharing"]) {
+        const root = r.roots[name + "-panel"];
+        const prices = all(root, "details").find((node) => node.children[0]?.textContent === "价格与能力详情");
+        const cells = Object.fromEntries(prices.children.slice(1).map((row) => [row.children[0].textContent, row.children[1].textContent]));
+        expect(cells["一小时缓存写入"]).toBe("$1.5 / 百万 token");
+        expect(cells["价格单位"]).toBe("USD per 1M tokens"); expect(cells["价格来源"]).toContain("Magpie 模型设置");
+        expect(cells["阶梯 1 · 门槛"]).toBe("超过 128000 token");
+        for (const [field, value] of [["输入", 3], ["输出", 4], ["缓存读取", 0.3], ["缓存写入", 3.5], ["一小时缓存写入", 5.25]]) expect(cells[`阶梯 1 · ${field}`]).toBe(`$${value} / 百万 token`);
+        expect(cells["阶梯 2 · 门槛"]).toBe("超过 256000 token");
+        expect(cells["阶梯 2 · 缓存读取"]).toBe("$0 / 百万 token");
+        expect(cells["阶梯 2 · 一小时缓存写入"]).toBe("未提供");
+        expect(cells["价格锁定"]).toContain("priceLocked: false");
+        expect(root.textContent).toContain(tiered.displayName); expect(all(root, "img")).toHaveLength(0);
+      }
+    } finally { r.cleanup(); }
+  });
+
+  test("null and omitted optional cache price stay missing rather than zero", () => {
+    const state = baseState();
+    state.status.catalog.peers[0].quote.models = [{ ...model, pricing: { ...pricing, cacheWrite1h: null, tiers: [{ above: 0, input: 1, output: 2, cacheRead: null, cacheWrite: undefined }] } }];
+    const r = runtime(state);
+    try {
+      const prices = all(r.roots["discovery-panel"], "details").find((node) => node.children[0]?.textContent === "价格与能力详情");
+      const cells = Object.fromEntries(prices.children.slice(1).map((row) => [row.children[0].textContent, row.children[1].textContent]));
+      expect(cells["一小时缓存写入"]).toBe("未提供");
+      for (const field of ["缓存读取", "缓存写入", "一小时缓存写入"]) expect(cells[`阶梯 1 · ${field}`]).toBe("未提供");
+      expect(cells["价格单位"]).toBe("未提供"); expect(cells["价格来源"]).toBe("未提供");
+    } finally { r.cleanup(); }
+  });
+
   test("remote catalogue HTML remains literal text and controls stay safe", () => {
     const state = baseState(); state.status.catalog.peers[0].quote.node.displayName = '<img src=x onerror="steal()">';
     const r = runtime(state);

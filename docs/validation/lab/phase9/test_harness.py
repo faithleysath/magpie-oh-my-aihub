@@ -63,6 +63,95 @@ class HarnessTests(unittest.TestCase):
             self.assertNotIn("webLoginUrl", result)
             self.assertNotIn(root, result)
 
+    def source_fixture(self, root, github=False):
+        nr = Path(root) / "provider"
+        data = nr / "data"
+        local = nr / "package"
+        target = data / "plugins/node_modules/@oh-my-aihub/magpie-plugin" if github else local
+        reference = Path(root) / "reference"
+        for directory in (local, target, reference):
+            for name, text in {
+                "package.json": json.dumps({"name": "@oh-my-aihub/magpie-plugin", "main": "plugin/src/index.ts"}),
+                "plugin/src/index.ts": "export default () => ({});",
+                "plugin/src/wallet.ts": "export const fixture = true;",
+                "plugin/console/app.js": "console.log('fixture');",
+                "plugin/console/index.html": "<!doctype html>",
+                "plugin/page/app.js": "// shipped launcher",
+                "plugin/page/status.js": "do-not-export-generated-payload",
+                "plugin/page/launcher.js": "do-not-export-generated-launcher",
+                "plugin/console/wallet.test.js": "do-not-export-tests",
+            }.items():
+                file = directory / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+        spec = "github:faithleysath/magpie-oh-my-aihub#feature/local-web-console" if github else str(local)
+        h.save(data / "plugins.json", {"plugins": [{"spec": spec, "options": {"networkSecret": "do-not-export-options"}}]})
+        if github:
+            h.save(data / "plugins/package.json", {"dependencies": {"@oh-my-aihub/magpie-plugin": spec}})
+            # Deliberately unused fixture copy differs from installed GitHub source.
+            (local / "plugin/src/index.ts").write_text("unused fixture copy")
+        return {"root": str(nr), "data": str(data), "pluginCopy": str(local), "ports": {}}, target, reference
+
+    def test_actual_source_selects_local_or_github_without_exporting_options(self):
+        for github in (False, True):
+            with self.subTest(github=github), tempfile.TemporaryDirectory(prefix="phase9-source-unit-") as root:
+                node, target, reference = self.source_fixture(root, github)
+                selected, kind, label = h.actual_package_root(node)
+                self.assertEqual(selected, target.resolve())
+                self.assertEqual(kind, "github" if github else "local")
+                self.assertNotIn(root, label)
+                evidence = h.actual_installed_source(node, reference)
+                self.assertEqual(evidence["status"], "VERIFIED")
+                self.assertEqual(evidence["mismatchCount"], 0)
+                self.assertIn("plugin/src/wallet.ts", evidence["files"])
+                self.assertNotIn("plugin/page/status.js", evidence["files"])
+                self.assertNotIn("plugin/page/launcher.js", evidence["files"])
+                self.assertNotIn("plugin/console/wallet.test.js", evidence["files"])
+                self.assertNotIn("do-not-export", json.dumps(evidence))
+                self.assertNotIn(root, json.dumps(evidence))
+                (target / "plugin/src/wallet.ts").write_text("changed installed source")
+                mismatch = h.actual_installed_source(node, reference)
+                self.assertEqual(mismatch["status"], "MISMATCH")
+                self.assertEqual(mismatch["mismatchCount"], 1)
+
+    def test_actual_source_refuses_paths_and_symlinks_escaping_owned_node(self):
+        with tempfile.TemporaryDirectory(prefix="phase9-source-unit-") as root:
+            node, target, reference = self.source_fixture(root, github=True)
+            file = target / "plugin/src/wallet.ts"
+            file.unlink()
+            outside = Path(root) / "outside-wallet.ts"
+            outside.write_text("must never be read")
+            file.symlink_to(outside)
+            self.assertEqual(h.actual_installed_source(node, reference)["status"], "UNKNOWN")
+            self.assertNotIn("must never be read", json.dumps(h.actual_installed_source(node, reference)))
+            file.unlink()
+            file.write_text("export const fixture = true;")
+            # Escaping installed-root symlink is refused as well as source-file links.
+            import shutil
+            shutil.rmtree(target)
+            target.symlink_to(reference, target_is_directory=True)
+            self.assertEqual(h.actual_installed_source(node, reference)["status"], "UNKNOWN")
+            h.save(Path(node["data"]) / "plugins.json", {"plugins": [{"spec": str(reference)}]})
+            self.assertEqual(h.actual_installed_source(node, reference)["status"], "UNKNOWN")
+
+    def test_actual_source_rejects_wrong_entry_main_or_dependency_mapping(self):
+        with tempfile.TemporaryDirectory(prefix="phase9-source-unit-") as root:
+            node, target, reference = self.source_fixture(root, github=True)
+            h.save(target / "package.json", {"name": "@oh-my-aihub/magpie-plugin", "main": "../outside.ts"})
+            self.assertEqual(h.actual_installed_source(node, reference)["status"], "UNKNOWN")
+            h.save(target / "package.json", {"name": "@oh-my-aihub/magpie-plugin", "main": "plugin/src/index.ts"})
+            h.save(Path(node["data"]) / "plugins/package.json", {"dependencies": {"@oh-my-aihub/magpie-plugin": "https://evil.invalid/private-token"}})
+            evidence = h.actual_installed_source(node, reference)
+            self.assertEqual(evidence["status"], "UNKNOWN")
+            self.assertNotIn("private-token", json.dumps(evidence))
+
+    def test_console_port_json_is_discovered_without_returning_other_metadata(self):
+        with tempfile.TemporaryDirectory(prefix="phase9-source-unit-") as root:
+            node, _, _ = self.source_fixture(root)
+            h.save(Path(node["data"]) / "oh-my-aihub/console-port.json", {"port": 52754, "secret": "do-not-export"})
+            self.assertEqual(h.observed_ports(node)["console-port"], 52754)
+            self.assertNotIn("do-not-export", json.dumps(h.observed_ports(node)))
+
     def test_mock_is_local_deterministic_and_counted(self):
         port = h.free_port(["127.0.0.1"], set())
         p = subprocess.Popen([sys.executable, str(Path(__file__).with_name("mock-upstream.py")), "--port", str(port), "--name", "unit"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

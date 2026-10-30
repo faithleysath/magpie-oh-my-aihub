@@ -9,6 +9,7 @@ import { ConsoleInputError } from "./console-server.ts";
 import { NetworkRegistry } from "./networks.ts";
 import { walletView, type KeyReadback, type WalletViewInput } from "./walletview.ts";
 import { verifyStatement } from "./walletstatement.ts";
+import { LedgerHistoryCursorError } from "./ledger.ts";
 import { formatTokenAmount } from "./walletamount.ts";
 import type { Service } from "./service.ts";
 import type { Wallet } from "./wallet.ts";
@@ -16,7 +17,7 @@ import { verifyIntentSignature, type DepositIntent } from "./deposits.ts";
 import type { ConsumerView } from "./provisioner.ts";
 import { boundedWalletDocument, externalSignatureDocument, parseWalletSignature, planWalletIntent, previewDepositDocument, UUID, WalletWorkflowError, walletAddress, walletBad, walletFields, walletHash, walletIntentDocument, walletObject, walletText } from "./wallet-workflows.ts";
 
-export const WALLET_CONSOLE_ACTIONS = ["wallet-refresh", "wallet-network", "wallet-start", "wallet-stop", "wallet-asset-register", "wallet-asset-toggle", "wallet-receiving", "wallet-intent-preview", "wallet-intent-create", "wallet-intent-document", "wallet-signature-import", "wallet-intent-cancel", "wallet-scan", "wallet-anomaly-resolve", "wallet-statement", "wallet-statement-preview", "deposit-document-preview", "deposit-signature-document", "accounting-refresh", "usage-gap-resolve"] as const;
+export const WALLET_CONSOLE_ACTIONS = ["wallet-refresh", "wallet-network", "wallet-start", "wallet-stop", "wallet-asset-register", "wallet-asset-toggle", "wallet-receiving", "wallet-intent-preview", "wallet-intent-create", "wallet-intent-document", "wallet-signature-import", "wallet-intent-cancel", "wallet-scan", "wallet-anomaly-resolve", "wallet-statement", "wallet-statement-preview", "deposit-document-preview", "deposit-signature-document", "accounting-refresh", "accounting-history", "usage-gap-resolve"] as const;
 // Leave room for the JSON action envelope under the transport's 64 KiB body
 // bound. A statement exported here must fit the consumer's import path too.
 const STATEMENT_DOCUMENT_LIMIT = 48 * 1024;
@@ -263,6 +264,14 @@ export class ConsoleWallet {
         case "wallet-anomaly-resolve":walletFields(input,["id","note"]);{const w=this.wallet(),id=integer(input.id,"异常编号"),note=walletText(input.note,"审计说明",500);if(!w.chainStore().anomalies().some(a=>a.id===id&&!a.resolvedAt))return walletBad("请选择未处理的异常记录");w.chainStore().resolveAnomaly(id,note);return {resolved:true,wallet:this.snapshot()};}
         case "wallet-statement":walletFields(input,["consumerId"]);{const consumerId=this.consumer(input.consumerId).consumerId;const statement=await this.service.walletStatement(consumerId);if(!statement)return walletBad("钱包账单暂不可读取");if(Buffer.byteLength(JSON.stringify(statement))>STATEMENT_DOCUMENT_LIMIT)return walletBad("账单超过 48 KiB 的浏览器交接限制，请保留完整历史记录；未导出截断账单");return {statement,wallet:this.snapshot()};}
         case "accounting-refresh":walletFields(input,["consumerId"]);{if(input.consumerId!==undefined)await this.service.checkConsoleConsumer(this.consumer(input.consumerId).consumerId);else await this.service.accountingTick();return {accounting:scrub(this.service.accountingStatus()),wallet:await this.refresh(input.consumerId as string|undefined)};}
+        case "accounting-history": {
+          walletFields(input,["consumerId","cursor"]);const consumerId=this.consumer(input.consumerId).consumerId;
+          if(input.cursor!==undefined&&(typeof input.cursor!=="string"||input.cursor.length>2048))return walletBad("消费记录分页无效，请重新打开第一页");
+          if(!this.service.ledger)return walletBad("本机持久化账本暂不可读取");
+          try { const result=this.service.ledger.consumptionHistory(consumerId,input.cursor as string|undefined);
+            return {...result,rows:result.rows.map(row=>({...row,model:safeText(row.model)}))};
+          } catch(e){if(e instanceof LedgerHistoryCursorError)return walletBad(e.message);throw e;}
+        }
         case "usage-gap-resolve":walletFields(input,["consumerId","logId","resolvedBy","note"]);{const c=this.consumer(input.consumerId),logId=walletText(input.logId,"日志记录",128),resolvedBy=walletText(input.resolvedBy,"审计人",100),note=walletText(input.note,"审计说明",500);if(!c.ledger?.gaps.some(g=>g.logId===logId&&!g.resolvedAt))return walletBad("请选择尚未解决的使用记录缺口");await this.service.resolveConsumerGap(c.consumerId,{logId,resolvedBy,note});return {wallet:this.snapshot()};}
         default:return walletBad("不支持的钱包操作");
       }

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import secrets
 import shutil
 import signal
@@ -430,6 +431,13 @@ def observed_ports(node):
         except (OSError, ValueError):
             pass
     try:
+        metadata = bounded_json(state / "console-port.json", node["root"])
+        value = metadata.get("port")
+        if isinstance(value, int) and not isinstance(value, bool) and 0 < value < 65536:
+            ports["console-port"] = value
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
         config = json.loads((state / "state.json").read_text()).get("config") or {}
         rpc = config.get("rpcPort")
         if isinstance(rpc, int) and 0 < rpc < 65536:
@@ -439,9 +447,138 @@ def observed_ports(node):
     return ports
 
 
+def owned_file(path, node_root):
+    """Resolve before reading: evidence must never follow a link outside this node."""
+    root = Path(node_root).resolve(strict=True)
+    resolved = Path(path).resolve(strict=True)
+    if not resolved.is_relative_to(root) or resolved == root:
+        raise ValueError("source is outside the owned node")
+    return resolved
+
+
+def bounded_json(path, node_root, maximum=256 * 1024):
+    resolved = owned_file(path, node_root)
+    if not resolved.is_file() or resolved.stat().st_size > maximum:
+        raise ValueError("source metadata is unavailable")
+    return json.loads(resolved.read_text())
+
+
+def public_plugin_spec(spec):
+    """Only this public repository/ref is eligible; never echo arbitrary input."""
+    if not isinstance(spec, str):
+        return None
+    match = re.fullmatch(r"(?:github:|https://github\.com/)faithleysath/magpie-oh-my-aihub(?:\.git)?(?:#([A-Za-z0-9._/-]{1,128}))?", spec)
+    if not match:
+        return None
+    return "github:faithleysath/magpie-oh-my-aihub" + ("#" + match[1] if match[1] else "")
+
+
+def actual_package_root(node):
+    """Select actual enabled entry, never assume the fixture copy is installed."""
+    nr = Path(node["root"]).resolve(strict=True)
+    data = owned_file(node["data"], nr)
+    document = bounded_json(data / "plugins.json", nr)
+    entries = document.get("plugins")
+    if not isinstance(entries, list) or len(entries) > 200:
+        raise ValueError("invalid installed plugin entries")
+    selected = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("off", False) is not False:
+            continue
+        # Intentionally read only entry.spec/off; never copy options to evidence.
+        spec = entry.get("spec")
+        github = public_plugin_spec(spec)
+        if github:
+            deps = bounded_json(data / "plugins/package.json", nr).get("dependencies", {})
+            if not isinstance(deps, dict) or public_plugin_spec(deps.get("@oh-my-aihub/magpie-plugin")) != github:
+                raise ValueError("installed dependency mapping does not match entry")
+            target = data / "plugins/node_modules/@oh-my-aihub/magpie-plugin"
+            kind, label = "github", github
+        elif isinstance(spec, str) and Path(spec).is_absolute():
+            # Accept only the node's designated root package, not arbitrary local specs.
+            designated = owned_file(node.get("pluginCopy", nr / "package"), nr)
+            if Path(spec).resolve() != designated:
+                continue
+            target, kind, label = designated, "local", "<owned local package>"
+        else:
+            continue
+        target = owned_file(target, nr)
+        package = bounded_json(target / "package.json", nr)
+        if package.get("name") != "@oh-my-aihub/magpie-plugin" or package.get("main") != "plugin/src/index.ts":
+            raise ValueError("installed package entry is not the root plugin package")
+        entrypoint = owned_file(target / "plugin/src/index.ts", nr)
+        if not entrypoint.is_relative_to(target) or not entrypoint.is_file():
+            raise ValueError("installed entrypoint escapes package")
+        selected.append((target, kind, label))
+    if len(selected) != 1:
+        raise ValueError("no unique enabled owned plugin package")
+    return selected[0]
+
+
+def production_sources(root):
+    """Exact production inputs; generated page payloads/tests are never evidence."""
+    root = Path(root)
+    result = {"package.json"}
+    patterns = ("plugin/src/*.ts", "plugin/console/**/*.js", "plugin/console/**/*.html", "plugin/console/**/*.css",
+                "plugin/page/**/*.js", "plugin/page/**/*.html", "plugin/page/**/*.css")
+    for pattern in patterns:
+        for path in root.glob(pattern):
+            rel = path.relative_to(root)
+            if any(part in {"test", "tests", "node_modules"} for part in rel.parts):
+                continue
+            if path.name in {"status.js", "options.js", "launcher.js"} or re.search(r"\.(?:test|spec)\.", path.name):
+                continue
+            # Only safe relative names can appear in a sanitized manifest.
+            if re.fullmatch(r"[A-Za-z0-9_./-]+", str(rel)):
+                result.add(str(rel))
+    return result
+
+
+def actual_installed_source(node, repo_root=None):
+    repo = Path(repo_root or REPO).resolve()
+    result = {"status": "UNKNOWN", "installedKind": None, "installedSpec": None,
+              "entryMain": None, "matchCount": 0, "mismatchCount": 0,
+              "files": {}, "note": "Actual installed source was not verified."}
+    try:
+        target, kind, label = actual_package_root(node)
+        result.update(installedKind=kind, installedSpec=label, entryMain="plugin/src/index.ts")
+        expected = production_sources(repo)
+        actual = production_sources(target)
+        for rel in sorted(expected | actual):
+            installed = target / rel
+            current = repo / rel
+            if installed.exists() or installed.is_symlink():
+                resolved = owned_file(installed, node["root"])
+                if not resolved.is_relative_to(target) or not resolved.is_file():
+                    raise ValueError("installed source escapes package")
+                installed_hash = digest(resolved)
+            else:
+                installed_hash = None
+            if current.exists():
+                resolved_current = current.resolve(strict=True)
+                if not resolved_current.is_relative_to(repo) or not resolved_current.is_file():
+                    raise ValueError("reference source escapes repository")
+                current_hash = digest(resolved_current)
+            else:
+                current_hash = None
+            matches = installed_hash is not None and installed_hash == current_hash
+            result["files"][rel] = {"installedSha256": installed_hash, "repoSha256": current_hash, "matches": matches}
+            result["matchCount" if matches else "mismatchCount"] += 1
+        result["status"] = "VERIFIED" if result["mismatchCount"] == 0 else "MISMATCH"
+        result["note"] = "Hashes describe the enabled installed package, not the unused fixture copy; process reload is a separate acceptance check."
+    except (OSError, ValueError, KeyError, TypeError):
+        # Never surface metadata/options/path/error text from the profile.
+        result["status"] = "UNKNOWN"
+        result["note"] = "Installed source could not be uniquely resolved inside the owned node."
+    return result
+
+
 def audit(runtime_path, runtime, cleanup=None):
     # Explicit allowlist: no keys, invitation, login URLs, private paths, bodies.
+    reference_head = run(["git", "rev-parse", "HEAD"], cwd=REPO).stdout.decode().strip()
     report = {"schema": MARKER, "at": stamp(), "repoHead": runtime["repoHead"],
+              "sourceReference": {"repoHead": reference_head if re.fullmatch(r"[0-9a-f]{40}", reference_head) else None,
+                                  "scope": "current working-tree production files"},
               "platform": runtime["platform"], "magpieVersion": runtime["magpieVersion"],
               "magpieSourceSha": runtime["magpieSourceSha"], "hostBun": runtime["hostBun"],
               "billingPin": "0.1.2038", "compatibility": runtime["compatibility"],
@@ -454,7 +591,9 @@ def audit(runtime_path, runtime, cleanup=None):
         report["nodes"][name] = {"ports": observed_ports(node), "binarySha256": node.get("binarySha256"),
                                   "readiness": node.get("readiness"),
                                   "runningPids": sorted(owned_pids(node)),
-                                  "package": json.loads(manifest.read_text()) if manifest.exists() else None}
+                                  "package": json.loads(manifest.read_text()) if manifest.exists() else None,
+                                  "packageEvidenceRole": "fixture copy only; actual installation is recorded separately",
+                                  "actualInstalledSource": actual_installed_source(node)}
     save(Path(runtime["root"]) / "sanitized-manifest.json", report)
     return report
 
