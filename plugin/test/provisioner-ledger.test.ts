@@ -335,6 +335,17 @@ describe("ledger-backed issuance", () => {
     expect(paused.ledger?.balanceUsd).toBe(1);
   });
 
+
+  test("reissue itself refuses an unaccepted price change, even before a status check", async () => {
+    const v = await p.ensure("quinn", { models: [MODEL], capUsd: 1 });
+    fake.addUsage(v.keyId, 100_000, 50_000);
+    fake.setPrice({ input: 2, output: 4, cache_read: 0.2, cache_write: 0.4 });
+    await expect(p.reissue("quinn")).rejects.toThrow(/bound to price version/);
+    const next = await p.reissue("quinn", { acceptPriceVersion: fake.version() });
+    expect(next.capUsd).toBe(0.8);
+    expect(next.ledger?.consumedUsd).toBeCloseTo(0.2, 9);
+  });
+
 describe("price changes and windows", () => {
   test("a price change pauses, and reissue carries old-price consumption, not repriced history", async () => {
     const first = await p.ensure("frank", { models: [MODEL], capUsd: 1 });

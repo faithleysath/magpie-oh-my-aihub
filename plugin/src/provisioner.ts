@@ -945,6 +945,12 @@ export class Provisioner {
         }
       }
       const oldWindow = rec.paused?.windowId ? ledger.window(rec.paused.windowId) : ledger.openWindowFor(consumerId);
+      const boundVersion = oldWindow?.priceVersion ?? rec.priceVersion ?? null;
+      if (boundVersion && boundVersion !== snap.version && opts.acceptPriceVersion !== snap.version) {
+        throw new Error(
+          `this key is bound to price version ${boundVersion}; pass acceptPriceVersion=${snap.version} to accept the change`,
+        );
+      }
       if (oldWindow) {
         ledger.markWindowDraining(oldWindow.id);
         ledger.importUsage({ consumerId, window: oldWindow, logPath: this.usageLog() });
