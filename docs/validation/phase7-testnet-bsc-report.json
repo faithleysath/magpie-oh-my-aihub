@@ -1,0 +1,121 @@
+{
+  "at": "2026-10-30T04:01:07.102Z",
+  "providerAddress": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+  "consumerAddress": "0x617c2C85E9D45F1E714855FA051CcB8c538200cd",
+  "platform": "darwin arm64",
+  "bun": "1.4.3",
+  "foundry": "cast Version: 1.8.6",
+  "chains": [
+    97
+  ],
+  "steps": [
+    {
+      "chain": 97,
+      "name": "rpc chainId",
+      "ok": true,
+      "detail": "BNB Smart Chain Testnet: the endpoint answers chainId 97"
+    },
+    {
+      "chain": 97,
+      "name": "provider gas",
+      "ok": true,
+      "detail": "provider holds 99512336000000000 wei of tBNB"
+    },
+    {
+      "chain": 97,
+      "name": "fund the consumer for its own transfer",
+      "ok": true,
+      "detail": "9951233600000000 wei from the provider to 0x617c2C85E9D45F1E714855FA051CcB8c538200cd",
+      "evidence": "https://testnet.bscscan.com/tx/0x89899c54dafed7cb06450b7fd3f268bef8a2d6df86c2c81d4aaabe56a8810cb2"
+    },
+    {
+      "chain": 97,
+      "name": "reuse a deployed mock token",
+      "ok": true,
+      "detail": "tMOCK6 at 0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+      "evidence": "https://testnet.bscscan.com/address/0xD711ca4EcD966bb83B572616aC6008795dD4E26C"
+    },
+    {
+      "chain": 97,
+      "name": "decimals() on chain",
+      "ok": true,
+      "detail": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C reports 6"
+    },
+    {
+      "chain": 97,
+      "name": "EIP-712 signature",
+      "ok": true,
+      "detail": "digest 0xa8d641c104e7cf40bee4d89ddec2ac984548bf10db6b43ec2334969bce586b99 recovered 0x617c2c85e9d45f1e714855fa051ccb8c538200cd"
+    },
+    {
+      "chain": 97,
+      "name": "transfer sent",
+      "ok": true,
+      "detail": "1000000 base units of tMOCK6",
+      "evidence": "https://testnet.bscscan.com/tx/0x52a600d99c3f2578d01c303044439110400a46e07769a30bec0531c48f6b9879"
+    },
+    {
+      "chain": 97,
+      "name": "finality reached and credited",
+      "ok": true,
+      "detail": "8s; credited (16 confirmations, credited 1000000000 nanos at fixed:97:tMOCK6:1000000000:v1)"
+    },
+    {
+      "chain": 97,
+      "name": "conversion",
+      "ok": true,
+      "detail": "1000000 raw \u2192 1000000000 nanos at fixed:97:tMOCK6:1000000000:v1 (dust 0)"
+    },
+    {
+      "chain": 97,
+      "name": "ledger booked once",
+      "ok": true,
+      "detail": "1 deposit(s), 1 applied"
+    },
+    {
+      "chain": 97,
+      "name": "rescan is idempotent",
+      "ok": true,
+      "detail": "rescan credited 0; deposits 1"
+    }
+  ],
+  "perChain": [
+    {
+      "chainId": 97,
+      "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+      "contract": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+      "decimals": 6,
+      "txHash": "0x52a600d99c3f2578d01c303044439110400a46e07769a30bec0531c48f6b9879",
+      "mintTx": "0x639c7e4f7f4d76eb97c9d8aca61492ec3fe37f356e7294f7e4db8cdc5ad2beaa",
+      "eventId": "97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c:0x52a600d99c3f2578d01c303044439110400a46e07769a30bec0531c48f6b9879:11",
+      "depositId": "chain:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c:0x52a600d99c3f2578d01c303044439110400a46e07769a30bec0531c48f6b9879:11",
+      "conversion": {
+        "nanos": 1000000000,
+        "dustRaw": "0",
+        "assetId": "eip155:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+        "decimals": 6,
+        "rawAmount": "1000000",
+        "nanosPerToken": "1000000000",
+        "priceVersion": "fixed:97:tMOCK6:1000000000:v1",
+        "rateAt": "2026-10-30T04:01:06.221Z",
+        "rounding": "floor"
+      },
+      "explorer": "https://testnet.bscscan.com/tx/0x52a600d99c3f2578d01c303044439110400a46e07769a30bec0531c48f6b9879",
+      "finality": {
+        "mode": "confirmations",
+        "confirmations": 15,
+        "reorgDepth": 15,
+        "rationale": "BSC testnet RPCs report finalized == latest, so the tag proves nothing. Parlia BFT gives one-block finality in principle; 15 blocks of depth is the conservative, verifiable substitute.",
+        "measured": {
+          "at": "2026-10-30",
+          "finalizedLagBlocks": 0,
+          "blockTimeSec": 0.44,
+          "source": "publicnode/bnbchain-seed/thirdweb eth_getBlockByNumber(finalized)"
+        }
+      }
+    }
+  ],
+  "ledgerKind": "in-memory-test-sink",
+  "liveMagpieVerified": false,
+  "provenance": "Original BSC run by the previous agent, independently checked against its successful chain receipt during handoff."
+}
