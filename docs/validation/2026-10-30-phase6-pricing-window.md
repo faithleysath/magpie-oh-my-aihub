@@ -16,8 +16,9 @@ fail-closed accounting layer that does not depend on the native `used` number be
 | PR #6 precondition | PR #6 was still **open** at the start; it was merged into `main` as `f90bfa4` (containing `2da1c3e`, whose parent is the security commit `30384bb`) before this branch was created |
 
 The lab costs are synthetic: the mock reports the token counts in the request body, and Magpie's
-own effective price is set with `magpie model price`. No real Gateway Key or provider API key was
-used. Secrets are not printed by the harness.
+own effective price is set with `magpie model price`. No external/vendor Gateway Key or provider
+API key was used; the isolated Magpie generated only local test keys. Secrets are not printed by
+the harness.
 
 ---
 
