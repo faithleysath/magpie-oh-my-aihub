@@ -1,0 +1,173 @@
+{
+  "at": "2026-10-30T05:20:17.408546+00:00",
+  "samePrivateNetworkSecret": true,
+  "providerConfig": {
+    "instance_name": "phase7-provider",
+    "instance_id": "49554127-9d66-462e-a371-08407a4467ff",
+    "hostname": "phase7-provider",
+    "ipv4": "10.78.0.1",
+    "listeners": [],
+    "peer": [
+      {
+        "uri": "tcp://38.22.237.209:11078"
+      }
+    ],
+    "proxy_network": [
+      {
+        "cidr": "192.168.132.218/32",
+        "mapped_cidr": "10.66.137.8/32"
+      }
+    ],
+    "network_identity": {
+      "network_name": "phase7-twohost-f86b3f3d6696",
+      "network_secret": "[REDACTED]"
+    },
+    "flags": {
+      "no_tun": true,
+      "disable_udp_hole_punching": true
+    },
+    "acl": {
+      "acl_v1": {
+        "chains": [
+          {
+            "name": "Inbound",
+            "chain_type": 1,
+            "enabled": true,
+            "default_action": 2
+          },
+          {
+            "name": "Forward",
+            "chain_type": 3,
+            "enabled": true,
+            "default_action": 2,
+            "rules": [
+              {
+                "name": "allow-gateway-3448",
+                "priority": 1000,
+                "enabled": true,
+                "protocol": 1,
+                "ports": [
+                  "3448"
+                ],
+                "action": 1,
+                "stateful": true
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "consumerConfig": {
+    "instance_name": "phase7-consumer",
+    "instance_id": "f4361b6b-5c6a-42d4-8198-de1c9de3f1e4",
+    "hostname": "phase7-consumer",
+    "ipv4": "10.78.0.2",
+    "listeners": [
+      "tcp://0.0.0.0:11078"
+    ],
+    "port_forward": [
+      {
+        "bind_addr": "127.0.0.1:13448",
+        "dst_addr": "10.66.137.8:3448",
+        "proto": "tcp"
+      }
+    ],
+    "network_identity": {
+      "network_name": "phase7-twohost-f86b3f3d6696",
+      "network_secret": "[REDACTED]"
+    },
+    "flags": {
+      "no_tun": true,
+      "disable_udp_hole_punching": true
+    },
+    "acl": {
+      "acl_v1": {
+        "chains": [
+          {
+            "name": "Inbound",
+            "chain_type": 1,
+            "enabled": true,
+            "default_action": 2
+          },
+          {
+            "name": "Forward",
+            "chain_type": 3,
+            "enabled": true,
+            "default_action": 2
+          }
+        ]
+      }
+    }
+  },
+  "provider": {
+    "route": [
+      {
+        "ipv4": "10.78.0.1/24",
+        "hostname": "phase7-provider",
+        "proxy_cidrs": "192.168.132.218->10.66.137.8",
+        "next_hop_ipv4": "-",
+        "next_hop_hostname": "Local",
+        "next_hop_lat": 0.0,
+        "path_len": 0,
+        "path_latency": 0,
+        "next_hop_ipv4_lat_first": "-",
+        "next_hop_hostname_lat_first": "Local",
+        "path_len_lat_first": 0,
+        "path_latency_lat_first": 0,
+        "version": "2.6.4-8428a89d"
+      },
+      {
+        "ipv4": "10.78.0.2/24",
+        "hostname": "phase7-consumer",
+        "proxy_cidrs": "",
+        "next_hop_ipv4": "DIRECT",
+        "next_hop_hostname": "DIRECT",
+        "next_hop_lat": 225.482,
+        "path_len": 1,
+        "path_latency": 225,
+        "next_hop_ipv4_lat_first": "DIRECT",
+        "next_hop_hostname_lat_first": "DIRECT",
+        "path_len_lat_first": 1,
+        "path_latency_lat_first": 225,
+        "version": "2.6.4-8428a89d"
+      }
+    ],
+    "acl": "AclStats:\n  Global:\n    CacheHits: 215\n    CacheMaxSize: 1024\n    CacheSize: 2\n    DefaultAllows: 15\n    DefaultDrops: 2\n    ForwardPacketsAllowed: 127\n    ForwardPacketsDropped: 4\n    ForwardPacketsTotal: 131\n    InboundPacketsDropped: 4\n    InboundPacketsTotal: 4\n    OutboundPacketsAllowed: 111\n    OutboundPacketsTotal: 111\n    PacketsAllowed: 238\n    PacketsDropped: 8\n    PacketsTotal: 246\n    RuleMatches: 14\n  ConnTrack:\n    [src: 10.78.0.2:33297, dst: 10.66.137.8:3448, proto: Tcp, state: Established, pkts: 18, bytes: 1127, created: 2026-10-30 13:19:00 +08:00, last_seen: 2026-10-30 13:20:11 +08:00]\n  Rules:\n    [name: 'allow-gateway-3448', prio: 1000, action: Allow, enabled: true, proto: Tcp, ports: [\"3448\"], src_ports: [], src_ips: [], dst_ips: [], stateful: true, rate: 0, burst: 0] [pkts: 127, bytes: 11380]\n\n"
+  },
+  "consumer": {
+    "route": [
+      {
+        "ipv4": "10.78.0.2/24",
+        "hostname": "phase7-consumer",
+        "proxy_cidrs": "",
+        "next_hop_ipv4": "-",
+        "next_hop_hostname": "Local",
+        "next_hop_lat": 0.0,
+        "path_len": 0,
+        "path_latency": 0,
+        "next_hop_ipv4_lat_first": "-",
+        "next_hop_hostname_lat_first": "Local",
+        "path_len_lat_first": 0,
+        "path_latency_lat_first": 0,
+        "version": "2.6.4-8428a89d"
+      },
+      {
+        "ipv4": "10.78.0.1/24",
+        "hostname": "phase7-provider",
+        "proxy_cidrs": "10.66.137.8",
+        "next_hop_ipv4": "DIRECT",
+        "next_hop_hostname": "DIRECT",
+        "next_hop_lat": 230.132,
+        "path_len": 1,
+        "path_latency": 243,
+        "next_hop_ipv4_lat_first": "DIRECT",
+        "next_hop_hostname_lat_first": "DIRECT",
+        "path_len_lat_first": 1,
+        "path_latency_lat_first": 243,
+        "version": "2.6.4-8428a89d"
+      }
+    ],
+    "acl": "AclStats:\n  Global:\n    CacheHits: 215\n    CacheMaxSize: 1024\n    CacheSize: 2\n    DefaultAllows: 16\n    DefaultDrops: 15\n    InboundPacketsDropped: 111\n    InboundPacketsTotal: 111\n    OutboundPacketsAllowed: 135\n    OutboundPacketsTotal: 135\n    PacketsAllowed: 135\n    PacketsDropped: 111\n    PacketsTotal: 246\n  ConnTrack:\n  Rules:\n\n"
+  }
+}

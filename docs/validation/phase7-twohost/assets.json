@@ -1,0 +1,14 @@
+[
+  {
+    "chainId": 97,
+    "token": "0xD711ca4EcD966bb83B572616aC6008795dD4E26C",
+    "decimals": 6,
+    "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6"
+  },
+  {
+    "chainId": 84532,
+    "token": "0x2379D65e90B21D4EcB7EF1Ad007d6f30A5f17c4F",
+    "decimals": 18,
+    "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6"
+  }
+]

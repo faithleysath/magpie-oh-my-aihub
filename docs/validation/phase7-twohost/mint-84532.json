@@ -1,0 +1,42 @@
+{
+ "at": "2026-10-30T05:08:51.815Z",
+ "status": "mined",
+ "kind": "mint",
+ "payment": {
+  "chainId": 84532,
+  "token": "0x2379D65e90B21D4EcB7EF1Ad007d6f30A5f17c4F",
+  "decimals": 18,
+  "rpc": "https://base-sepolia-rpc.publicnode.com",
+  "invoiceId": "inv_02d8754c-5285-4d6c-be78-e356564aa24a",
+  "amountRaw": "1000000000000000000",
+  "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+  "payer": "0x617c2C85E9D45F1E714855FA051CcB8c538200cd"
+ },
+ "nonce": "2",
+ "txHash": "0x66fb84342fd1a48b0893b5e26cc7bb4d97f3c0dc0e606ebf38cc4a62eb3b8b7a",
+ "receipt": {
+  "transactionHash": "0x66fb84342fd1a48b0893b5e26cc7bb4d97f3c0dc0e606ebf38cc4a62eb3b8b7a",
+  "blockNumber": "0x31a9b2d",
+  "blockHash": "0x8c0a97de719627f2b80cf60108ca7406f1803a373ca1270dc6bb370aa9e9cd70",
+  "status": "0x1",
+  "logs": [
+   {
+    "address": "0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+    "topics": [
+     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+     "0x0000000000000000000000000000000000000000000000000000000000000000",
+     "0x000000000000000000000000617c2c85e9d45f1e714855fa051ccb8c538200cd"
+    ],
+    "data": "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+    "blockHash": "0x8c0a97de719627f2b80cf60108ca7406f1803a373ca1270dc6bb370aa9e9cd70",
+    "blockNumber": "0x31a9b2d",
+    "blockTimestamp": "0x6ae42662",
+    "transactionHash": "0x66fb84342fd1a48b0893b5e26cc7bb4d97f3c0dc0e606ebf38cc4a62eb3b8b7a",
+    "transactionIndex": "0x8",
+    "logIndex": "0x2b",
+    "removed": false,
+    "blockTimestampMs": "0x1a18b35f128"
+   }
+  ]
+ }
+}

@@ -1,0 +1,469 @@
+{
+ "at": "2026-10-30T05:20:19.139Z",
+ "status": "VERIFIED",
+ "operation": "public read-only RPC; no finality assertion in collector",
+ "chains": [
+  {
+   "chainId": 97,
+   "rows": [
+    {
+     "at": "2026-10-30T05:20:17.655Z",
+     "endpoint": "https://bsc-testnet-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_chainId",
+      "params": []
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "result": "0x61",
+      "id": 1
+     }
+    },
+    {
+     "at": "2026-10-30T05:20:17.788Z",
+     "endpoint": "https://bsc-testnet-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_getBlockByNumber",
+      "params": [
+       "latest",
+       false
+      ]
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "result": {
+       "baseFeePerGas": "0x0",
+       "blobGasUsed": "0x20000",
+       "difficulty": "0x2",
+       "excessBlobGas": "0x0",
+       "extraData": "0xdb8301080188393437626131636289676f312e32352e3134836c696e283fedb7f8b48201ffb8608311759797f4bdf5b4836e6b7fe3d21055a624aa63580c3c806f661b64fd8f65d130fd40012676c2193dccf5ecc88d74001ec0572978710eb07756322cc27130712a4757eabdfce02d7e9b247a593fc03456bd805ac161c20bb96d21a30709faf84c8408546465a0908770e04e22f9853fe722091b5fa04caf016c59be708d49c0069d01271c666e8408546466a0fd4a7bf68addcbc71ed34c8d65f85a30392f6ed59eaddfbb047f76369888738880ed4d8cb0519c07d9824e417410c82f2b143497f151e63a307e6c685eed3b60c753850fa040f5005feaadb0c8de59c8b5f5098b9971639be11d8599752bbbecf900",
+       "gasLimit": "0x5e9ffb3",
+       "gasUsed": "0xa45ca",
+       "hash": "0x30cadca40a7477743619d41476a4767e08417c289fd7af3de95e7f5b2a6eb6d1",
+       "logsBloom": "0x040008004000000000000040000000000000200000000000010080000000010000001000000003000001000000000002000004000000004000000000400420000080001000000000000000000000420021100000800400000000000000100000200801240202000000001000800208000880000040000000080000204000000008214000004000000000000000000000000404000000002100000000000101a4000000000000003009000100020000000000002000010000000000000011000000000000000002000000040080000000000000000008000000104002008060000000000000000080011000040000410000008000008008004100080020000000",
+       "milliTimestamp": "0x1a18b406bc6",
+       "miner": "0x90409f56966b5da954166eb005cb1a8790430ba1",
+       "mixHash": "0x000000000000000000000000000000000000000000000000000000000000015e",
+       "nonce": "0x0000000000000000",
+       "number": "0x8546467",
+       "parentBeaconBlockRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+       "parentHash": "0xfd4a7bf68addcbc71ed34c8d65f85a30392f6ed59eaddfbb047f763698887388",
+       "receiptsRoot": "0xb0b9dff46174a11df0c265a68a0bf30a9d8f702f1ae5f2c0f93d6d39b1c9ab2b",
+       "requestsHash": "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+       "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+       "size": "0x20847",
+       "stateRoot": "0xc0cadf1f3237db7d8568831ee1bafff16af2f95fbe3ba17d56182e2512384206",
+       "timestamp": "0x6ae42911",
+       "totalDifficulty": "0x10a4ab2f",
+       "transactions": [
+        "0x9ac6d959baae8065275d1f63d7378c223565770e2606184cb20c601070fb1931",
+        "0xc00d7a972082cac82ed21f4287ef8dc5738eb92bbc7698c4230449d799665b54",
+        "0x4111cc54ad595d998dd578d758d83c2c70a0d1f450a50bee2f1d4aa8127b8be4",
+        "0x00be9465a8f0d5d54820de4121c2a3c21d48a22a084e79a86512f36c771f0fdc",
+        "0x8539f43e66cb7e374ae3ce80e6c34a478ac51f468746c53a8e8e3045ea867cf7",
+        "0x744fb3ed6137963688a6b097075d4a66f460738027b15b81ff70599122b1dd28",
+        "0x55fa81e261c7bbded86b701aab008bb4f675556826256eaa1255046f4381707d"
+       ],
+       "transactionsRoot": "0x90f12fa7f41dc1b9a52a950d7de53197e6636ee72005c43fb53972d6c1e1469b",
+       "uncles": [],
+       "withdrawals": [],
+       "withdrawalsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
+      },
+      "id": 1
+     }
+    },
+    {
+     "at": "2026-10-30T05:20:17.923Z",
+     "endpoint": "https://bsc-testnet-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_getBlockByNumber",
+      "params": [
+       "finalized",
+       false
+      ]
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "hash": "0xfd4a7bf68addcbc71ed34c8d65f85a30392f6ed59eaddfbb047f763698887388",
+       "parentHash": "0x908770e04e22f9853fe722091b5fa04caf016c59be708d49c0069d01271c666e",
+       "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+       "miner": "0x90409f56966b5da954166eb005cb1a8790430ba1",
+       "stateRoot": "0x056436220a5d7dc35a70cd778090d6867cee34c15af27588904f69fde342c519",
+       "transactionsRoot": "0x4d01e591ae26237b83b8d46ae4da234b80c5089df49285b128f1e750f658d9b3",
+       "receiptsRoot": "0xf7bed5ed7c84ed37f22fbc51df55c5a992b530090134aeb801a38d7d0f22cf0a",
+       "logsBloom": "0x00000000400000000000004000000000004000000000000000000000000000000008100000000400000000010020000000000000000000240000020000000000000000100000000000100000000200002050000000000100002000001000000000180030220a00000000000140002800080000000000000000004000000000000000000400000000400000000006000010800400000000100000000000000020000000000000002008400000020000000000000000280000008002000000400202000000000000400001040000000001001010000200040000304002000020000000000000000000010000040002010080008800000000024180000000000000",
+       "difficulty": "0x2",
+       "number": "0x8546466",
+       "gasLimit": "0x5eb7a90",
+       "gasUsed": "0x40d98",
+       "timestamp": "0x6ae42910",
+       "extraData": "0xdb8301080188393437626131636289676f312e32352e3134836c696e283fedb7f8b48201ffb860a98c8e49c67152ebcc0e165748176f59c3e2557afa797fa52920192e5da77c842fc86ac60bbc7f2f41cc31b25fa640b101530a3a0b17b19442bb4ae657ed74c7c0015b94e742220c77c4015a75c5ad38ff27fe9e355a2e7d896b7c235b996864f84c8408546464a0cb9bd78019a211bacb8133497b71d32cf06ffd4cd989a650e803a91b10cb92208408546465a0908770e04e22f9853fe722091b5fa04caf016c59be708d49c0069d01271c666e807fb036c9b4cffd5ec1cd121eecfa2d19afe439ac9aa03b5e81932655d53837ef4c745b58c59a55ae7c90b821afb1a63b11b88b0f224acce7b8afc42dd0b5bf1e00",
+       "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000384",
+       "nonce": "0x0000000000000000",
+       "baseFeePerGas": "0x0",
+       "withdrawalsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+       "blobGasUsed": "0x0",
+       "excessBlobGas": "0x0",
+       "parentBeaconBlockRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+       "requestsHash": "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+       "totalDifficulty": "0x10a4ab2d",
+       "size": "0xbe6",
+       "milliTimestamp": "0x1a18b406a04",
+       "uncles": [],
+       "transactions": [
+        "0x60351252ebd215f91b11f51f555d1b51da7cd5e4b387d19f61202cc58d03418e",
+        "0xbe1ff5408b07706ebfb0ccdf5d5c8b03117e04085ad42d55845299e95aec4b31",
+        "0x68a938a3c94704e0fe7212921cdb938d03395d753da34c42e1b0034d8e0e3a17"
+       ],
+       "withdrawals": []
+      }
+     }
+    },
+    {
+     "at": "2026-10-30T05:20:18.055Z",
+     "endpoint": "https://bsc-testnet-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_getTransactionReceipt",
+      "params": [
+       "0xeb2a98ad1f6b8919486ae8b3b573ed25ea16b15f4331a9461a9e8ed7fed9d8fa"
+      ]
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "type": "0x0",
+       "status": "0x1",
+       "cumulativeGasUsed": "0x410f88",
+       "logs": [
+        {
+         "address": "0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+         "topics": [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+          "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "0x000000000000000000000000617c2c85e9d45f1e714855fa051ccb8c538200cd"
+         ],
+         "data": "0x00000000000000000000000000000000000000000000000000000000000f4240",
+         "blockHash": "0xd29a429d4c292e3da5908de95a2ba2eddb43537cde3b47eaaf4eb9ccbb6bfd0f",
+         "blockNumber": "0x8545e65",
+         "blockTimestamp": "0x6ae4265d",
+         "transactionHash": "0xeb2a98ad1f6b8919486ae8b3b573ed25ea16b15f4331a9461a9e8ed7fed9d8fa",
+         "transactionIndex": "0x5",
+         "logIndex": "0x23",
+         "removed": false
+        }
+       ],
+       "logsBloom": "0x00000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000020000000000000000000800000000000000000000000010000000000000000000000000000000000000000000000000000000000000000200000000000010040000000000000000000000000000000000000000000000000000000000000002000010001000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000",
+       "transactionHash": "0xeb2a98ad1f6b8919486ae8b3b573ed25ea16b15f4331a9461a9e8ed7fed9d8fa",
+       "transactionIndex": "0x5",
+       "blockHash": "0xd29a429d4c292e3da5908de95a2ba2eddb43537cde3b47eaaf4eb9ccbb6bfd0f",
+       "blockNumber": "0x8545e65",
+       "gasUsed": "0x84f6",
+       "effectiveGasPrice": "0x5f5e100",
+       "from": "0x617c2c85e9d45f1e714855fa051ccb8c538200cd",
+       "to": "0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+       "contractAddress": null
+      }
+     }
+    },
+    {
+     "at": "2026-10-30T05:20:18.202Z",
+     "endpoint": "https://bsc-testnet-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_getTransactionReceipt",
+      "params": [
+       "0xe5edb6d3510056b47bde2d14344c8c36f65d38ccd0a9c147951b7a6c04309820"
+      ]
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "type": "0x0",
+       "status": "0x1",
+       "cumulativeGasUsed": "0x622d82",
+       "logs": [
+        {
+         "address": "0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+         "topics": [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+          "0x000000000000000000000000617c2c85e9d45f1e714855fa051ccb8c538200cd",
+          "0x0000000000000000000000003d80c477021e3fa568e91c73baec8e806518d9a6"
+         ],
+         "data": "0x00000000000000000000000000000000000000000000000000000000000f4240",
+         "blockHash": "0x1ace2db11e4f34ad11ceb0d4ecd098e442bf6837262f4a643f722e3dd030720b",
+         "blockNumber": "0x8545e6a",
+         "blockTimestamp": "0x6ae4265f",
+         "transactionHash": "0xe5edb6d3510056b47bde2d14344c8c36f65d38ccd0a9c147951b7a6c04309820",
+         "transactionIndex": "0x3",
+         "logIndex": "0x47",
+         "removed": false
+        }
+       ],
+       "logsBloom": "0x00001000000000000000000000008000000000000000000000000000000000000000000000000000000000000010000000000001000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000200000000000010040000000000000000000000000000000000000000000000000000000000000002000010001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+       "transactionHash": "0xe5edb6d3510056b47bde2d14344c8c36f65d38ccd0a9c147951b7a6c04309820",
+       "transactionIndex": "0x3",
+       "blockHash": "0x1ace2db11e4f34ad11ceb0d4ecd098e442bf6837262f4a643f722e3dd030720b",
+       "blockNumber": "0x8545e6a",
+       "gasUsed": "0x86fa",
+       "effectiveGasPrice": "0x5f5e100",
+       "from": "0x617c2c85e9d45f1e714855fa051ccb8c538200cd",
+       "to": "0xd711ca4ecd966bb83b572616ac6008795dd4e26c",
+       "contractAddress": null
+      }
+     }
+    }
+   ]
+  },
+  {
+   "chainId": 84532,
+   "rows": [
+    {
+     "at": "2026-10-30T05:20:18.488Z",
+     "endpoint": "https://base-sepolia-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_chainId",
+      "params": []
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "result": "0x14a34",
+      "id": 1
+     }
+    },
+    {
+     "at": "2026-10-30T05:20:18.647Z",
+     "endpoint": "https://base-sepolia-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_getBlockByNumber",
+      "params": [
+       "latest",
+       false
+      ]
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "hash": "0x67fa2c87c52bb3d572e0a8412cc3d03b5364b74e5341d142310bc8605155ad7b",
+       "parentHash": "0x3dd44f791cbf59a3fa8f175627e19883165ceaf883a7599692f22e2fb063fd1e",
+       "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+       "miner": "0x4200000000000000000000000000000000000011",
+       "stateRoot": "0xa4a183b314ae22a15f3982b982be92977337573c4c9cabf0b5079f7e09fb457b",
+       "transactionsRoot": "0xdbff59c3553886d52c14d67ea93dd4582f372baf2b5bfc7bff7bd800e90b8eb6",
+       "receiptsRoot": "0xce89617f48069b3725a366e304373cc747514656de764a3abf13cba8acb0fd3c",
+       "logsBloom": "0x00000000000000000000400000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000200100000000000100000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000001000000000040000000000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000004000000",
+       "difficulty": "0x0",
+       "number": "0x31aa89d",
+       "gasLimit": "0x7270e00",
+       "gasUsed": "0x3e056",
+       "timestamp": "0x6ae42912",
+       "extraData": "0x01000003e80000000f00000000004c4b40",
+       "mixHash": "0x04a13b2eac3a7ff3a20fca94648d2def84c9696a379937d1ac8f324cb2998422",
+       "nonce": "0x0000000000000000",
+       "baseFeePerGas": "0x4c4b40",
+       "withdrawalsRoot": "0x220cd8dc160d34181c322603c2785bea2ed30434e6bc0abe9e7c5b8393b45850",
+       "blobGasUsed": "0x1f244",
+       "excessBlobGas": "0x0",
+       "parentBeaconBlockRoot": "0xf614c54deaf260452870b6897ff981b681b38f18b1046a7ebef19cdd07b3a3d9",
+       "requestsHash": "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+       "size": "0x649",
+       "timestampMs": "0x1a18b4070a8",
+       "uncles": [],
+       "transactions": [
+        "0x985bcc5bdcaf8950766808a75aa6dec508863fa6f5e7fc06797423116b4c8b1b",
+        "0x4622ffcfc11108426689196dc78047c1185ac4090d7881024293a17f57712b61",
+        "0x64439199b2c5e2f1a5a10a954d74654eb4943412babd42e44a80fbc54343ada7"
+       ],
+       "withdrawals": []
+      }
+     }
+    },
+    {
+     "at": "2026-10-30T05:20:18.792Z",
+     "endpoint": "https://base-sepolia-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_getBlockByNumber",
+      "params": [
+       "finalized",
+       false
+      ]
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "hash": "0xa05141dee982f235d1eac91b2ee46275e4cbd661f91104200b9a192bf9e86cb8",
+       "parentHash": "0x65f7970af6016971efa521aa5f2c99d2ba46ed05b103286e378b75185e7a91f6",
+       "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+       "miner": "0x4200000000000000000000000000000000000011",
+       "stateRoot": "0x124d8fbf956831c0035e7aaf4953947abb39600089ee6b3094e8a9f215784a46",
+       "transactionsRoot": "0x178651054a6e226b5e53f84eae3aef3a3339f597ebb97be85a57a038b863e99b",
+       "receiptsRoot": "0x216d0774f8b8f4795d952f30f74ec055cfd2ecfc156688d5712f7a92624001bb",
+       "logsBloom": "0x100008000400000004010a801046888001250200010030000000000000000088200801000022200035024201200040018201000015401010401803c00080210000060018009200180000200c8101000002610020040014000590008042008000000a8851020800011889050001000820000032826a0000040003091081204a22204220000241002010408950100091100010409200001000008000001000240020840000801020100943100204029010420080104820008020004200002004004000004200001040015112008092014000260000088c01029480000c00007004604200488a080000040000414001401880840110010101020020080042920000",
+       "difficulty": "0x0",
+       "number": "0x31a924f",
+       "gasLimit": "0x7270e00",
+       "gasUsed": "0x406659",
+       "timestamp": "0x6ae4249c",
+       "extraData": "0x01000003e80000000f00000000004c4b40",
+       "mixHash": "0x30333706a21b5b610e1da168af2b4533a80e3edc46e232bd5f82ee915c47bc47",
+       "nonce": "0x0000000000000000",
+       "baseFeePerGas": "0x4c4b40",
+       "withdrawalsRoot": "0x4191f7efeca5096a3bce178ef305e0046ac7e9bad3c5fd64be29d56c64e3be28",
+       "blobGasUsed": "0x3a71e8",
+       "excessBlobGas": "0x0",
+       "parentBeaconBlockRoot": "0xe8eeabbe4860f1a16d94d982714c67e01bb0b986fd926fbf89c806ec3af3cc60",
+       "requestsHash": "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+       "size": "0x92d6",
+       "timestampMs": "0x1a18b2f03b8",
+       "uncles": [],
+       "transactions": [
+        "0x4d9a664983395110b3cb0b9da3dc89c85ba73850ca6a6de7ae9d82701ba291d2",
+        "0x608e38af33533e3520feb98e98b43eeed972f0d411022b662073df7d7e1cd164",
+        "0xbc7b79334dd1160b23e62d2fc48fe449415285b12358fc18742e1e706802eec1",
+        "0x37ad060110cdc3285048f84fb54cc253763d4fc2974e2cc7ec7179a1d4f2ae6d",
+        "0xf3df6a75a57c4bf3922481c0fd0a9a1b8f8797f4b765cf31809bb98d85958a7a"
+       ],
+       "withdrawals": []
+      }
+     }
+    },
+    {
+     "at": "2026-10-30T05:20:18.947Z",
+     "endpoint": "https://base-sepolia-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_getTransactionReceipt",
+      "params": [
+       "0x66fb84342fd1a48b0893b5e26cc7bb4d97f3c0dc0e606ebf38cc4a62eb3b8b7a"
+      ]
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "type": "0x0",
+       "status": "0x1",
+       "cumulativeGasUsed": "0x117132",
+       "logs": [
+        {
+         "address": "0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+         "topics": [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+          "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "0x000000000000000000000000617c2c85e9d45f1e714855fa051ccb8c538200cd"
+         ],
+         "data": "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+         "blockHash": "0x8c0a97de719627f2b80cf60108ca7406f1803a373ca1270dc6bb370aa9e9cd70",
+         "blockNumber": "0x31a9b2d",
+         "blockTimestamp": "0x6ae42662",
+         "transactionHash": "0x66fb84342fd1a48b0893b5e26cc7bb4d97f3c0dc0e606ebf38cc4a62eb3b8b7a",
+         "transactionIndex": "0x8",
+         "logIndex": "0x2b",
+         "removed": false,
+         "blockTimestampMs": "0x1a18b35f128"
+        }
+       ],
+       "logsBloom": "0x00000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000040000002000000000000000000000000000000008000000000000000000000000000000000000000000000000020000000000000000000800000000000000000000000010000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000002000000001000000000000001000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000",
+       "transactionHash": "0x66fb84342fd1a48b0893b5e26cc7bb4d97f3c0dc0e606ebf38cc4a62eb3b8b7a",
+       "transactionIndex": "0x8",
+       "blockHash": "0x8c0a97de719627f2b80cf60108ca7406f1803a373ca1270dc6bb370aa9e9cd70",
+       "blockNumber": "0x31a9b2d",
+       "gasUsed": "0x851a",
+       "effectiveGasPrice": "0x5b8d80",
+       "blobGasUsed": "0xae38",
+       "from": "0x617c2c85e9d45f1e714855fa051ccb8c538200cd",
+       "to": "0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+       "contractAddress": null,
+       "l1GasPrice": "0xf",
+       "l1GasUsed": "0x640",
+       "l1Fee": "0x410e",
+       "l1BaseFeeScalar": "0x44d",
+       "l1BlobBaseFee": "0xfc",
+       "l1BlobBaseFeeScalar": "0xa118b",
+       "daFootprintGasScalar": "0x1be"
+      }
+     }
+    },
+    {
+     "at": "2026-10-30T05:20:19.139Z",
+     "endpoint": "https://base-sepolia-rpc.publicnode.com",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_getTransactionReceipt",
+      "params": [
+       "0x1fca28a8d6ae900b6229ff1c232ff27ff648b867bad471c19d52cc75531609c0"
+      ]
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "type": "0x0",
+       "status": "0x1",
+       "cumulativeGasUsed": "0x2014ad",
+       "logs": [
+        {
+         "address": "0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+         "topics": [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+          "0x000000000000000000000000617c2c85e9d45f1e714855fa051ccb8c538200cd",
+          "0x0000000000000000000000003d80c477021e3fa568e91c73baec8e806518d9a6"
+         ],
+         "data": "0x0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+         "blockHash": "0xdd56d304d3624f9c64233d8aeaf1b559c765f30e3434b7caba069a5dd06e27c5",
+         "blockNumber": "0x31a9b3f",
+         "blockTimestamp": "0x6ae42666",
+         "transactionHash": "0x1fca28a8d6ae900b6229ff1c232ff27ff648b867bad471c19d52cc75531609c0",
+         "transactionIndex": "0x5",
+         "logIndex": "0x17",
+         "removed": false,
+         "blockTimestampMs": "0x1a18b35ff38"
+        }
+       ],
+       "logsBloom": "0x00001000000000000000000000008000000000000000000000000000000000000000000000000000000000000010000000000001000000040000002000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000002000000001000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+       "transactionHash": "0x1fca28a8d6ae900b6229ff1c232ff27ff648b867bad471c19d52cc75531609c0",
+       "transactionIndex": "0x5",
+       "blockHash": "0xdd56d304d3624f9c64233d8aeaf1b559c765f30e3434b7caba069a5dd06e27c5",
+       "blockNumber": "0x31a9b3f",
+       "gasUsed": "0x871e",
+       "effectiveGasPrice": "0x5b8d80",
+       "blobGasUsed": "0xae38",
+       "from": "0x617c2c85e9d45f1e714855fa051ccb8c538200cd",
+       "to": "0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+       "contractAddress": null,
+       "l1GasPrice": "0xf",
+       "l1GasUsed": "0x640",
+       "l1Fee": "0x3f82",
+       "l1BaseFeeScalar": "0x44d",
+       "l1BlobBaseFee": "0xf6",
+       "l1BlobBaseFeeScalar": "0xa118b",
+       "daFootprintGasScalar": "0x1be"
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

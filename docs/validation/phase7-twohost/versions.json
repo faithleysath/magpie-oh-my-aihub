@@ -1,0 +1,24 @@
+{
+  "at": "2026-10-30T05:25:46.663450+00:00",
+  "providerPlatform": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+  "providerKernel": "Darwin laysathdeMacBook-Air.local 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:16:20 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T8142 arm64",
+  "providerBinarySha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15",
+  "providerCommit": "8c63c5b7873c6aa7aa797aa17f481d5fa8301876",
+  "consumerPlatform": "Linux ecs-mkvRMW 6.1.0-54-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.190-1 (2026-10-16) x86_64 GNU/Linux",
+  "consumerVersion": "magpie v0.1.2057",
+  "consumerBinarySha256": "1f4fe9fc13a7298898fe5a049ad569ff531a642b5143dd1b9599fd20d06e18a3",
+  "consumerImage": "ghcr.io/yetone/magpie@sha256:900711e2867299e6dbc7d9b02112e86d0a00add626f61bacfad83be0da5fbe5e",
+  "consumerEmbeddedSourceRevision": "UNKNOWN; no vcs metadata or image revision label",
+  "consumerReleaseTagCommit": "2c89794acb333b8b9875927a204e0de79ab44d2c",
+  "bun": "1.4.3",
+  "foundry": "cast Version: 1.8.6\nCommit SHA: 6bad0a66de7c83f7b33695044138f0f5fa4c5990\nBuild Timestamp: 2026-10-21T17:44:12.747118000Z (1792604652)\nBuild Profile: dist",
+  "easyTierCommit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+  "easyTierProviderVersion": "easytier-core 2.6.4-8428a89d",
+  "easyTierConsumerVersion": "easytier-core 2.6.4-8428a89d",
+  "easyTierProviderBinarySha256": "6478a522b8637e2bd2ad3adad66ed04a71b35f832bd9889bffaf1863262f6ddf",
+  "easyTierConsumerBinarySha256": "35b854e0c5853c02733870488c977200f6aa06d09c08d5dc7f9f9e150e7be8d5",
+  "easyTierArchives": {
+    "easytier-macos-aarch64-v2.6.4.zip": "4be1882d1aa36d31c1d6ba0596f2cf8a097e371f8da124212324b2e0f8df7e4b",
+    "easytier-linux-x86_64-v2.6.4.zip": "61b659eaedba658fa66fe47d17e1426cdd77e5d02fa15fed447bb4357c09dfd6"
+  }
+}

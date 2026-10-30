@@ -1,0 +1,22 @@
+[
+  {
+    "test": "mapped-no-key",
+    "http": "401",
+    "curl_exit": 0
+  },
+  {
+    "test": "mapped-wrong-key",
+    "http": "401",
+    "curl_exit": 0
+  },
+  {
+    "test": "virtual-gateway-blocked",
+    "http": "000",
+    "curl_exit": 28
+  },
+  {
+    "test": "mapped-ssh-blocked",
+    "http": "000",
+    "curl_exit": 28
+  }
+]

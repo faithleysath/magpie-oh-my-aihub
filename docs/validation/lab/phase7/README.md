@@ -89,3 +89,7 @@ bun x tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler \
   ../docs/validation/lab/phase7/live-credit.ts
 bun run ci
 ```
+
+## Fresh two-host acceptance
+
+The subsequent [two-host lab](TWOHOST.md) creates new signed intents and sends new BSC/Base testnet payments while the production watchers run. It uses a real native Remote Magpie on an independent consumer host and the corrected EasyTier no-TUN ingress. See the [separate report](../../2026-10-30-fresh-twohost-wallet.md); the replay-only claims above continue to describe `live-credit.ts`.

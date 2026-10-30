@@ -1,0 +1,6 @@
+ 392 pass
+ 0 fail
+ 1438 expect() calls
+Ran 392 tests across 25 files. [15.17s]
+boot-check PASS: plugin 0.4.0, magpie magpie 0.1.2038, api 34517, checks 1
+secret-scan PASS: no credentials in the working tree
