@@ -1,16 +1,19 @@
-# Architecture decision record — updated 2026-10-30 (phase 6)
+# Architecture decision record — updated 2026-10-30 (phase 7)
 
-Phase 6 adds a local immutable prepaid ledger and fail-closed key reissue for price changes and
-window boundaries. It does **not** add a wallet, chain payment or a second AI gateway; Magpie
-remains the only charging point. Phase 5 added opt-in peer discovery and a read-only quote
+Phase 7 adds the **testnet chain wallet**: a registry in which every network is a peer, a per-chain
+deposit watcher, signed deposit attribution and one bridge into the existing ledger and provisioner.
+It does **not** add a second AI gateway, a second balance, a custodian, a buy/swap/bridge feature or
+any mainnet asset. Phase 6 added a local immutable prepaid ledger and fail-closed key reissue for
+price changes and window boundaries. Phase 5 added opt-in peer discovery and a read-only quote
 catalogue. Phase 4 turned the two mutually exclusive roles into two independent capabilities on one
 node (share my Magpie, consume other Magpies) and replaced the single consumer wiring with a set of
 remote providers. Everything measured in phase 3 still holds; the phase-4 decisions are 5–12, the
-phase-5 decisions are 13–17, the phase-6 decisions are 18–20, the phase-6 review patch's are 21–24
-and the final targeted patch's are 25–26. Evidence is in
+phase-5 decisions are 13–17, the phase-6 decisions are 18–20, the phase-6 review patch's are 21–24,
+the final targeted patch's are 25–26, and the phase-7 decisions are 27–33. Evidence is in
 [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
 [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md) and
-[`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md).
+[`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md) and
+[`validation/2026-10-30-phase7-multichain-wallet.md`](validation/2026-10-30-phase7-multichain-wallet.md).
 
 Supersedes the 2026-10-29 draft. Every claim below is backed by a measured result in
 [`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md) or
@@ -636,6 +639,131 @@ could ignore it and grant a balance the plugin could not prove.
 - A complete line that is not valid JSON marks the same uncertainty instead of being skipped as a
   zero-cost call.
 
+
+## Decision 27 — Every network is a peer; nothing names a primary chain
+
+BSC and Base are the first two **registered** networks, not a privileged pair. The registry
+(`plugin/src/networks.ts`) has no `primary`, `secondary`, `preferred`, `default` or `priority` field,
+and a test asserts that the serialized registry contains none of those words. Both records have the
+same key set. Disabling one leaves the other enabled, and the choice survives a restart.
+
+Consequences that are enforced rather than documented:
+
+- No chain id appears in `ledger.ts`, `provisioner.ts`, `chainstore.ts`, `deposits.ts` or
+  `watcher.ts`. Adding a chain is a registry record.
+- A third EVM chain was added by data alone and the **whole** pipeline ran on it
+  (`scripts/chain-lab.ts`, chain 31337), which is the practical proof that the crediting path is not
+  BSC- or Base-specific.
+- Mainnet 56 and 8453 are present as `RESERVED_MAINNETS` with `enabled: false`, and three separate
+  code paths refuse to enable them or to watch them.
+
+## Decision 28 — Assets are `(chainId, contract)`, never a symbol
+
+Two chains may both have a token called `tMOCK6` at the same address; they are different assets
+(`eip155:97:0x…` vs `eip155:84532:0x…`). Nothing compares symbols, and no conversion crosses a chain.
+
+- A test asset can only be registered after the chain has answered `decimals()`, and the value must
+  match what the operator claims, because every later conversion depends on it.
+- `registerTestAsset()` refuses a symbol or name that does not say it is a mock or a test token, so
+  `USDC` cannot be introduced on a testnet through this path.
+- No contract address ships in the repository: a deployment is recorded with its transaction hash in
+  a lab report, never typed in from expectation.
+
+## Decision 29 — Finality is a per-network policy with its measurement attached
+
+A single global confirmation count would either over-credit one chain or needlessly delay the other.
+Measured 2026-10-30: BSC testnet's `finalized` tag equals `latest` on every endpoint tried, so it
+proves nothing there; Base Sepolia's `finalized` lags ~5,100–7,200 blocks (~17–24 min) and three
+providers agree, so it is the real condition.
+
+- `FinalityPolicy` is a field of the network record: `mode` (`finalized-tag` or `confirmations`),
+  the depth, the known reorg depth, a `rationale`, and the measurement it rests on.
+- BSC testnet uses 15 confirmations as a **stated substitute** for a tag that carries no depth
+  information; Base Sepolia uses the tag.
+- `finalityVerdict()` is pure, so both policies are tested at the same heights and produce different
+  answers.
+- A chain that cannot answer the tag never finalises under a tag policy: unknown is not final.
+
+## Decision 30 — A transfer is credited only when one signed intent matches it exactly
+
+A provider publishes one receiving address per chain; many consumers pay it. Attribution is
+therefore cryptographic, not heuristic:
+
+- The plugin issues a deposit intent with a single-use nonce and an expiry, and hands the consumer an
+  EIP-712 document whose **domain carries the chain id** and whose message carries invoice, consumer,
+  provider, chain, asset, token contract, recipient, exact raw amount, nonce and both timestamps.
+- The consumer signs with their own wallet and states the address they signed with. The plugin
+  recovers the signer locally and requires the recovered address to equal the stated one.
+- **Stating the payer is mandatory, not defensive.** A signature over a different document still
+  recovers to *some* address; binding on recovery alone would attach an invoice to an address nobody
+  controls and make the real payment unclaimable. This was found by a failing test.
+- A `Transfer` claims the intent only if chain, token, recipient, amount and sender all match, the
+  intent is unexpired, and exactly one candidate matches. Zero candidates means `unclaimed`; two or
+  more means `uncertain`. Neither is ever credited.
+- A payer who cannot sign (an exchange withdrawal, a contract, a third-party relay) stays `unclaimed`
+  and is visible in the anomaly list. The plugin does not guess.
+
+## Decision 31 — Uniqueness is a database constraint, not a set in memory
+
+`deposit_events` is unique on `(chain_id, token_contract, tx_hash, log_index)` — not on the tx hash,
+because one transaction may contain several `Transfer`s. `deposit_id`, `claimed_event_id` and
+`intent.nonce` are separately unique. A rescan finds the same row and only increments an observation
+count; a second claimer's transaction fails instead of overwriting.
+
+The deposit id is derived from the chain event (`chain:<chain>:<contract>:<tx>:<log>`), so a crash at
+any point retries the **same** deposit rather than creating a new one. `applyChainDeposit()` is the
+only way into the ledger, and it marks the deposit applied only after Magpie's read-back shows the
+cap — the phase-6 rule, unchanged.
+
+## Decision 32 — A reorg freezes; it never deletes or adjusts
+
+A credited event whose block hash is no longer canonical becomes `reverted`, an anomaly row is
+written, and the consumer's ledger account is paused through the same `pause()` a price change uses,
+so the enforcement level is measured rather than assumed. The deposit row stays, the balance is not
+edited, and `reissue()` is the only way back. Proven with `anvil_reorg` on a real node: two credits,
+two freezes, two deposits still present.
+
+## Decision 32a — Stored, verified and credited are three different states
+
+A chain log becomes credit in three steps that can each fail, so they are recorded separately:
+
+- **stored** — the log exists in `deposit_events` with its `(chain, token, tx, logIndex)` key. The
+  page's rows and the scan cursor commit in **one** transaction, so a failure re-reads the range
+  instead of skipping it.
+- **verified** — the transaction receipt exists, is successful, and contains this log at this block.
+  A provider that cannot serve the receipt is a *retryable* condition, not a refusal: the event stays
+  in `pendingVerification()` (a query, so it survives a restart) and is re-examined on the next pass,
+  including a pass with no new blocks. Only a reverted transaction is permanent.
+- **credited** — the finality policy holds, the amount is converted at the rate the **intent** was
+  issued at, and the ledger has accepted the deposit.
+
+A `crediting` row means the ledger intent exists; it does **not** mean the block still does. Every
+credit, including a retry, first re-reads the block hash and re-evaluates the finality policy. A
+reorg marks the event `reverted`, keeps the deposit for audit and freezes the consumer; a chain that
+cannot answer pauses the retry rather than assuming the payment is still good.
+
+## Decision 32b — A deposit is converted at the rate it was requested at
+
+The rate (and its version) is snapshotted into the deposit intent at issue time and frozen onto the
+event before the ledger is asked for anything. A registry edit afterwards cannot change the value of
+an amount the consumer already signed for; an intent with no snapshot is converted only if the
+registry still reports the version it was issued with, and otherwise goes to manual review. This is
+the same rule the phase-6 ledger applies to consumption: a settled amount is never repriced.
+
+## Decision 33 — No buy, swap, bridge or fiat path; two plain external links
+
+The product does not sell, buy, swap, bridge or exchange any token. There is no buy button, order
+form, price comparison, account linking, embedded browser, exchange SDK, fiat order tracking or
+referral parameter, and no code path credits on a "payment complete" page.
+
+The page carries exactly two external documentation links — BNB Chain's guide to moving assets to
+BSC, and Peer's guide to buying with Alipay — as fixed HTTPS URLs with no query string, opened with
+`rel="noopener noreferrer external"`, labelled as third-party sites that are not part of this
+product, with an explicit statement that Peer and Alipay have no partnership with this project and
+that the guides are about real mainnet assets and do not obtain test tokens. Tests assert there are
+exactly two such links, that no URL is built at runtime, and that the only buttons on the page are
+"Reload snapshot" and the settings form's "Save".
+
 ## Preferred dataflow
 
 ```
@@ -645,13 +773,28 @@ consumer agent -> consumer Magpie (Remote Magpie provider)
    -> provider Magpie: Gateway Key guard -> budget/limit -> native routing -> upstream
 ```
 
-Deposits (future): chain -> provider's verified receipt watcher -> idempotent deposit event ->
-`cap += credit` on the mapped key -> read back `/v1/magpie/limit` -> consumer balance view.
+Deposits (phase 7, testnet only):
 
-## Payment invariants (phase 6 accounting; chain still future)
+```
+consumer wallet --ERC-20 transfer--> provider's receiving address on chain N
+   -> ChainWatcher(N): eth_getLogs -> deposit_events (unique) -> signed intent claims it
+   -> finalityVerdict(N's own policy) -> convertRawToNanos (bigint, floor, dust recorded)
+   -> Ledger.depositIntent(id = chain:<event>)         <- the only booking
+   -> Provisioner.applyChainDeposit: cap = native used + ledger balance
+   -> Magpie read-back -> markDepositApplied
+   -> Magpie Gateway Key
+```
 
-- Wallet identity signed and bound to the peer public key, not to an IP or a peer ID.
-- Base native USDC (8453) is the candidate asset; testnet only during development.
+The chain module cannot reach a Gateway Key: its whole interface to the accounting side is four
+methods, none of which is a key operation.
+
+## Payment invariants (phase 6 accounting + phase 7 testnet wallet)
+
+- Wallet identity is proven by an EIP-712 signature over a deposit intent that carries the chain id;
+  binding it to the peer public key remains future work (EasyTier 2.6.4 does not expose it).
+- Only testnet assets are creditable. Mainnet 56/8453 are registered and always disabled; no mainnet
+  transfer is watched, confirmed or credited in this phase.
+- Every network is equal: no primary chain, no automatic network choice for the consumer.
 - Credit only a confirmed ERC-20 `Transfer` receipt to the intended provider, from a registered
   sender or an explicit signed invoice.
 - Deposit dedupe key: `(chain ID, token contract, tx hash, log index)`; the local ledger uses the
@@ -717,6 +860,31 @@ refuses an unlisted platform or a hash mismatch.
 13. **The consumer's SOCKS5 listener is loopback-only but unauthenticated.** Any local process could
     use it to reach the private overlay while discovery is on. It creates no persistent forward and
     is stopped when discovery is off; local process isolation is out of scope.
+
+Phase-7 additions:
+
+14. **No real-testnet deposit has been executed.** Testnet gas could not be obtained from any faucet
+    reachable here (hCaptcha, a mainnet-balance requirement, or a wallet login), so the end-to-end
+    testnet run is UNKNOWN. The pipeline is REPRODUCED against a local EVM node with a real deployed
+    ERC-20, real logs and a real reorg; that is not the same claim.
+15. **BSC testnet's finality policy is a substitute.** Its RPCs report `finalized` == `latest`, so 15
+    confirmations is a conservative choice, not a measured chain guarantee. No BSC testnet reorg
+    distribution was observed.
+16. **The verification retry set is bounded per tick** (100 verify, 50 credit). A large backlog
+    drains over several scans; the deposit is never lost, but it can take time.
+17. **Two identical intents from one payer are ambiguous by design.** The plugin marks the event
+    `uncertain` and credits nothing. Safe, but a real usability limit; per-consumer addresses or
+    amount uniqueness would fix it and are explicitly out of scope for this phase.
+18. **Attribution depends on the consumer keeping their wallet key.** A payment from an exchange
+    withdrawal address is `unclaimed` forever without manual review. There is an anomaly table and a
+    CLI, not a resolution workflow.
+19. **The watcher trusts the configured RPC for a log's existence.** It cross-checks the receipt and
+    re-reads the block at finality time, and reports endpoint health, but a provider that lies
+    consistently about a block and its hash would not be caught. There is no consensus read.
+20. **The wallet page is read-only.** Enabling a network, registering an asset, creating or signing an
+    intent are CLI/API operations, because the page cannot reach the network (`connect-src 'none'`).
+21. **No HD wallet, no per-consumer addresses, no key custody.** The plugin stores no private key for
+    either side; the provider's receiving address is one they already own.
 14. **A native window boundary is not atomic with a cap rebase.** Phase 6 removes the key and
     requires `reissue`; it does not silently adjust the cap at the computed reset time. A consumer
     is therefore briefly refused at a boundary (and after a price change) until reissue. A 3650-day

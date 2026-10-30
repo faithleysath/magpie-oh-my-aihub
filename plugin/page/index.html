@@ -64,6 +64,50 @@
       </p>
     </section>
 
+
+    <section id="wallet">
+      <h2>Testnet credit (chain wallet)</h2>
+      <p class="muted">
+        <strong>Testnet only.</strong> The tokens below are mock test tokens on a test network. They are not USDC, they
+        are not worth anything, and nothing here touches a mainnet asset. This plugin watches a provider's own receiving
+        address, and only after the chain's own finality condition does a deposit become credit in the existing ledger,
+        which the provisioner then applies to a Magpie Gateway Key.
+      </p>
+      <div id="wallet-body" class="muted">No wallet snapshot yet.</div>
+      <p class="muted">
+        A deposit is credited only when one signed deposit request matches it exactly: same chain, same token contract,
+        same recipient, same amount, and a payer address recovered from the consumer's own EIP-712 signature. A transfer
+        from an exchange, a contract or any wallet that did not sign stays <em>unclaimed</em> and is never credited
+        automatically.
+      </p>
+    </section>
+
+    <section id="how-to-get-assets">
+      <h2>How to get assets (external links)</h2>
+      <p class="muted">
+        Oh My AI Hub does not sell, buy, swap or bridge any token. There is no buy button, no order form, no exchange
+        integration and no fiat payment path in this product. The two links below are ordinary documentation links to
+        third-party sites; they open in a new tab, they carry no address, amount, consumer id or referral parameter, and
+        nothing on this page sends data to them.
+      </p>
+      <ul class="links">
+        <li>
+          <a href="https://www.bnbchain.org/en/blog/moving-from-a-centralized-exchange-to-bnb-chain" target="_blank" rel="noopener noreferrer external">BNB Chain: how to move assets to BSC and obtain stablecoins</a>
+          — BNB Chain's own guide to self-custody wallets and moving assets from an exchange.
+        </li>
+        <li>
+          <a href="https://docs.peer.xyz/guides/zh/alipay-buy" target="_blank" rel="noopener noreferrer external">Peer: buyer's guide — buying with Alipay</a>
+          — a third-party guide. Peer is not affiliated with this project, and this is not a claim that Peer or Alipay
+          has any partnership with Oh My AI Hub or is a licensed financial service.
+        </li>
+      </ul>
+      <p class="muted">
+        Third-party websites, not part of this product. These guides are about real mainnet assets: they do not apply to
+        the mock test tokens used on the testnet page, and following them will not buy test tokens. Whether a service is
+        lawful where you are is a matter for local law, local regulation and that service's own terms.
+      </p>
+    </section>
+
     <section id="operator">
       <h2>Operations</h2>
       <p class="muted">
@@ -78,7 +122,11 @@ bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; catalog peers
 bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; catalog request &lt;node-id&gt;
 bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; provider add peer-b --cidr 10.66.1.2/32 --key sk-… --port 3425
 bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; consumers add alice deepseek/deepseek-flash 1
-bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; topup alice 1</pre>
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; topup alice 1
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; wallet
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; wallet networks
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; wallet receiving provider-a 97 0x…
+bun plugin/bin/ohmyaihub.ts --data &lt;magpie config dir&gt; wallet intent provider-a alice 97 eip155:97:0x… 2500000</pre>
       <p class="muted">
         Remote providers are managed one by one: each has its own loopback port, its own Gateway Key and its own status.
         Deleting one never touches the others. Sharing only ever exports this node's own models: a remote Magpie's models

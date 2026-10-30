@@ -1,0 +1,110 @@
+{
+  "at": "2026-10-30T03:30:14.748Z",
+  "rpc": "http://127.0.0.1:8547",
+  "chainId": 31337,
+  "token": "0xb5563A20eb96e73eDd2B829dAEE672f9dcf91703",
+  "decimals": 6,
+  "txHash": "0x57eb4d3bf8ea126664b63b4252d03081ba622e6a617e87af6f62334c80abb724",
+  "steps": [
+    {
+      "name": "rpc chainId",
+      "ok": true,
+      "detail": "the node answers chainId 31337"
+    },
+    {
+      "name": "token decimals()",
+      "ok": true,
+      "detail": "0xb5563A20eb96e73eDd2B829dAEE672f9dcf91703 reports 6 decimals"
+    },
+    {
+      "name": "asset registered",
+      "ok": true,
+      "detail": "eip155:31337:0xb5563a20eb96e73edd2b829daee672f9dcf91703"
+    },
+    {
+      "name": "consumer funded",
+      "ok": true,
+      "detail": "consumer holds 10000000 base units"
+    },
+    {
+      "name": "EIP-712 signature",
+      "ok": true,
+      "detail": "digest 0xc062b31b22d00212… recovered 0x617c2c85e9d45f1e714855fa051ccb8c538200cd"
+    },
+    {
+      "name": "transfer sent",
+      "ok": true,
+      "detail": "tx 0x57eb4d3bf8ea126664b63b4252d03081ba622e6a617e87af6f62334c80abb724"
+    },
+    {
+      "name": "eth_getLogs",
+      "ok": true,
+      "detail": "2 Transfer log(s) in range, 1 from the consumer's tx"
+    },
+    {
+      "name": "log amount",
+      "ok": true,
+      "detail": "data decodes to 2500000 base units"
+    },
+    {
+      "name": "scan",
+      "ok": true,
+      "detail": "{\"chainId\":31337,\"fromBlock\":82,\"toBlock\":112,\"logs\":2,\"newEvents\":2,\"claimed\":1,\"unclaimed\":1,\"finalized\":1,\"credited\":1,\"reverified\":0,\"errors\":[],\"partial\":false}"
+    },
+    {
+      "name": "event credited",
+      "ok": true,
+      "detail": "31337:0xb5563a20eb96e73edd2b829daee672f9dcf91703:0x57eb4d3bf8ea126664b63b4252d03081ba622e6a617e87af6f62334c80abb724:0 → chain:31337:0xb5563a20eb96e73edd2b829daee672f9dcf91703:0x57eb4d3bf8ea126664b63b4252d03081ba622e6a617e87af6f62334c80abb724:0"
+    },
+    {
+      "name": "conversion",
+      "ok": true,
+      "detail": "2500000 raw → 2500000000 nanos (dust 0)"
+    },
+    {
+      "name": "ledger booked once",
+      "ok": true,
+      "detail": "1 deposit(s), 1 applied"
+    },
+    {
+      "name": "rescan is idempotent",
+      "ok": true,
+      "detail": "rescan: {\"chainId\":31337,\"fromBlock\":1,\"toBlock\":112,\"logs\":2,\"newEvents\":0,\"claimed\":0,\"unclaimed\":0,\"finalized\":0,\"credited\":0,\"reverified\":0,\"errors\":[],\"partial\":false}"
+    },
+    {
+      "name": "receipt outage keeps the event",
+      "ok": true,
+      "detail": "uncertain: the receipt could not be read: the receipt index is catching up"
+    },
+    {
+      "name": "receipt recovery finishes the payment",
+      "ok": true,
+      "detail": "credited (reverified 1); 2 deposit(s) total"
+    },
+    {
+      "name": "a rate change does not reprice a signed request",
+      "ok": true,
+      "detail": "credited 2500000000 nanos at 1000000000 (registry now 4000000000)"
+    },
+    {
+      "name": "two consumers, one provider address",
+      "ok": true,
+      "detail": "consumer 2 claimed inv_e31c0254-a883-42b6-9def-d2f34f380fb7 (credited); 4 deposits total"
+    },
+    {
+      "name": "unsigned payer stays unclaimed",
+      "ok": true,
+      "detail": "2 unclaimed; deposits still 4"
+    },
+    {
+      "name": "reorg performed",
+      "ok": true,
+      "detail": "anvil_reorg [17, []]: ok"
+    },
+    {
+      "name": "reorg freezes, never deletes",
+      "ok": true,
+      "detail": "block 0xc0eca14053… → 0xc0eca14053…; status reverted; frozen 4; deposits 4; scan {\"chainId\":31337,\"fromBlock\":0,\"toBlock\":0,\"logs\":0,\"newEvents\":0,\"claimed\":0,\"unclaimed\":0,\"finalized\":0,\"credited\":0,\"reverified\":0,\"errors\":[],\"partial\":false}"
+    }
+  ]
+}

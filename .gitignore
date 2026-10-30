@@ -19,3 +19,7 @@ build/
 *keystore*
 *mnemonic*
 .DS_Store
+
+# Foundry build artefacts from the phase-7 mock token lab.
+plugin/lab/chain/out/
+plugin/lab/chain/cache/

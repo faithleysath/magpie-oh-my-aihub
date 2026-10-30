@@ -20,3 +20,17 @@ button { cursor: pointer; font-weight: 500; padding: 6px 14px; }
 .actions { display: flex; gap: 12px; align-items: center; }
 pre { background: var(--magpie-code, color-mix(in srgb, CanvasText 6%, Canvas)); padding: 10px 12px; border-radius: 8px; overflow: auto; font-size: 12px; }
 code { font-size: 12px; }
+
+/* The external asset guides. Plain links, no card, no form, no tracking. */
+.links {
+  margin: 0.5rem 0 0.5rem 1.25rem;
+  padding: 0;
+}
+.links li {
+  margin-bottom: 0.5rem;
+  line-height: 1.5;
+}
+.links a[rel~="external"]::after {
+  content: " ↗";
+  font-size: 0.85em;
+}

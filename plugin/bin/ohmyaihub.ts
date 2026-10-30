@@ -20,6 +20,24 @@
 //   ... revoke <id>
 //   ... accounting                the periodic accounting check's state
 //   ... checks
+//
+// Chain wallet (phase 7). Every network is a peer; none is a default.
+//   ... wallet                          registry, chain health, totals
+//   ... wallet networks                 every registered network
+//   ... wallet network <chainId> [--enable|--disable] [--rpc <url>[,<url>]]
+//   ... wallet assets [<chainId>]
+//   ... wallet asset-register <chainId> <contract> <symbol> <name> <decimals> [--nanos-per-token N] [--note <text>]
+//   ... wallet asset <assetId> [--enable|--disable]
+//   ... wallet receiving <providerId> <chainId> <address>
+//   ... wallet intents [<consumerId>]
+//   ... wallet intent <providerId> <consumerId> <chainId> <assetId> <amountRaw> [--ttl <sec>]
+//   ... wallet sign <invoiceId> <signature> <payerAddress> [--expect <address>]
+//   ... wallet cancel <invoiceId> [--reason <text>]
+//   ... wallet events [--chain <chainId>] [--tx <hash>]
+//   ... wallet scan <chainId>
+//   ... wallet start | wallet stop
+//   ... wallet anomalies [--chain <chainId>] | wallet resolve <id> --note <text>
+//   ... wallet credit <consumerId>       chain credit as the ledger sees it
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -359,6 +377,165 @@ switch (cmd) {
     console.log(JSON.stringify(r));
     break;
   }
+  case "wallet": {
+    const sub = rest[1];
+    if (sub === "network") {
+      const chainId = Number(positional(2)[0]);
+      if (!Number.isInteger(chainId)) throw new Error("wallet network <chainId> [--enable|--disable] [--rpc url[,url]]");
+      const body: Record<string, unknown> = { chainId };
+      if (has("enable")) body.enabled = true;
+      if (has("disable")) body.enabled = false;
+      if (flag("rpc")) body.rpcEndpoints = flag("rpc")!.split(",").map((x) => x.trim()).filter(Boolean);
+      console.log(JSON.stringify(await call("POST", "/wallet/network", body), null, 2));
+    } else if (sub === "asset-register") {
+      const [chainId, contract, symbol, name, decimals] = positional(2);
+      if (!chainId || !contract || !symbol || !name || !decimals) {
+        throw new Error("wallet asset-register <chainId> <contract> <symbol> <name> <decimals> [--nanos-per-token N] [--note text]");
+      }
+      const r = await call("POST", "/wallet/asset/register", {
+        chainId: Number(chainId),
+        contractAddress: contract,
+        symbol,
+        name,
+        expectedDecimals: Number(decimals),
+        nanosPerToken: flag("nanos-per-token") ?? "1000000000",
+        pricingNote: flag("note") ?? "fixed test rate: 1 token = 1 test USD",
+      });
+      console.log(JSON.stringify(r, null, 2));
+    } else if (sub === "asset") {
+      const [assetId] = positional(2);
+      if (!assetId) throw new Error("wallet asset <assetId> [--enable|--disable]");
+      if (has("enable") || has("disable")) {
+        console.log(JSON.stringify(await call("POST", "/wallet/asset", { assetId, enabled: has("enable") }), null, 2));
+      } else {
+        const r = await call("GET", "/wallet/assets");
+        const one = (r.assets as any[]).find((a) => a.assetId === assetId);
+        console.log(JSON.stringify(one ?? { error: "no such asset" }, null, 2));
+      }
+    } else if (sub === "assets") {
+      const chainId = positional(2)[0];
+      const r = await call("GET", "/wallet/assets");
+      const list = (r.assets as any[]).filter((a) => (chainId ? a.chainId === Number(chainId) : true));
+      if (!list.length) console.log("no assets registered");
+      for (const a of list) {
+        console.log(`${a.assetId}  ${a.symbol} (${a.decimals}d) ${a.enabled ? "enabled" : "disabled"}  ${a.nanosPerToken} nanos/token  ${a.contractAddress}`);
+      }
+    } else if (sub === "networks") {
+      const r = await call("GET", "/wallet/networks");
+      for (const n of r.networks as any[]) {
+        console.log(
+          `${n.chainId}  ${n.displayName}  ${n.networkType}  ${n.enabled ? "enabled" : "disabled"}  finality=${n.finality.mode}${n.finality.confirmations ? `(${n.finality.confirmations})` : ""}  rpc=${n.rpcEndpoints.length}`,
+        );
+      }
+    } else if (sub === "receiving") {
+      const [providerId, chainId, address] = positional(2);
+      if (!providerId || !chainId || !address) throw new Error("wallet receiving <providerId> <chainId> <address>");
+      console.log(JSON.stringify(await call("POST", "/wallet/receiving", { providerId, chainId: Number(chainId), address }), null, 2));
+    } else if (sub === "intent") {
+      const [providerId, consumerId, chainId, assetId, amountRaw] = positional(2);
+      if (!providerId || !consumerId || !chainId || !assetId || !amountRaw) {
+        throw new Error("wallet intent <providerId> <consumerId> <chainId> <assetId> <amountRaw> [--ttl sec]");
+      }
+      const r = await call("POST", "/wallet/intent", {
+        providerId,
+        consumerId,
+        chainId: Number(chainId),
+        assetId,
+        amountRaw,
+        ...(flag("ttl") ? { ttlSec: Number(flag("ttl")) } : {}),
+        ...(flag("to") ? { recipientAddress: flag("to") } : {}),
+      });
+      console.log(r.summary);
+      console.log(JSON.stringify({ invoiceId: r.intent.invoiceId, nonce: r.intent.nonce, digest: r.digest, expiresAt: r.intent.expiresAt }, null, 2));
+      console.log("\nsign this EIP-712 document with the wallet that will pay:");
+      console.log(JSON.stringify(r.typedData, null, 2));
+    } else if (sub === "sign") {
+      const [invoiceId, signature, payerAddress] = positional(2);
+      if (!invoiceId || !signature || !payerAddress) throw new Error("wallet sign <invoiceId> <signature> <payerAddress> [--expect address]");
+      console.log(
+        JSON.stringify(
+          await call("POST", "/wallet/intent/sign", { invoiceId, signature, payerAddress, expectedPayer: flag("expect") ?? null }),
+          null,
+          2,
+        ),
+      );
+    } else if (sub === "cancel") {
+      const [invoiceId] = positional(2);
+      if (!invoiceId) throw new Error("wallet cancel <invoiceId> [--reason text]");
+      console.log(JSON.stringify(await call("POST", "/wallet/intent/cancel", { invoiceId, reason: flag("reason") }), null, 2));
+    } else if (sub === "intents") {
+      const consumerId = positional(2)[0];
+      const r = await call("GET", consumerId ? `/wallet/intents?consumerId=${encodeURIComponent(consumerId)}` : "/wallet/intents");
+      if (has("json")) console.log(JSON.stringify(r, null, 2));
+      else if (!r.intents.length) console.log("no deposit intents");
+      else {
+        for (const i of r.intents as any[]) {
+          console.log(
+            `${i.invoiceId}  chain=${i.chainId}  ${i.status}/${i.attributionStatus}  ${i.expectedAmountRaw} of ${i.assetId}  payer=${i.payerAddress ?? "—"}  expires=${i.expiresAt}`,
+          );
+        }
+      }
+    } else if (sub === "events") {
+      const chain = flag("chain");
+      const tx = flag("tx");
+      const q = tx ? `?tx=${tx}` : chain ? `?chainId=${chain}` : "";
+      const r = await call("GET", `/wallet/events${q}`);
+      if (has("json")) console.log(JSON.stringify(r, null, 2));
+      else if (!r.events.length) console.log("no deposit events");
+      else {
+        for (const e of r.events as any[]) {
+          console.log(
+            `${e.chainId}  ${e.status.padEnd(11)}  ${e.txHash}:${e.logIndex}  block ${e.blockNumber}  ${e.amountRaw}  ${e.fromAddress} → ${e.toAddress}  ${e.invoiceId ?? "—"}${e.reason ? `  (${e.reason})` : ""}`,
+          );
+        }
+      }
+    } else if (sub === "scan") {
+      const chainId = Number(positional(2)[0]);
+      if (!Number.isInteger(chainId)) throw new Error("wallet scan <chainId>");
+      console.log(JSON.stringify(await call("POST", "/wallet/scan", { chainId }), null, 2));
+    } else if (sub === "start" || sub === "stop") {
+      console.log(JSON.stringify(await call("POST", `/wallet/${sub}`, {}), null, 2));
+    } else if (sub === "anomalies") {
+      const r = await call("GET", "/wallet/anomalies");
+      const chain = flag("chain");
+      const list = (r.anomalies as any[]).filter((a) => (chain ? a.chainId === Number(chain) : true));
+      if (!list.length) console.log("no chain anomalies");
+      for (const a of list) {
+        console.log(`#${a.id}  chain ${a.chainId}  ${a.kind}  ${a.at}  ${a.detail}${a.resolvedAt ? `  [resolved: ${a.resolutionNote}]` : ""}`);
+      }
+    } else if (sub === "resolve") {
+      const id = Number(positional(2)[0]);
+      if (!Number.isInteger(id) || !flag("note")) throw new Error("wallet resolve <id> --note <text>");
+      console.log(JSON.stringify(await call("POST", "/wallet/anomaly/resolve", { id, note: flag("note") }), null, 2));
+    } else if (sub === "credit") {
+      const consumerId = positional(2)[0];
+      if (!consumerId) throw new Error("wallet credit <consumerId>");
+      const r = await call("GET", "/wallet");
+      const w = r.wallet;
+      const credited = (w?.events ?? []).filter((e: any) => e.status === "credited");
+      console.log(
+        JSON.stringify(
+          {
+            consumerId,
+            ledgerCredit: w?.consumers?.find?.((c: any) => c.consumerId === consumerId)?.ledger ?? null,
+            totals: w?.totals ?? null,
+            creditedEvents: credited.length,
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      const r = await call("GET", "/wallet");
+      const w = r.wallet;
+      if (!w) {
+        console.log("no chain wallet: no network is enabled on this node");
+        break;
+      }
+      console.log(JSON.stringify({ registry: w.registry.networks, chains: w.chains, totals: w.totals, disabled: w.disabled }, null, 2));
+    }
+    break;
+  }
   case "checks": {
     const s = await call("GET", "/checks");
     for (const c of s.checks) console.log(`${c.ok ? "PASS" : "FAIL"}  ${c.name}: ${c.detail}`);
@@ -421,7 +598,8 @@ switch (cmd) {
   default:
     console.error(
       "usage: status | providers | provider add|update|rm|reconcile | share on|off|models | consume on|off | " +
-        "configure | consumers [add|models|reissue|resolve-gap] | topup | accounting | secret | revoke | guard | checks | start | stop",
+        "configure | consumers [add|models|reissue|resolve-gap] | topup | accounting | secret | revoke | guard | checks | start | stop | " +
+        "wallet [networks|network|assets|asset|asset-register|receiving|intent|sign|cancel|intents|events|scan|start|stop|anomalies|resolve|credit]",
     );
     process.exit(2);
 }

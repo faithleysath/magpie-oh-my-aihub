@@ -184,6 +184,113 @@ function renderStatus(s) {
   body.append(gen);
 }
 
+
+/* The chain wallet is read-only on this page: Magpie serves plugin pages with
+ * `connect-src 'none'`, so the page reads the snapshot the host writes and can
+ * never call the loopback API. Everything that changes a network, an asset or a
+ * deposit intent is a CLI/API operation.
+ *
+ * Nothing here is a payment UI. There is no buy button, no order form and no
+ * address to type: the section shows what the host observed and what the ledger
+ * recorded, and the two external guides are plain links. */
+function renderWallet(w) {
+  const body = $("wallet-body");
+  if (!body) return;
+  if (!w) {
+    body.textContent = "No chain wallet on this node: no testnet is enabled, so nothing is watched and nothing is credited.";
+    return;
+  }
+  if (w.disabled) {
+    body.textContent = "Every testnet is disabled on this node. No deposit can be requested or credited.";
+    return;
+  }
+  const parts = [];
+  const nets = w.registry?.networks ?? [];
+  parts.push(
+    table(
+      ["Network", "Chain id", "Mode", "Enabled", "Finality", "Head / finalized", "Cursor", "Last scan"],
+      nets.map((n) => {
+        const h = (w.chains ?? []).find((c) => c.chainId === n.chainId) || {};
+        return [
+          n.displayName,
+          String(n.chainId),
+          n.networkType,
+          n.enabled ? "yes" : "no",
+          `${n.finality.mode}${n.finality.confirmations ? ` (${n.finality.confirmations})` : ""}`,
+          h.head === null || h.head === undefined ? "—" : `${h.head} / ${h.finalizedBlock ?? "—"}`,
+          h.cursor ?? "—",
+          h.lastScanAt ? `${h.lastScanAt}${h.lastError ? ` · ${h.lastError}` : ""}` : h.lastError || "—",
+        ];
+      }),
+    ),
+  );
+  const assets = w.registry?.assets ?? [];
+  parts.push(
+    table(
+      ["Test token", "Chain", "Contract", "Decimals", "On-chain", "Rate", "Enabled"],
+      assets.map((a) => {
+        const h = (w.chains ?? []).find((c) => c.chainId === a.chainId) || {};
+        const seen = (h.assets ?? []).find((x) => x.assetId === a.assetId);
+        return [
+          `${a.symbol} — ${a.name}`,
+          String(a.chainId),
+          a.contractAddress,
+          String(a.decimals),
+          seen ? (seen.decimalsOk === null ? "unreadable" : seen.decimalsOk ? `${seen.onchainDecimals} ✓` : `${seen.onchainDecimals} MISMATCH`) : "—",
+          `${a.nanosPerToken} nanos per whole token (${a.priceVersion})`,
+          a.enabled ? "yes" : "no",
+        ];
+      }),
+    ),
+  );
+  const t = w.totals ?? {};
+  parts.push(
+    table(
+      ["Credited", "Finalized, not yet credited", "Pending confirmations", "Unclaimed", "Uncertain", "Reverted"],
+      [[String(t.credited ?? 0), String(t.finalized ?? 0), String(t.pending ?? 0), String(t.unclaimed ?? 0), String(t.uncertain ?? 0), String(t.reverted ?? 0)]],
+    ),
+  );
+  const intents = w.intents ?? [];
+  parts.push(
+    table(
+      ["Deposit request", "Consumer", "Chain", "Amount (base units)", "Payer", "Status"],
+      intents.slice(0, 20).map((i) => [
+        i.invoiceId,
+        i.consumerId,
+        String(i.chainId),
+        i.expectedAmountRaw,
+        i.payerAddress || "unsigned",
+        `${i.status}/${i.attributionStatus}`,
+      ]),
+    ),
+  );
+  const events = (w.events ?? []).slice(0, 20);
+  parts.push(
+    table(
+      ["Chain", "Status", "Transaction", "Block", "Amount", "Invoice", "Note"],
+      events.map((e) => [
+        String(e.chainId),
+        e.status,
+        `${e.txHash}:${e.logIndex}`,
+        String(e.blockNumber),
+        e.amountRaw,
+        e.invoiceId || "—",
+        e.reason || "—",
+      ]),
+    ),
+  );
+  const anomalies = w.anomalies ?? [];
+  if (anomalies.length) {
+    parts.push(
+      table(
+        ["Chain", "Kind", "When", "Detail", "Resolved"],
+        anomalies.slice(0, 20).map((a) => [String(a.chainId), a.kind, a.at, a.detail, a.resolvedAt ? a.resolutionNote || "yes" : "OPEN"]),
+      ),
+    );
+  }
+  body.replaceChildren(...parts);
+}
+
 function renderCatalog(c) {
   const body = $("catalog-body");
   if (!c) {
@@ -263,7 +370,9 @@ function renderDirectory(peers) {
 }
 
 async function main() {
-  renderStatus(globalThis.__OH_MY_AIHUB_STATUS__ || null);
+  const snapshot = globalThis.__OH_MY_AIHUB_STATUS__ || null;
+  renderStatus(snapshot);
+  renderWallet(snapshot ? snapshot.wallet : null);
 
   $("reload").addEventListener("click", () => location.reload());
 
