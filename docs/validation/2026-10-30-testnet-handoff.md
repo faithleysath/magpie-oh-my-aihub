@@ -32,7 +32,7 @@ The predecessor sent `1000000` raw units on an **18-decimal** token. At the lab 
 - `plugin/test/testnet-lab.test.ts` now proves the default is one whole token at either 6 or 18 decimals, and dust is rejected **before** a write.
 - No change to finality or the money conversion rule was made to make the test pass.
 
-### VERIFIED — corrected Base payment mined; UNKNOWN — final credit still waiting
+### VERIFIED — corrected Base payment finalized, one test credit, zero duplicate credits
 
 Reused the existing Base mock token instead of deploying again. Existing consumer gas was sufficient, so no additional native-coin top-up was sent.
 
@@ -42,7 +42,9 @@ Reused the existing Base mock token instead of deploying again. Existing consume
 - RPC: `https://base-sepolia-rpc.publicnode.com`.
 - Original public receipt responses are in `phase7-testnet-handoff-receipts.json`.
 
-Base's configured condition is the `finalized` tag reaching the payment's block, **not** a successful receipt alone. While that tag still lags, the event is `confirming` and must not be called credited. The waiting process is read-only on-chain, writes public checkpoints locally and never retransmits a payment.
+Base's configured condition is the `finalized` tag reaching the payment's block, **not** a successful receipt alone. It was reached at `2026-10-30T04:33:16.754Z`; the event was credited at `04:33:17.335Z`. The read-only resume process exited successfully after 17m56s, about 19m24s after the payment was mined. One whole mock token became 1,000,000,000 nano-USD in the **test sink**. A deliberate rescan added zero credits.
+
+Evidence: `phase7-testnet-base-report.json`, `phase7-testnet-base-resume.log`, and the fresh raw block/receipt responses in `phase7-testnet-base-finality.json`. No additional transaction was sent during the wait. This does not close the live-Magpie UNKNOWN below.
 
 ### REPRODUCED — gas configuration and weak receipt checks
 
@@ -76,12 +78,14 @@ bun scripts/testnet-lab.ts --keys <throwaway-keys-file> --chains 84532 \
 bun scripts/resume-testnet-lab.ts <existing-checkpoint.json>
 ```
 
-The active checkpoint is `/tmp/phase7-lab/testnet-base-handoff.json.checkpoint.json`. Its local SQLite path is recorded there. The read-only resume report is `<checkpoint>.resume.json`; it labels the sink and `liveMagpieVerified: false`. The sink persists its local deposits so a restart does not forget a recorded test credit. A rescan must return zero new credits. A 40-minute finality timeout reports UNKNOWN, not success, and permits another read-only resume.
+The completed checkpoint is `/tmp/phase7-lab/testnet-base-handoff.json.checkpoint.json`. Its local SQLite path is recorded there. The read-only resume report is `<checkpoint>.resume.json`; it labels the sink and `liveMagpieVerified: false`. The sink persists its local deposits so a restart does not forget a recorded test credit. A rescan must return zero new credits. A 40-minute finality timeout reports UNKNOWN, not success, and permits another read-only resume.
 
 ## Validation
 
 - VERIFIED: `bun run ci` passed on macOS arm64: **392 tests, 0 failures, 1438 assertions, 25 files**, typecheck, boot-check and secret-scan.
 - VERIFIED: additional resume script typecheck and the four lab regression tests pass.
-- UNKNOWN: follow-up branch CI on Linux/GitHub, not yet run.
-- UNKNOWN: corrected Base payment finality/credit until the waiting process records it.
+- VERIFIED: follow-up code commit `b751095330a274c88761d1966086e343926f437c` passed both Linux and macOS GitHub checks on [PR #9](https://github.com/faithleysath/magpie-oh-my-aihub/pull/9).
+- VERIFIED: corrected Base payment reached finality and produced one test credit, with zero on rescan.
+- UNKNOWN: live Magpie Gateway Key/AI-call acceptance remains unverified.
+- Cleanup: finality waiting process exited 0; no new deployment or transfer occurred during resume. Public reports were copied into the repository; disposable key files remain outside it.
 - Real funds remain NO-GO; pricing-lock and other architecture blockers are unchanged.

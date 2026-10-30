@@ -1,0 +1,6 @@
+confirming: 5347 block(s) short of the finalized tag []
+confirming: 3406 block(s) short of the finalized tag []
+confirming: 1329 block(s) short of the finalized tag []
+[oh-my-aihub] 2026-10-30T04:33:17.336Z INFO chain 84532: 1000000000000000000 of tMOCK18 from 0x617c2c85e9d45f1e714855fa051ccb8c538200cd credited as 1000000000 nanos to lab-consumer (chain:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f:0x6c192c2aed807871e962f4655860e5f5eda2d6a9eff32e81de04612b01a0abe9:2)
+credited: credited 1000000000 nanos at fixed:84532:tMOCK18:1000000000:v1 []
+VERIFIED: one test-sink credit, zero on rescan. Report: /tmp/phase7-lab/testnet-base-handoff.json.checkpoint.json.resume.json

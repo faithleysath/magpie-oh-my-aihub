@@ -864,8 +864,8 @@ refuses an unlisted platform or a hash mismatch.
 Phase-7 additions:
 
 14. **Real-testnet → live Magpie credit remains UNKNOWN.** After faucet funding, BSC's real payment
-    and one test-sink credit were verified; a corrected Base payment is mined and awaits its finality
-    condition. Neither lab sink writes a live Gateway Key. See
+    and one test-sink credit were verified; the corrected Base payment also reached finality and
+    produced one test credit with zero on rescan. Neither lab sink writes a live Gateway Key. See
     [`validation/2026-10-30-testnet-handoff.md`](validation/2026-10-30-testnet-handoff.md) for exact
     receipts, lab corrections and current status. Local EVM reorg evidence is a separate claim.
 15. **BSC testnet's finality policy is a substitute.** Its RPCs report `finalized` == `latest`, so 15

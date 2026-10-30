@@ -1,0 +1,99 @@
+{
+  "at": "2026-10-30T04:33:18.812Z",
+  "platform": "darwin arm64",
+  "bun": "1.4.3",
+  "status": "VERIFIED",
+  "ledgerKind": "persisted-test-sink",
+  "liveMagpieVerified": false,
+  "network": {
+    "chainId": 84532,
+    "displayName": "Base Sepolia",
+    "family": "evm",
+    "networkType": "testnet",
+    "rpcEndpoints": [
+      "https://base-sepolia-rpc.publicnode.com"
+    ],
+    "blockExplorer": "https://sepolia.basescan.org",
+    "nativeSymbol": "ETH",
+    "enabled": true,
+    "finality": {
+      "mode": "finalized-tag",
+      "confirmations": 0,
+      "reorgDepth": 0,
+      "rationale": "Base is an L2: its `finalized` tag tracks L1 finality and lags ~17 min, and three providers agree on it. Waiting for the tag is the real condition, so a block count would only be a guess.",
+      "measured": {
+        "at": "2026-10-30",
+        "finalizedLagBlocks": 5093,
+        "blockTimeSec": 0.2,
+        "source": "sepolia.base.org/publicnode/tenderly eth_getBlockByNumber(finalized)"
+      }
+    },
+    "scanIntervalSec": 12,
+    "maxBlockRange": 2000,
+    "notes": "Testnet only. Mainnet 8453 is not registered in this phase."
+  },
+  "asset": {
+    "assetId": "eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+    "chainId": 84532,
+    "contractAddress": "0x2379D65e90B21D4EcB7EF1Ad007d6f30A5f17c4F",
+    "symbol": "tMOCK18",
+    "name": "Mock Test Dollar",
+    "decimals": 18,
+    "issuerType": "mock",
+    "testnetOnly": true,
+    "enabled": true,
+    "pricing": {
+      "nanosPerToken": "1000000000",
+      "version": "fixed:84532:tMOCK18:1000000000:v1",
+      "kind": "fixed-test-rate",
+      "note": "fixed test rate: 1 mock token = 1 test USD"
+    }
+  },
+  "txHash": "0x6c192c2aed807871e962f4655860e5f5eda2d6a9eff32e81de04612b01a0abe9",
+  "event": {
+    "id": "84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f:0x6c192c2aed807871e962f4655860e5f5eda2d6a9eff32e81de04612b01a0abe9:2",
+    "chainId": 84532,
+    "tokenContract": "0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+    "txHash": "0x6c192c2aed807871e962f4655860e5f5eda2d6a9eff32e81de04612b01a0abe9",
+    "logIndex": 2,
+    "blockNumber": 52058825,
+    "blockHash": "0x4552f3a7cb780a3a3427517bfdb548e260f01c68fea3300111928099ecc40223",
+    "fromAddress": "0x617c2c85e9d45f1e714855fa051ccb8c538200cd",
+    "toAddress": "0x3d80c477021e3fa568e91c73baec8e806518d9a6",
+    "amountRaw": "1000000000000000000",
+    "status": "credited",
+    "invoiceId": "inv_4501d69d-73b0-43d6-b35c-e0f466ac812b",
+    "depositId": "chain:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f:0x6c192c2aed807871e962f4655860e5f5eda2d6a9eff32e81de04612b01a0abe9:2",
+    "confirmations": 620,
+    "firstSeenAt": "2026-10-30T04:13:54.616Z",
+    "updatedAt": "2026-10-30T04:33:17.335Z",
+    "finalizedAt": "2026-10-30T04:33:16.754Z",
+    "creditedAt": "2026-10-30T04:33:17.335Z",
+    "reason": "credited 1000000000 nanos at fixed:84532:tMOCK18:1000000000:v1",
+    "observations": 1,
+    "rateNanosPerToken": "1000000000",
+    "rateVersion": "fixed:84532:tMOCK18:1000000000:v1",
+    "creditedNanos": 1000000000,
+    "verifyAttempts": 1
+  },
+  "conversion": {
+    "nanos": 1000000000,
+    "dustRaw": "0",
+    "assetId": "eip155:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f",
+    "decimals": 18,
+    "rawAmount": "1000000000000000000",
+    "nanosPerToken": "1000000000",
+    "priceVersion": "fixed:84532:tMOCK18:1000000000:v1",
+    "rateAt": "2026-10-30T04:33:17.342Z",
+    "rounding": "floor"
+  },
+  "deposits": {
+    "chain:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f:0x6c192c2aed807871e962f4655860e5f5eda2d6a9eff32e81de04612b01a0abe9:2": {
+      "consumerId": "lab-consumer",
+      "amountNanos": 1000000000,
+      "source": "chain:84532",
+      "applied": true
+    }
+  },
+  "rescanCredited": 0
+}
