@@ -475,6 +475,20 @@ export class Provisioner {
   }
 
   /**
+   * Freezes a consumer because a credited chain deposit was reverted.
+   *
+   * The ledger deposit is **not** removed and the balance is **not** adjusted:
+   * the freeze is the auditable record, and `reissue()` is the only way back.
+   * The stop goes through the same `pause()` a price change uses, so the
+   * enforcement level is measured and reported rather than assumed.
+   */
+  async pauseForChain(consumerId: string, reason: string): Promise<void> {
+    const rec = this.find(consumerId);
+    if (!rec) throw new Error(`no consumer ${consumerId}`);
+    await this.pause(rec, "manual", `chain-reorg: ${reason}`, true);
+  }
+
+  /**
    * Stops a consumer and records exactly how far the stop went.
    *
    * Measured against Magpie 0.1.2038 (see the phase-6 review note):
@@ -1263,6 +1277,103 @@ export class Provisioner {
       logger.error(`deposit ${id} for ${rec.consumerId} is pending: ${String(e)}`);
       throw e;
     }
+  }
+
+  /**
+   * Applies a deposit the ledger already holds, without creating it.
+   *
+   * This is the chain module's only way in. The phase-6 `topUp()` computes an
+   * amount from a caller's USD figure; a chain deposit has already been priced
+   * and booked by `depositIntent()` from a finalized on-chain amount, so
+   * re-deriving it here would be a second, competing calculation. The cap is
+   * therefore `native used + the ledger's balance including this deposit`,
+   * exactly as `topUpLedger` computes it, and the read-back rule is unchanged:
+   * the deposit is marked applied only after Magpie reports the cap.
+   *
+   * Idempotent: an already-applied deposit returns the current view, and a
+   * pending one is reconciled first. A crash between the cap write and the
+   * local commit leaves `rec.pending` set, which `reconcile()` finishes.
+   */
+  async applyChainDeposit(input: { id: string; consumerId: string; amountNanos: number }): Promise<ConsumerView> {
+    if (!this.ledger) throw new Error("a chain deposit needs the durable ledger");
+    if (!Number.isInteger(input.amountNanos) || input.amountNanos <= 0) throw new Error("a chain deposit must be a positive integer amount");
+    return this.withLock(input.consumerId, async () => {
+      const rec = this.find(input.consumerId);
+      if (!rec || rec.revokedAt) throw new Error(`no active consumer ${input.consumerId}`);
+      await this.reconcile(rec);
+      const ledger = this.ledger!;
+      const booked = ledger.deposit(input.id);
+      if (!booked) throw new Error(`deposit ${input.id} was not booked before it was applied`);
+      if (booked.consumerId !== input.consumerId) throw new Error(`deposit ${input.id} belongs to ${booked.consumerId}`);
+      if (booked.amountNanos !== input.amountNanos) {
+        throw new Error(`deposit ${input.id} was booked at ${booked.amountNanos} nanos, not ${input.amountNanos}`);
+      }
+      if (booked.status === "applied") return view(rec, rec.paused ? null : await this.verify(rec), this.ledger);
+      if (booked.status === "failed") throw new Error(`deposit ${input.id} failed earlier; it needs a new id`);
+
+      // A paused consumer keeps the credit in the ledger; reissue spends it.
+      // This is what lets a chain deposit repay an overdraft without a key.
+      if (rec.paused) {
+        ledger.markDepositApplied(input.id, rec.paused.windowId ?? "", input.amountNanos);
+        rec.creditedUsd = roundCap(rec.creditedUsd + nanosToUsd(input.amountNanos));
+        if (!rec.deposits.some((d) => d.id === input.id)) {
+          rec.deposits.push({ id: input.id, usd: nanosToUsd(input.amountNanos), at: new Date().toISOString() });
+        }
+        this.persist();
+        logger.info(`chain deposit ${input.id} of ${nanosToUsd(input.amountNanos)} test USD booked for paused ${rec.consumerId}; reissue to use it`);
+        return view(rec, null, this.ledger);
+      }
+
+      const check = await this.ledgerCheck(rec);
+      const window = check.window;
+      const status = check.status;
+      if (!window || !status) throw new Error(`consumer ${input.consumerId} has no readable open window`);
+      const snap = await this.snapshotFor(rec.models);
+      if (!snap) {
+        await this.pause(rec, "unpriced", "a chain deposit could not be applied: a shared model has no complete effective price");
+        throw new Error("a shared model has no complete effective price");
+      }
+      if (snap.version !== window.priceVersion) {
+        await this.pause(rec, "price-mismatch", `a chain deposit arrived while the key is bound to ${window.priceVersion.slice(0, 16)}…`);
+        throw new Error("the effective price changed; the deposit is booked and will apply after a reissue");
+      }
+      const usedNanos = usdToNanos(status.limit?.cost ?? 0);
+      // The deposit is still an *intent* here: `balance()` counts applied
+      // deposits only, so the amount has to be added explicitly. Without this a
+      // second deposit arriving before the first is applied would compute a cap
+      // that leaves the newer credit unenforced.
+      const balanceAfter = ledger.balance(rec.consumerId).balanceNanos + input.amountNanos;
+      const capNanos = floorGrid(usedNanos + balanceAfter);
+      if (capNanos < GRID_NANOS) {
+        ledger.markDepositFailed(input.id, "credit is below Magpie's $0.0001 enforceable minimum");
+        throw new Error("the resulting credit is below $0.0001 and cannot be enforced; add more");
+      }
+      if (capNanos / 1_000_000_000 > MAX_CAP_USD) {
+        ledger.markDepositFailed(input.id, "resulting cap above the maximum");
+        throw new Error(`a cost cap above $${MAX_CAP_USD} is refused`);
+      }
+      const capUsd = assertCap(capNanos / 1_000_000_000);
+      rec.pending = { capUsd, depositId: input.id, usd: nanosToUsd(input.amountNanos) };
+      this.persist();
+      try {
+        await this.setCap(rec, capUsd);
+        const after = await this.verify(rec, capUsd);
+        ledger.markDepositApplied(input.id, window.id, capNanos);
+        rec.capUsd = capUsd;
+        rec.creditedUsd = roundCap(rec.creditedUsd + nanosToUsd(input.amountNanos));
+        if (!rec.deposits.some((d) => d.id === input.id)) {
+          rec.deposits.push({ id: input.id, usd: nanosToUsd(input.amountNanos), at: new Date().toISOString() });
+        }
+        rec.pending = null;
+        rec.priceVersion = window.priceVersion;
+        this.persist();
+        logger.info(`chain deposit ${input.id} of ${nanosToUsd(input.amountNanos)} test USD for ${rec.consumerId}: cap ${capUsd}, used ${after.limit?.cost}`);
+        return view(rec, after, this.ledger);
+      } catch (e) {
+        logger.error(`chain deposit ${input.id} for ${rec.consumerId} is pending: ${String(e)}`);
+        throw e;
+      }
+    });
   }
 
   /**

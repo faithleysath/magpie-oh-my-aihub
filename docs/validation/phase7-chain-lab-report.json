@@ -1,0 +1,95 @@
+{
+  "at": "2026-10-30T02:46:35.651Z",
+  "rpc": "http://127.0.0.1:8547",
+  "chainId": 31337,
+  "token": "0x3d9b54d3B66655998b41802981BC001bbC87bDB2",
+  "decimals": 6,
+  "txHash": "0x0193efa5ab5f8fd490ebbdfb30fa45a72283dc0b288f2394d84623dfdcdd1a86",
+  "steps": [
+    {
+      "name": "rpc chainId",
+      "ok": true,
+      "detail": "the node answers chainId 31337"
+    },
+    {
+      "name": "token decimals()",
+      "ok": true,
+      "detail": "0x3d9b54d3B66655998b41802981BC001bbC87bDB2 reports 6 decimals"
+    },
+    {
+      "name": "asset registered",
+      "ok": true,
+      "detail": "eip155:31337:0x3d9b54d3b66655998b41802981bc001bbc87bdb2"
+    },
+    {
+      "name": "consumer funded",
+      "ok": true,
+      "detail": "consumer holds 10000000 base units"
+    },
+    {
+      "name": "EIP-712 signature",
+      "ok": true,
+      "detail": "digest 0x7f013a3ab2f60963… recovered 0x617c2c85e9d45f1e714855fa051ccb8c538200cd"
+    },
+    {
+      "name": "transfer sent",
+      "ok": true,
+      "detail": "tx 0x0193efa5ab5f8fd490ebbdfb30fa45a72283dc0b288f2394d84623dfdcdd1a86"
+    },
+    {
+      "name": "eth_getLogs",
+      "ok": true,
+      "detail": "2 Transfer log(s) in range, 1 from the consumer's tx"
+    },
+    {
+      "name": "log amount",
+      "ok": true,
+      "detail": "data decodes to 2500000 base units"
+    },
+    {
+      "name": "scan",
+      "ok": true,
+      "detail": "{\"chainId\":31337,\"fromBlock\":50,\"toBlock\":80,\"logs\":2,\"newEvents\":2,\"claimed\":1,\"unclaimed\":1,\"finalized\":1,\"credited\":1,\"errors\":[],\"partial\":false}"
+    },
+    {
+      "name": "event credited",
+      "ok": true,
+      "detail": "31337:0x3d9b54d3b66655998b41802981bc001bbc87bdb2:0x0193efa5ab5f8fd490ebbdfb30fa45a72283dc0b288f2394d84623dfdcdd1a86:0 → chain:31337:0x3d9b54d3b66655998b41802981bc001bbc87bdb2:0x0193efa5ab5f8fd490ebbdfb30fa45a72283dc0b288f2394d84623dfdcdd1a86:0"
+    },
+    {
+      "name": "conversion",
+      "ok": true,
+      "detail": "2500000 raw → 2500000000 nanos (dust 0)"
+    },
+    {
+      "name": "ledger booked once",
+      "ok": true,
+      "detail": "1 deposit(s), 1 applied"
+    },
+    {
+      "name": "rescan is idempotent",
+      "ok": true,
+      "detail": "rescan: {\"chainId\":31337,\"fromBlock\":1,\"toBlock\":80,\"logs\":2,\"newEvents\":0,\"claimed\":0,\"unclaimed\":0,\"finalized\":0,\"credited\":0,\"errors\":[],\"partial\":false}"
+    },
+    {
+      "name": "two consumers, one provider address",
+      "ok": true,
+      "detail": "consumer 2 claimed inv_c5af26a1-9ab8-473f-8655-37dcd811b9fc (credited); 2 deposits total"
+    },
+    {
+      "name": "unsigned payer stays unclaimed",
+      "ok": true,
+      "detail": "2 unclaimed; deposits still 2"
+    },
+    {
+      "name": "reorg performed",
+      "ok": true,
+      "detail": "anvil_reorg [11, []]: ok"
+    },
+    {
+      "name": "reorg freezes, never deletes",
+      "ok": true,
+      "detail": "block 0x183078ae5d… → 0x183078ae5d…; status reverted; frozen 2; deposits 2; scan {\"chainId\":31337,\"fromBlock\":0,\"toBlock\":0,\"logs\":0,\"newEvents\":0,\"claimed\":0,\"unclaimed\":0,\"finalized\":0,\"credited\":0,\"errors\":[],\"partial\":false}"
+    }
+  ]
+}

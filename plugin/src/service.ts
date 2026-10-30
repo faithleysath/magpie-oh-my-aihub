@@ -22,7 +22,11 @@ import { logger, registerSecret, writePageStatus } from "./log.ts";
 import { gatewayBaseURL, type CatalogModelMeta, type LimitStatus, type Magpie } from "./magpie.ts";
 import { Provisioner, type ConsumerView } from "./provisioner.ts";
 import { Ledger } from "./ledger.ts";
-import { catalogPriceVersion, priceSnapshot } from "./pricing.ts";
+import { catalogPriceVersion, nanosToUsd, priceSnapshot, usdToNanos } from "./pricing.ts";
+import { Wallet, type WalletStatus } from "./wallet.ts";
+import type { CreditSink } from "./watcher.ts";
+import type { AssetRecord, NetworkRecord } from "./networks.ts";
+import type { ChainDepositEvent } from "./chainstore.ts";
 import {
   EasytierSupervisor,
   generateSecureIdentity,
@@ -138,6 +142,13 @@ export interface ServiceDeps {
   accountingFailureBudget?: number;
   /** a check that takes longer than this is a failure, not a pass */
   accountingTimeoutMs?: number;
+  /**
+   * The chain wallet module. Off by default: a node that never enables a network
+   * must not open a socket to an RPC. Tests pass a stub or a real one.
+   */
+  wallet?: Wallet | null;
+  /** build the wallet from the plugin state directory when the node enables it */
+  walletFactory?: () => Wallet | null;
 }
 
 /**
@@ -217,6 +228,8 @@ export interface StatusSnapshot {
   providers: ProviderView[];
   catalog: CatalogStatus;
   accounting: AccountingStatus;
+  /** the chain wallet, or null when this node runs no network */
+  wallet: WalletStatus | null;
   /** the phase-3 field, kept for older clients: the first provider, or null */
   wiring: { id: string; mappedCidr: string; url: string; createdAt: string } | null;
   checks: { name: string; ok: boolean; detail: string }[];
@@ -329,6 +342,13 @@ export class Service {
   private catalogError: string | null = null;
   private catalogNextQuoteAt = 0;
   private catalogNextRefreshAt = 0;
+  /**
+   * The chain wallet, when this node runs one. It is created lazily by
+   * `walletModule()` because constructing it opens SQLite and the registry file;
+   * a node that never enables a network never touches either.
+   */
+  private walletInstance: Wallet | null | undefined = undefined;
+  private walletStatusCache: WalletStatus | null = null;
 
   constructor(private deps: ServiceDeps) {
     this.state = loadState().state;
@@ -411,6 +431,113 @@ export class Service {
 
   accountingStatus(): AccountingStatus {
     return { ...this.accounting, paused: [...this.accounting.paused] };
+  }
+
+  // --- chain wallet ----------------------------------------------------------
+
+  /**
+   * The wallet module, or null when this node runs none.
+   *
+   * A node with no enabled network must not open an RPC connection or write a
+   * second SQLite file, so the module is built on first use and only when a
+   * network is enabled. `deps.wallet` is the test seam; `deps.walletFactory`
+   * lets the host decide the paths.
+   */
+  walletModule(): Wallet | null {
+    if (this.walletInstance !== undefined) return this.walletInstance;
+    if (this.deps.wallet !== undefined) {
+      this.walletInstance = this.deps.wallet;
+      return this.walletInstance;
+    }
+    try {
+      const built = this.deps.walletFactory ? this.deps.walletFactory() : null;
+      if (built) {
+        this.walletInstance = built;
+        return built;
+      }
+      // No factory (a test or a minimal host): build one over the plugin state
+      // directory only when a network is enabled, so a disabled node stays idle.
+      const probe = new Wallet({ credit: this.chainCreditSink(), registry: undefined });
+      if (probe.registryView().enabledNetworks().length === 0) {
+        probe.close();
+        this.walletInstance = null;
+        return null;
+      }
+      this.walletInstance = probe;
+      return probe;
+    } catch (e) {
+      logger.warn(`the chain wallet is unavailable: ${String(e)}`);
+      this.walletInstance = null;
+      return null;
+    }
+  }
+
+  /**
+   * The only bridge from a chain event to credit. It delegates to the
+   * provisioner, which owns the Magpie cap write and its read-back; nothing in
+   * the wallet module can reach a Gateway Key any other way.
+   */
+  private chainCreditSink(): CreditSink {
+    const ledger = this.ledger;
+    return {
+      depositIntent: (input) => {
+        if (!ledger) throw new Error("a chain deposit needs the durable ledger");
+        const r = ledger.depositIntent({ id: input.id, consumerId: input.consumerId, amountNanos: input.amountNanos, source: input.source });
+        return { created: r.created };
+      },
+      applyDeposit: async (input) => {
+        await this.provisioner.applyChainDeposit(input);
+      },
+      freezeConsumer: async (consumerId, reason) => {
+        if (!ledger) return;
+        // A reverted credit is an auditable freeze, not a silent adjustment: the
+        // deposit row stays, the account is paused, and the key is stopped by the
+        // same fail-closed path a price change uses.
+        ledger.setPaused(consumerId, `chain-reorg: ${reason}`);
+        const rec = this.provisioner.find(consumerId);
+        if (rec) await this.provisioner.pauseForChain(consumerId, reason);
+      },
+      balance: (consumerId) => {
+        if (!ledger) return { depositedNanos: 0, consumedNanos: 0, balanceNanos: 0 };
+        const b = ledger.balance(consumerId);
+        return { depositedNanos: b.depositedNanos, consumedNanos: b.consumedNanos, balanceNanos: b.balanceNanos };
+      },
+    };
+  }
+
+  /** Starts the chain watchers for every enabled network (idempotent). */
+  startWallet(): void {
+    const w = this.walletModule();
+    if (!w) return;
+    try {
+      w.start();
+    } catch (e) {
+      logger.error(`chain watchers did not start: ${String(e)}`);
+    }
+  }
+
+  /** The wallet's status, or null; cached briefly so the page is not slow. */
+  async walletStatus(): Promise<WalletStatus | null> {
+    const w = this.walletModule();
+    if (!w) return null;
+    try {
+      this.walletStatusCache = await w.status();
+      return this.walletStatusCache;
+    } catch (e) {
+      logger.warn(`wallet status failed: ${String(e)}`);
+      return this.walletStatusCache;
+    }
+  }
+
+  walletStatusSync(): WalletStatus | null {
+    return this.walletStatusCache;
+  }
+
+  /** The wallet module for the API, or an error when this node runs none. */
+  requireWallet(): Wallet {
+    const w = this.walletModule();
+    if (!w) throw new Error("this node has no chain wallet; enable a network first");
+    return w;
   }
 
   /**
@@ -580,6 +707,9 @@ export class Service {
       })
       .catch((e) => logger.error(`accounting recovery failed: ${String(e)}`));
     this.startLoops();
+    // Chain watchers start only after recovery: a deposit must never be applied
+    // to a key the recovery pass has not yet reconciled.
+    this.startWallet();
     // Do not make boot wait for peers: the directory fills in the background.
     void this.catalogTick();
     this.writeSnapshot();
@@ -705,6 +835,7 @@ export class Service {
     if (this.accountingTimer) clearInterval(this.accountingTimer);
     this.accountingTimer = null;
     this.stopCatalogServer();
+    this.walletInstance?.stop();
     await this.supervisor.stop();
   }
 
@@ -2618,6 +2749,7 @@ export class Service {
       accounting: this.accountingStatus(),
       providers: this.providers(),
       catalog: this.catalogStatus(),
+      wallet: this.walletStatusCache,
       wiring: this.state.providers[0]
         ? {
             id: this.state.providers[0].id,

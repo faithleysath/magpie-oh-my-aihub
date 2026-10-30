@@ -2,18 +2,57 @@
 
 A private-community P2P AI API sharing project based on Magpie, EasyTier no-TUN networking, and wallet-funded Gateway Key quotas.
 
-**Status: phase 6 — one Magpie node can share its own channels, consume several remote Magpies, discover signed read-only model/price catalogues, and keep a local immutable prepaid ledger with fail-closed key reissue across price changes and quota-window boundaries. Verified against Magpie 0.1.2038 and EasyTier 2.6.4. No wallet, no chain, no real payments; real funds are blocked by the native price-lock finding.**
+**Status: phase 7 — one Magpie node can share its own channels, consume several remote Magpies, discover signed read-only model/price catalogues, keep a local immutable prepaid ledger with fail-closed key reissue, and watch **testnet** deposits on BNB Smart Chain testnet and Base Sepolia as two equal networks. Verified against Magpie 0.1.2038, EasyTier 2.6.4 and foundry 1.8.6. Testnet only: no mainnet asset is watched or credited, and real funds are still blocked by the native price-lock finding. The real-testnet deposit run is UNKNOWN — testnet gas could not be obtained; the pipeline is proven on a local EVM node with a real deployed ERC-20.**
 
 ## Current planned division of responsibilities
 
 - **Magpie**: upstream providers, Remote Magpie, routing, Gateway Key authentication, quotas, usage accounting and model forwarding.
 - **EasyTier**: private peer transport, discovery via Peer list, encrypted no-TUN networking and targeted port forwarding.
-- **Plugin/local helper**: overlay and port-forward supervisor, per-consumer Gateway Keys, the set of remote providers this node consumes, simulated deposits, and later wallet binding, verified chain deposits, reconciliation and automatic top-up.
+- **Plugin/local helper**: overlay and port-forward supervisor, per-consumer Gateway Keys, the set of remote providers this node consumes, the network/asset registry, signed deposit attribution, per-chain deposit watching with per-chain finality, and the ledger that the provisioner turns into a Magpie cap.
 - **HK VPS**: EasyTier bootstrap/relay only. No centralized business server.
 
 Do **not** implement a second AI API proxy, token router or charging gateway unless real integration tests demonstrate a hard security/compatibility limit in the native path.
 
 Read [architecture](docs/ARCHITECTURE.md), [verification tasks](docs/VALIDATION.md), and [agent instructions](AGENTS.md).
+
+## Phase 7: testnet chain deposits into the existing ledger
+
+A provider publishes one receiving address **per chain**. A consumer asks for a deposit intent, signs
+it with their own wallet, sends the test tokens, and the plugin credits them — but only after that
+chain's own finality condition, and only when exactly one signed intent matches the transfer.
+
+- **Every network is a peer.** `plugin/src/networks.ts` is a registry with no primary, secondary or
+  preferred chain. BSC testnet (97) and Base Sepolia (84532) are two records of the same shape; a
+  third EVM chain was added by data alone and the whole pipeline ran on it. Mainnet 56/8453 exist as
+  always-disabled reserved records and are refused on three separate paths.
+- **Assets are `(chainId, contract)`.** Two chains with a token called `tMOCK6` at the same address
+  are two assets. A test asset is registered only after the chain answers `decimals()`, and a symbol
+  that pretends to be a real token is refused.
+- **Finality is per chain, with its measurement attached.** BSC testnet's `finalized` tag equals
+  `latest` (measured), so it uses 15 confirmations as a stated substitute; Base Sepolia's `finalized`
+  lags ~17 minutes across three providers, so it uses the tag.
+- **Attribution is a signature, not a guess.** The EIP-712 document carries the chain id, invoice,
+  nonce, exact amount and recipient. The plugin recovers the payer locally and requires it to match
+  the address the consumer says they signed with — because a signature over a *different* document
+  still recovers to *some* address. An unsigned payer stays `unclaimed` and is never credited.
+- **Uniqueness is a database index**, `(chain, token, tx, logIndex)`, not a set in memory, and the
+  ledger deposit id is derived from the event so a crash retries the same deposit.
+- **A reorg freezes, never deletes.** A credited event whose block hash moved becomes `reverted`, an
+  anomaly is recorded and the consumer is paused; the deposit stays and the balance is not edited.
+- **No buy, swap, bridge or fiat path.** Two plain external documentation links (BNB Chain, Peer) and
+  an explicit statement that Peer and Alipay have no partnership with this project.
+
+```sh
+bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet networks
+bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet receiving provider-a 97 0x…
+bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet intent provider-a alice 97 eip155:97:0x… 2500000
+bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet events --tx 0x…
+```
+
+Evidence, including the measurements behind each finality policy, the local-chain lab with a real
+reorg, and exactly which testnet steps are UNKNOWN, is in
+[`docs/validation/2026-10-30-phase7-multichain-wallet.md`](docs/validation/2026-10-30-phase7-multichain-wallet.md).
+**GO for continued testnet wallet development; NO-GO for real funds.**
 
 ## Phase 6: prepaid credit that survives price changes and window ends
 

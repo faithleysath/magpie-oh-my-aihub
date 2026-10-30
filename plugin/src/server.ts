@@ -102,6 +102,34 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
     const s = await svc.status();
     return json({ consumers: s.consumers });
   }
+  if (req.method === "GET" && path === "/wallet") {
+    return json({ wallet: await svc.walletStatus() });
+  }
+  if (req.method === "GET" && path === "/wallet/networks") {
+    const w = svc.walletModule();
+    return json({ networks: w ? w.networks() : [] });
+  }
+  if (req.method === "GET" && path === "/wallet/assets") {
+    const w = svc.walletModule();
+    return json({ assets: w ? w.allAssets() : [] });
+  }
+  if (req.method === "GET" && path === "/wallet/intents") {
+    const w = svc.walletModule();
+    if (!w) return json({ intents: [] });
+    return json({ intents: w.intents(url.searchParams.get("consumerId") ?? undefined) });
+  }
+  if (req.method === "GET" && path === "/wallet/events") {
+    const w = svc.walletModule();
+    if (!w) return json({ events: [] });
+    const tx = url.searchParams.get("tx");
+    if (tx) return json({ events: w.chainStore().eventByTx(tx) });
+    const chainId = url.searchParams.get("chainId");
+    return json({ events: chainId ? w.chainStore().eventsForChain(Number(chainId)) : (await w.status()).events });
+  }
+  if (req.method === "GET" && path === "/wallet/anomalies") {
+    const w = svc.walletModule();
+    return json({ anomalies: w ? w.chainStore().anomalies() : [] });
+  }
 
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const auth = req.headers.get("authorization") ?? "";
@@ -299,6 +327,108 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
         const { consumerId } = body as { consumerId?: string };
         if (consumerId) return json({ consumerId, guard: await svc.guardSharedKeys() });
         return json(await svc.guardSharedKeys());
+      }
+      case "/wallet/network": {
+        const { chainId, enabled, rpcEndpoints } = body as { chainId?: number; enabled?: boolean; rpcEndpoints?: string[] };
+        if (typeof chainId !== "number") return json({ error: "chainId is required" }, 400);
+        const w = svc.requireWallet();
+        if (Array.isArray(rpcEndpoints)) w.setRpcEndpoints(chainId, rpcEndpoints.map(String));
+        if (typeof enabled === "boolean") w.setNetworkEnabled(chainId, enabled);
+        return json({ network: w.registryView().network(chainId) });
+      }
+      case "/wallet/asset": {
+        const { assetId, enabled } = body as { assetId?: string; enabled?: boolean };
+        if (!assetId || typeof enabled !== "boolean") return json({ error: "assetId and enabled are required" }, 400);
+        return json({ asset: svc.requireWallet().setAssetEnabled(assetId, enabled) });
+      }
+      case "/wallet/asset/register": {
+        const { chainId, contractAddress, symbol, name, expectedDecimals, nanosPerToken, pricingNote } = body as {
+          chainId?: number;
+          contractAddress?: string;
+          symbol?: string;
+          name?: string;
+          expectedDecimals?: number;
+          nanosPerToken?: string;
+          pricingNote?: string;
+        };
+        if (typeof chainId !== "number" || !contractAddress || !symbol || !name || typeof expectedDecimals !== "number" || !nanosPerToken) {
+          return json({ error: "chainId, contractAddress, symbol, name, expectedDecimals and nanosPerToken are required" }, 400);
+        }
+        return json(
+          await svc.requireWallet().registerTestAsset({
+            chainId,
+            contractAddress,
+            symbol,
+            name,
+            expectedDecimals,
+            nanosPerToken,
+            pricingNote: pricingNote ?? "fixed test rate",
+          }),
+        );
+      }
+      case "/wallet/receiving": {
+        const { providerId, chainId, address } = body as { providerId?: string; chainId?: number; address?: string };
+        if (!providerId || typeof chainId !== "number" || !address) return json({ error: "providerId, chainId and address are required" }, 400);
+        return json({ receiving: svc.requireWallet().setReceivingAddress(providerId, chainId, address) });
+      }
+      case "/wallet/intent": {
+        const { providerId, consumerId, chainId, assetId, amountRaw, ttlSec, recipientAddress } = body as {
+          providerId?: string;
+          consumerId?: string;
+          chainId?: number;
+          assetId?: string;
+          amountRaw?: string;
+          ttlSec?: number;
+          recipientAddress?: string;
+        };
+        if (!providerId || !consumerId || typeof chainId !== "number" || !assetId || !amountRaw) {
+          return json({ error: "providerId, consumerId, chainId, assetId and amountRaw are required" }, 400);
+        }
+        return json(
+          svc.requireWallet().requestIntent({
+            providerId,
+            consumerId,
+            chainId,
+            assetId,
+            amountRaw: String(amountRaw),
+            ...(typeof ttlSec === "number" ? { ttlSec } : {}),
+            ...(recipientAddress ? { recipientAddress } : {}),
+          }),
+        );
+      }
+      case "/wallet/intent/sign": {
+        const { invoiceId, signature, payerAddress, expectedPayer } = body as {
+          invoiceId?: string;
+          signature?: string;
+          payerAddress?: string;
+          expectedPayer?: string;
+        };
+        if (!invoiceId || !signature || !payerAddress) return json({ error: "invoiceId, signature and payerAddress are required" }, 400);
+        return json(svc.requireWallet().signIntent({ invoiceId, signature, payerAddress, expectedPayer: expectedPayer ?? null }));
+      }
+      case "/wallet/intent/cancel": {
+        const { invoiceId, reason } = body as { invoiceId?: string; reason?: string };
+        if (!invoiceId) return json({ error: "invoiceId is required" }, 400);
+        return json({ intent: svc.requireWallet().cancelIntent(invoiceId, reason ?? "operator cancelled") });
+      }
+      case "/wallet/scan": {
+        const { chainId } = body as { chainId?: number };
+        if (typeof chainId !== "number") return json({ error: "chainId is required" }, 400);
+        return json({ scan: await svc.requireWallet().scanNow(chainId) });
+      }
+      case "/wallet/start": {
+        svc.startWallet();
+        return json({ ok: true, running: svc.walletModule()?.runningChains() ?? [] });
+      }
+      case "/wallet/stop": {
+        svc.walletModule()?.stop();
+        return json({ ok: true, running: [] });
+      }
+      case "/wallet/anomaly/resolve": {
+        const { id, note } = body as { id?: number; note?: string };
+        if (typeof id !== "number" || !note) return json({ error: "id and note are required" }, 400);
+        svc.requireWallet().chainStore().resolveAnomaly(id, note);
+        return json({ ok: true });
       }
       case "/verify": {
         const s = await svc.status();
