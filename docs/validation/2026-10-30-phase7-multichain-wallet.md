@@ -1,6 +1,6 @@
 # Phase 7 — multichain testnet wallet and deposit reconciliation
 
-Status update: **local-chain lab PASS; BSC real-testnet transfer/test-sink credit VERIFIED; corrected Base real-testnet transfer/finality/test-sink credit VERIFIED; real-testnet → live Magpie end-to-end UNKNOWN.** Real funds remain **NO-GO**.
+Status update: **local-chain lab PASS; BSC/Base real-testnet transfer/finality VERIFIED; replay of their original signed payments → real SQLite Ledger → same real Magpie Gateway Key → 200/429/200 VERIFIED with a local mock model upstream.** Fresh combined live-payment/EasyTier/vendor acceptance remains UNKNOWN. Real funds remain **NO-GO**. See [the real-Magpie replay report](2026-10-30-live-magpie-chain-credit.md) for the exact scope.
 
 The original sections below record the earlier no-gas run and are retained as historical evidence, not current progress. See [the testnet handoff](2026-10-30-testnet-handoff.md) and its linked raw receipts for the funded runs, corrected lab inputs and the exact distinction between a test-sink credit and a live Magpie Gateway Key credit.
 
