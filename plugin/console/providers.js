@@ -24,6 +24,20 @@ export function selectableModels(models, selected) {
 export function peerAcceptance(peer) {
   return { nodeId: peer.nodeId || peer.quote?.node?.id, fingerprint: peer.pendingFingerprint || peer.identity?.fingerprint || peer.quote?.identity?.fingerprint, quoteHash: peer.quoteHash || peer.quote?.contentHash };
 }
+export function peerNextStep(status) {
+  const guidance = {
+    unverified: "请先通过可信渠道核对完整指纹，再点击“核对并接受身份”。",
+    "identity-changed": "伙伴身份已变化。请联系对方核对新指纹，再点击“核对新身份”；确认前不能申请或连接。",
+    verified: "身份已在本机接受，可以选择模型生成申请，或使用伙伴交付的授权连接。",
+    connected: "此伙伴已有连接，可在“我的连接”中检查模型、密钥与额度。",
+    stale: "报价已过期或发生回退，请刷新目录并向伙伴确认最新报价。",
+    unreachable: "暂时无法读取伙伴目录，请检查网络连接后刷新。",
+    offline: "伙伴当前离线，请等待对方上线后刷新目录。",
+    "no-catalog": "伙伴尚未发布模型目录，请联系对方在“我的共享”中发布。",
+    conflict: "伙伴网络地址存在冲突，请与对方确认各自的网络设置。",
+  };
+  return guidance[status] || "请刷新目录，确认伙伴的当前状态后继续。";
+}
 export function checkLabel(name) {
   const labels = { configured: "私有网络配置", "core-running": "网络引擎", acl: "网络访问规则", "sharing-suspended": "共享安全保护", "gateway-key-required": "未授权访问拒绝", "mapped-cidr": "共享专用地址", "published-gateway": "模型网关发布", "shared-models-native-only": "仅共享本机模型", "share-guard-cadence": "共享保护巡检", "catalog-published": "模型目录发布", "catalog-forward-port": "目录访问规则", "catalog-quote": "签名目录与报价", "catalog-identity": "目录身份签名", "catalog-socks5-loopback": "本机目录查询", "catalog-peers": "伙伴目录身份", "forwards-match": "远程连接归属", "no-orphan-forwards": "过期连接清理" };
   if (labels[name]) return labels[name];
@@ -131,7 +145,9 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     urls.clear();
   }
   dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialog(); });
-  dialog.addEventListener("close", () => { if (currentDialog) closeDialog(); });
+  // Native close events are queued: an older event may arrive after this same
+  // dialog has already opened the next workflow step. Keep that new step intact.
+  dialog.addEventListener("close", () => { if (!dialog.open && currentDialog) closeDialog(); });
   function openDialog(title, build) {
     closeDialog();
     currentDialog = title;
@@ -221,7 +237,8 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       card.append(top, paragraph(`${items(peer.quote?.models).length} 个模型 · ${peer.online ? "在线" : "离线"} · ${peer.quote?.node?.contact || "未提供联系方式"}`));
       const acceptance = peerAcceptance(peer);
       card.append(details("查看完整身份与报价", [["身份指纹", acceptance.fingerprint], ["报价指纹", acceptance.quoteHash], ["报价版本", peer.quote?.publication?.version], ["更新时间", peer.quote?.publication?.updatedAt], ["身份说明", "自签名 TOFU，仅证明同一密钥签名，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
-      if (peer.detail) card.append(paragraph(peer.detail));
+      card.append(paragraph(peerNextStep(peer.status)));
+      if (peer.detail) card.append(details("查看目录技术详情", [["原始诊断", peer.detail]]));
       const models = el("div", null, "discovery-models");
       for (const model of items(peer.quote?.models).filter((model) => !query || [model.id, model.displayName, peer.hostname, peer.quote?.node?.displayName].join(" ").toLowerCase().includes(query))) {
         const row = el("div", null, "discovery-model"); row.append(el("strong", model.displayName || model.id), paragraph(priceText(model.pricing)), priceDetails(model)); models.append(row);
@@ -328,13 +345,33 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     if (minimum.input.value) input.minTopUpUsd = Number(minimum.input.value);
     void run("catalog-settings", input, () => { publicationDirty = false; });
   });
+  const ownIdentity = el("div", null, "card workflow-section");
+  ownIdentity.append(toolbar("我的目录身份"), paragraph("让伙伴在其“发现模型”页面展开身份信息，与你通过可信渠道逐字核对完整指纹。以下均为公开目录信息。"));
+  const identityContent = el("div");
+  ownIdentity.append(identityContent);
+  function renderOwnIdentity() {
+    identityContent.replaceChildren();
+    const quote = state?.status.catalog?.quote;
+    const fingerprint = quote?.identity?.fingerprint;
+    if (!fingerprint) {
+      identityContent.append(empty("尚未生成目录身份", "选择本机模型并发布目录后，这里会显示可供伙伴核对的完整身份和报价。"));
+      return;
+    }
+    identityContent.append(details("查看完整目录身份与报价", [["完整身份指纹", fingerprint], ["完整报价指纹", quote.contentHash], ["完整价格版本", quote.billing?.priceVersion], ["目录版本", quote.version ?? quote.publication?.version], ["更新时间", quote.updatedAt ?? quote.publication?.updatedAt], ["发布时间", quote.publishedAt ?? quote.publication?.publishedAt], ["身份签名", "自签名 Ed" + "25519；只证明同一密钥签署，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
+    const actions = el("div", null, "workflow-actions");
+    actions.append(button("复制完整身份指纹", async () => {
+      try { await navigator.clipboard.writeText(fingerprint); notice("完整身份指纹已复制，请通过可信渠道交给伙伴核对。", "good"); }
+      catch { notice("浏览器未允许复制，请展开目录身份并选择完整指纹进行复制。", "warn"); }
+    }));
+    identityContent.append(actions);
+  }
   const requestCard = el("div", null, "card workflow-section"); requestCard.append(toolbar("连接申请"));
   const importRequest = button("导入伙伴的申请文件", () => importDocument("request"));
   requestCard.append(paragraph("导入仅用于核对；每份申请都需要你明确选择额度和模型，再手动批准。"), importRequest);
   const requestsList = el("div", null, "workflow-list"); requestCard.append(requestsList);
   const consumersCard = el("div", null, "card workflow-section"); consumersCard.append(toolbar("已授权的伙伴"));
   const consumersList = el("div", null, "workflow-list"); consumersCard.append(consumersList);
-  roots.sharing.append(shareIntro, modelsCard, publication, requestCard, consumersCard);
+  roots.sharing.append(shareIntro, modelsCard, publication, ownIdentity, requestCard, consumersCard);
   function policySelection(models) {
     const policy = state?.status.config.share?.models;
     return items(models).filter((model) => model.completePrice && (Array.isArray(policy) ? policy.some((rule) => rule === "*" || rule === model.id || (rule.endsWith("/*") && model.id.startsWith(rule.slice(0, -1)))) : model.allowedByPolicy)).map((model) => model.id);
@@ -573,7 +610,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       selectedModels = new Set(policySelection(candidates.models));
       renderModels();
     }
-    for (const [key, value, update] of [["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections]]) {
+    for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections]]) {
       const digest = JSON.stringify(value ?? null);
       if (caches.get(key) !== digest) { caches.set(key, digest); update(); }
     }

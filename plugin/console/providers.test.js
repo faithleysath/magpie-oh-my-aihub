@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { capLabel, checkLabel, mountProviders, parseTransportDocument, peerAcceptance, priceText, selectableModels, validCap } from "./providers.js";
+import { capLabel, checkLabel, mountProviders, parseTransportDocument, peerAcceptance, peerNextStep, priceText, selectableModels, validCap } from "./providers.js";
 
 const pricing = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 };
 const model = { id: "native/demo", displayName: "本机模型", pricing, completePrice: true, allowedByPolicy: true };
@@ -24,7 +24,7 @@ class Node {
     return descendants(this).filter(matches);
   }
   showModal() { this.open = true; }
-  close() { this.open = false; void this.emit("close"); }
+  close() { this.open = false; queueMicrotask(() => { void this.emit("close"); }); }
   remove() {}
   reportValidity() { return true; }
   click() { return this.emit("click"); }
@@ -96,6 +96,50 @@ describe("real mounted workflow handlers", () => {
         expect(r.calls[1]).toEqual({ name: "consumer-check", input: { consumerId: "friend" } });
       } finally { r.cleanup(); }
     }
+  });
+
+  test("own published identity exposes full fingerprints and current price version for comparison and public copy", async () => {
+    const state = baseState();
+    const priceVersion = "c".repeat(64);
+    state.status.catalog.quote.billing = { priceVersion, priceLocked: false };
+    state.status.catalog.quote.updatedAt = "2026-10-30T10:00:00Z";
+    state.status.catalog.quote.publishedAt = "2026-10-30T10:01:00Z";
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const copied = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text) => copied.push(text) } });
+    const r = runtime(state);
+    try {
+      const root = r.roots["sharing-panel"];
+      const own = find(root, "summary", "查看完整目录身份与报价");
+      expect(own).toBeDefined();
+      const identity = descendants(root).find((node) => node.tagName === "details" && node.children.includes(own));
+      expect(identity.open).toBeFalse();
+      for (const value of [fingerprint, quoteHash, priceVersion, "2026-10-30T10:00:00Z", "2026-10-30T10:01:00Z", "自签名", "priceLocked: false"]) expect(identity.textContent).toContain(value);
+      await find(root, "button", "复制完整身份指纹").click();
+      expect(copied).toEqual([fingerprint]);
+      expect(r.calls).toHaveLength(0);
+      const next = structuredClone(state); next.status.catalog.quote.contentHash = "d".repeat(64);
+      r.render(next); expect(root.textContent).toContain("d".repeat(64));
+    } finally {
+      r.cleanup();
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard); else delete navigator.clipboard;
+    }
+  });
+
+  test("catalogue next steps are Chinese and raw CLI diagnostics remain in collapsed technical details", () => {
+    expect(peerNextStep("unverified")).toContain("核对并接受身份");
+    expect(peerNextStep("identity-changed")).toContain("核对新身份");
+    const state = baseState();
+    state.status.catalog.peers[0].detail = "first seen; use catalog trust before connecting";
+    const r = runtime(state);
+    try {
+      const root = r.roots["discovery-panel"];
+      const technical = descendants(root).find((node) => node.tagName === "details" && node.textContent.includes(state.status.catalog.peers[0].detail));
+      expect(technical).toBeDefined(); expect(technical.open).toBeFalse();
+      expect(technical.children[0].textContent).toBe("查看目录技术详情");
+      expect(all(root, "p").some((node) => node.textContent.includes("catalog trust"))).toBeFalse();
+      expect(all(root, "p").some((node) => node.textContent.includes("核对并接受身份"))).toBeTrue();
+    } finally { r.cleanup(); }
   });
 
   test("TOFU requires explicit checkbox and submits exact shown fingerprint without manual IDs", async () => {
@@ -174,6 +218,25 @@ describe("real mounted workflow handlers", () => {
     } finally { r.cleanup(); }
   });
 
+  test("generated request download dialog stays open after the prior dialog's queued close event", async () => {
+    const state = baseState(); state.status.catalog.peers[0].status = "verified";
+    const requestDocument = { schema: "ohmyaihub.connection-request/v1", models: [model.id] };
+    const r = runtime(state, async () => requestDocument);
+    try {
+      await find(r.roots["discovery-panel"], "button", "选择模型并申请").click();
+      const choices = all(r.dialog, "input").filter((node) => node.type === "checkbox");
+      choices.forEach((node) => { node.checked = true; });
+      await find(r.dialog, "button", "生成连接申请").click(); await flush();
+      expect(r.calls).toEqual([{ name: "connection-request", input: { nodeId: peer.nodeId, fingerprint, quoteHash, models: [model.id] } }]);
+      expect(r.dialog.open).toBeTrue();
+      expect(r.dialog.textContent).toContain("连接申请已生成");
+      expect(find(r.dialog, "button", "下载连接申请")).toBeDefined();
+      await flush();
+      expect(r.dialog.open).toBeTrue();
+      expect(find(r.dialog, "button", "下载连接申请")).toBeDefined();
+    } finally { r.cleanup(); }
+  });
+
   test("paused authorization uses backend subset price preview and explicit consent for reissue", async () => {
     const state = baseState(); state.status.consumers = [{ consumerId: "friend", models: [model.id], paused: { reason: "price-changed" } }];
     const currentPriceVersion = "c".repeat(64);
@@ -199,6 +262,7 @@ describe("real mounted workflow handlers", () => {
       await find(r.dialog, "button", "验证并连接").click(); await flush();
       expect(r.calls).toHaveLength(1); expect(r.calls[0].name).toBe("connection-preview");
       expect(r.dialog.textContent).toContain(fingerprint);
+      expect(r.dialog.open).toBeTrue();
       expect(all(r.dialog, "textarea")).toHaveLength(0);
       const connect = find(r.dialog, "button", "创建此伙伴连接"); expect(connect.disabled).toBeTrue();
       const agree = all(r.dialog, "input")[0]; agree.checked = true; await agree.emit("change");
