@@ -66,6 +66,7 @@ describe("credit arithmetic", () => {
     // intent is not credit until the cap write is confirmed
     expect(ledger.balance("alice").balanceNanos).toBe(usdToNanos(10));
     ledger.markDepositApplied("dep-1", ledger.openWindowFor("alice")!.id, usdToNanos(12.5));
+    expect(ledger.deposit("dep-1")?.priceVersion).toBe(snap.version);
     expect(ledger.balance("alice").depositedNanos).toBe(usdToNanos(12.5));
     expect(ledger.balance("alice").balanceNanos).toBe(usdToNanos(12.5));
   });

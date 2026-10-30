@@ -63,6 +63,7 @@ export interface LedgerDeposit {
   source: string;
   status: DepositStatus;
   windowId: string | null;
+  priceVersion: string | null;
   capAfterNanos: number | null;
   createdAt: string;
   appliedAt: string | null;
@@ -120,6 +121,7 @@ interface DepositRow {
   source: string;
   status: DepositStatus;
   window_id: string | null;
+  price_version: string | null;
   cap_after_nanos: number | null;
   created_at: string;
   applied_at: string | null;
@@ -184,6 +186,7 @@ CREATE TABLE IF NOT EXISTS deposits (
   source TEXT NOT NULL,
   status TEXT NOT NULL,
   window_id TEXT,
+  price_version TEXT,
   cap_after_nanos INTEGER,
   created_at TEXT NOT NULL,
   applied_at TEXT,
@@ -267,6 +270,7 @@ function mapDeposit(r: DepositRow): LedgerDeposit {
     source: r.source,
     status: r.status,
     windowId: r.window_id,
+    priceVersion: r.price_version,
     capAfterNanos: r.cap_after_nanos,
     createdAt: r.created_at,
     appliedAt: r.applied_at,
@@ -373,7 +377,7 @@ export class Ledger {
       if (input.openingNanos > 0) {
         this.db
           .query(
-            "INSERT INTO deposits(id,consumer_id,amount_nanos,source,status,window_id,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO deposits(id,consumer_id,amount_nanos,source,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
           )
           .run(
             `opening:${input.consumerId}`,
@@ -382,6 +386,7 @@ export class Ledger {
             "opening",
             "applied",
             window.id,
+            input.price.version,
             input.capNanos,
             at,
             at,
@@ -531,9 +536,9 @@ export class Ledger {
       const at = input.at ?? nowIso();
       this.db
         .query(
-          "INSERT INTO deposits(id,consumer_id,amount_nanos,source,status,window_id,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO deposits(id,consumer_id,amount_nanos,source,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         )
-        .run(input.id, input.consumerId, input.amountNanos, input.source, "intent", null, null, at, null, null);
+        .run(input.id, input.consumerId, input.amountNanos, input.source, "intent", null, null, null, at, null, null);
       this.event(input.consumerId, "deposit-intent", { depositId: input.id, amountNanos: input.amountNanos, source: input.source });
       return { deposit: this.deposit(input.id)!, created: true };
     });
@@ -546,8 +551,8 @@ export class Ledger {
       if (d.status === "applied") return d;
       if (d.status === "failed") throw new Error(`deposit ${id} already failed; a new deposit id is required`);
       this.db
-        .query("UPDATE deposits SET status='applied',window_id=?,cap_after_nanos=?,applied_at=?,error=NULL WHERE id=?")
-        .run(windowId, capNanos, nowIso(), id);
+        .query("UPDATE deposits SET status='applied',window_id=?,price_version=(SELECT price_version FROM windows WHERE id=?),cap_after_nanos=?,applied_at=?,error=NULL WHERE id=?")
+        .run(windowId, windowId, capNanos, nowIso(), id);
       this.event(d.consumerId, "deposit-applied", { depositId: id, windowId, capNanos });
       return this.deposit(id)!;
     });
