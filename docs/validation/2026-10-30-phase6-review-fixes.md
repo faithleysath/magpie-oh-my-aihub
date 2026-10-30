@@ -188,12 +188,12 @@ same writer as `state.json`.
 
 ```text
 typecheck PASS
-228 tests, 0 failures (16 files)
+229 tests, 0 failures (16 files)
 boot-check PASS: plugin 0.4.0, magpie magpie 0.1.2038, api 34517, checks 1
 secret-scan PASS: no credentials in the working tree
 ```
 
-New file `plugin/test/review-fixes.test.ts` holds 20 tests, one or more per defect, written to fail
+New file `plugin/test/review-fixes.test.ts` holds 21 tests, one or more per defect, written to fail
 on the reviewed HEAD: identical-line double charge, repeated import, truncated log, late row at 5 s
 and 30 s, in-flight at settlement, restart re-scan, late row after settlement, the three enforcement
 levels, the four crash points, tick-only price detection, failure budget withdrawal and recovery, and

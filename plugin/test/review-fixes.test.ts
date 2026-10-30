@@ -662,6 +662,30 @@ async function waitFor(fn: () => boolean, ms: number): Promise<void> {
   }
 }
 
+
+  test("a deposit while paused is booked once and survives a restart", async () => {
+    const p = make(50);
+    const v = await p.ensure("tara", { models: [MODEL], capUsd: 0.5 });
+    fake.addUsage(v.keyId, 400_000, 100_000); // $0.6, an overdraft
+    await p.status("tara");
+    expect((await p.status("tara")).ledger?.overdraftUsd).toBeCloseTo(0.1, 9);
+    fake.rollWindow(v.keyId);
+    await p.status("tara");
+    const paid = await p.topUp("tara", 0.3, "paused-dep");
+    expect(paid.ledger?.balanceUsd).toBeCloseTo(0.2, 9);
+    const replay = await p.topUp("tara", 0.3, "paused-dep");
+    expect(replay.ledger?.depositedUsd).toBeCloseTo(0.8, 9);
+    ledger.close();
+    ledger = new Ledger(join(dir, "ledger.sqlite"));
+    const restarted = make(50);
+    const view = await restarted.status("tara");
+    expect(view.ledger?.balanceUsd).toBeCloseTo(0.2, 9);
+    expect(ledger.depositsFor("tara").filter((d) => d.status === "applied")).toHaveLength(2);
+    const reissued = await restarted.reissue("tara");
+    expect(reissued.paused).toBeNull();
+    expect(reissued.capUsd).toBe(0.2);
+  });
+
 describe("B/D interaction — a paused consumer still gets late charges", () => {
   test("a row that settles after the pause is still charged, and the overdraft is visible", async () => {
     const p = make(50);
