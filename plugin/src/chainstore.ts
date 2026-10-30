@@ -350,6 +350,13 @@ export class ChainStore {
     return rows.map(mapIntent);
   }
 
+  /** Authoritative pending set: never use the 50-row display preview for admission. */
+  openIntentsFor(consumerId: string, at = new Date()): DepositIntent[] {
+    const rows = this.db.query("SELECT * FROM deposit_intents WHERE consumer_id=? AND status IN ('requested','signed') AND expires_at>? ORDER BY created_at DESC")
+      .all(consumerId, at.toISOString()) as IntentRow[];
+    return rows.map(mapIntent);
+  }
+
   allIntents(limit = 200): DepositIntent[] {
     const rows = this.db.query("SELECT * FROM deposit_intents ORDER BY created_at DESC LIMIT ?").all(limit) as IntentRow[];
     return rows.map(mapIntent);

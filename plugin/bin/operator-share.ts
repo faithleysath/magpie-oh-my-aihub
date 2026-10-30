@@ -11,6 +11,7 @@
 
 import { readFileSync } from "node:fs";
 import { catalogPriceVersion } from "../src/pricing.ts";
+import { validateConnectionRequest, validateRequestApproval } from "../src/connection-request.ts";
 import {
   OperatorApi,
   boolFlag,
@@ -291,14 +292,6 @@ async function candidates(api: OperatorApi): Promise<ShareCandidatesView> {
   }
 }
 
-function sameSet(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((x) => b.includes(x)) && new Set(a).size === a.length;
-}
-
-function hex64(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-}
-
 async function shareApprove(api: OperatorApi, args: ReturnType<typeof parseArgs>, io: WizardIO): Promise<number> {
   const file = args.positionals[0];
   if (!file) fail("share approve <request.json> --cap <usd>");
@@ -308,70 +301,20 @@ async function shareApprove(api: OperatorApi, args: ReturnType<typeof parseArgs>
   } catch (e) {
     fail(`cannot read request JSON ${file}: ${(e as Error).message}`);
   }
-  if (!raw || raw.schema !== "ohmyaihub.connection-request/v1") fail("not an ohmyaihub.connection-request/v1 document");
-  if (!raw.consumer || typeof raw.consumer.nodeId !== "string") fail("the request has no consumer.nodeId");
-  if (!raw.provider || typeof raw.provider.nodeId !== "string") fail("the request has no provider.nodeId");
-  if (!Array.isArray(raw.models) || raw.models.some((m: unknown) => typeof m !== "string")) {
-    fail("the request has no valid models array");
-  }
+  raw = validateConnectionRequest(raw);
   const requestModels: string[] = raw.models;
   const approval = raw.approval;
-  if (!approval || approval.action !== "consumers add") fail("the request has no `approval.action = consumers add` block");
-  if (typeof approval.consumerId !== "string" || approval.consumerId !== raw.consumer.nodeId) {
-    fail("the approval consumerId does not match the request's consumer");
-  }
+  const requestQuote = raw.quote;
   if (args.one("consumer") !== undefined && args.one("consumer") !== raw.consumer.nodeId) {
     fail("--consumer must equal the request's consumer id; do not redirect a key silently");
   }
-  if (!Array.isArray(approval.models) || !sameSet(approval.models.map(String), requestModels)) {
-    fail("the approval models do not match the request models");
-  }
-  if (!raw.quote || typeof raw.quote !== "object") fail("the request has no accepted quote");
-  const requestQuote = raw.quote;
-  if (!hex64(requestQuote.contentHash) || !hex64(requestQuote.priceVersion)) {
-    fail("the request quote must carry a 64-hex content hash and price version");
-  }
-  if (!hex64(requestQuote.identityFingerprint)) fail("the request quote must carry a 64-hex identity fingerprint");
-  if (!raw.acceptance || raw.acceptance.fingerprint !== requestQuote.identityFingerprint || raw.acceptance.quoteHash !== requestQuote.contentHash) {
-    fail("the request acceptance does not match its quote fingerprint/hash");
-  }
-  if (raw.acceptance.priceVersion !== undefined && raw.acceptance.priceVersion !== requestQuote.priceVersion) {
-    fail("the request acceptance price version does not match its quote");
-  }
-  if (approval.quoteHash !== requestQuote.contentHash || approval.quotePriceVersion !== requestQuote.priceVersion) {
-    fail("the approval quote binding does not match the request quote");
-  }
-
   const status = await api.get<any>("/status", 60_000);
-  if (!status.config || status.config.nodeId !== raw.provider.nodeId) {
-    fail(`this request is for provider ${raw.provider.nodeId}, not this node (${status.config?.nodeId ?? "unconfigured"})`);
-  }
-  if (status.config.mappedCidr !== raw.provider.mappedCidr) {
-    fail(`this request targets ${raw.provider.mappedCidr}, but this node exports ${status.config.mappedCidr}`);
-  }
   const gatewayPort = Number(new URL(status.magpie?.gateway ?? "http://127.0.0.1:3425").port || 3425);
-  if (raw.provider.gatewayPort !== gatewayPort) {
-    fail(`this request targets gateway port ${raw.provider.gatewayPort}, but this node serves ${gatewayPort}`);
-  }
-
   const catalog = (await api.get<any>("/catalog", 30_000))?.catalog;
-  const localQuote = catalog?.quote;
-  if (!localQuote) fail("this provider has no published catalogue to verify the accepted quote against; publish it first");
-  if (localQuote.contentHash !== requestQuote.contentHash) {
-    fail("the request's accepted quote is not the current published quote; ask the consumer to re-read it");
-  }
-  if (localQuote.identity?.fingerprint !== requestQuote.identityFingerprint) {
-    fail("the request's accepted catalogue identity is not this node's current identity");
-  }
-  const localPriceVersion = catalogPriceVersion(
-    (localQuote.models ?? []).filter((m: any) => requestModels.includes(String(m.id))),
-  );
-  if (!localPriceVersion || localPriceVersion !== requestQuote.priceVersion) {
-    fail("the request's accepted price version does not match this node's current quote for those models");
-  }
-  if (requestModels.some((id) => !(localQuote.models ?? []).some((m: any) => String(m.id) === id))) {
-    fail("the request names a model this provider's current quote does not offer");
-  }
+  validateRequestApproval(raw, {
+    provider: { nodeId: status.config?.nodeId ?? null, mappedCidr: status.config?.mappedCidr ?? null, gatewayPort },
+    quote: catalog?.quote ?? null,
+  });
 
   let cap = args.one("cap");
   if (cap === undefined) {

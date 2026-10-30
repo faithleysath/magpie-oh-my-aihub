@@ -1,0 +1,15 @@
+{
+  "schema": "ohmyaihub.phase9-cleanup/v1",
+  "nodeProcessesBefore": 12,
+  "nodeProcessesRemaining": 0,
+  "nodePortsChecked": 27,
+  "allNodePortsFree": true,
+  "additionalOwnedProcessesRemaining": [],
+  "fixtureProcessExited": true,
+  "cookieProbeStoppedAndPrivateDirectoryRemoved": true,
+  "labRootDeleted": true,
+  "egoTaskSpaceClosed": 21,
+  "webKitContextsClosed": true,
+  "userMagpieProfileModified": false,
+  "note": "12 node processes were stopped by verified ownership. Separate fixture stopped through private capability; background process exit code0 observed. Browser contexts and taskspace closed. No raw state/Key/signature files retained in repository."
+}

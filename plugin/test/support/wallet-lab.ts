@@ -190,7 +190,10 @@ export function createLab(opts: { initialLookback?: number } = {}): Lab {
           const lim = st.limit;
           if (!lim) continue;
           out[c.consumerId] = {
-            at: now().toISOString(),
+            // This measures the real Provisioner/Ledger, whose appliedAt uses
+            // wallclock. The controllable chain-expiry clock may be behind it;
+            // stamping that clock here fabricates evidence predating the credit.
+            at: new Date().toISOString(),
             capUsd: lim.costLimit ?? 0,
             usedUsd: lim.cost ?? 0,
             leftUsd: lim.costLeft ?? 0,

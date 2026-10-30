@@ -1,0 +1,33 @@
+{
+  "engine": "WebKit",
+  "version": "27.2",
+  "platform": "darwin",
+  "arch": "arm64",
+  "steps": [
+    {
+      "name": "anonymous browser requires pairing approval",
+      "ok": true
+    },
+    {
+      "name": "Magpie code confirmation and host restart establish new browser session",
+      "ok": true
+    },
+    {
+      "name": "visible settings form invokes production configure with real EasyTier",
+      "ok": true
+    },
+    {
+      "name": "refresh resumes current host cookie session",
+      "ok": true
+    },
+    {
+      "name": "dark theme and mobile layout rendered",
+      "ok": true
+    },
+    {
+      "name": "logout persists refusal across refresh",
+      "ok": true
+    }
+  ],
+  "pass": true
+}

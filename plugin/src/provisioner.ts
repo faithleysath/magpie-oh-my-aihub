@@ -923,7 +923,7 @@ export class Provisioner {
   /** Creates the consumer's key if it does not exist yet, and checks it either way. */
   async ensure(
     consumerId: string,
-    opts: { models: string[]; window?: string; capUsd: number; quoteHash?: string; quotePriceVersion?: string },
+    opts: { models: string[]; window?: string; capUsd: number; quoteHash?: string; quotePriceVersion?: string; beforeApply?: () => void },
   ): Promise<ConsumerView> {
     if (!consumerId || !/^[a-z0-9][a-z0-9._-]{1,40}$/.test(consumerId)) {
       throw new Error("consumerId must be 2-41 characters of a-z0-9._-");
@@ -943,6 +943,8 @@ export class Provisioner {
     const capUsd = assertCap(opts.capUsd);
 
     return this.withLock(consumerId, async () => {
+      // Quote-based approval rechecks after waiting for this consumer's lock.
+      opts.beforeApply?.();
       let rec = this.find(consumerId);
       if (rec?.revokedAt) throw new Error(`consumer ${consumerId} was revoked; create a new consumer id`);
       if (rec) {
@@ -968,6 +970,9 @@ export class Provisioner {
         const keyName = Provisioner.keyName(consumerId);
         const existing = this.magpie.keyByName(keyName);
         let key = existing;
+        // Synchronous check immediately before the first key mutation, after
+        // all awaited price reads. A refusal here must not remove an old key.
+        opts.beforeApply?.();
         try {
           // Magpie's own generated prefix (`sk-magpie-`) may not be passed back
           // through `--key`, so a ledger-managed key gets a plugin-owned
@@ -1015,6 +1020,10 @@ export class Provisioner {
           const again = this.magpie.keyById(rec.keyId);
           if (!again) throw new Error(`key ${rec.keyName} no longer exists in Magpie`);
           rec.secret = again.secret;
+        }
+        opts.beforeApply?.();
+        if (opts.quotePriceVersion && rec.priceVersion !== opts.quotePriceVersion) {
+          throw new Error("the existing consumer price version differs from the accepted quote; reissue explicitly");
         }
         if (JSON.stringify(rec.models) !== JSON.stringify(opts.models)) {
           this.validateModels(opts.models);

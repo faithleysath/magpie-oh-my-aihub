@@ -1,164 +1,52 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Oh My AIHub</title>
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <header>
-      <h1>Oh My AIHub</h1>
-      <p class="sub">
-        让一台 Magpie 把自己已经付过费的模型共享给朋友，或者使用朋友共享出来的 Magpie。没有任何 AI 请求经过本插件。
-      </p>
-    </header>
-
-    <div id="save-banner" class="banner" hidden></div>
-
-    <nav class="toc">
-      <a href="#s1">1 现在在哪一步</a>
-      <a href="#s2">2 我的节点</a>
-      <a href="#s3">3 共享与 Gateway Key</a>
-      <a href="#s4">4 发现与目录</a>
-      <a href="#s5">5 远程提供者</a>
-      <a href="#s6">6 测试网钱包</a>
-      <a href="#settings">本页设置</a>
-    </nav>
-
-    <section id="s1">
-      <h2>1 现在在哪一步</h2>
-      <div id="step"></div>
-      <div id="next"></div>
-      <div class="advanced-only">
-        <h3>诊断（只读）</h3>
-        <p class="muted">
-          Magpie 用 <code>connect-src 'none'</code> 提供插件页：页面不能访问网络，也不能让宿主做事，所有改动都在终端里用命令完成。
-          下面每一项都标明证据来源：<span class="tag local">本地</span> 是这台机器读到的状态，
-          <span class="tag remote">远端实测</span> 是经转发真的打到远端 Magpie 的结果，
-          <span class="tag unknown">未测</span> 是本页确实没有测量过。
-        </p>
-        <div id="checks" class="muted">宿主未提供检查结果。</div>
-        <h3>版本与进程</h3>
-        <div id="versions" class="muted"></div>
-      </div>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Oh My AIHub</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">MAGPIE · 私人 AI 共享</p><h1>Oh My AIHub</h1>
+      <p class="sub">共享自己的 Magpie，或使用朋友的模型。所有设置都在独立浏览器控制台完成，没有 AI 请求经过本插件。</p></header>
+    <section aria-labelledby="entry-title">
+      <h2 id="entry-title">打开控制台</h2>
+      <p>请在运行 Magpie 的这台电脑上操作。控制台只监听本机，不会开放 Magpie 管理界面。</p>
+      <div class="actions"><button type="button" id="open" disabled>打开控制台</button><button type="button" id="reload">刷新状态</button></div>
+      <p id="launch-status" role="status" aria-live="polite">正在读取宿主状态…</p>
+      <p class="muted">按钮会通过 Magpie 官方选项桥请求本机默认浏览器。选项保存会重启插件宿主（所有插件共用的 Bun 进程），覆盖网可能短暂中断。旧宿主忙碌时先由原来的唯一节点处理打开请求，新宿主等待交接；不启动第二个节点。</p>
+      <p class="muted">浏览器页面过期或宿主重启后，请回到这里重新打开。通过远端 Magpie web 访问不能打开你这边的浏览器。</p>
     </section>
-
-    <section id="s2">
-      <h2>2 我的节点</h2>
-      <p class="muted">覆盖网身份、导出地址与 EasyTier 核心；全部是这台机器上读到的状态。</p>
-      <div id="node" class="muted"></div>
+    <section aria-labelledby="pairing-title">
+      <h2 id="pairing-title">在其他浏览器中打开</h2>
+      <p>在你选择的浏览器打开下面的普通地址，点击「配对此浏览器」，再回到本页刷新、核对八位配对码并批准。地址本身不提供登录权限。</p>
+      <p><code id="console-origin">等待控制台启动…</code></p>
+      <p class="muted">远端使用时，先通过你已有的 SSH 端口转发连接同一个端口；这里只接受本机回环连接。浏览器与本页的配对码必须完全一致，切勿批准他人发来的请求。</p>
+      <p id="pairing-status" role="status" aria-live="polite">尚无等待批准的配对。</p>
+      <div id="pairing-requests"></div>
+      <p class="muted">配对请求两分钟内有效。批准会让 Magpie 重启共用插件宿主；待配对请求会保留，浏览器随后建立新会话。已有会话在重启后需要重新登录。</p>
     </section>
-
-    <section id="s3">
-      <h2>3 共享与 Gateway Key</h2>
-      <p class="muted">
-        「开关」「实际在服务」「导出」「Key」是四件独立的事：开关打开不等于真的在服务；被安全规则撤下时，开关仍然是打开的。
-      </p>
-      <div id="sharing" class="muted"></div>
-      <h3>消费者 Key</h3>
-      <div id="consumers" class="muted"></div>
-      <p class="muted">
-        本页<strong>不显示任何 Gateway Key</strong>。交付 Key 用下面的命令，它把 Key 写进你指定的 0600 文件，终端里不打印。
-      </p>
+    <section aria-labelledby="node-title"><h2 id="node-title">本机状态</h2><p id="node-status">尚无状态快照。</p><p id="snapshot-time" class="muted"></p>
+      <p class="muted">本页只显示本地快照，不是实时远端检查；不显示任何 Gateway Key、网络密钥、会话票据或钱包付款对应关系。</p>
     </section>
-
-    <section id="s4">
-      <h2>4 发现与目录</h2>
-      <p class="muted">
-        目录是一份只读的签名 JSON（<code>GET /catalog/v1</code>）。身份是自签 Ed25519（TOFU）：签名只证明同一把私钥签过，
-        不证明对方是谁。指纹显示完整的 64 位十六进制，不做截断。
-      </p>
-      <div id="catalog" class="muted"></div>
-      <h3>目录里的 peer</h3>
-      <div id="directory" class="muted"></div>
+    <section aria-labelledby="prefs-title"><h2 id="prefs-title">打开偏好</h2>
+      <label class="row"><input id="auto-open" type="checkbox" checked /> 首次在本机桌面启用时自动打开一次</label>
+      <p class="muted">只有确认由原生 Magpie 桌面启动时才自动打开；终端、SSH、无桌面环境不自动打开、不循环重试。关闭浏览器标签不会关闭节点。</p>
+      <div class="actions"><button type="button" id="save" disabled>保存偏好</button><span id="saved" role="status" class="muted"></span></div>
     </section>
-
-    <section id="s5">
-      <h2>5 远程提供者</h2>
-      <p class="muted">
-        每台被使用的 Magpie 是一条记录：自己的本地端口、自己的 Gateway Key、自己的状态。
-        <span class="tag remote">远端实测</span> 的行来自经 <code>127.0.0.1:端口</code> 转发真实请求远端
-        <code>/v1/models</code> 与 <code>/v1/magpie/limit</code> 的最近一次结果；
-        <span class="tag local">本地</span> 的行只是本机 EasyTier 与 Magpie 的记录。
-      </p>
-      <div id="providers" class="muted"></div>
-    </section>
-
-    <section id="s6">
-      <h2>6 测试网钱包</h2>
-      <p class="muted">
-        <strong>只有测试网</strong>：下面是测试网络上的 mock 测试代币，不是 USDC、不值钱，也不涉及任何主网资产。
-        本页只显示汇总，不显示付款地址与「谁付了哪笔」的对应关系；那些在终端用 <code>wallet intents</code> /
-        <code>wallet events</code> 查。
-      </p>
-      <div id="wallet" class="muted"></div>
-
-      <h3>怎么拿到资产（外部教程）</h3>
-      <p class="muted">
-        本项目不买、不卖、不兑换、不跨链桥接任何代币：没有购买按钮、没有订单表单、没有交易所集成、没有法币通道。
-        下面两条只是第三方教程的普通超链接，不带任何地址、金额、消费者 ID 或返利参数，点开不会向对方发送本页数据。
-      </p>
-      <ul class="links">
-        <li>
-          <a href="https://www.bnbchain.org/en/blog/moving-from-a-centralized-exchange-to-bnb-chain" target="_blank" rel="noopener noreferrer external">BNB Chain 官方教程</a>
-          —— BNB Chain 官方关于自托管钱包、把资产从交易所转到 BSC 的说明。
-        </li>
-        <li>
-          <a href="https://docs.peer.xyz/guides/zh/alipay-buy" target="_blank" rel="noopener noreferrer external">Peer 中文购买教程</a>
-          —— 第三方教程。
-        </li>
-      </ul>
-      <p class="muted">
-        这两条只是外部教程：它们由第三方独立提供、独立运营，与本项目没有合作、代理或背书关系；教程内容、服务可用性和后果由第三方负责。
-        它们讲的是真实主网资产，<strong>不适用于</strong>上面的测试网 mock 代币，照着做也买不到测试代币。
-        某个服务在你所在地是否合法，取决于当地法律、当地监管与该服务自己的条款，请自行确认；本项目不提供任何兑换或购买渠道。
-      </p>
-    </section>
-
-    <section id="settings">
-      <h2>本页设置</h2>
-      <p class="muted" id="settings-note"></p>
-      <form id="form" autocomplete="off">
-        <fieldset id="wizard" class="advanced-only">
-          <legend>首次配置（没有终端时的等价入口）</legend>
-          <p class="muted">
-            推荐在终端执行 <code>share setup</code>（共享）或 <code>connect --key-file …</code>（使用别人的）。
-            这个表单做同一件事：值写进 Magpie 的插件选项，宿主下次启动时用它建立覆盖网。
-            一旦有了网络配置，本页就不再写入网络设置——它属于配置，用 CLI 改，免得把命令行改过的结果覆盖掉。
-          </p>
-          <label class="row">网络名称 <input name="networkName" placeholder="magpie-lab" /></label>
-          <label class="row">
-            网络密钥 <input name="networkSecret" type="password" placeholder="留空＝保留已保存的密钥" />
-            <span id="secret-state" class="muted"></span>
-          </label>
-          <label class="row">初始 peer <input name="peers" placeholder="tcp://relay.example.com:11010" /></label>
-          <label class="row">监听地址 <input id="listen-addr" aria-label="监听地址" placeholder="留空＝只拨号；或 127.0.0.1:11010" /></label>
-          <label class="row"><input name="secureMode" type="checkbox" checked /> Secure Mode（持久化 X25519 身份）</label>
-          <label class="row"><input name="sharingEnabled" type="checkbox" /> 共享这台 Magpie（把网关发布到覆盖网）</label>
-          <label class="row"><input name="consumingEnabled" type="checkbox" /> 使用别人的 Magpie</label>
-        </fieldset>
-        <fieldset id="prefs">
-          <legend>本页偏好（随时可写，由本页自己使用）</legend>
-          <label class="row"><input name="showAdvanced" type="checkbox" /> 显示诊断、细节行与首次配置表单</label>
-        </fieldset>
-        <div class="actions">
-          <button type="button" id="save">保存</button>
-          <button type="button" id="reload">Reload 快照</button>
-          <span id="saved" class="muted"></span>
-        </div>
-      </form>
-      <p class="muted">
-        保存会写入本插件的选项，并让 Magpie 重启插件宿主（所有插件共用的 Bun 进程）。宿主退出时会停掉它启动的 EasyTier 核心，
-        所以覆盖网和本地运维 API 会消失几秒；Magpie 只在有人调用时才会重新启动宿主（打开本页就会）。
-        重载后看诊断里的 <code>pid</code> 与 <code>startedAt</code> 就知道重启是否真的发生了。
-      </p>
-    </section>
-
-    <script src="_magpie/bridge.js"></script>
-    <script src="options.js"></script>
-    <script src="status.js"></script>
-    <script src="settings.js"></script>
-    <script src="app.js"></script>
-  </body>
+    <details><summary>测试网与外部教程</summary>
+      <p>只有测试网：mock 测试代币不是 USDC、不值钱。本项目不买、不卖、不兑换、不跨链桥接任何代币。</p>
+      <ul><li><a href="https://www.bnbchain.org/en/blog/moving-from-a-centralized-exchange-to-bnb-chain" target="_blank" rel="noopener noreferrer external">BNB Chain 官方教程</a></li>
+      <li><a href="https://docs.peer.xyz/guides/zh/alipay-buy" target="_blank" rel="noopener noreferrer external">Peer 中文购买教程</a></li></ul>
+      <p class="muted">上述主网教程不适用于测试网代币。第三方独立运营，与本项目没有合作、代理或背书关系，内容与服务由第三方负责，适用范围取决于当地法律。</p>
+    </details>
+  </main>
+  <script src="_magpie/bridge.js"></script>
+  <script src="options.js"></script>
+  <script src="status.js"></script>
+  <script src="launcher.js"></script>
+  <script src="settings.js"></script>
+  <script src="app.js"></script>
+</body>
 </html>

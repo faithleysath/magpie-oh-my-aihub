@@ -1,0 +1,38 @@
+{
+  "at": "2026-10-30T12:22:40.793Z",
+  "engine": "WebKit",
+  "version": "27.2",
+  "expectedCommit": "cf9833e8ca931fe48b244a0cc24c54441a2c258e",
+  "steps": [
+    {
+      "name": "consumer GitHub plugin updated through Magpie GUI to cf9833e",
+      "ok": true
+    },
+    {
+      "name": "provider2 GitHub plugin updated through Magpie GUI to cf9833e",
+      "ok": true
+    },
+    {
+      "name": "final provider build authorized through explicit native pairing",
+      "ok": true
+    },
+    {
+      "name": "selected-consumer immutable usage records rendered with price/window/token evidence",
+      "ok": true
+    },
+    {
+      "name": "actual WebKit rejects CSRF/unknown API and exposes no JS cookie or persistent app storage",
+      "ok": true
+    },
+    {
+      "name": "final logout requires fresh authorization",
+      "ok": true
+    }
+  ],
+  "security": {
+    "missingCsrf": 403,
+    "unknownApi": 404,
+    "persistentAppStorage": false
+  },
+  "pass": true
+}

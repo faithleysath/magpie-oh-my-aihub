@@ -142,12 +142,11 @@ describe("the page's product claims", () => {
   });
 
   test("there is no buy, swap, bridge or fiat affordance", () => {
-    // The page has exactly two buttons — the snapshot reload and this plugin's own
-    // settings Save — and neither can move money: the form writes plugin options,
-    // nothing else. The wallet section is rendered as tables.
+    // The native page opens the local console, refreshes its public snapshot,
+    // or saves a launcher preference. None of these controls can move money.
     const buttons = [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1]!.replace(/<[^>]+>/g, "").trim());
-    expect(buttons).toEqual(["保存", "Reload 快照"]);
-    for (const id of ["save", "reload"]) expect(html).toContain(`id="${id}"`);
+    expect(buttons).toEqual(["打开控制台", "刷新状态", "保存偏好"]);
+    for (const id of ["open", "save", "reload"]) expect(html).toContain(`id="${id}"`);
     for (const word of ["Buy", "Swap", "Bridge", "Purchase", "Pay now", "立即购买", "兑换", "跨链桥", "下单"]) {
       expect(html).not.toContain(`>${word}`);
       expect(app).not.toContain(`">${word}`);

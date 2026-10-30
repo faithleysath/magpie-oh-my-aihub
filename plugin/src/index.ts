@@ -14,8 +14,12 @@
 
 import { logger } from "./log.ts";
 import { Magpie } from "./magpie.ts";
-import { resolveMagpieBin } from "./paths.ts";
-import { acquireHostLock } from "./lock.ts";
+import { resolveMagpieBin, statePath } from "./paths.ts";
+import { ownsProcess } from "./easytier.ts";
+import { waitForHostLock, type HostLock } from "./lock.ts";
+import { startConsoleServer, type ConsoleServer } from "./console-server.ts";
+import { CONSOLE_ACTIONS, consoleAction, consoleState } from "./console-api.ts";
+import { readConsolePort, saveConsolePort, readOwnPluginOptions, startConsoleLauncher, publishUnavailableLauncher } from "./console-launch.ts";
 import { Service } from "./service.ts";
 import { startApi } from "./server.ts";
 import {
@@ -41,6 +45,7 @@ interface PluginInput {
 interface Running {
   service: Service;
   api: { port: number; stop: () => void };
+  console?: ConsoleServer;
 }
 
 const g = globalThis as unknown as { __ohMyAIHub?: Promise<Running>; __ohMyAIHubStopped?: boolean };
@@ -48,21 +53,73 @@ const g = globalThis as unknown as { __ohMyAIHub?: Promise<Running>; __ohMyAIHub
 /** Starts the plugin once per host process. */
 export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<Running> {
   if (g.__ohMyAIHub) return g.__ohMyAIHub;
+  let failedBootCleanup: (() => Promise<void>) | undefined;
   g.__ohMyAIHub = (async () => {
     const bin = resolveMagpieBin();
     const magpie = new Magpie(bin);
     const version = magpie.version();
     logger.info(`plugin boot: magpie ${version} (${bin}), cwd ${process.cwd()}`);
 
-    const lock = acquireHostLock();
-    if (!lock) {
-      logger.info("another plugin host already owns this Magpie data directory; standing by (no supervisor, no API)");
-      return { service: null as unknown as Service, api: { port: 0, stop: () => {} } };
-    }
-    process.on("exit", () => lock.release());
+    let lock: HostLock | null = null;
+    let service: Service | undefined;
+    let api: { port: number; stop(): void } | undefined;
+    let consoleServer: ConsoleServer | undefined;
+    let launcher: ReturnType<typeof startConsoleLauncher> | undefined;
+    let stopped = false;
+    const parentPid = process.ppid;
+    const parentGone = () => {
+      if (parentPid <= 1 || process.ppid !== parentPid) return true;
+      try { process.kill(parentPid, 0); return false; }
+      catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+    };
+    const isStopped = () => stopped || parentGone();
+    const ensureRunning = () => { if (isStopped()) throw new Error("plugin host stopped before startup completed"); };
+    const shutdown = () => {
+      stopped = true;
+      launcher?.stop(); consoleServer?.stop(); api?.stop();
+      const pid = service?.supervisor.snapshot().pid;
+      const configPath = statePath("easytier", "current.toml");
+      if (pid && ownsProcess(pid, configPath)) {
+        try { process.kill(pid, "SIGTERM"); } catch { /* gone */ }
+        for (let i = 0; i < 50 && ownsProcess(pid, configPath); i++) Bun.sleepSync(100);
+        if (ownsProcess(pid, configPath)) {
+          try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+        }
+      }
+    };
+    const onExit = () => { try { shutdown(); } finally { lock?.release(); } };
+    const onSignal = () => { stopped = true; process.exit(0); };
+    // Install before ownership wait, Service construction, or any async startup.
+    process.on("exit", onExit);
+    process.on("SIGTERM", onSignal); process.on("SIGINT", onSignal);
+    const orphanWatch = setInterval(() => {
+      if (parentGone()) { stopped = true; process.exit(0); }
+    }, 500);
+    orphanWatch.unref?.();
+    failedBootCleanup = async () => {
+      stopped = true;
+      launcher?.stop(); consoleServer?.stop(); api?.stop();
+      try { if (service) await service.stop(); }
+      finally {
+        shutdown(); lock?.release(); clearInterval(orphanWatch);
+        process.off("exit", onExit); process.off("SIGTERM", onSignal); process.off("SIGINT", onSignal);
+      }
+    };
+    ensureRunning();
+    let announced = false;
+    lock = await waitForHostLock({ stopped: isStopped, waiting: () => {
+      if (!announced) logger.info("existing plugin owner is draining; waiting without starting another supervisor or API");
+      announced = true;
+    } });
+    ensureRunning();
+    if (!lock) throw new Error("existing plugin owner did not release within 11 minutes; reopen the plugin page to retry");
+    // options.set retires a shared host. Read the latest official options only
+    // after ownership transfers, not the potentially 10-minute-old input blob.
+    optionsRaw = readOwnPluginOptions() ?? optionsRaw;
 
     const startedAt = new Date().toISOString();
-    const service = new Service({ magpie, magpieVersion: version });
+    service = new Service({ magpie, magpieVersion: version });
+    ensureRunning();
 
     // What to do with plugins.json's options is decided in plugin-options.ts:
     // seed a node that has no configuration, apply a *new* save as a patch of
@@ -94,6 +151,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
       );
       try {
         await service.configure(decision.patch as Parameters<Service["configure"]>[0]);
+        ensureRunning();
         // Read back: a key this plugin does not actually accept must not pass
         // silently, so the seed has to be visible in the stored configuration.
         const cfg = service.config();
@@ -127,9 +185,36 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
 
     // configure() applies an overlay patch; every fresh host must also recover
     // issued keys, reconcile Remote Magpies and start its chain watchers.
+    ensureRunning();
     await service.start();
+    ensureRunning();
 
-    const api = startApi({ port: opt.apiPort ? Number(opt.apiPort) : undefined, service });
+    api = startApi({ port: opt.apiPort ? Number(opt.apiPort) : undefined, service });
+    try {
+      const consoleOptions = {
+        port: readConsolePort(),
+        state: () => consoleState(service!),
+        action: (name: string, body: Record<string, unknown>) => consoleAction(service!, name, body),
+        allowedActions: CONSOLE_ACTIONS,
+        sensitiveActions: ["key-reveal"],
+        staticModules: ["/session.js", "/providers.js", "/wallet.js"],
+        pairingFile: statePath("console-pairing.json"),
+      };
+      consoleServer = startConsoleServer(consoleOptions);
+      saveConsolePort(consoleServer.port);
+      launcher = startConsoleLauncher({
+        port: consoleServer.port, issueTicket: () => consoleServer!.issueTicket(), options: optionsRaw,
+        pendingPairings: () => consoleServer!.pendingPairings(),
+        approvePairing: (id, code) => consoleServer!.approvePairing(id, code),
+      });
+    } catch {
+      // Opening the UI must never stop the overlay or leak a secret URL in an
+      // error. A fresh explicit page request can recover on the next host.
+      consoleServer?.stop();
+      consoleServer = undefined;
+      try { publishUnavailableLauncher(); } catch { /* snapshot is best effort */ }
+      logger.warn("local console could not start; overlay and script API remain running");
+    }
     service.writeSnapshot();
     writePageOptions(
       pageOptionsView({
@@ -145,40 +230,16 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
       }),
     );
 
-    // Disabling the plugin (or quitting Magpie) stops the EasyTier this host
-    // started: a plugin that is off must not leave a VPN behind. A core that
-    // survives a crash is adopted by the next host instead.
-    const shutdown = () => {
-      const pid = service.supervisor.snapshot().pid;
-      if (pid) {
-        try {
-          process.kill(pid, "SIGTERM");
-        } catch {
-          /* already gone */
-        }
-      }
-    };
-    process.on("exit", shutdown);
-    // A host can outlive the Magpie that started it (Magpie's host outlives the
-    // request; a killed Magpie leaves it reparented). Without this, disabling the
-    // plugin or quitting Magpie would leave the VPN running with nobody to stop
-    // it, and the host lock would keep the next Magpie out.
-    const orphanWatch = setInterval(() => {
-      if (process.ppid <= 1) {
-        logger.info("Magpie is gone (reparented); stopping the supervisor and exiting");
-        shutdown();
-        process.exit(0);
-      }
-    }, 5000);
-    orphanWatch.unref?.();
-    for (const sig of ["SIGTERM", "SIGINT"] as const) {
-      process.on(sig, () => {
-        shutdown();
-        process.exit(0);
-      });
-    }
-    return { service, api };
-  })();
+    ensureRunning();
+    return { service, api, console: consoleServer };
+  })().catch(async (error) => {
+    // A failed startup must stop its partial Service before another boot can
+    // take ownership. Cleanup failure deliberately leaves the lock fail-closed.
+    try { await failedBootCleanup?.(); } catch { /* synchronous owned-process fallback already ran */ }
+    // Do not memoize a permanent standby/rejected boot.
+    delete g.__ohMyAIHub;
+    throw error;
+  });
   return g.__ohMyAIHub;
 }
 

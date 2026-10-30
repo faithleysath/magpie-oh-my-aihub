@@ -1,451 +1,119 @@
-# Operations — the daily loop, anomalies, exit and recovery
+# 日常操作：浏览器控制台
 
-This is the day-to-day guide for a Magpie user whose node has already completed
-[onboarding](ONBOARDING.md). It keeps Magpie as the only AI data path and the only charging point;
-the plugin never proxies a request.
+首次安装和双方申请/授权交接见[首次使用](ONBOARDING.md)。日常操作在独立控制台完成；备份、灾难恢复、自动化和维护者命令集中在[高级 CLI 参考](ADVANCED-CLI.md)，不是普通用户的前置步骤。
 
-**Safety rules**
+本轮已实测 Magpie 0.1.2171 + EasyTier 2.6.4 的双节点 GUI 安装/更新、网络、授权文件、原生 Remote Magpie 与 Test models 的 200→429；使用受控模拟模型上游。Ego 已通过 BSC/Base 受控本地模拟 RPC、实际 EIP-712 合成外部签名、生产观察器/账本/原生额度（1.0001→2.0001）、重复扫描、无签名账单与 RPC503未知状态；WebKit 完成9步真实 UI 钱包流程，新增0.5 BSC模拟入账、最终性、重放和原生 Test models200。WebKit 第二提供方完整手动流程，以及字面注入不执行、暂停第二方时第一方仍200和恢复均通过。详见[共享报告](validation/phase9-stage2.md)、[钱包报告](validation/phase9-wallet.md)、[WebKit钱包记录](validation/phase9-browser/webkit-wallet.json)和[安全报告](validation/phase9-security.md)。这些是明确标记的本地模拟金融路径，**不是新的公链付款**；最终环境清理与全面结论由最终报告记录。
 
-- Testnet only for chain credit. Real funds are NO-GO.
-- Never expose Magpie's administrative interface (`magpie web` or `/api/*`), even to overlay members.
-  Do not use `magpie web --lan`, and do not share the plugin page URL or screenshots: the page is a
-  capability URL and its snapshot can contain operator/accounting data.
-- A Gateway Key is a bearer secret. Do not paste it into a ticket, a screenshot or a chat. Use the
-  0600-file handover path (`share handover` / `remote add --key-file`), not `--key` on the command
-  line.
-- Stop Magpie completely before copying its data directory. A live SQLite copy can be inconsistent.
-- Do not hand-edit `state.json`, `consumers.json`, `caller-keys.json`, `providers.json` or the
-  generated EasyTier TOML. Use the CLI/page; a hand edit can silently change what a key can reach.
+## 打开、更新与退出
 
-The examples use `~/.config/magpie`; substitute the real Magpie data directory (a portable Magpie
-uses its own `data/`).
+从 Magpie 的 **Oh My AIHub → 打开控制台**进入。其他浏览器使用插件页显示的普通回环地址，选 **配对此浏览器**，再回 Magpie 刷新、比对完整八位码并手动批准。控制台普通地址不是登录凭据。
 
-## 1. The daily check
+原生插件页保存打开请求、偏好或批准会重启**所有插件共用的宿主**，忙碌旧宿主可能先完成工作再交接。已有控制台会话在宿主重启后失效；待配对预授权会保留到到期或消费。不要在重要模型请求进行中反复提交原生页保存。
 
-Run these from the repository root (or use the installed plugin path). A shell function keeps paths
-with spaces and repeated `--data` correct in zsh and bash:
+控制台中的网络、模型、申请、授权和账目按钮直接调用现有 Service，不通过保存 Magpie 插件选项或运行 CLI 执行。网络参数、目录监听、移除或重定向连接可能重启同一个 EasyTier 核心，因此其他连接可短暂中断。
 
-```sh
-REPO="$HOME/Projects/magpie-oh-my-aihub-import"
-MAGPIE_DATA="$HOME/.config/magpie"
-ohmyaihub() { bun "$REPO/plugin/bin/ohmyaihub.ts" --data "$MAGPIE_DATA" "$@"; }
+关闭标签页不停止节点；**退出会话**结束当前浏览器权限。要停用插件，从 Magpie Plugins 页面关闭 Oh My AIHub；它会结束自己管理的网络与服务。更新也从 Magpie Plugins 页面执行，完成后重新打开或配对。
 
-ohmyaihub status                 # JSON summary: both capabilities, node, export, peers, checks
-ohmyaihub checks                 # PASS/FAIL; exits 1 on any failure
-ohmyaihub setup --check          # read-only preflight: host, Magpie, EasyTier, LAN
-ohmyaihub accounting             # periodic accounting state, failures, paused consumers, serving
-ohmyaihub remote list            # one line per remote provider, status and native limit
-ohmyaihub consumers              # provider-owned keys, cap, used, ledger balance, pause
-ohmyaihub wallet status          # only if a testnet chain is enabled; per-consumer view
-```
+## 看懂状态
 
-What to look for:
-
-| Field | Healthy | What it means |
+| 页面或状态 | 应怎样理解 | 下一步 |
 | --- | --- | --- |
-| `checks` | every line `PASS`, exit 0 | The effective ACL, gateway 401, mapped prefix, published port, key scoping, provider ownership and forwards were verified |
-| `sharingActive` | `true` while sharing | The export is published; `false` can mean sharing is off or the safety guard withdrew it |
-| `shareSuspended` | `null` | A non-null value is a fail-closed withdrawal with a reason; see §3 |
-| `accounting.uncertain` | `false` | A failed accounting check; after the failure budget the export is withdrawn |
-| `accounting.paused` | `[]` | A consumer is paused for a price/window/log reason; see §2 |
-| `providers[].status` | `connected` | `degraded` is that provider only; other providers keep working |
-| `consumers[].paused` | `null` | A non-null pause includes the enforcement level; only `keyRevoked`/`secretRotated` are enforced |
-| `wallet.chains[].lastError` | `null` | A chain RPC/scan error; it does not stop the other chain |
-| `wallet.totals.unclaimed/uncertain` | `0` unless there is a real anomaly | These are never credited automatically |
-
-Do not use `magpie gateway-key limit reset` or `limit off` to "fix" a spent key. A reset erases
-usage and breaks the ledger; `topup` raises the same key's cumulative cap.
-
-## 2. Balance anomalies
-
-The plugin's ledger is the balance of record. It never silently adjusts or reconstructs a charge.
-
-### 2.1 A paused consumer
-
-`consumers` shows a `paused` reason. The common cases:
-
-| Reason | Meaning | Action |
-| --- | --- | --- |
-| `price-mismatch` | Magpie's effective price differs from the accepted version | Confirm the new price; run `consumers reissue <id> --accept-price-version <sha256>`. Settled usage stays at its old snapshot |
-| `window-rollover` | The native limit window ended or differs from the ledger's | `consumers reissue <id>`; it imports the old window, closes it, and issues a new key with the ledger balance |
-| `unpriced` | A shared model has no complete effective price | Fix the model price in Magpie; then `consumers reissue <id>`. Do not hand out a key for an unpriced model |
-| `overdraft` / `dust` | The balance is negative or below $0.0001 | Do not issue a key; top up or write off explicitly; a reissue will keep the consumer paused |
-| `log-gap` | `usage.jsonl` shrank, disappeared or had an unparsable line | Do not guess. Audit the log, then `consumers resolve-gap <id> --log-id <id> --by <who> --note <what happened>`; a reissue is refused until then |
-| `manual` with detail `chain-reorg: …` | A credited deposit's block hash moved | The deposit stays for audit and the consumer is frozen; review `wallet anomalies`; reissue only after the reorg is understood |
-| `manual` | Recovery found a ledger window with no key, or a key changed outside the plugin | Keep the balance; explain the missing/foreign key before issuing a new one |
-| `drift` | Native used and the ledger's recorded consumption differ beyond tolerance | Do not reset Magpie usage; inspect the usage log and ledger, then reissue only after the evidence is understood |
-
-`consumers reissue` may return a new secret for a legacy `sk-magpie-…` key. Hand the new secret over;
-a plugin-owned `sk-ohmy-…` key keeps its secret. A window boundary is not a top-up; `reissue` carries
-the recorded balance, never `old cap + amount`.
-
-### 2.2 Accounting uncertainty
-
-```sh
-ohmyaihub accounting
-ohmyaihub status
-ohmyaihub checks
-```
-
-- `uncertain: true` or `failures > 0` means a check threw, timed out or could not read
-  `GET /v1/magpie/limit`. An unreadable limit endpoint is a **failed** check, not a healthy one.
-- After the failure budget the export is withdrawn (`serving: false`). Fix the Magpie/gateway first.
-- Do not reissue a consumer while its charges are `ledgerUncertain`; a read outage is not proof of
-  fraud, but it is not a pass either.
-- A pause whose enforcement is `capRestricted` or `safetyUncertain` did **not** fully stop a local
-  caller. The export is withdrawn and the status says so; do not report the consumer as stopped.
-
-### 2.3 Sharing suspended
-
-`checks` shows `sharing-suspended` when Magpie's provider list cannot be read or a shared key names a
-model that is not native/allowed. The export and Forward chain are withdrawn; no key is revoked on a
-transient read error.
-
-1. Inspect `status.config.nativeProviders`/`remoteProviders`, `plugin.log`, and Magpie's own
-   provider list.
-2. Fix the provider entry or the share allow list. Do not delete a provider that a consumer is using.
-3. Run `ohmyaihub guard` (or wait for the reconcile pass), then `ohmyaihub checks`.
-4. Sharing republishes only when the guard can prove every issued key is native and allowed.
-
-### 2.4 Spent, revoked and exhausted
-
-- `spent: true` / a native `429` means the key's cap is exhausted. `topup <consumer> <usd>
-  --deposit-id <unique>` raises the same cap; a replayed deposit id is a no-op. A native window
-  boundary is **not** an automatic refill: it pauses the consumer as `window-rollover`, and the
-  provider must run `consumers reissue <id>` (accepting a price version if it changed). Waiting for
-  the next window does not restore the key.
-- `revoked` means the key was removed and its secret wiped. A revoked consumer id cannot be reused;
-  create a new id and hand over a new key.
-- A `401` with a key that should work means the key was revoked, rotated or never handed over. Re-run
-  `share handover` on the provider, then `remote update-key <id> --key-file <file>` on the consumer.
-
-### 2.5 Chain anomalies
-
-```sh
-ohmyaihub wallet status
-ohmyaihub wallet networks
-ohmyaihub wallet assets
-ohmyaihub wallet intents
-ohmyaihub wallet events
-ohmyaihub wallet anomalies
-ohmyaihub wallet statement <consumer> --out "$HOME/<consumer>-statement.json"
-ohmyaihub wallet resolve <id> --note '<what you checked>'
-```
-
-- **unclaimed** — the transfer did not match a signed intent (unsigned payer, exchange withdrawal,
-  wrong amount/recipient/chain). It is never credited. Do not send a second payment to "fix" it.
-- **uncertain** — two or more candidates match, or an event is ambiguous. It is never credited.
-- **reverted** — a credited event's block hash moved; the deposit stays, the consumer is frozen.
-- **finalized but not credited** — the credit path/ledger is waiting; run `wallet scan <chainId>`,
-  then check `wallet credit <consumer>` and `status`. A retry is bounded per tick; a backlog drains
-  over several scans.
-- **RPC error / no head** — fix the endpoint in `wallet network <chainId> --rpc …`; the other chain
-  is independent. A chain that cannot answer never finalises under a `finalized` policy.
-- **Cap write failed after the deposit was booked** — keep the same deposit and retry the credit
-  path (`wallet scan`, then `wallet credit`); do not create a second deposit. A reorg still freezes
-  the consumer and keeps the deposit for audit. Historical `failed` rows do not automatically turn
-  back into credits; they need a manual audit.
-- A chain's configured finality is not a suggestion. BSC testnet uses 15 confirmations; Base
-  Sepolia waits for the real `finalized` tag (~17–24 minutes). Do not resend while waiting.
-
-The wallet wizard and watcher run on the **provider** node. The consumer only signs the typed data
-externally and sends back a `signature`/`payerAddress` file; the consumer does not run the provider's
-wizard and does not access the provider's loopback API. The provider then resumes with
-`wallet wizard --batch --invoice <id> --signature-file <file>` and sends the exact transfer instructions.
-`wallet statement` is an **unsigned** file with a digest; it proves only that the file was not
-edited by hand, not that a payment happened. `wallet resolve` records an operator note; it does not
-create credit, adjust a balance or delete a deposit. That is deliberate.
-
-## 3. Stop sharing, revoke and remove a provider
-
-### 3.1 Provider: stop sharing
-
-```sh
-ohmyaihub share off
-ohmyaihub checks
-```
-
-This withdraws the export, the Forward chain and the published catalogue. It deletes **nothing** in
-Magpie: local providers, models and issued Gateway Keys stay. A remote consumer can no longer reach
-the gateway, but a key that leaked may still work on a local/LAN caller; revoke keys if the stop is
-about access, not just publication.
-
-To pause all new business temporarily, `share off` is enough. To stop one consumer:
-
-```sh
-ohmyaihub revoke alice
-ohmyaihub consumers
-ohmyaihub checks
-```
-
-`revoke` removes the key from Magpie and wipes the stored secret. It is not reversible and the same
-consumer id cannot be reused. If removal fails, the command reports it; inspect Magpie's key list and
-retry; do not assume the key is gone.
-
-To resume:
-
-```sh
-ohmyaihub share on
-ohmyaihub checks
-```
-
-A new `share on` republishes the same persisted export/mapped address, so existing consumers can
-reconnect. A key revoked while sharing was off is still revoked.
-
-### 3.2 Consumer: remove one remote provider
-
-```sh
-ohmyaihub remote remove peer-p
-ohmyaihub remote list
-ohmyaihub checks
-```
-
-This removes C's loopback forward, the Remote Magpie entry the plugin owns and C's stored key. It
-does **not** revoke the key at P; ask P to `revoke` that consumer. Other providers are re-verified
-and keep working. A failed removal leaves a recorded orphan; the next core start drops it.
-
-`consume off` unregisters every plugin-owned Remote Magpie and drops the forwards, but keeps the
-connection records and keys so `consume on` can restore them. A provider added by hand in Magpie is
-never touched.
-
-### 3.3 Retarget or rotate a provider key
-
-```sh
-ohmyaihub remote update-key peer-p --key-file "$HOME/peer-p-new.key"
-ohmyaihub provider update peer-p --cidr 10.66.12.35/32 --port 3425   # retarget; no key on argv
-ohmyaihub remote test peer-p
-ohmyaihub remote list
-```
-
-A key update proves the new key before replacing the registration. A CIDR/port change moves to a
-fresh loopback port and restarts EasyTier once so the old listener is gone; other providers' in-flight
-requests may be interrupted and recover immediately. A failed switch restores the old registration.
-Reusing the same loopback port for a new target is refused (EasyTier 2.6.4 cannot retarget a live
-forward).
-
-## 4. Leave the network or remove the plugin
-
-### 4.1 Provider leaving
-
-1. `share off` (cut publication first).
-2. `revoke` every consumer listed by `consumers`.
-3. `catalog publish off` if the catalogue is on.
-4. `remote remove` every remote provider if this node also consumes.
-5. `consume off`.
-6. `ohmyaihub stop` (stop the EasyTier supervisor).
-7. `magpie plugin off <spec>` (find the spec with `magpie plugin list`).
-8. Quit Magpie completely; verify no plugin host or `easytier-core` process remains.
-9. Keep a backup; only then remove `<magpie data>/oh-my-aihub/`. `magpie plugin rm <spec>` removes
-   the installed plugin package.
-
-### 4.2 Consumer leaving
-
-1. `remote remove` every remote provider.
-2. `consume off`.
-3. `catalog discover off`.
-4. `ohmyaihub stop`.
-5. `magpie plugin off <spec>`; quit Magpie.
-6. Ask each provider to `revoke` your consumer id. Removing your provider does not revoke the key at
-   the provider.
-
-### 4.3 Changing or leaving the overlay
-
-There is no separate "leave network" command. A node leaves by stopping its EasyTier core and
-removing its provider/catalog state; it joins a different network by configuring the new name,
-secret and peers. Because the node id and mapped address are persisted, do not run the old and new
-copies at the same time.
-
-To rotate the overlay secret, keep the existing provider records and keys unless they are actually
-broken:
-
-1. `share off` to stop new remote ingress. Do **not** remove every remote provider or revoke keys
-   just to rotate the overlay.
-2. On every node, run `setup --reconfigure --secret-file <0600 file>` with the same new secret. The
-   page cannot change a configured node's network; use the CLI. This restarts EasyTier.
-3. `share on`; on each consumer run `remote recover` so the existing records reconnect. A provider
-   that is still stale after both sides have the new secret can be updated/removed individually;
-   keys are not part of the overlay secret.
-
-If the secret itself leaked, rotate it this way and treat any exposed Gateway Key separately
-(`revoke`/`share handover`).
-
-Removing the plugin does not remove Magpie's own providers, models or Gateway Keys. Remove those in
-Magpie deliberately, or keep them for a later reinstall.
-
-## 5. Backup and restore
-
-There is no supported `backup` command in this release. Use this stopped-host procedure.
-
-### 5.1 What must be in the backup
-
-Back up the **whole Magpie data directory**, not just `oh-my-aihub/`. The plugin's ledger and chain
-store must match Magpie's own keys, providers and usage:
-
-- `oh-my-aihub/` — `state.json`, `provider-keys.json`, `consumers.json`, `ledger.sqlite`,
-  `networks.json`, `chain.sqlite`, catalogue identity/trust, EasyTier state, logs;
-- Magpie's `caller-keys.json`, `providers.json`, `settings.json`, `usage.jsonl`;
-- the installed plugin state/config (`plugins.json`/`plugins.yml`, depending on the Magpie version)
-  and any `plugins/` package that must be restored.
-
-A backup contains Gateway Keys, the network secret, the ledger and the chain store. Treat it as a
-secret. Encrypt it at rest and keep it off the repository.
-
-### 5.2 Make a backup
-
-```sh
-# 1. Stop publication and the host, then quit Magpie completely.
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie share off
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie stop
-magpie plugin off <spec>
-# Quit the Magpie app/menu bar; do not leave the plugin host alive.
-pgrep -fl 'easytier-core|ohmyaihub|plugin/src/index.ts' || true
-
-# 2. Copy the whole config directory. Use a private umask.
-umask 077
-tar -C ~/.config -czf "$HOME/magpie-backup-$(date +%F-%H%M).tgz" magpie
-chmod 600 "$HOME"/magpie-backup-*.tgz
-# Encrypt with your normal tool (age/gpg) before moving it off the machine.
-```
-
-If the node uses a portable Magpie, archive its `data/` directory instead of `~/.config/magpie`.
-Do not copy a live `ledger.sqlite`/`chain.sqlite` while the host is running.
-
-**Restore to the same absolute path.** The ledger identifies Magpie's usage log by a hash of the
-log's resolved absolute path (`usageLogId`). Restoring the same files under a different root can make
-the ledger see a different log and re-identify/re-read usage. Moving a ledger to a new directory is
-**untested and unsupported**; this procedure restores to the original Magpie data path. This is a
-documentation constraint, not a change to the ledger algorithm.
-
-### 5.3 Restore
-
-```sh
-# 1. Stop Magpie and all plugin/EasyTier processes.
-magpie plugin off <spec>        # if the current install still has it
-# Quit Magpie; verify with pgrep as above.
-# After a restore, re-enable it explicitly; starting Magpie alone does not turn an off plugin on.
-
-# 2. Move the current directory aside instead of deleting it.
-mv ~/.config/magpie ~/.config/magpie.before-restore-$(date +%F-%H%M)
-mkdir -p ~/.config
-
-# 3. Extract the backup and keep it private.
-umask 077
-tar -C ~/.config -xzf "$HOME/magpie-backup-YYYY-MM-DD-HHMM.tgz"
-chmod -R go-rwx ~/.config/magpie
-
-# 4. Re-enable the plugin, then start Magpie and open the page once so the host starts.
-magpie plugin on <spec>
-# Start Magpie, open the plugin page once, wait for the host, then verify.
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie setup --check
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie status
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie checks
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie accounting
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie remote list
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie consumers
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie wallet
-```
-
-Then make one real test call and compare the ledger balance with the backup. The restore is only
-verified when:
-
-- `checks` passes (ACL, gateway 401, mapped prefix, keys, providers, forwards);
-- `accounting` is not uncertain and the paused list is what you expect;
-- the same consumer key still answers 200 and the ledger balance is unchanged;
-- a duplicate wallet scan adds zero credits.
-
-### 5.4 Restore caveats
-
-- **Restore to the original absolute Magpie data path.** Do not treat this as a directory-migration
-  procedure: the ledger's usage-log identity is tied to the resolved path, and a new root may be read
-  as a different log. Cross-root migration is untested and unsupported.
-- Do not run the original and the restored copy at the same time on the same overlay. They share the
-  node id, virtual IP and mapped CIDR; two copies can steal routes and double-serve.
-- A backup from an older plugin/Magpie version may migrate on first start. Read the log and the
-  migration backup; do not delete the old directory until the migration is verified.
-- `easytier/` contains platform-specific binaries. Restoring on a different OS/architecture may
-  require removing that folder and letting the plugin download and SHA-256 verify the pinned build.
-- Restoring only `oh-my-aihub/` without Magpie's `caller-keys.json`/`providers.json`/`usage.jsonl`
-  can leave the ledger ahead of or behind Magpie. That is why the whole config directory is the
-  unit of backup.
-- A stale `host.lock` is taken over only when its owner is gone. Make sure no old host is still
-  running before starting the restored copy.
-
-## 6. Troubleshooting
-
-Start with `checks`, then `status`, then `plugin.log`. The log redacts registered secrets and
-`sk-…` patterns, but treat the whole file as sensitive.
-
-| Symptom | Likely cause | Action |
-| --- | --- | --- |
-| `checks` exits 1 on `core-running` | EasyTier failed to start or was stopped | `stop`, then `start`; read the detail and `plugin.log`; check the pinned binary hash/cache |
-| `acl` fails | Running core does not match the generated ACL, or a hand edit changed the TOML | Do not edit the TOML; `stop`/`start`; if it persists, keep the log and report the generated/current values |
-| `gateway-key-required` fails | Magpie is loopback-only, wrong port, or another process owns the port | Enable LAN sharing; fix `--ports`; `checks` detail names the URL/port |
-| `mapped-cidr` fails | The export is not announced, or the core is down | Check the peer/route, `share on`, `remote list`; wait for reconcile |
-| `sharing-suspended` | Provider list unreadable or a shared key is non-native | §2.3; `guard`, `checks`; do not delete keys blindly |
-| `provider:<id>:forward` fails | No loopback listener | `remote recover`; if an orphan is reported, restart the core once |
-| `provider:<id>:registered` fails | Magpie entry is absent or was edited by hand | Inspect `remote list`; remove a foreign entry in Magpie before re-adding; do not overwrite it |
-| `provider:<id>:status` fails | Peer offline, mapped address moved, wrong key | `remote list`, `remote test <id>`, `remote recover`; check the overlay peer list; retry after the peer returns |
-| `forwards-match` fails | A loopback listener has no provider | `remote recover`; restart the core to drop it; report an orphan if it persists |
-| `catalog`/peer offline | The catalogue is not published, its port is outside the bounded probe range, or the peer is offline | `catalog status`; use port 3426 (or 3427–3430) on the provider or match C's base; `catalog refresh` |
-| `degraded`/`identity-mismatch` | The provider is down or its hostname no longer owns the mapped prefix | Other providers keep serving; wait for the real peer; do not reuse its key elsewhere |
-| `429` | Native cap spent, or a native window boundary paused the key | `topup` raises the cap; a `window-rollover` pause needs `consumers reissue <id>` (and the new price version if it changed). Waiting does not auto-resume |
-| `401` | Wrong/revoked key, or a loopback caller bypass | Re-handover with `share handover`; `remote update-key`; check `consumers`/Magpie key list |
-| `connection refused` from CLI | Plugin host not running or page save restart in progress | Open the page/restart Magpie; wait for `api-port`; retry |
-| Page has old data | Snapshot is read-only; it updates on host writes/reload | Press **Reload snapshot**; `pid`/`generatedAt` show freshness |
-| Page says “no chain wallet” when enabled | The snapshot was written before the wallet was enabled, or an older host filled its cache only after a `wallet` call | Run `ohmyaihub wallet status` and press **Reload snapshot**; the phase-8 host writes the wallet projection into the snapshot |
-| `wallet` RPC error | Endpoint down/wrong chain id | `wallet networks`; `wallet network <id> --rpc …`; the other chain is independent |
-| `unclaimed`/`uncertain` deposit | No exact signed intent, or ambiguity | Do not send again; inspect `wallet anomalies`; resolve with a note |
-| `reverted` deposit | A credited block moved | Keep the deposit; review the anomaly; reissue only after the reorg is understood |
-| `checks` says `no snapshot yet` on a fresh node | The host has not written `status.js`; no configuration yet | Open the page once; configure the node; `status` |
-
-### Logs and evidence
-
-- `<magpie data>/oh-my-aihub/plugin.log` — redacted, best effort.
-- `status`/`checks`/`accounting`/`providers`/`consumers`/`wallet` JSON — the first evidence to keep.
-- Magpie's own `usage.jsonl` — the source of token/cost rows; do not edit it.
-- `ledger.sqlite`/`chain.sqlite` — audit stores; copy only with the host stopped.
-- Never include a Gateway Key, network secret, API token, wallet private key or keystore password in
-  a report. Public testnet transaction hashes and addresses are fine.
-
-## 7. Emergency stop and key compromise
-
-If a key may have leaked or a consumer must be stopped immediately:
-
-```sh
-ohmyaihub share off                 # cut new remote ingress first
-ohmyaihub revoke <consumer>         # remove the key and wipe the stored secret
-ohmyaihub checks
-```
-
-If `share off` or `revoke` cannot prove the stop, `checks`/`status` report the real enforcement level
-and withdraw the export. Do not describe a `capRestricted` or `safetyUncertain` pause as stopped.
-If removal keeps failing, stop the plugin host and the EasyTier core, then fix Magpie's key store
-deliberately.
-
-For a compromised remote-provider key:
-
-1. Provider: `revoke <consumer>` and issue a new key for a new consumer id.
-2. Consumer: `remote update-key <id> --key-file <new-file>`; verify `remote list` and `checks`.
-3. The old key is refused by the provider; C's local record no longer stores it.
-
-For a compromised network secret:
-
-1. `share off`, `consume off`, `remote remove` all remote providers.
-2. Rotate the secret on every node with `setup --reconfigure --secret-file <0600 file>` (or the
-   page).
-3. Re-add providers and keys. A peer that still has the old secret cannot join.
-
-## 8. Upgrade and version policy
-
-- The host/CLI and pricing/billing pin is Magpie **0.1.2038**. Magpie **0.1.2120** is page/bridge
-  source and **0.1.2171** has isolated `magpie web` page/CSP/Save evidence only; do not assume their
-  host/CLI commands, limits or prices behave the same. Desktop WKWebView is UNKNOWN.
-- Linux Magpie **0.1.2057** official container was verified as a consumer; Linux GUI/provider is
-  untested. Windows is untested.
-- EasyTier **2.6.4** is pinned and SHA-256 verified. Do not replace the binary by hand; the
-  supervisor reinstalls the pinned archive on a hash mismatch.
-- Before an upgrade: back up the whole Magpie config directory, run `checks`, and keep the old
-  directory. After an upgrade: `setup --check`, `status`, `checks`, `accounting`, a real test call and a
-  duplicate wallet scan. A schema migration writes a timestamped backup; verify it before deleting anything.
-- Real funds remain NO-GO on every version until the price-lock and other architecture blockers are
-  solved and re-measured.
+| 总览 → 刷新状态 | 读取本地状态与上次证据，不自动完成所有远端探测 | 需要新证据时点运行检查，并查看检查时间 |
+| 共享开关打开 | 希望共享，不代表已发布或实际可服务 | 检查安全状态、模型允许范围、目录发布与授权 |
+| 我的连接 → 已连接 | 最近一次连接结果，不代表永久健康或无限信用 | 点检查连接与额度、读取可用模型 |
+| 401 | 远端没有接受该 Key，可能错误、已撤销或已更换 | 联系共享方核对授权；不要当作充值不足 |
+| 429 | Magpie 原生限额拒绝 | 检查额度、窗口与暂停原因；不要重置历史使用量 |
+| 额度未知 | 缺少有效读回 | 重做核验；不能按 0 或“已用尽”解释 |
+| 上限 0 或负数 | 不安全的无限额语义 | 停止交付，核验并改成明确正额度；不能用 0 暂停 |
+| RPC 不可用或证据过期 | 链/服务当前不可验证 | 保留上次数据及时间，等待恢复；不是余额归零或交易失败 |
+| 共享被撤下 | 现有安全检查无法证明可继续服务 | 先查原因；不要绕过检查强行恢复 |
+
+报价中的 **priceLocked: false** 一直有效。模型价格变化会触发版本核对和暂停，但检测有间隔；原生并发请求也可能超出软额度。历史计费语义测量基线是 Magpie 0.1.2038，本轮没有在 0.1.2171 重测所有重定价/窗口细节，真实资金仍未开放。
+
+## 管理共享与伙伴
+
+在 **我的共享**中点 **读取本机模型**后再保存允许范围。共享只允许完整定价的本机原生模型；不允许转售 Remote Magpie、模型组或自动路由。发布目录是独立开关，目录联系说明不含任何密钥或 RPC 凭据。
+
+申请导入后仍需 **核对并审批**。审批时确认完整身份/报价、模型子集和正额度；初始手动额度是明确授予的试验信用，不是付款。价格或报价变了，应刷新目录并重新核对当前版本，而不是放行旧文件。
+
+**已授权的伙伴**提供以下操作：
+
+- **检查授权**：核验实际 Key、价格和账目；以读回及检查时间为准。
+- **交付访问授权**：明确确认后才显示密钥或下载授权文件；完成后点 **完成并隐藏**。
+- **调整模型范围**：只保留有效且允许的本机模型，范围不能为空。要停止访问，使用撤销而不是空白名单。
+- **撤销授权**：需要确认，保留历史账目；操作异常时仍要检查实际执行结果，不能只看本地“已撤销”字样。
+
+授权文件是秘密。浏览器下载目录、文件权限和复制后的剪贴板由用户环境控制，产品不能保证下载文件为 `0600`。完成后关闭显示、清理多余副本；浏览器隐藏不等于已下载副本消失。
+
+## 管理连接
+
+在 **发现模型**中与对方核对完整身份指纹；TOFU 只记住本机接受过的密钥，不证明现实身份。新身份、指纹变化、报价变化和过期数据都需要明确复核。仅凭主机名、虚拟 IP 或“签名有效”不能跳过。
+
+在 **我的连接**中用 **导入伙伴授权 → 核对授权并连接 → 创建此伙伴连接**建立原生 Remote Magpie。该授权必须交付给本机、匹配当前接受的共享方与报价。
+
+**更新访问密钥**用于接收共享方重新交付的 Key；**移除此连接**只移除本插件创建的本机注册和转发，不撤销对方那边的账户、余额或授权，也不动用户手工创建的服务。共享方是否撤销，需要双方另行确认。一个提供方失败不应被理解成所有提供方余额或连接同时失效。
+
+## 测试网钱包：双方文件流程
+
+导航 **测试网钱包**与 **用量与账单**由同一套现有 Wallet、ChainWatcher、Ledger、Provisioner 提供数据；没有第二份钱包余额。共享方的消费者账目留在共享方本机，使用方不能读取所有伙伴的私有余额。
+
+### 配置网络与收款
+
+在 **测试网钱包 → 初始化 / 刷新钱包**查看真实可用状态。**网络与收款配置**中的 **编辑 RPC、启用网络、设置收款地址、注册测试代币**分别对应明确配置，不代表链上支付成功。
+
+BSC 测试网（97）与 Base Sepolia（84532）地位平等，必须明确选择。不能启用主网，也不新增链。资产身份是“链 + 代币合约”；同名、同地址在不同链仍是不同资产。注册时核对完整合约、预期精度和测试换算率，链上精度读回必须一致。小数金额按精确文本输入，不用四舍五入凑整数。
+
+RPC 编辑只替换自己明确输入的地址；已有可能含 API Key 的 URL 不回显。收款地址是共享方自己持有的钱包地址，设置地址不意味着插件持有其私钥。**启动已启用网络的观察 / 停止自动观察**控制观察器；停止时已有扫描可能正在收尾，不能把它当作撤销 Key 或删除记录。
+
+### 共享方创建申请，使用方在外部钱包签名
+
+1. 共享方选择已授权消费者、明确的网络、测试资产、精确金额与有效期，点 **创建测试网入账申请 → 预览精确申请内容**。
+2. 核对完整收款地址、合约、金额、测试换算率、有效期与暂停状态，**确认创建一次申请 → 下载入账申请文件**，私下交给对应使用方。
+3. 使用方导入并核对申请，经本机服务核验后点 **下载外部钱包签名数据**，在自己的外部钱包审阅并签署 EIP-712 文档。只签名不会转账。拿到签名后，回控制台点 **把钱包签名整理为交付文件**，填写公开付款地址及钱包给出的 `0x` 开头、65 字节签名，勾选确认后 **核验并生成签名交付文件 → 下载签名交付文件**，交回共享方。服务会核验文档摘要并恢复签名地址；不要求钱包直接导出 AIHub 格式。用户不手工构造 JSON，不把私钥、助记词或 keystore 输入控制台。
+4. 共享方选中原申请，**导入付款方签名 → 核验签名并读取转账指引 → 下载准确转账指引**，把指引交给使用方。
+5. 使用方只在自己的钱包按该指引执行测试转账，再核对网络、完整合约、付款与收款地址、精确金额和有效期。插件不广播交易、不代管钱包。
+
+可选浏览器扩展路径：核验申请后选 **使用浏览器钱包签名**，完整审阅并确认，再点 **连接钱包并请求签名**。该点击才请求账户，以服务已核验的文档请求 `eth_signTypedData_v4`；链不一致时手工在钱包切换，不自动切链。服务核验签名地址后生成同一签名交付文件。无扩展或拒绝时可继续文件/手动签名整理路径。没有 WalletConnect、钱包 SDK、私钥导入或交易广播；此路径目前只有模拟注入钱包测试，实际实验使用文件流程，真实扩展兼容性待验收。
+
+外部钱包必须支持指定 EIP-712 数据的审阅、签署与签名结果提取；签名交付文件由 AIHub 整理，无需钱包直接导出 AIHub 格式。不能假设任意钱包都能直接导入下载的签名数据。本轮具体真实钱包兼容性尚未验收，实验用模拟签名器不等于受审计的钱包集成。
+
+有未完成申请时先恢复或取消，不重复创建。若崩溃留下结果不明的创建预留，它会继续阻止新建，普通界面不能清除，需按高级维护人工恢复。超时、刷新或宿主重启后结果不明时，先读现有申请与操作记录；不要为了“再试一次”新建第二份。暂停账户需要明确知悉，充值不自动抹掉暂停原因；取消申请也不是撤销已发生的链转账。
+
+### 等待最终性与读回
+
+链事件被观察到、回执验证、达到该链最终性、账本入账、Magpie Key 额度读回是不同步骤。BSC 测试网沿用 15 次确认的替代策略；Base Sepolia 使用注册表的 `finalized` 策略，不能只看最新区块数。当前测量与局限见[架构](ARCHITECTURE.md)。
+
+点 **扫描此网络**是主动工作，可能推动已有链事件入账；普通页面轮询只看本地状态。显示 **最后核验时间**而非把缓存叫实时余额。只有账本已应用、Key 的正额度读回及账目状态都满足要求，才有证据说明可继续使用；最终仍以原生调用结果为准。
+
+本轮 Ego/Chromium 与 WebKit 钱包验收使用本地模拟链和合成外部签名器，事件明确注明“本地模拟链，未连接公链，未付款”。它不证明新的 BSC/Base 公链付款。之前 PR11 的真实测试网转账见[历史两主机验证](validation/2026-10-30-fresh-twohost-wallet.md)，与新 GUI 证据分开。
+
+## 用量、暂停与账单
+
+在 **用量与账单**选择实际消费者，再点 **核验此伙伴账目与额度**。区分累计入账、已结算使用量、余额、透支、原生累计上限/已用量、模型范围、价格版本和窗口；不要用“上限减已用”替代提供方账本，也不能把伙伴之间的余额合并。
+
+查看明细的路径是 **用量与账单 → 伙伴账目 → 查看消费记录**，通过 **上一页 / 下一页**翻阅，固定每页最多50条。记录显示账本保存的原始费用、`priceVersion`、窗口与 token 用量；已记录费用保持不可变，不按当前模型价格重新计算。
+
+| 问题 | 操作与含义 |
+| --- | --- |
+| 价格或报价变化 | 核对当前模型/价格绑定，必要时核对并重新签发；保留旧窗口已结算价格，不增加余额 |
+| 原生窗口结束 | 检查旧窗口使用结算后重新签发；不是充值，也不重置历史使用 |
+| 透支或低于最小可用网格 | 保持暂停，不能签发无限额 Key 来“恢复” |
+| 日志缺失或用量不连续 | 先审计证据，再明确接受当前基线并记录操作者与说明；不猜测、不补造消费 |
+| 链重组或归属不明 | 查看异常；审计备注不入账、不删除原存款、不自动解除冻结 |
+| RPC/原生额度无法读取 | 显示未知/过期，先恢复证据；不要当成零余额 |
+
+**核对并重新签发**需要明确确认新的绑定；**审计并接受当前基线**只记录已完成的审计决定，不补回缺失账单。**导出此伙伴账单**包含该消费者范围的记录，完整性摘要不是签名、付款凭证或第三方担保；只交付给对应伙伴。账单导入/导出上限48KiB，超过范围使用高级维护，不会截断后假装完整。普通界面没有“测试充值”或修改余额按钮。
+
+## 通过 SSH 转发使用控制台
+
+这是已有 SSH 环境的高级选择，端到端 SSH 交互仍未完成本轮实测。真实钱包扩展、原生 WKWebView、Linux/Windows 桌面同样保留未知，不能从自动化 WebKit 浏览器结果推断。只转发插件普通控制台的回环端口，保持本地端口与宿主端口一致，再在本机浏览器打开 `http://127.0.0.1:同一端口`并按八位码流程批准。服务严格校验 Host/Origin，任意换端口或改成局域网地址会被拒绝。SSH 的建立与凭据管理属于你已有的工具；普通桌面安装不需要这一过程。
+
+配对并不开放匿名管理，不转发 Magpie 管理页面，不开启 `magpie web --lan`，不通过 Quick Tunnel 暴露公网。也不要把含一次性票据的打开 URL 发给别人。原生页只显示无凭据普通地址与短期公开配对码。
+
+## 故障、备份与恢复
+
+控制台无法打开时先看 Magpie Plugins 是否启用，刷新原生页查看新状态；默认浏览器不可用可换浏览器配对。配对过期后重新发起；宿主重启后重新登录。不要在结果未知时重复批准、签发、创建入账申请或广播转账。
+
+安全检查失败、共享被撤下或账目不确定时保持失败可见，不绕过 ACL、不重置原生用量、不手改 Key/账本/TOML。只停止使用能力、停止共享、停止观察与关闭插件的作用不同，按对应目的选择。
+
+备份前完整停止 Magpie，避免复制仍在写入的 SQLite 数据。浏览器没有一键一致性备份、灾难恢复或退出网络聚合操作；维护者按[高级 CLI 与灾难恢复](ADVANCED-CLI.md)执行。恢复后先核验身份、账本、原生 Key 和连接，不靠旧缓存宣称服务已恢复。

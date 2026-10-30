@@ -1,282 +1,123 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-
-const PAGE = join(import.meta.dir, "..", "page");
+const PAGE = join(import.meta.dir, "../page");
 const html = readFileSync(join(PAGE, "index.html"), "utf8");
-const appJS = readFileSync(join(PAGE, "app.js"), "utf8");
-const settingsJS = readFileSync(join(PAGE, "settings.js"), "utf8");
+const app = readFileSync(join(PAGE, "app.js"), "utf8");
+const settings = readFileSync(join(PAGE, "settings.js"), "utf8");
+function helper() { const w: any = {}; new Function("window", settings)(w); return w.OHMYAIHUB_SETTINGS; }
 
-type Settings = {
-  SEED_FIELDS: string[];
-  PREF_FIELDS: string[];
-  canonical: (v: unknown) => string;
-  same: (a: unknown, b: unknown) => boolean;
-  list: (v: unknown) => string[];
-  portList: (v: unknown) => number[];
-  draftToOptions: (d: unknown) => Record<string, unknown>;
-  mergeSaved: (base: Record<string, unknown>, draft: unknown) => { merged: Record<string, unknown>; changed: string[] };
-  changedBetween: (a: Record<string, unknown>, b: Record<string, unknown>) => string[];
-  seedReady: (o: Record<string, unknown>) => boolean;
-};
+test("launch-only whole-options merge preserves every network/unknown option", () => {
+  const base = { networkName: "fixture", networkSecret: "fixture-kept-secret", rpcPort: 15999, future: { x: true }, consoleLaunch: { future: 9, autoOpen: false } };
+  const request = { nonce: "a".repeat(32), issuedAt: 1, expiresAt: 2 };
+  const merged = helper().mergeLaunch(base, { request });
+  expect(merged).toEqual({ ...base, consoleLaunch: { ...base.consoleLaunch, request } });
+  expect(base.consoleLaunch).toEqual({ future: 9, autoOpen: false });
+  expect(helper().mergeLaunch(base, { autoOpen: true }).networkSecret).toBe(base.networkSecret);
+});
 
-/** Loads page/settings.js the way the page does: a classic script, no modules. */
-function loadSettings(): Settings {
-  const sandbox: Record<string, unknown> = {};
-  new Function("window", settingsJS)(sandbox);
-  return sandbox.OHMYAIHUB_SETTINGS as Settings;
+describe("native sandbox page boundary", () => {
+  test("external scripts only, no inline handlers, shipped/generated files exist", () => {
+    expect(html).not.toMatch(/<script\b(?![^>]*\bsrc=)/i);
+    expect(html).not.toMatch(/\son(click|load|change|submit|error)\s*=/i);
+    const generated = new Set(["status.js", "options.js", "launcher.js"]);
+    for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
+      const path = m[1]!;
+      if (/^(https?:|#|_magpie\/)/.test(path) || generated.has(path)) continue;
+      expect(existsSync(join(PAGE, path))).toBe(true);
+    }
+  });
+  test("three real type=button controls; no network, storage or sandbox escape", () => {
+    expect([...html.matchAll(/<button[^>]*id="([^"]+)"/g)].map(m => m[1])).toEqual(["open", "reload", "save"]);
+    for (const source of [app, settings]) {
+      expect(source).not.toMatch(/\bfetch\s*\(|XMLHttpRequest|new\s+WebSocket|localStorage|sessionStorage|document\.cookie|window\.open\(|innerHTML/);
+    }
+    for (const id of ["open", "reload", "save"]) {
+      expect(html).toMatch(new RegExp('<button[^>]*type="button"[^>]*id="' + id + '"'));
+      expect(app).toContain('$(' + JSON.stringify(id) + ').addEventListener');
+    }
+    expect(html).not.toContain("bun plugin/"); expect(html).not.toContain("终端执行");
+  });
+  test("snapshot has no credentials or network form; local-only caveat and optout are visible", () => {
+    expect(html).toContain("首次在本机桌面启用时自动打开一次");
+    expect(html).toContain("通过远端 Magpie web 访问不能打开你这边的浏览器");
+    expect(html).toContain("不显示任何 Gateway Key");
+    expect(html).not.toMatch(/name="networkSecret"|name="networkName"/);
+    expect(app).not.toMatch(/sk-[A-Za-z0-9._-]{8,}|api-token|issueTicket|console-port/);
+  });
+});
+
+function runtime(base: any, fail = false, query = "", launcher?: any) {
+  const nodes: Record<string, any> = {};
+  const created: any[] = [];
+  function element(tag = "div"): any { return { tag, children: [], disabled: true, checked: false, textContent: "", handlers: {},
+    appendChild(child: any) { this.children.push(child); }, addEventListener(name: string, fn: any) { this.handlers[name] = fn; } }; }
+  const ids = ["open", "reload", "save", "auto-open", "launch-status", "node-status", "snapshot-time", "saved", "console-origin", "pairing-status", "pairing-requests"];
+  ids.forEach(id => { nodes[id] = element(); });
+  const calls: any[] = [], replacements: string[] = [], timers: (() => void)[] = [];
+  const window: any = { crypto, __OH_MY_AIHUB_LAUNCHER__: launcher, OHMYAIHUB_SETTINGS: helper(), location: { pathname: "/plugin/page/index.html", search: query, replace: (s: string) => replacements.push(s), reload: () => calls.push("reload") },
+    magpie: { ready: Promise.resolve(), options: { get: async () => base, set: async (o: any) => { calls.push(o); if (fail) throw new Error("private fixture secret"); } } } };
+  new Function("window", "document", "URLSearchParams", "setTimeout", app)(window, { getElementById: (id: string) => nodes[id], createElement: (tag: string) => { const n = element(tag); created.push(n); return n; } }, URLSearchParams, (f: () => void) => timers.push(f));
+  return { nodes, calls, replacements, timers, created };
 }
 
-const S = loadSettings();
-
-describe("mergeSaved: a save must never erase what the page did not touch", () => {
-  test("keeps every key the page does not own, including ones a newer version wrote", () => {
-    const base = {
-      networkName: "lab",
-      networkSecret: "overlay-secret-1",
-      peers: ["tcp://relay:11010"],
-      rpcPort: 13400,
-      apiPort: 34517,
-      role: "provider",
-      futureKey: { nested: true },
-    };
-    const { merged, changed } = S.mergeSaved(base, { peers: "tcp://other:11010" });
-    expect(merged.rpcPort).toBe(13400);
-    expect(merged.apiPort).toBe(34517);
-    expect(merged.role).toBe("provider");
-    expect(merged.futureKey).toEqual({ nested: true });
-    expect(merged.networkSecret).toBe("overlay-secret-1");
-    expect(merged.peers).toEqual(["tcp://other:11010"]);
-    expect(changed).toEqual(["peers"]);
+describe("actual launcher page handlers", () => {
+  test("pairing requires explicit matched-code checkbox; preserves old request and all other options", async () => {
+    const at = Date.now();
+    const request = { id: "d".repeat(32), code: "01234567", expiresAt: new Date(at + 60000).toISOString() };
+    const launcher = { at: new Date(at).toISOString(), origin: "http://127.0.0.1:34567", pendingPairings: [request] };
+    const oldRequest = { nonce: "a".repeat(32), issuedAt: at, expiresAt: at + 120000 };
+    const base = { networkSecret: "fixture-kept", future: 1, consoleLaunch: { request: oldRequest, autoOpen: false } };
+    const r = runtime(base, false, "", launcher); await Bun.sleep(0);
+    expect(r.nodes["console-origin"].textContent).toBe(launcher.origin);
+    const button = r.created.find(n => n.tag === "button")!;
+    const check = r.created.find(n => n.tag === "input")!;
+    expect(button.disabled).toBe(true); await button.handlers.click(); expect(r.calls).toEqual([]);
+    check.checked = true; check.handlers.change(); expect(button.disabled).toBe(false);
+    await Promise.all([button.handlers.click(), button.handlers.click()]);
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0].networkSecret).toBe(base.networkSecret);
+    expect(r.calls[0].future).toBe(1); expect(r.calls[0].consoleLaunch.request).toEqual(oldRequest);
+    const approval = r.calls[0].consoleLaunch.approval;
+    expect(approval.id).toBe(request.id); expect(approval.code).toBe(request.code);
+    expect(approval.expiresAt).toBe(Date.parse(request.expiresAt));
+    expect(r.replacements[0]).toContain("?approval=" + request.id);
+    expect(JSON.stringify(r.calls)).not.toContain("browserSecret");
   });
-
-  test("an empty secret field means keep the stored one, not clear it", () => {
-    const base = { networkSecret: "overlay-secret-1", networkName: "lab" };
-    const { merged, changed } = S.mergeSaved(base, { networkSecret: "", networkName: "lab" });
-    expect(merged.networkSecret).toBe("overlay-secret-1");
-    expect(changed).toEqual([]);
-  });
-
-  test("a typed secret replaces it, and the change is reported", () => {
-    const base = { networkSecret: "overlay-secret-1" };
-    const { merged, changed } = S.mergeSaved(base, { networkSecret: "txnpkry-jbozkv-2" });
-    expect(merged.networkSecret).toBe("txnpkry-jbozkv-2");
-    expect(changed).toEqual(["networkSecret"]);
-  });
-
-  test("an unchanged save produces no change at all, so no host restart is asked for", () => {
-    const base = { networkName: "lab", networkSecret: "overlay-secret-1", peers: ["tcp://relay:11010"], secureMode: true };
-    const { changed } = S.mergeSaved(base, {
-      networkName: "lab",
-      networkSecret: "",
-      peers: "tcp://relay:11010",
-      secureMode: true,
-    });
-    expect(changed).toEqual([]);
-  });
-
-  test("a blank network name is not a rename", () => {
-    const base = { networkName: "lab" };
-    const { merged, changed } = S.mergeSaved(base, { networkName: "   " });
-    expect(merged.networkName).toBe("lab");
-    expect(changed).toEqual([]);
-  });
-
-  test("text fields turn an empty string into null, lists into []", () => {
-    for (const key of S.SEED_FIELDS) {
-      if (key === "networkName" || key === "networkSecret") continue;
-      const options = S.draftToOptions({ [key]: "" });
-      expect(options).toHaveProperty(key);
-      const value = options[key];
-      if (Array.isArray(value)) expect(value).toEqual([]);
-      else if (typeof value === "boolean") expect(value).toBe(false);
-      else expect(value).toBeNull();
+  test("fallback origin refuses ticket-bearing URLs and stale pairing requests", async () => {
+    const at = Date.now();
+    for (const origin of ["http://127.0.0.1:34567/#ticket=bad", "http://evil.example", "http://127.0.0.1:65536"]) {
+      const r = runtime({}, false, "", { at: new Date(at).toISOString(), origin, pendingPairings: [{ id: "a".repeat(32), code: "12345678", expiresAt: new Date(at - 1).toISOString() }] });
+      await Bun.sleep(0); expect(r.nodes["console-origin"].textContent).not.toBe(origin);
+      expect(r.created.filter(n => n.tag === "button")).toHaveLength(0); expect(r.calls).toEqual([]);
     }
   });
-
-  test("preferences merge without dropping the other preference keys", () => {
-    const base = { pagePrefs: { showAdvanced: false, somethingElse: 1 } };
-    const { merged, changed } = S.mergeSaved(base, { pagePrefs: { showAdvanced: true } });
-    expect(merged.pagePrefs).toEqual({ showAdvanced: true, somethingElse: 1 });
-    expect(changed).toEqual(["pagePrefs"]);
+  test("one click writes nonce over fresh whole options then warms hosted HTML, duplicate click suppressed", async () => {
+    const base = { networkName: "lab", networkSecret: "fixture-secret", future: { keep: 1 }, consoleLaunch: { autoOpen: false } };
+    const r = runtime(base); await Bun.sleep(0);
+    expect(r.nodes.open.disabled).toBe(false);
+    await Promise.all([r.nodes.open.handlers.click(), r.nodes.open.handlers.click()]);
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0].networkSecret).toBe(base.networkSecret);
+    expect(r.calls[0].future).toEqual(base.future);
+    const req = r.calls[0].consoleLaunch.request;
+    expect(req.nonce).toMatch(/^[a-f0-9]{32}$/); expect(req.expiresAt - req.issuedAt).toBe(120000);
+    expect(r.calls[0].consoleLaunch.autoOpen).toBe(false);
+    expect(r.replacements[0]).toContain("?open=" + req.nonce);
   });
-
-  test("lists are de-duplicated and ports drop what is not a port", () => {
-    expect(S.list("tcp://a:1, tcp://a:1  tcp://b:2")).toEqual(["tcp://a:1", "tcp://b:2"]);
-    expect(S.portList("3425, 3426, 0, nope, 70000")).toEqual([3425, 3426]);
+  test("save optout preserves unrelated fields; failure never echoes raw bridge error", async () => {
+    const r = runtime({ future: true, consoleLaunch: { autoOpen: true, future: "kept" } }); await Bun.sleep(0);
+    r.nodes["auto-open"].checked = false; await r.nodes.save.handlers.click();
+    expect(r.calls[0]).toEqual({ future: true, consoleLaunch: { autoOpen: false, future: "kept" } });
+    const bad = runtime({}, true); await Bun.sleep(0); await bad.nodes.open.handlers.click();
+    expect(bad.nodes["launch-status"].textContent).not.toContain("private fixture secret");
+    expect(bad.nodes.open.disabled).toBe(false); expect(bad.replacements).toHaveLength(0);
   });
-
-  test("seedReady demands a name and a secret of at least 8 characters", () => {
-    expect(S.seedReady({ networkName: "lab", networkSecret: "12345678" })).toBe(true);
-    expect(S.seedReady({ networkName: "lab", networkSecret: "1234567" })).toBe(false);
-    expect(S.seedReady({ networkName: "l", networkSecret: "12345678" })).toBe(false);
-    expect(S.seedReady({})).toBe(false);
-  });
-
-  test("a save with no options at all is a no-op", () => {
-    expect(S.mergeSaved({}, {})).toEqual({ merged: {}, changed: [] });
-  });
-});
-
-describe("dirty tracking: a form nobody touched is not a save", () => {
-  const freshDraft = {
-    networkName: "",
-    networkSecret: "",
-    peers: "",
-    secureMode: true,
-    sharingEnabled: false,
-    consumingEnabled: false,
-    pagePrefs: { showAdvanced: false },
-  };
-
-  test("the form as filled differs from plugins.json but not from itself", () => {
-    const base = {};
-    const first = S.mergeSaved(base, freshDraft).merged;
-    const again = S.mergeSaved(base, freshDraft).merged;
-    expect(S.mergeSaved(base, freshDraft).changed.length).toBeGreaterThan(0); // differs from {}
-    expect(S.changedBetween(first, again)).toEqual([]); // but not from the filled form
-  });
-
-  test("typing one field reports exactly that field", () => {
-    const base = {};
-    const baseline = S.mergeSaved(base, freshDraft).merged;
-    const typed = S.mergeSaved(base, { ...freshDraft, networkName: "lab" }).merged;
-    expect(S.changedBetween(baseline, typed)).toEqual(["networkName"]);
-  });
-
-  test("typing a secret reports only the secret", () => {
-    const base = { networkSecret: "overlay-secret-1" };
-    const baseline = S.mergeSaved(base, freshDraft).merged;
-    const typed = S.mergeSaved(base, { ...freshDraft, networkSecret: "new-secret-here" }).merged;
-    expect(S.changedBetween(baseline, typed)).toEqual(["networkSecret"]);
-  });
-
-  test("a preference toggle reports only the preference", () => {
-    const base = { networkName: "lab", pagePrefs: { showAdvanced: false } };
-    const baseline = S.mergeSaved(base, { ...freshDraft, pagePrefs: { showAdvanced: false } }).merged;
-    const toggled = S.mergeSaved(base, { ...freshDraft, pagePrefs: { showAdvanced: true } }).merged;
-    expect(S.changedBetween(baseline, toggled)).toEqual(["pagePrefs"]);
-  });
-});
-
-describe("the page respects the CSP Magpie serves it with", () => {
-  test("every script is a file, never inline", () => {
-    const scripts = html.match(/<script\b[^>]*>/gi) ?? [];
-    expect(scripts.length).toBeGreaterThan(0);
-    for (const tag of scripts) expect(tag).toContain("src=");
-    expect(html).not.toMatch(/<script\b(?![^>]*\bsrc=)/i);
-  });
-
-  test("no inline event handlers (script-src has no 'unsafe-inline')", () => {
-    expect(html).not.toMatch(/\son(click|load|change|input|submit|error)\s*=/i);
-  });
-
-  test("every file the page loads exists beside it, or is one the host generates", () => {
-    // status.js and options.js are written by the running host; everything else
-    // is a file of this repository.
-    const generated = new Set(["status.js", "options.js"]);
-    const refs = html.match(/(?:src|href)="([^"]+)"/gi) ?? [];
-    let checked = 0;
-    for (const ref of refs) {
-      const value = ref.slice(ref.indexOf('"') + 1, -1);
-      if (/^(https?:|#|\/)/.test(value) || value.startsWith("_magpie/")) continue;
-      if (generated.has(value)) continue;
-      expect(existsSync(join(PAGE, value))).toBe(true);
-      checked++;
-    }
-    expect(checked).toBeGreaterThanOrEqual(3); // style.css, settings.js, app.js
-  });
-
-  test("Save is a plain button, because a sandboxed page never fires submit", () => {
-    // Measured in a real browser: with `sandbox allow-scripts` and no allow-forms,
-    // clicking a submit button inside the page focuses it and fires nothing — no
-    // submit event, no navigation, no error. See docs/validation/phase8-csp.md §10.
-    expect(html).toMatch(/<button[^>]*type="button"[^>]*id="save"/);
-    expect(appJS).toContain('save.addEventListener("click"');
-    expect(appJS).toContain('form.addEventListener("submit"');
-  });
-
-  test("the page never pretends it can reach the network", () => {
-    for (const source of [appJS, settingsJS]) {
-      expect(source).not.toMatch(/\bfetch\s*\(/);
-      expect(source).not.toMatch(/XMLHttpRequest/);
-      expect(source).not.toMatch(/new\s+WebSocket/);
-      expect(source).not.toMatch(/localStorage|sessionStorage|document\.cookie/);
-    }
-  });
-
-  test("there are exactly two buttons, and both do something", () => {
-    const buttons = html.match(/<button\b[^>]*>/gi) ?? [];
-    expect(buttons.length).toBe(2);
-    const ids = buttons.map((b) => (b.match(/id="([^"]+)"/) ?? [])[1]).sort();
-    expect(ids).toEqual(["reload", "save"]);
-    // both are wired in app.js
-    expect(appJS).toContain('$("reload").addEventListener');
-    expect(appJS).toContain('addEventListener("submit"');
-  });
-
-  test("the two external guides are plain links with no parameters and no opener", () => {
-    const links = html.match(/<a\b[^>]*href="https?:[^"]*"[^>]*>[^<]*<\/a>/gi) ?? [];
-    expect(links.length).toBe(2);
-    const labels = links.map((l) => l.replace(/<[^>]+>/g, "").trim());
-    expect(labels).toEqual(["BNB Chain 官方教程", "Peer 中文购买教程"]);
-    for (const link of links) {
-      expect(link).toContain('rel="noopener noreferrer external"');
-      expect(link).toContain('target="_blank"');
-      expect(link).not.toMatch(/[?&](address|amount|consumer|ref|utm)/i);
-    }
-    expect(html).toContain("不买、不卖、不兑换、不跨链桥接");
-    expect(html).toContain("不适用于");
-    expect(html).toContain("由第三方负责");
-    expect(html).toContain("当地法律");
-    // there is no third place to buy anything
-    expect((html.match(/href="https?:/g) ?? []).length).toBe(2);
-  });
-
-  test("the first screen is the operator's state, not a spec sheet", () => {
-    const header = html.slice(html.indexOf("<header>"), html.indexOf("</header>"));
-    expect(header).not.toContain("connect-src");
-    expect(header).not.toContain("JSON");
-    expect(header).not.toContain("pid");
-    // the jargon lives in the advanced block
-    const advanced = html.slice(html.indexOf('class="advanced-only"'));
-    expect(advanced).toContain("connect-src 'none'");
-    // the page renders the plain-language card from the snapshot, not from markup
-    expect(appJS).toContain("这台机器还没有接入覆盖网");
-    expect(appJS).toContain("已接入 ");
-    expect(appJS).toContain("share setup");
-  });
-
-  test("it says out loud that the page is read-only and that changes are CLI", () => {
-    expect(html).toContain("所有改动都在终端里用命令完成");
-    expect(html).toContain("connect-src 'none'");
-    expect(html).toContain("不显示任何 Gateway Key");
-  });
-
-  test("delivering a key writes a 0600 file instead of printing it", () => {
-    expect(appJS).toContain("share handover alice --key-file");
-    expect(appJS).not.toContain('"secret alice"');
-    expect(html).toContain("写进你指定的 0600 文件");
-    // no command in the page asks for the old `secret <id>` print-the-key path
-    expect(html).not.toMatch(/ohmyaihub\.ts[^<]*\bsecret\b/);
-    expect(appJS).not.toMatch(/cli\("secret/);
-  });
-
-  test("the restart text says what actually happens, and the save text does not promise success", () => {
-    expect(html).toContain("重启插件宿主");
-    expect(html).toContain("覆盖网和本地运维 API 会消失几秒");
-    expect(appJS).toContain("已提交，未验证");
-    expect(appJS).not.toMatch(/保存成功|已生效(?!；)/);
-  });
-
-  test("the page does not display a gateway key, a secret or an api token", () => {
-    for (const source of [html, appJS]) {
-      expect(source).not.toMatch(/sk-[A-Za-z0-9._-]{8,}/);
-      expect(source).not.toMatch(/api-token/i);
-      expect(source).not.toContain("__OH_MY_AIHUB_STATUS__.config.networkSecret");
-    }
-    // the secret input is a password field and is never pre-filled from options
-    expect(html).toMatch(/name="networkSecret"[^>]*type="password"|type="password"[^>]*name="networkSecret"/);
-    expect(appJS).not.toMatch(/f\.networkSecret\.value\s*=\s*String/);
+  test("pending refresh never resubmits options, expired requests never auto retry", async () => {
+    const nonce = "a".repeat(32);
+    const r = runtime({}, false, "?open=" + nonce + "&until=" + (Date.now() + 60000)); await Bun.sleep(0);
+    expect(r.timers).toHaveLength(1); r.timers[0]!(); expect(r.replacements).toHaveLength(1); expect(r.calls).toEqual([]);
+    const expired = runtime({}, false, "?open=" + nonce + "&until=1"); await Bun.sleep(0);
+    expect(expired.timers).toEqual([]); expect(expired.calls).toEqual([]);
   });
 });

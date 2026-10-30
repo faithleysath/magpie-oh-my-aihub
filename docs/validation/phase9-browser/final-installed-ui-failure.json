@@ -1,0 +1,20 @@
+{
+  "at": "2026-10-30T12:22:12.888Z",
+  "phase": "immutable consumption history",
+  "errorKind": "TimeoutError",
+  "steps": [
+    {
+      "name": "consumer GitHub plugin updated through Magpie GUI to cf9833e",
+      "ok": true
+    },
+    {
+      "name": "provider2 GitHub plugin updated through Magpie GUI to cf9833e",
+      "ok": true
+    },
+    {
+      "name": "final provider build authorized through explicit native pairing",
+      "ok": true
+    }
+  ],
+  "pass": false
+}

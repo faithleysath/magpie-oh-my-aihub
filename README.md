@@ -1,197 +1,49 @@
-# Magpie Oh My AI Hub
+# Oh My AIHub
 
-A private-community P2P AI API sharing project based on Magpie, EasyTier no-TUN networking, and wallet-funded Gateway Key quotas.
+让一台 Magpie 共享自己的模型，也能使用朋友的 Magpie。日常安装、连接和授权都在 **Magpie + 独立浏览器控制台**完成，无需终端、源码目录、数据目录或单独安装 Bun。
 
-**Status: phase 8 — onboarding and everyday-use journeys for the phase-7 feature set.** One Magpie node can share its own channels, consume several remote Magpies, discover signed read-only model/price catalogues, keep a local immutable prepaid ledger with fail-closed key reissue, and watch **testnet** deposits on BNB Smart Chain testnet and Base Sepolia as two equal networks.
+AI 请求始终走「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」。Magpie 负责原生模型路由、Gateway Key、用量和限额；本插件管理私有连接与授权，不增加 AI 代理或第二套计费网关。
 
-**Current testnet evidence.** Fresh BSC and Base Sepolia payments credited the same real Gateway Key
-through two independent hosts, real EasyTier no-TUN and a real native Remote Magpie, with automatic
-watchers, restart recovery, duplicate scans and cleanup
-([report](docs/validation/2026-10-30-fresh-twohost-wallet.md)). Original finalized payments were also
-replayed into a fresh real SQLite Ledger and the real pinned Magpie key
-([report](docs/validation/2026-10-30-live-magpie-chain-credit.md)). Real vendor/paid model execution is
-still **UNKNOWN**, and **real funds are NO-GO** because Magpie still has no price lock and the other
-phase-6 blockers are unchanged.
+## 从 Magpie 安装
 
-**Version scope.** Magpie **0.1.2038** is the host/CLI and pricing/billing pin. A Linux Magpie
-**0.1.2057** official container was verified as a consumer. Magpie **0.1.2120** is compared for the
-page/bridge source; an isolated `magpie web` browser run on **0.1.2171** verified the page/CSP/Save
-flow, but full host/CLI behaviour on 0.1.2120/0.1.2171 is **UNKNOWN**, and the desktop WKWebView
-frame was not measured. EasyTier **2.6.4** and foundry **1.8.6** are the other measured tools. No
-mainnet asset is watched or credited.
+1. 打开 Magpie 的 **Plugins → Discover**。
+2. 如果搜索结果为空，在列表底部找到手动添加入口，输入 `github:faithleysath/magpie-oh-my-aihub` 并安装。
+3. 打开 **Oh My AIHub** 插件页，点击 **打开控制台**。系统默认浏览器会打开本机控制台。Magpie 自己管理插件运行所需的 Bun。
+4. 想换一个浏览器：复制插件页显示的普通本机地址，在该浏览器选择 **配对此浏览器**，回到 Magpie 刷新，核对完整八位码并批准。地址本身不能登录。
 
-## Current planned division of responsibilities
+上面的 GitHub 地址是合并后的常规安装入口。开发分支后缀只供验证，未合并改动不会因安装常规地址自动出现。更新插件也通过 Magpie 的 Plugins 页面完成。
 
-- **Magpie**: upstream providers, Remote Magpie, routing, Gateway Key authentication, quotas, usage accounting and model forwarding.
-- **EasyTier**: private peer transport, discovery via Peer list, encrypted no-TUN networking and targeted port forwarding.
-- **Plugin/local helper**: overlay and port-forward supervisor, per-consumer Gateway Keys, the set of remote providers this node consumes, the network/asset registry, signed deposit attribution, per-chain deposit watching with per-chain finality, and the ledger that the provisioner turns into a Magpie cap.
-- **HK VPS**: EasyTier bootstrap/relay only. No centralized business server.
+接下来按[首次使用指南](docs/ONBOARDING.md)配置网络，并在「我的共享」或「发现模型」中继续。已经连接后查阅[日常操作](docs/OPERATIONS.md)。备份、灾难恢复与维护者脚本放在[高级 CLI 参考](docs/ADVANCED-CLI.md)。
 
-Do **not** implement a second AI API proxy, token router or charging gateway unless real integration tests demonstrate a hard security/compatibility limit in the native path.
+## 两种能力，一套网络
 
-New here? Start with [onboarding](docs/ONBOARDING.md) for the five-minute install and the two roles,
-then keep [operations](docs/OPERATIONS.md) for the daily loop, balance anomalies, revocation,
-backup/restore and network exit. The phase-8 guided-flow acceptance (18/18 live steps, browser and
-wallet evidence, and its limits) is in
-[`docs/validation/2026-10-30-phase8-onboarding-ux.md`](docs/validation/2026-10-30-phase8-onboarding-ux.md).
-Read [architecture](docs/ARCHITECTURE.md), [verification tasks](docs/VALIDATION.md), and
-[agent instructions](AGENTS.md) for the design and its limits.
+| 我想做什么 | 控制台入口 |
+| --- | --- |
+| 把自己 Magpie 的模型共享给朋友 | 我的共享：选择有完整价格的本机模型、发布目录、手动审批申请并交付授权文件 |
+| 使用朋友共享的模型 | 发现模型：核对完整身份指纹与报价、下载申请；收到授权后在我的连接中导入 |
+| 查看网络与原生限额状态 | 总览、我的连接、网络与设置 |
+| 试验链上充值与账目 | 测试网钱包、用量与账单；已完成受控本地模拟钱包流程，范围见验证报告 |
 
-## Phase 7: testnet chain deposits into the existing ledger
+两种能力可以同时打开；所有连接共用一个 EasyTier 核心。共享模型只来自这台 Magpie 的本机服务，不转售朋友的 Remote Magpie。每个共享方独立保存自己的消费者账目和余额，没有跨节点统一余额。
 
-A provider publishes one receiving address **per chain**. A consumer asks for a deposit intent, signs
-it with their own wallet, sends the test tokens, and the plugin credits them — but only after that
-chain's own finality condition, and only when exactly one signed intent matches the transfer.
+## 当前验收范围
 
-- **Every network is a peer.** `plugin/src/networks.ts` is a registry with no primary, secondary or
-  preferred chain. BSC testnet (97) and Base Sepolia (84532) are two records of the same shape; a
-  third EVM chain was added by data alone and the whole pipeline ran on it. Mainnet 56/8453 exist as
-  always-disabled reserved records and are refused on three separate paths.
-- **Assets are `(chainId, contract)`.** Two chains with a token called `tMOCK6` at the same address
-  are two assets. A test asset is registered only after the chain answers `decimals()`, and a symbol
-  that pretends to be a real token is refused.
-- **Finality is per chain, with its measurement attached.** BSC testnet's `finalized` tag equals
-  `latest` (measured), so it uses 15 confirmations as a stated substitute; Base Sepolia's `finalized`
-  lags ~17 minutes across three providers, so it uses the tag.
-- **Attribution is a signature, not a guess.** The EIP-712 document carries the chain id, invoice,
-  nonce, exact amount and recipient. The plugin recovers the payer locally and requires it to match
-  the address the consumer says they signed with — because a signature over a *different* document
-  still recovers to *some* address. An unsigned payer stays `unclaimed` and is never credited.
-- **Uniqueness is a database index**, `(chain, token, tx, logIndex)`, not a set in memory, and the
-  ledger deposit id is derived from the event so a crash retries the same deposit.
-- **A reorg freezes, never deletes.** A credited event whose block hash moved becomes `reverted`, an
-  anomaly is recorded and the consumer is paused; the deposit stays and the balance is not edited.
-- **No buy, swap, bridge or fiat path.** Two plain external documentation links (BNB Chain, Peer) and
-  an explicit statement that Peer and Alipay have no partnership with this project.
+**已实测（REPRODUCED）**：两份全新隔离的 Magpie **0.1.2171** 图形环境、EasyTier **2.6.4**；Magpie 正常 GitHub UI 安装和 Update；默认浏览器入口、八位码配对与首次配置；提供方发布有价本机模型、消费方核对完整指纹、申请文件交接、提供方手动批准正额度、授权文件导入及原生 Remote Magpie 连接。Magpie 自带的 **Test models** 已观察到有效调用 **200**、额度用尽后原生 **429**。模型上游为受控模拟服务，不代表真实付费供应商验收。
 
-```sh
-bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet networks
-bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet receiving provider-a 97 0x…
-bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet intent provider-a alice 97 eip155:97:0x… 2500000
-bun plugin/bin/ohmyaihub.ts --data <magpie config dir> wallet events --tx 0x…
-```
+**已实测的受控模拟范围**：Ego 浏览器完成 BSC/Base 两条本地模拟 RPC、真实 EIP-712 文档与合成外部钱包签名 → 生产 Watcher/Ledger/Provisioner → 原生额度读回 `$1.0001`、再到 `$2.0001`；Base 只增加最新高度不入账，达到 finalized 后才入账；重复事件/扫描不重复记账，原生 Magpie 调用从 429 恢复为 200。消费者导入无签名账单通过，RPC503 保留为未知。WebKit 完成第二提供方完整手动授权流程；注入内容显示为字面文本且不执行，暂停第二提供方时第一方原生调用仍200，恢复通过。详见[共享与多提供方](docs/validation/phase9-stage2.md)、[钱包验证](docs/validation/phase9-wallet.md)和[安全边界](docs/validation/phase9-security.md)。
 
-The measurements behind each finality policy and the local-chain lab with a real reorg are in
-[`docs/validation/2026-10-30-phase7-multichain-wallet.md`](docs/validation/2026-10-30-phase7-multichain-wallet.md).
-That report's earlier “no real-testnet run” section is historical: the funded runs and their
-corrections are in [`2026-10-30-testnet-handoff.md`](docs/validation/2026-10-30-testnet-handoff.md),
-the live-Magpie replay in
-[`2026-10-30-live-magpie-chain-credit.md`](docs/validation/2026-10-30-live-magpie-chain-credit.md),
-and the fresh two-host acceptance in
-[`2026-10-30-fresh-twohost-wallet.md`](docs/validation/2026-10-30-fresh-twohost-wallet.md).
-**Testnet only: GO for a scoped testnet journey; NO-GO for real funds or a real vendor claim.**
+WebKit 钱包9步真实 UI 复测也已通过：新增0.5 BSC模拟入账、最终性/重放和原生 Test models200，见[WebKit钱包记录](docs/validation/phase9-browser/webkit-wallet.json)。三节点最终源码比对、745项本地测试、浏览器检查和清理结果见[Phase 9 完整验收报告](docs/validation/2026-10-30-phase9-local-web-console.md)。
 
-## Phase 6: prepaid credit that survives price changes and window ends
+**仍未确认（UNKNOWN）**：真实浏览器钱包扩展、原生 WKWebView、Linux/Windows 桌面、SSH 端到端交互未完成本轮验收。本地模拟没有新的公链付款，也不代表真实资金安全。账单导入/导出上限48KiB；崩溃后结果不明的入账申请预留保持阻止状态，需要高级人工恢复。
 
-Magpie remains the only charging point. On the **0.1.2038 billing pin** Magpie has no price pinning
-and recomputes a key's used cost at today's price; that behaviour is **not re-measured on 0.1.2120**.
-The plugin therefore keeps the balance of record itself:
+Magpie **0.1.2038** 仍是已有价格与计费语义的测量基线；没有在 0.1.2171 重测全部历史重定价、并发超额和窗口行为。早期真实 BSC 测试网、Base Sepolia 转账及双主机链上证据见[历史两主机验证](docs/validation/2026-10-30-fresh-twohost-wallet.md)，它们与本轮 GUI 验收分开。
 
-- a local SQLite ledger in `oh-my-aihub/ledger.sqlite` (integer nano-USD, unique deposit and usage
-  ids, immutable price snapshot per window);
-- top-up = `native used + ledger balance`, never `old cap + amount`; the deposit is credited only
-  after Magpie's cap read-back;
-- a price-version mismatch, a native window boundary or native-vs-ledger drift **pauses** the key
-  (`gateway-key remove`, falling back to `gateway-key rotate`) instead of pretending the old cap is
-  still safe, and records how far the stop really went;
-- the check runs on its own 10 s cadence, not only when the page is opened; a check that cannot
-  verify the books withdraws the overlay publication;
-- a row that settles after a rotation is charged at the old window's frozen price and tightens the
-  live key; consumption identity is the usage-log line position, not a content hash;
-- `consumers reissue` creates a new key with `cap = ledger balance`, preserving a plugin-owned
-  secret, and requires an explicit `acceptPriceVersion` after a price change;
-- quotes carry `billing.priceVersion` and `priceLocked: false`, so a signed quote is a record of
-  what was quoted, not a claim that Magpie will keep that price.
+## 使用边界
 
-The measured price/window behaviour, the three candidate strategies and the exact GO/NO-GO are in
-[`docs/validation/2026-10-30-phase6-pricing-window.md`](docs/validation/2026-10-30-phase6-pricing-window.md).
-The accounting-safety review patch (periodic check, late-row settlement, log-position identity,
-enforcement levels, crash recovery) is in
-[`docs/validation/2026-10-30-phase6-review-fixes.md`](docs/validation/2026-10-30-phase6-review-fixes.md).
-The final targeted patch (an unreadable limit fails the check; a usage-log gap blocks reissue until
-an audited resolution) is in
-[`docs/validation/2026-10-30-phase6-final-fixes.md`](docs/validation/2026-10-30-phase6-final-fixes.md).
-**GO for testnet accounting development; NO-GO for real USDC until the native price-lock blocker is
-solved.**
+- 控制台只监听 `127.0.0.1`，需要一次性打开凭证或明确配对。永不把 Magpie 管理界面发布到局域网、覆盖网或公网，也没有 Quick Tunnel。
+- 原生插件页保存打开偏好、打开请求或配对批准会重启**所有插件共用的宿主**，已有控制台会话会失效。普通控制台业务操作直接调用现有 Service；网络变更可能重启 EasyTier，但不靠保存 Magpie 插件选项执行。
+- Gateway Key 是访问秘密。授权文件只交给对应伙伴；浏览器下载权限由浏览器和系统决定，不能保证文件是 `0600`。
+- `priceLocked: false` 表示价格没有被锁定。正额度不是实时硬结算保证；价格检测有间隔，并发请求也可能超额。`0` 在 Magpie 原生上限中表示无限额，不能当作暂停。
+- 钱包仅限注册的 mock 测试代币。BSC 测试网与 Base Sepolia 地位相同；没有主网资产、代币发行、代管私钥、买卖、兑换、跨链桥或法币交易。真实资金仍未开放。
 
-```sh
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie consumers reissue <consumer-id> --accept-price-version <sha256>
-```
-
-## Phase 5: peer discovery and a read-only catalogue
-
-A node can opt in to **publish** a small signed JSON catalogue of its shareable **native** models,
-API capabilities, explicit prices, simulated minimum top-up, mapped address and gateway port. A
-node can opt in to **discover** peers, reading their catalogues through EasyTier's own loopback
-SOCKS5 listener. No mapped_cidr is typed by hand; hostname, virtual IP and mapped_cidr remain
-routing hints, not verified identities.
-
-```sh
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog config --display-name "My Magpie" --port 3426
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog publish on
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog discover on
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie catalog peers
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie connect
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie connect --node <node-id> \
-  --trust --fingerprint <64-hex> --quote <64-hex> --request-out "$HOME/request.json"
-```
-
-- The catalogue is one read-only `GET /catalog/v1`, bound to the provider's LAN address, not a
-gateway and not the management API. Its port is added to the Forward ACL only while published;
-Inbound stays Drop with no rules, so the virtual-IP/loopback path is not a way in.
-- Quotes are self-signed Ed25519 (TOFU). The first sight is **unverified**; a changed fingerprint is
-  a warning and is never accepted silently. `connect` displays the full fingerprint and quote hash
-  and requires an explicit `--trust --fingerprint … --quote …` acceptance. A signature is not a
-  real-world identity.
-- Quotes are display data: they do not create a key, a balance or a charge. The manual
-  `consumers add` → `share handover` → `remote add` flow issues every Gateway Key, and a quote price
-  change never alters a key's cost cap. Since phase 6 a quote also carries a recomputable
-  `billing.priceVersion` and `priceLocked: false`; a key is bound to the accepted version.
-- The plugin page stays read-only and CSP-compatible: it renders a generated snapshot with the peer
-  directory, quotes, native key limits and warnings.
-
-## Phase 4: two capabilities, several providers
-
-`plugin/` is a real Magpie community plugin (a package with a Magpie page). One node can now:
-
-- **share** its own Magpie on the overlay (`sharingEnabled`), issuing one **held** Gateway Key per
-  consumer (native-only model whitelist + positive cost cap), and
-- **consume** any number of remote Magpies (`consumingEnabled`), each with its own loopback port,
-  Remote Magpie registration, Gateway Key and status.
-
-Both run on one EasyTier core and one network identity. A shared key may only name this node's own
-models, so a remote channel is never resold and an A→B→A chain cannot form through a shared key.
-It never touches an AI request: Magpie keeps authentication, accounting and 429s. Phase-3
-`provider`/`consumer` state migrates automatically, with a backup.
-
-```sh
-magpie plugin add /absolute/path/to/plugin          # install into Magpie
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie status
-```
-
-- Sharing: exports **its own LAN address as a `/32`** under a unique `10.66.a.b/32`, with the
-  Inbound ACL dropping everything and the Forward ACL opening only its gateway port. The
-  virtual-IP path (which would be rewritten to loopback and bypass the key) is never offered.
-- Consuming: adds a `127.0.0.1` port forward to the provider's mapped address, registers it as a
-  native Remote Magpie, and refuses to finish unless the ingress answers 401 without a key and
-  with a wrong key, and the valid key lists a model.
-
-```sh
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie remote list
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie remote add peer-b --cidr 10.66.1.2/32 --key-file "$HOME/peer-b.key" --port 3425
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie remote test peer-b
-bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie share on
-```
-- EasyTier 2.6.4 is downloaded and **SHA-256 verified** by the plugin, Secure Mode with a
-  persisted X25519 identity, RPC pinned to `127.0.0.1`.
-
-See [plugin/README.md](plugin/README.md) for install, configuration, operations and limits,
-[`docs/validation/2026-10-30-plugin-phase3.md`](docs/validation/2026-10-30-plugin-phase3.md) for the
-phase-3 matrix and [`docs/validation/2026-10-29-phase4-multi-role-multi-provider.md`](docs/validation/2026-10-29-phase4-multi-role-multi-provider.md)
-for the phase-4 three-instance lab, and [`docs/validation/2026-10-30-phase5-peer-catalog.md`](docs/validation/2026-10-30-phase5-peer-catalog.md) for the phase-5 lab.
-
-The older [Phase 0 prototype](prototype/phase0/README.md) is archived as a working experimental slice, **not the target architecture**. It contains an independent HTTP admission/charging proxy which should not be carried forward without evidence.
-
-## Security
-
-No keys, mnemonic phrases, real Gateway Keys, EasyTier network secrets, RPC credentials, personal records or payment databases in Git. A GitHub repository may be public. Wallet and payment code must stay on testnet until authenticated networking, quota semantics and double-credit protection are verified.
+设计与技术证据见[架构决策](docs/ARCHITECTURE.md)、[验证任务](docs/VALIDATION.md)和[插件说明](plugin/README.md)。历史验证结论以各自版本、平台及报告范围为准。

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>外部合成测试钱包 · 本地夹具</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head><body>
+<header><h1>外部合成测试钱包</h1><strong>本地模拟链，仅复用 chainId；未连接公链，未付款</strong><p>独立测试夹具，不是产品钱包。临时账户没有资金，不能广播交易；重启、重置或退出后密钥丢失。</p><p id="session">正在建立私有夹具会话…</p><button id="logout" disabled>清除临时钱包并退出</button></header>
+<p id="notice" role="status"></p>
+<main hidden id="main">
+<section><h2>1. 生成无资金临时钱包</h2><button id="generate">生成新的合成钱包</button><button id="reset">清除临时钱包</button><p>公开付款人地址：<code id="payer">未生成</code></p></section>
+<section><h2>2. 导入生产控制台导出的签名请求</h2><input id="deposit-file" type="file" accept="application/json,.json"><p>仅接收真实 deposit-request 文件，核对签名域、网络、代币、收款地址、原始数量和摘要。</p><pre id="deposit-review">尚未导入</pre><label><input type="checkbox" id="sign-consent">我已核对上述全部字段，仅使用这个无资金合成账户签署本地测试请求。</label><p><button id="sign" disabled>签署并下载签名文件</button><button id="clear-document">清除文件与签名</button></p></section>
+<section><h2>3. 在本地模拟链生成 Transfer 事件（不是付款）</h2><p>先将签名文件导回生产控制台。只有生产端验签后导出的 transfer-instructions 文件可以导入此处。不会读取产品文件或调用产品管理 API。</p><input id="transfer-file" type="file" accept="application/json,.json"><pre id="transfer-review">尚未导入</pre>
+<label>模拟测试变体<select id="variant"><option value="exact">精确匹配导入指令</option><option value="amount">错误原始数量 +1（负面测试）</option><option value="sender">错误付款人（负面测试）</option><option value="token">错误代币（负面测试）</option><option value="chain">另一模拟链（负面测试）</option></select></label>
+<p><label><input id="event-consent" type="checkbox">我理解这只生成合成日志与回执，不是链上付款。</label></p><button id="event" disabled>在新块生成模拟 Transfer</button><button id="event-replay" disabled>用同一操作编号重复提交（重复保护测试）</button><pre id="event-result"></pre></section>
+<section><h2>4. 独立推进模拟链与负面控制</h2><p>先让生产监视器看见事件，再推进深度。97 使用生产 15 确认策略；84532 必须单独推进 finalized。这里没有修改生产策略。</p><label>明确选择网络<select id="chain"><option value="">请选择，不设默认</option><option value="97">97 · 本地模拟</option><option value="84532">84532 · 本地模拟</option></select></label><label>推进块数<input id="blocks" type="number" value="15" min="1" max="100"></label><button id="mine">推进 head（finalized 不变）</button><button id="finalize">将 finalized 推进到当前 head</button>
+<fieldset><legend>该链独立故障开关</legend><label><input id="fail-all" type="checkbox">全部 RPC 503</label><label><input id="fail-logs" type="checkbox">日志 RPC 错误</label><label><input id="wrong-chain" type="checkbox">返回错误 chainId=1</label><label><input id="wrong-decimals" type="checkbox">返回错误 decimals</label><label>回执<select id="receipt"><option value="normal">正常</option><option value="missing">缺失 null</option><option value="unavailable">HTTP503</option></select></label><button id="flags">应用该链故障设置</button></fieldset></section>
+<section><h2>只读夹具状态</h2><button id="refresh">刷新状态</button><button id="export-evidence">下载无密钥模拟证据</button><pre id="state"></pre></section>
+</main></body></html>

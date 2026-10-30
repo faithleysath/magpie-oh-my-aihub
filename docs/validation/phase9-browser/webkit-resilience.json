@@ -1,0 +1,90 @@
+{
+  "schema": "ohmyaihub.webkit-resilience/v1",
+  "at": "2026-10-30T12:13:01.403Z",
+  "playwright": "1.64.1",
+  "browser": "WebKit",
+  "browserVersion": "27.2",
+  "platform": "darwin/arm64",
+  "magpie": "0.1.2171",
+  "magpieSource": "244d80e23f91ab4e2b37b4e045d61fda5f7bca50",
+  "installedSources": {
+    "provider2": {
+      "webPort": 29747,
+      "source": "8b86115",
+      "provenance": "parent installed via actual Magpie GUI"
+    },
+    "consumer": {
+      "webPort": 51417,
+      "source": "03d9981",
+      "provenance": "parent installed via actual Magpie GUI"
+    }
+  },
+  "boundary": "Visible Magpie GUI and console clicks/forms, private runtime login URL reads, and DOM-only assertions. No CLI business operations, manual HTTP, Service calls, product state edits, key reveal or P1 pairing. Parent services left running.",
+  "scenarios": [
+    {
+      "name": "provider2 explicit browser pairing",
+      "result": "VERIFIED",
+      "codeMatched": true,
+      "nativeCheckboxAndApproval": true,
+      "privateStateVisibleAfterApproval": true
+    },
+    {
+      "name": "consumer explicit browser pairing",
+      "result": "VERIFIED",
+      "codeMatched": true,
+      "nativeCheckboxAndApproval": true,
+      "privateStateVisibleAfterApproval": true
+    },
+    {
+      "name": "malicious catalogue display name",
+      "result": "VERIFIED",
+      "payload": "<img src=x onerror=\"document.body.dataset.xss=1\">",
+      "literalHeading": true,
+      "injectedImageElements": 0,
+      "bodyXssMarker": false,
+      "javascriptDialogs": 0,
+      "imageRequests": 0,
+      "screenshot": "webkit-resilience-literal-catalog.png"
+    },
+    {
+      "name": "restore provider display name",
+      "result": "VERIFIED",
+      "restored": "林间实验室 · 第二提供者"
+    },
+    {
+      "name": "provider2 pause isolation",
+      "result": "VERIFIED",
+      "provider2": "ohmyaihub-2acddc17\n需要处理\n\n原生 Remote Magpie · peer-2acddc17\n\n额度上限 $1.0000 · 已用 $0.0000 · 剩余 $1.0000\n\nthe provider does not answer with this Gateway Key (offline, revoked or a different provider)\n\n连接与核验信息\n读取可用模型\n检查连接与额度\n更新访问密钥\n移除此连接",
+      "provider1": "ohmyaihub-f4754eac\n已连接\n\n原生 Remote Magpie · peer-f4754eac\n\n额度上限 $2.0001 · 已用 $0.0480 · 剩余 $1.9521\n\n连接与核验信息\n读取可用模型\n检查连接与额度\n更新访问密钥\n移除此连接",
+      "screenshot": "webkit-resilience-peer-isolation.png"
+    },
+    {
+      "name": "native Magpie P1 model during P2 sharing pause",
+      "result": "VERIFIED",
+      "surface": "C Magpie Providers → Remote magpie (not Remote magpie 2) → 测试模型",
+      "model": "provider/provider-model",
+      "title": "通过 OpenAI 协议在 3 毫秒内响应\n右键可单独测试这个模型",
+      "screenshot": "webkit-resilience-native-p1-model.png",
+      "equivalence": "Native UI model test successful via OpenAI protocol; no manual HTTP request"
+    },
+    {
+      "name": "provider2 sharing resumed and real models recovered",
+      "result": "VERIFIED",
+      "checks": 1,
+      "elapsedMs": 285,
+      "model": "provider2/provider2-model"
+    },
+    {
+      "name": "refresh resumes HttpOnly-cookie session",
+      "result": "VERIFIED",
+      "privateStateVisible": true
+    },
+    {
+      "name": "logout followed by reload denies private state",
+      "result": "VERIFIED",
+      "explicitPairingRequired": true,
+      "privateStateHidden": true
+    }
+  ],
+  "result": "VERIFIED"
+}

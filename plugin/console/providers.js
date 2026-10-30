@@ -1,0 +1,650 @@
+/* Provider/consumer workflows. Every action goes through the existing session
+ * client. Remote strings are text nodes; secrets exist only in an explicit dialog. */
+const items = (value) => Array.isArray(value) ? value : [];
+const record = (value) => value && typeof value === "object" ? value : {};
+const money = (value) => typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(4)}` : "未读取";
+const knownCap = (value) => typeof value === "number" && Number.isFinite(value);
+const safeCap = (value) => knownCap(value) && value > 0;
+export function capLabel(value) {
+  if (!knownCap(value)) return "未知（尚未验证额度上限）";
+  return value <= 0 ? "无限制 / 不安全配置" : money(value);
+}
+export function priceText(pricing) {
+  if (!pricing || ![pricing.input, pricing.output, pricing.cacheRead, pricing.cacheWrite].every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) return "价格不完整，不能授权";
+  return `输入 $${pricing.input} / 输出 $${pricing.output} · 每百万 token${items(pricing.tiers).length ? " · 有阶梯价格，查看详情" : ""}`;
+}
+export function validCap(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0.0001 && amount <= 1_000_000 && Math.abs(Math.round(amount * 1e4) / 1e4 - amount) < 1e-9;
+}
+export function selectableModels(models, selected) {
+  const chosen = new Set(selected);
+  return items(models).filter((model) => chosen.has(model.id) && model.completePrice !== false && priceText(model.pricing) !== "价格不完整，不能授权").map((model) => model.id);
+}
+export function peerAcceptance(peer) {
+  return { nodeId: peer.nodeId || peer.quote?.node?.id, fingerprint: peer.pendingFingerprint || peer.identity?.fingerprint || peer.quote?.identity?.fingerprint, quoteHash: peer.quoteHash || peer.quote?.contentHash };
+}
+export function peerNextStep(status) {
+  const guidance = {
+    unverified: "请先通过可信渠道核对完整指纹，再点击“核对并接受身份”。",
+    "identity-changed": "伙伴身份已变化。请联系对方核对新指纹，再点击“核对新身份”；确认前不能申请或连接。",
+    verified: "身份已在本机接受，可以选择模型生成申请，或使用伙伴交付的授权连接。",
+    connected: "此伙伴已有连接，可在“我的连接”中检查模型、密钥与额度。",
+    stale: "报价已过期或发生回退，请刷新目录并向伙伴确认最新报价。",
+    unreachable: "暂时无法读取伙伴目录，请检查网络连接后刷新。",
+    offline: "伙伴当前离线，请等待对方上线后刷新目录。",
+    "no-catalog": "伙伴尚未发布模型目录，请联系对方在“我的共享”中发布。",
+    conflict: "伙伴网络地址存在冲突，请与对方确认各自的网络设置。",
+  };
+  return guidance[status] || "请刷新目录，确认伙伴的当前状态后继续。";
+}
+export function checkLabel(name) {
+  const labels = { configured: "私有网络配置", "core-running": "网络引擎", acl: "网络访问规则", "sharing-suspended": "共享安全保护", "gateway-key-required": "未授权访问拒绝", "mapped-cidr": "共享专用地址", "published-gateway": "模型网关发布", "shared-models-native-only": "仅共享本机模型", "share-guard-cadence": "共享保护巡检", "catalog-published": "模型目录发布", "catalog-forward-port": "目录访问规则", "catalog-quote": "签名目录与报价", "catalog-identity": "目录身份签名", "catalog-socks5-loopback": "本机目录查询", "catalog-peers": "伙伴目录身份", "forwards-match": "远程连接归属", "no-orphan-forwards": "过期连接清理" };
+  if (labels[name]) return labels[name];
+  if (/^provider:.+:forward$/.test(name)) return "伙伴网络连接";
+  if (/^provider:.+:registered$/.test(name)) return "Magpie 远程服务注册";
+  if (/^provider:.+:status$/.test(name)) return "伙伴服务状态";
+  return "服务检查";
+}
+export function parseTransportDocument(text) {
+  if (typeof text !== "string" || new TextEncoder().encode(text).length > 64 * 1024) throw new Error("文件内容超过 64 KB，请使用 AIHub 导出的申请或授权文件。");
+  let document;
+  try { document = JSON.parse(text); } catch { throw new Error("文件内容无法识别，请选择 AIHub 导出的申请或授权文件。"); }
+  if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error("请选择有效的 AIHub 文件。");
+  return document;
+}
+const statusNames = { connected: "已连接", verified: "身份已接受", unverified: "身份待确认", "identity-changed": "身份已变化", stale: "报价已过期", unreachable: "暂时无法连接", "no-catalog": "未发布目录", conflict: "地址冲突", offline: "离线", self: "本机", pending: "待审批", approved: "已批准", rejected: "已拒绝", paused: "已暂停", auth: "授权失效", error: "需要处理", unknown: "尚未验证" };
+
+export function mountProviders({ client, getState, onState, notice, setBusy, refreshState }) {
+  const el = (tag, text, className) => {
+    const node = document.createElement(tag);
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    if (className) node.className = className;
+    return node;
+  };
+  const button = (text, callback, primary = false) => {
+    const node = el("button", text, `button ${primary ? "primary" : "secondary"}`);
+    node.type = "button";
+    node.addEventListener("click", callback);
+    return node;
+  };
+  const paragraph = (text) => el("p", text, "muted");
+  const empty = (title, text) => {
+    const node = el("div", null, "workflow-empty");
+    node.append(el("h3", title), paragraph(text));
+    return node;
+  };
+  const field = (title, type = "text", value = "") => {
+    const label = el("label", null, "field");
+    const input = el("input");
+    input.type = type;
+    input.value = value;
+    if (type === "password") { input.autocomplete = "new-password"; input.setAttribute("data-1p-ignore", ""); input.setAttribute("data-bwignore", ""); }
+    label.append(el("span", title), input);
+    return { label, input };
+  };
+  const checkbox = (text, checked = false) => {
+    const label = el("label", null, "workflow-check");
+    const input = el("input"); input.type = "checkbox"; input.checked = checked;
+    label.append(input, el("span", text));
+    return { label, input };
+  };
+  const details = (title, entries) => {
+    const node = el("details", null, "workflow-details");
+    node.append(el("summary", title));
+    for (const [label, value] of entries) {
+      const line = el("div"); line.append(el("strong", label), el("span", value ?? "未提供")); node.append(line);
+    }
+    return node;
+  };
+  const priceValue = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? `$${value} / 百万 token` : "未提供";
+  function priceDetails(model) {
+    const pricing = model.pricing;
+    const entries = [
+      ["模型", model.id], ["输入 / 输出", priceText(pricing)],
+      ["缓存读取", priceValue(pricing?.cacheRead)],
+      ["缓存写入", priceValue(pricing?.cacheWrite)],
+    ];
+    if (pricing && Object.hasOwn(pricing, "cacheWrite1h")) entries.push(["一小时缓存写入", priceValue(pricing.cacheWrite1h)]);
+    entries.push(["价格单位", pricing?.unit ?? "未提供"], ["价格来源", ({ "magpie-gateway": "Magpie 网关（magpie-gateway）", "magpie-settings": "Magpie 模型设置（magpie-settings）" })[pricing?.source] || pricing?.source || "未提供"]);
+    for (const [index, tier] of items(pricing?.tiers).entries()) {
+      const name = `阶梯 ${index + 1}`;
+      entries.push(
+        [`${name} · 门槛`, typeof tier.above === "number" && Number.isFinite(tier.above) ? `超过 ${tier.above} token` : "未提供"],
+        [`${name} · 输入`, priceValue(tier.input)],
+        [`${name} · 输出`, priceValue(tier.output)],
+        [`${name} · 缓存读取`, priceValue(tier.cacheRead)],
+        [`${name} · 缓存写入`, priceValue(tier.cacheWrite)],
+        [`${name} · 一小时缓存写入`, priceValue(tier.cacheWrite1h)],
+      );
+    }
+    entries.push(
+      ["上下文", model.contextWindow ?? "未提供"], ["最大输出", model.maxOutputTokens ?? "未提供"],
+      ["图像输入", model.images === true ? "支持" : model.images === false ? "不支持" : "未提供"],
+      ["调用接口", items(model.gatewayApis).join("、") || "未提供"],
+      ["推理级别", items(model.reasoningLevels).join("、") || "未提供"],
+      ["价格锁定", "否（priceLocked: false），以 Magpie 原生计费为准"],
+    );
+    return details("价格与能力详情", entries);
+  }
+  const badge = (text, tone = "neutral") => el("span", text, `pill ${tone}`);
+  const roots = Object.fromEntries(["discovery", "sharing", "connections"].map((name) => [name, document.getElementById(name + "-panel")]));
+  let state = null;
+  let working = false;
+  let generation = 0;
+  let candidates = null;
+  let selectedModels = new Set();
+  let modelDirty = false;
+  let publicationDirty = false;
+  let currentDialog = null;
+  let secretDocument = null;
+  const urls = new Set();
+  const caches = new Map();
+  const search = { discovery: "", sharing: "" };
+
+  const dialog = el("dialog", null, "workflow-dialog");
+  const dialogHeader = el("div", null, "section-heading");
+  const dialogTitle = el("h2"); dialogTitle.id = "workflow-dialog-title";
+  dialog.setAttribute("aria-labelledby", dialogTitle.id);
+  dialogHeader.append(dialogTitle, button("关闭", () => closeDialog()));
+  const dialogContent = el("div", null, "dialog-content");
+  const dialogError = el("p", null, "form-error"); dialogError.hidden = true; dialogError.setAttribute("role", "alert");
+  dialog.append(dialogHeader, dialogContent, dialogError);
+  document.body.append(dialog);
+  function closeDialog() {
+    generation++;
+    if (secretDocument) delete secretDocument.key;
+    secretDocument = null;
+    dialog.querySelectorAll("input,textarea").forEach((node) => { node.value = ""; });
+    dialogContent.replaceChildren();
+    dialogError.textContent = "";
+    dialogError.hidden = true;
+    currentDialog = null;
+    if (dialog.open) dialog.close();
+    for (const url of urls) URL.revokeObjectURL(url);
+    urls.clear();
+  }
+  dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialog(); });
+  // Native close events are queued: an older event may arrive after this same
+  // dialog has already opened the next workflow step. Keep that new step intact.
+  dialog.addEventListener("close", () => { if (!dialog.open && currentDialog) closeDialog(); });
+  function openDialog(title, build) {
+    closeDialog();
+    currentDialog = title;
+    dialogTitle.textContent = title;
+    build(dialogContent);
+    dialog.showModal();
+  }
+  function download(document, filename) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2) + "\n"], { type: "application/json" }));
+    urls.add(url);
+    const link = el("a"); link.href = url; link.download = filename; link.rel = "noopener"; link.click();
+    setTimeout(() => { URL.revokeObjectURL(url); urls.delete(url); }, 1000);
+  }
+  async function run(name, input = {}, success, { refresh = true } = {}) {
+    if (working || !getState()?.configured) return;
+    const expectedGeneration = generation;
+    working = true;
+    setBusy(true);
+    const controls = [...Object.values(roots), dialog].flatMap((root) => [...root.querySelectorAll("button,input,textarea,select")]).map((node) => ({ node, disabled: node.disabled }));
+    controls.forEach(({ node }) => { node.disabled = true; });
+    dialogError.hidden = true;
+    notice("正在处理，请稍候…");
+    try {
+      const result = await client.action(name, input);
+      if (generation !== expectedGeneration || !getState()) return;
+      if (result?.schema === "ohmyaihub/console/1") onState(result);
+      if (success) await success(result);
+      if (refresh && getState()) await refreshState();
+      if (getState()) notice("操作已完成，状态已更新。", "good");
+      return result;
+    } catch (error) {
+      if (generation !== expectedGeneration || !getState()) return;
+      const message = error.status === 0 ? "连接中断，操作结果暂时不明。请刷新状态确认后再决定，系统不会自动重复提交。" : error.message;
+      notice(message, "warn");
+      if (dialog.open) { dialogError.textContent = message; dialogError.hidden = false; }
+    } finally {
+      controls.forEach(({ node, disabled }) => { node.disabled = disabled; });
+      working = false;
+      if (getState()) setBusy(false);
+    }
+  }
+  function confirmAction(title, explanation, action, input, confirmText = "确认继续") {
+    openDialog(title, (root) => {
+      root.append(paragraph(explanation));
+      const agree = checkbox(confirmText);
+      const submit = button(title, () => { if (agree.input.checked) void run(action, input, () => closeDialog()); }, true);
+      submit.disabled = true;
+      agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      root.append(agree.label, submit);
+    });
+  }
+  function heading(name, title, subtitle, action) {
+    const node = el("div", null, "page-heading");
+    const text = el("div"); text.append(el("p", name, "eyebrow"), el("h1", title), paragraph(subtitle));
+    node.append(text); if (action) node.append(action); return node;
+  }
+  function toolbar(title) { const node = el("div", null, "section-heading"); node.append(el("h2", title)); return node; }
+  function searchInput(kind, container, rerender) {
+    const input = el("input", null, "workflow-search"); input.type = "search"; input.placeholder = kind === "discovery" ? "搜索模型或伙伴" : "搜索本机模型"; input.setAttribute("aria-label", input.placeholder);
+    input.addEventListener("input", () => { search[kind] = input.value; rerender(); }); container.append(input);
+  }
+
+  // Discovery and consumer request export.
+  roots.discovery.append(heading("DISCOVER TOGETHER", "发现伙伴的 AI", "在私有网络中查看真实模型、价格与签名身份。", button("刷新目录", () => void run("catalog-refresh"))));
+  const discoveryIntro = el("div", null, "card workflow-section");
+  const discoveryControls = toolbar("伙伴目录");
+  const discoverToggle = button("开启目录发现", () => void run("catalog-discover", { enabled: !state.status.config.catalog?.discoveryEnabled }));
+  discoveryControls.append(discoverToggle); discoveryIntro.append(discoveryControls, paragraph("目录只用于展示报价，申请不会自动产生账户或扣费。首次使用前，请通过可信渠道核对对方的完整身份指纹。"));
+  searchInput("discovery", discoveryIntro, renderDiscovery);
+  const discoveryList = el("div", null, "workflow-card-grid");
+  roots.discovery.append(discoveryIntro, discoveryList);
+  function renderDiscovery() {
+    if (!state) return;
+    discoverToggle.textContent = state.status.config.catalog?.discoveryEnabled ? "关闭目录发现" : "开启目录发现";
+    discoveryList.replaceChildren();
+    const peers = items(state.status.catalog?.peers).filter((peer) => peer.status !== "self");
+    const query = search.discovery.toLowerCase().trim();
+    const matches = peers.filter((peer) => !query || [peer.hostname, peer.quote?.node?.displayName, ...items(peer.quote?.models).map((model) => model.displayName || model.id)].join(" ").toLowerCase().includes(query));
+    if (!matches.length) {
+      discoveryList.append(empty(peers.length ? "没有找到匹配的模型" : "伙伴还没有出现在目录中", peers.length ? "尝试其他模型名称或伙伴名称。" : "开启目录发现并刷新；伙伴需要启用共享并发布目录。"));
+      return;
+    }
+    for (const peer of matches) {
+      const card = el("article", null, "card workflow-section");
+      const top = toolbar(peer.quote?.node?.displayName || peer.hostname || "网络伙伴");
+      top.append(badge(statusNames[peer.status] || "尚未验证", peer.status === "verified" || peer.status === "connected" ? "good" : "warn"));
+      card.append(top, paragraph(`${items(peer.quote?.models).length} 个模型 · ${peer.online ? "在线" : "离线"} · ${peer.quote?.node?.contact || "未提供联系方式"}`));
+      const acceptance = peerAcceptance(peer);
+      card.append(details("查看完整身份与报价", [["身份指纹", acceptance.fingerprint], ["报价指纹", acceptance.quoteHash], ["报价版本", peer.quote?.publication?.version], ["更新时间", peer.quote?.publication?.updatedAt], ["身份说明", "自签名 TOFU，仅证明同一密钥签名，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
+      card.append(paragraph(peerNextStep(peer.status)));
+      if (peer.detail) card.append(details("查看目录技术详情", [["原始诊断", peer.detail]]));
+      const models = el("div", null, "discovery-models");
+      for (const model of items(peer.quote?.models).filter((model) => !query || [model.id, model.displayName, peer.hostname, peer.quote?.node?.displayName].join(" ").toLowerCase().includes(query))) {
+        const row = el("div", null, "discovery-model"); row.append(el("strong", model.displayName || model.id), paragraph(priceText(model.pricing)), priceDetails(model)); models.append(row);
+      }
+      card.append(models);
+      const actions = el("div", null, "workflow-actions");
+      if (acceptance.fingerprint && peer.nodeId && !["verified", "connected"].includes(peer.status)) actions.append(button(peer.status === "identity-changed" ? "核对新身份" : "核对并接受身份", () => trustPeer(peer)));
+      if (peer.quote && peer.nodeId) {
+        const request = button("选择模型并申请", () => requestConnection(peer), true);
+        const connect = button("已有密钥，连接此伙伴", () => connectPeer(peer));
+        const allowed = ["verified", "connected"].includes(peer.status) && peer.online;
+        request.disabled = !allowed; connect.disabled = !allowed;
+        actions.append(request, connect);
+      }
+      card.append(actions); discoveryList.append(card);
+    }
+  }
+  function trustPeer(peer) {
+    const acceptance = peerAcceptance(peer);
+    openDialog("核对伙伴身份", (root) => {
+      root.append(paragraph("请通过你信任的联系方式向伙伴核对以下完整指纹。目录签名本身不能证明现实身份。"), el("code", acceptance.fingerprint, "fingerprint"));
+      if (peer.status === "identity-changed") root.append(el("p", "此伙伴的身份已变化。确认原因并重新核对后，再接受新身份。", "inline-warning"));
+      const agree = checkbox("我已通过可信渠道核对上述完整指纹，并接受此身份");
+      const submit = button("接受此身份", () => { if (agree.input.checked) void run("trust-peer", { nodeId: acceptance.nodeId, fingerprint: acceptance.fingerprint }, () => closeDialog()); }, true);
+      submit.disabled = true; agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      root.append(agree.label, submit);
+    });
+  }
+  function modelChoices(root, models, selected = []) {
+    const choices = [];
+    for (const model of items(models)) {
+      const value = typeof model === "string" ? { id: model } : model;
+      const choice = checkbox(value.displayName ? `${value.displayName} · ${value.id}` : value.id, selected.includes(value.id));
+      choice.input.dataset.modelId = value.id;
+      choice.input.disabled = value.completePrice === false;
+      const row = el("div", null, "choice-row"); row.append(choice.label);
+      if (value.pricing !== undefined) row.append(paragraph(priceText(value.pricing)));
+      root.append(row); choices.push({ id: value.id, input: choice.input });
+    }
+    return () => choices.filter((choice) => choice.input.checked && !choice.input.disabled).map((choice) => choice.id);
+  }
+  function requestConnection(peer) {
+    const acceptance = peerAcceptance(peer);
+    openDialog("选择想使用的模型", (root) => {
+      root.append(paragraph("申请会绑定你当前看到的伙伴身份、报价和模型。下载申请文件后，将它发送给共享方审批。"));
+      const getModels = modelChoices(root, items(peer.quote.models).map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" })));
+      const agree = checkbox("我已查看模型价格；价格未锁定（priceLocked: false）");
+      root.append(agree.label, button("生成连接申请", () => {
+        if (!agree.input.checked || !getModels().length) { dialogError.textContent = "请选择至少一个有完整价格的模型，并确认报价。"; dialogError.hidden = false; return; }
+        void run("connection-request", { ...acceptance, models: getModels() }, (result) => {
+          const document = result.document || result;
+          openDialog("连接申请已生成", (body) => {
+            body.append(paragraph("将下载的申请文件发送给共享方。对方导入并批准后，会另行交付授权文件；此申请不包含密钥，也不会自动扣费。"), button("下载连接申请", () => download(document, "aihub-connection-request.json"), true));
+          });
+        });
+      }, true));
+    });
+  }
+  function connectPeer(peer) {
+    const acceptance = peerAcceptance(peer);
+    openDialog("使用伙伴交付的密钥连接", (root) => {
+      root.append(paragraph("请优先导入共享方提供的授权文件；只有在对方单独交付密钥时才使用此入口。连接将绑定当前已接受的身份和报价。"));
+      const key = field("伙伴提供的 Gateway Key", "password"); key.input.required = true;
+      const agree = checkbox("我已确认密钥来自上述伙伴，并接受当前报价");
+      root.append(key.label, agree.label, button("连接此伙伴", () => {
+        if (!key.input.value.trim() || !agree.input.checked) { dialogError.textContent = "请填写密钥并确认伙伴和报价。"; dialogError.hidden = false; return; }
+        const input = { ...acceptance, key: key.input.value.trim() };
+        key.input.value = "";
+        void run("catalog-connect", input, () => closeDialog()).finally(() => { delete input.key; });
+      }, true));
+    });
+  }
+
+  // Sharing policy, catalogue publication and manual imported approvals.
+  roots.sharing.append(heading("SHARE ON YOUR TERMS", "我的共享", "选择本机模型，发布目录，并逐一审批伙伴的访问申请。", button("读取本机模型", () => loadCandidates())));
+  const shareIntro = el("div", null, "card workflow-section");
+  const shareTop = toolbar("共享能力");
+  const shareToggle = button("开启共享", () => confirmAction(state.status.config.sharingEnabled ? "暂停共享" : "开启共享", "此操作会更新网络发布并可能重连。访问模型仍需有效的专属授权。", "share-toggle", { enabled: !state.status.config.sharingEnabled }));
+  shareTop.append(shareToggle); shareIntro.append(shareTop, paragraph("只提供当前 Magpie 中有完整价格的本机模型。不会转售从其他伙伴连接来的模型。"));
+  const modelsCard = el("div", null, "card workflow-section");
+  modelsCard.append(toolbar("允许共享的本机模型"));
+  searchInput("sharing", modelsCard, renderModels);
+  const modelsList = el("div", null, "shared-model-list");
+  const modelSave = button("保存模型范围", () => {
+    const selected = selectableModels(candidates?.models, [...selectedModels]);
+    if (!selected.length) { notice("请至少选择一个有完整价格的本机模型；如需停止共享，请暂停共享能力。", "warn"); return; }
+    void run("share-models", { models: selected }, () => { modelDirty = false; });
+  }, true);
+  modelsCard.append(modelsList, paragraph("价格未锁定（priceLocked: false）。模型价格变化时，现有授权可能暂停并要求重新确认。"), modelSave);
+  const publication = el("form", null, "card workflow-section");
+  publication.append(toolbar("对伙伴展示的目录"));
+  const displayName = field("展示名称"); displayName.input.maxLength = 120;
+  const contact = field("联系说明"); contact.input.maxLength = 200;
+  const minimum = field("建议申请额度（USD）", "number"); minimum.input.min = "0.0001"; minimum.input.step = "0.0001";
+  const pubFields = el("div", null, "form-grid"); pubFields.append(displayName.label, contact.label, minimum.label);
+  const publishToggle = button("发布目录", () => confirmAction(state.status.config.catalog?.enabled ? "停止发布目录" : "发布模型目录", "发布内容包括所选模型、价格、联系说明和自签名身份。授权密钥不会进入目录。", "catalog-publish", { enabled: !state.status.config.catalog?.enabled }));
+  const pubSave = el("button", "保存目录说明", "button primary"); pubSave.type = "submit";
+  const pubActions = el("div", null, "workflow-actions"); pubActions.append(pubSave, publishToggle);
+  publication.append(pubFields, pubActions);
+  for (const input of [displayName.input, contact.input, minimum.input]) input.addEventListener("input", () => { publicationDirty = true; });
+  publication.addEventListener("submit", (event) => {
+    event.preventDefault(); if (!publication.reportValidity()) return;
+    const input = { displayName: displayName.input.value.trim() || null, contact: contact.input.value.trim() || null };
+    if (minimum.input.value) input.minTopUpUsd = Number(minimum.input.value);
+    void run("catalog-settings", input, () => { publicationDirty = false; });
+  });
+  const ownIdentity = el("div", null, "card workflow-section");
+  ownIdentity.append(toolbar("我的目录身份"), paragraph("让伙伴在其“发现模型”页面展开身份信息，与你通过可信渠道逐字核对完整指纹。以下均为公开目录信息。"));
+  const identityContent = el("div");
+  ownIdentity.append(identityContent);
+  function renderOwnIdentity() {
+    identityContent.replaceChildren();
+    const quote = state?.status.catalog?.quote;
+    const fingerprint = quote?.identity?.fingerprint;
+    if (!fingerprint) {
+      identityContent.append(empty("尚未生成目录身份", "选择本机模型并发布目录后，这里会显示可供伙伴核对的完整身份和报价。"));
+      return;
+    }
+    identityContent.append(details("查看完整目录身份与报价", [["完整身份指纹", fingerprint], ["完整报价指纹", quote.contentHash], ["完整价格版本", quote.billing?.priceVersion], ["目录版本", quote.version ?? quote.publication?.version], ["更新时间", quote.updatedAt ?? quote.publication?.updatedAt], ["发布时间", quote.publishedAt ?? quote.publication?.publishedAt], ["身份签名", "自签名 Ed" + "25519；只证明同一密钥签署，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
+    const actions = el("div", null, "workflow-actions");
+    actions.append(button("复制完整身份指纹", async () => {
+      try { await navigator.clipboard.writeText(fingerprint); notice("完整身份指纹已复制，请通过可信渠道交给伙伴核对。", "good"); }
+      catch { notice("浏览器未允许复制，请展开目录身份并选择完整指纹进行复制。", "warn"); }
+    }));
+    identityContent.append(actions);
+  }
+  const requestCard = el("div", null, "card workflow-section"); requestCard.append(toolbar("连接申请"));
+  const importRequest = button("导入伙伴的申请文件", () => importDocument("request"));
+  requestCard.append(paragraph("导入仅用于核对；每份申请都需要你明确选择额度和模型，再手动批准。"), importRequest);
+  const requestsList = el("div", null, "workflow-list"); requestCard.append(requestsList);
+  const consumersCard = el("div", null, "card workflow-section"); consumersCard.append(toolbar("已授权的伙伴"));
+  const consumersList = el("div", null, "workflow-list"); consumersCard.append(consumersList);
+  roots.sharing.append(shareIntro, modelsCard, publication, ownIdentity, requestCard, consumersCard);
+  function policySelection(models) {
+    const policy = state?.status.config.share?.models;
+    return items(models).filter((model) => model.completePrice && (Array.isArray(policy) ? policy.some((rule) => rule === "*" || rule === model.id || (rule.endsWith("/*") && model.id.startsWith(rule.slice(0, -1)))) : model.allowedByPolicy)).map((model) => model.id);
+  }
+  async function loadCandidates() {
+    return run("share-candidates", {}, (result) => {
+      candidates = result.candidates || result;
+      if (!modelDirty) selectedModels = new Set(policySelection(candidates.models));
+      renderModels();
+    }, { refresh: false });
+  }
+  function renderModels() {
+    modelsList.replaceChildren();
+    if (!candidates) { modelsList.append(empty("先读取本机模型", "点击上方“读取本机模型”，获取 Magpie 当前真实模型及完整价格。")); modelSave.disabled = true; return; }
+    const models = items(candidates.models).filter((model) => [model.id, model.displayName].join(" ").toLowerCase().includes(search.sharing.toLowerCase()));
+    if (!models.length) modelsList.append(empty("没有可显示的本机模型", "在 Magpie 添加本机服务和模型并设置完整价格后，再读取模型列表。"));
+    for (const model of models) {
+      const row = el("div", null, "shared-model-row");
+      const choice = checkbox(model.displayName || model.id, selectedModels.has(model.id));
+      choice.input.disabled = !model.completePrice;
+      choice.input.addEventListener("change", () => { modelDirty = true; if (choice.input.checked) selectedModels.add(model.id); else selectedModels.delete(model.id); });
+      const body = el("div"); body.append(choice.label, paragraph(model.id), paragraph(priceText(model.pricing)), priceDetails(model));
+      row.append(body, badge(model.completePrice ? "价格完整" : "缺少价格", model.completePrice ? "good" : "warn"));
+      modelsList.append(row);
+    }
+    modelSave.disabled = items(candidates.models).every((model) => !model.completePrice);
+  }
+  function importDocument(kind) {
+    openDialog(kind === "request" ? "导入连接申请" : "导入伙伴授权", (root) => {
+      root.append(paragraph(kind === "request" ? "选择伙伴从 AIHub 导出的申请文件，导入后先核对内容，再手动审批。" : "选择共享方交付的授权文件。文件包含访问密钥，本应用只在本机发送给服务验证；请妥善保存与传递。"));
+      const fileLabel = el("label", null, "field"); fileLabel.append(el("span", "选择 AIHub 文件"));
+      const file = el("input"); file.type = "file"; file.accept = ".json,application/json"; fileLabel.append(file);
+      const advanced = el("details", null, "workflow-details"); advanced.append(el("summary", "或粘贴已收到的完整文件内容"));
+      const paste = el("textarea"); paste.rows = 5; paste.maxLength = 65536; paste.autocomplete = "off"; paste.setAttribute("aria-label", "粘贴 AIHub 文件内容"); paste.setAttribute("data-1p-ignore", ""); paste.setAttribute("data-bwignore", ""); advanced.append(paste);
+      const agree = checkbox(kind === "request" ? "我确认只导入此申请，尚未授权任何访问" : "我已核对共享方身份和报价，并确认此授权是交付给本机的");
+      root.append(fileLabel, advanced, agree.label, button(kind === "request" ? "导入并核对申请" : "验证并连接", async () => {
+        if (!agree.input.checked) { dialogError.textContent = "请先确认文件用途与来源。"; dialogError.hidden = false; return; }
+        try {
+          const selected = file.files?.[0];
+          if (selected && selected.size > 64 * 1024) throw new Error("文件超过 64 KB，请选择有效的 AIHub 文件。");
+          const document = parseTransportDocument(selected ? await selected.text() : paste.value);
+          if (kind === "request" && document.schema !== "ohmyaihub.connection-request/v1") throw new Error("这不是 AIHub 连接申请文件。");
+          if (kind === "authorization" && document.schema !== "ohmyaihub.authorization/v1") throw new Error("这不是 AIHub 授权文件。");
+          paste.value = ""; file.value = "";
+          const input = { document };
+          await run(kind === "request" ? "request-import" : "connection-preview", input, (result) => {
+            if (kind === "request") { closeDialog(); renderRequests(); }
+            else previewConnection(document, result.document || result);
+          }, { refresh: kind === "request" });
+          if (kind !== "request" && secretDocument !== document) delete document.key;
+        } catch (error) { dialogError.textContent = error.message; dialogError.hidden = false; }
+      }, true));
+    });
+  }
+  function previewConnection(document, preview) {
+    openDialog("核对授权并连接", (root) => {
+      root.append(paragraph("本机已验证此文件的申请方、共享方身份和当前报价。请再次核对以下信息，确认后才会创建原生 Remote Magpie 连接。"), details("授权身份与模型", [["共享方", preview.provider?.hostname || preview.provider?.nodeId], ["接受方", preview.consumer?.nodeId], ["模型范围", items(preview.models).join("、")], ["额度", capLabel(preview.capUsd)], ["完整身份指纹", preview.quote?.identityFingerprint], ["完整报价指纹", preview.quote?.contentHash], ["完整价格版本", preview.quote?.priceVersion], ["价格锁定", "否（priceLocked: false）"]]));
+      const agree = checkbox("我已核对上述伙伴、模型与价格，并确认连接");
+      const submit = button("创建此伙伴连接", () => {
+        if (!agree.input.checked || !secretDocument) return;
+        const input = { document: secretDocument };
+        void run("connection-import", input, () => closeDialog());
+      }, true);
+      submit.disabled = true; agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      root.append(agree.label, submit);
+    });
+    secretDocument = document;
+  }
+  function requestDocument(request) { return request.document || request.request || request; }
+  function renderRequests() {
+    requestsList.replaceChildren();
+    const requests = items(state?.workflows?.requests);
+    if (!requests.length) { requestsList.append(empty("还没有收到申请", "让伙伴在“发现模型”中选择你的模型，生成申请并将文件发送给你。")); return; }
+    for (const request of requests) {
+      const doc = requestDocument(request);
+      const row = el("article", null, "workflow-row");
+      const title = toolbar(doc.consumer?.hostname || doc.consumer?.nodeId || "伙伴申请"); title.append(badge(statusNames[request.status] || "待审批"));
+      row.append(title, paragraph(`${items(doc.models).length} 个模型 · ${doc.createdAt || request.importedAt || "待核对"}`));
+      const actions = el("div", null, "workflow-actions");
+      actions.append(button(request.status === "pending" ? "核对并审批" : "查看申请", () => approveRequest(request)));
+      row.append(actions); requestsList.append(row);
+    }
+  }
+  function approveRequest(request) {
+    const doc = requestDocument(request);
+    openDialog("核对伙伴申请", (root) => {
+      const reasons = items(request.reasons || request.comparison?.reasons);
+      root.append(details("申请身份与报价", [["申请方", doc.consumer?.hostname || doc.consumer?.nodeId], ["共享方", doc.provider?.hostname || doc.provider?.nodeId], ["申请身份指纹", doc.quote?.identityFingerprint], ["申请报价指纹", doc.quote?.contentHash], ["申请价格版本", doc.quote?.priceVersion], ["当前报价指纹", request.currentQuote?.contentHash || state.status.catalog?.quote?.contentHash], ["当前身份指纹", request.currentQuote?.identityFingerprint || state.status.catalog?.quote?.identity?.fingerprint], ["价格锁定", "否（priceLocked: false）"]]));
+      if (reasons.length) root.append(el("p", reasons.join("；"), "inline-warning"));
+      const currentModels = items(state.status.catalog?.quote?.models);
+      const getModels = modelChoices(root, items(doc.models).map((id) => ({ ...(currentModels.find((model) => model.id === id) || {}), id, completePrice: currentModels.some((model) => model.id === id && priceText(model.pricing) !== "价格不完整，不能授权") })), items(doc.models));
+      if (request.status !== "pending") { root.append(paragraph(`此申请${statusNames[request.status] || "已处理"}。`)); return; }
+      const cap = field("本次明确授权的额度（USD）", "number", ""); cap.input.min = "0.0001"; cap.input.max = "1000000"; cap.input.step = "0.0001"; cap.input.required = true; cap.input.placeholder = "请输入大于等于 0.0001 的金额";
+      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍。0 在 Magpie 中表示不设上限，不能作为暂停。"));
+      const agree = checkbox("我已核对申请方、当前报价、模型与额度，明确批准此次授权");
+      const submit = button("批准此申请", () => {
+        if (!agree.input.checked || !validCap(cap.input.value) || !getModels().length) { dialogError.textContent = "请选择至少一个当前可授权模型，填写有效正额度，并明确确认批准。"; dialogError.hidden = false; return; }
+        void run("request-approve", { requestId: request.id || request.requestId, capUsd: Number(cap.input.value), models: getModels() }, () => closeDialog());
+      }, true);
+      submit.disabled = request.eligible === false || request.approvable === false;
+      const rejectNote = field("拒绝说明（可选）"); rejectNote.input.maxLength = 300;
+      root.append(cap.label, agree.label, submit, rejectNote.label, button("拒绝此申请", () => void run("request-reject", { requestId: request.id || request.requestId, note: rejectNote.input.value.trim() }, () => closeDialog())));
+    });
+  }
+  function renderConsumers() {
+    consumersList.replaceChildren();
+    const consumers = items(state?.status.consumers);
+    if (!consumers.length) { consumersList.append(empty("还没有授权伙伴", "导入并手动批准申请后，伙伴的模型范围、使用量和授权状态会显示在这里。")); return; }
+    for (const consumer of consumers) {
+      const row = el("article", null, "workflow-row");
+      const top = toolbar(consumer.consumerId);
+      const capVerified = safeCap(consumer.capUsd);
+      top.append(badge(consumer.revokedAt ? "已撤销" : consumer.paused ? "已暂停" : !capVerified ? (knownCap(consumer.capUsd) ? "额度上限不安全" : "额度上限待核验") : consumer.spent ? "额度已用尽" : "已授权", consumer.revokedAt || consumer.paused || consumer.spent || !capVerified ? "warn" : "good"));
+      row.append(top, paragraph(`${items(consumer.models).length} 个模型 · 额度上限 ${capLabel(consumer.capUsd)} · 已用 ${money(consumer.usedUsd)} · 剩余 ${money(consumer.leftUsd)}`), details("模型、计费与授权详情", [["模型范围", items(consumer.models).join("、")], ["价格版本", consumer.priceVersion], ["接受的报价", consumer.acceptedQuoteHash], ["累计调用", consumer.calls], ["下次窗口", consumer.reset], ["暂停原因", consumer.paused?.reason], ["计费不确定性", consumer.ledger?.uncertain], ["价格锁定", "否（priceLocked: false）"]]));
+      if (!capVerified && !consumer.revokedAt) row.append(el("p", `${capLabel(consumer.capUsd)}。请点击“检查授权”核验当前上限；这不表示剩余额度为零。`, "inline-warning"));
+      if (!consumer.revokedAt) {
+        const actions = el("div", null, "workflow-actions");
+        actions.append(button("检查授权", () => void run("consumer-check", { consumerId: consumer.consumerId }, (result) => {
+          const current = result.consumer || consumer;
+          if (current.paused || !current.acceptedQuoteHash || current.acceptedQuoteHash !== result.currentQuoteHash || current.priceVersion !== result.currentPriceVersion) reissueConsumer(current, result);
+        })), button("交付访问授权", () => revealAuthorization(consumer)), button("调整模型范围", () => editConsumerModels(consumer)), button("撤销授权", () => confirmAction("撤销伙伴授权", "撤销后，此伙伴原有密钥将失效。已有账目会保留。", "consumer-revoke", { consumerId: consumer.consumerId }, "我确认撤销此伙伴的访问授权")));
+        row.append(actions);
+      }
+      consumersList.append(row);
+    }
+  }
+  function editConsumerModels(consumer) {
+    openDialog("调整伙伴模型范围", (root) => {
+      root.append(paragraph("只允许选择当前共享的有完整价格的本机模型。模型范围不能为空；停止访问请使用撤销授权。"));
+      const models = items(state.status.catalog?.quote?.models).filter((model) => items(consumer.models).includes(model.id)).map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" }));
+      const getModels = modelChoices(root, models, items(consumer.models));
+      const agree = checkbox("我确认更新此伙伴的模型范围");
+      root.append(agree.label, button("保存模型范围", () => {
+        if (!agree.input.checked || !getModels().length) { dialogError.textContent = "请选择模型并明确确认。"; dialogError.hidden = false; return; }
+        void run("consumer-models", { consumerId: consumer.consumerId, models: getModels() }, () => closeDialog());
+      }, true));
+    });
+  }
+  function reissueConsumer(consumer, preview) {
+    openDialog("重新确认并恢复授权", (root) => {
+      root.append(paragraph(consumer.paused ? "此伙伴的授权已暂停。只有当前模型价格、报价与账目都能验证时，才可重新签发授权。该操作不会增加余额，也不会重置历史使用量。" : "此伙伴的授权尚未绑定当前目录报价，或接受的报价与当前版本不同。只有明确核对并接受当前价格与报价后，才可重新签发并交付授权。该操作不会增加余额，也不会重置历史使用量。"), details("当前待接受的价格绑定", [["伙伴", consumer.consumerId], ["模型", items(consumer.models).join("、")], ["当前价格版本", preview.currentPriceVersion], ["当前报价指纹", preview.currentQuoteHash], ["暂停原因", preview.consumer?.paused?.reason || consumer.paused?.reason], ["价格锁定", "否（priceLocked: false）"]]));
+      if (!preview.currentPriceVersion || !preview.currentQuoteHash) { root.append(el("p", "当前报价缺少完整价格或模型范围，暂时不能重新签发。请先检查模型目录和价格。", "inline-warning")); return; }
+      const agree = checkbox("我已核对上述完整报价与模型，并接受新的价格绑定");
+      const submit = button("接受并重新签发", () => {
+        if (!agree.input.checked) return;
+        void run("consumer-reissue", { consumerId: consumer.consumerId, acceptPriceVersion: preview.currentPriceVersion, acceptQuoteHash: preview.currentQuoteHash }, () => closeDialog());
+      }, true);
+      submit.disabled = true; agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      root.append(agree.label, submit);
+    });
+  }
+  function revealAuthorization(consumer) {
+    openDialog("交付访问授权", (root) => {
+      root.append(paragraph("授权文件包含 Gateway Key，持有者可使用指定模型与额度。请只通过可信的私密渠道交付给该伙伴。关闭窗口会清除本页显示的密钥。"));
+      const agree = checkbox("我确认要向此伙伴交付访问密钥");
+      const reveal = button("显示本次授权文件", () => {
+        if (!agree.input.checked) return;
+        void run("key-reveal", { consumerId: consumer.consumerId }, (result) => {
+          secretDocument = result.document || result;
+          root.replaceChildren(paragraph("此文件包含访问密钥。只交付给对应伙伴；下载的文件和主动复制的内容需要由你妥善保管。"));
+          const key = el("textarea", null, "secret-value"); key.readOnly = true; key.value = secretDocument.key || ""; key.rows = 3; key.setAttribute("aria-label", "本次授权的访问密钥"); key.autocomplete = "off";
+          const actions = el("div", null, "workflow-actions");
+          actions.append(button("下载授权文件", () => { if (secretDocument) download(secretDocument, "aihub-authorization.json"); }, true), button("复制授权文件", async () => {
+            if (!secretDocument) return;
+            try { await navigator.clipboard.writeText(JSON.stringify(secretDocument, null, 2)); notice("授权文件已复制，请仅通过私密渠道交付。", "good"); }
+            catch { notice("浏览器未允许复制，请下载授权文件。", "warn"); }
+          }), button("完成并隐藏", () => closeDialog()));
+          root.append(key, actions);
+        }, { refresh: false });
+      }, true);
+      reveal.disabled = true; agree.input.addEventListener("change", () => { reveal.disabled = !agree.input.checked; });
+      root.append(agree.label, reveal);
+    });
+  }
+
+  // Native Remote Magpie connections, key replacement and removal.
+  roots.connections.append(heading("CONNECTED TO YOUR MAGPIE", "我的连接", "授权验证通过后，伙伴模型会注册为本机 Magpie 的原生远程服务。", button("导入伙伴授权", () => importDocument("authorization"), true)));
+  const connectionsIntro = el("div", null, "card workflow-section");
+  const consumeTop = toolbar("使用伙伴的 AI");
+  const consumeToggle = button("开启使用能力", () => confirmAction(state.status.config.consumingEnabled ? "暂停使用伙伴的 AI" : "开启使用伙伴的 AI", "此操作可能重连网络。暂停时仅移除本插件创建的远程服务注册，伙伴的账户与额度仍独立保留。", "consume-toggle", { enabled: !state.status.config.consumingEnabled }));
+  consumeTop.append(consumeToggle); connectionsIntro.append(consumeTop, paragraph("每个共享方的身份、密钥、模型与额度保持独立。可从发现页面生成申请，或导入对方已交付的授权文件。"));
+  const connectionsList = el("div", null, "workflow-card-grid"); roots.connections.append(connectionsIntro, connectionsList);
+  function renderConnections() {
+    connectionsList.replaceChildren();
+    const providers = items(state?.status.providers);
+    if (!providers.length) { connectionsList.append(empty("还没有连接伙伴", "先在“发现模型”中核对身份并申请模型；收到授权文件后，点击“导入伙伴授权”。")); return; }
+    for (const provider of providers) {
+      const row = el("article", null, "card workflow-section"); const top = toolbar(provider.fingerprint?.hostname || provider.id);
+      const limit = record(provider.limit);
+      const capVerified = safeCap(limit.costLimit);
+      top.append(badge(!capVerified ? (knownCap(limit.costLimit) ? "额度上限不安全" : "额度上限待核验") : limit.spent === true ? "额度已用尽" : statusNames[provider.status] || "需要处理", provider.status === "connected" && capVerified && limit.spent !== true ? "good" : "warn"));
+      row.append(top, paragraph(`原生 Remote Magpie · ${provider.remoteMagpieId || provider.id}`), paragraph(`额度上限 ${capLabel(limit.costLimit)} · 已用 ${money(limit.cost)} · 剩余 ${money(limit.costLeft)}`));
+      if (!capVerified) row.append(el("p", `${capLabel(limit.costLimit)}。请点击“检查连接与额度”核验；网络已连接不代表额度上限安全。`, "inline-warning"));
+      if (provider.detail) row.append(el("p", provider.detail, "inline-warning"));
+      row.append(details("连接与核验信息", [["本机接入地址", provider.url], ["伙伴网络地址", provider.mappedCidr], ["最近连接", provider.lastConnectedAt], ["原生限额状态", limit.spent === true ? "额度已用尽，原生调用可能返回 429" : provider.limit ? "已读取" : "尚未读取"], ["授权说明", "401 表示密钥未被接受；429 表示原生限额拒绝。两者不是网络连通证明。"]]));
+      const actions = el("div", null, "workflow-actions");
+      actions.append(button("读取可用模型", () => void run("provider-models", { id: provider.id }, (result) => showProviderModels(provider, result), { refresh: false })), button("检查连接与额度", () => void run("provider-check", { id: provider.id })), button("更新访问密钥", () => updateKey(provider)), button("移除此连接", () => confirmAction("移除此连接", "会移除本插件创建的本机远程服务与转发。对方的授权和账目不会被删除，其他连接可能短暂重连。", "provider-remove", { id: provider.id }, "我确认移除此伙伴连接")));
+      row.append(actions); connectionsList.append(row);
+    }
+  }
+  function showProviderModels(provider, result) {
+    const models = items(result.models || result.modelIds || result);
+    openDialog("此连接的实际可用模型", (root) => {
+      root.append(paragraph(`来自 Magpie 原生远程服务：${provider.remoteMagpieId || provider.id}`));
+      if (!models.length) root.append(empty("尚未读取到模型", "检查此连接的身份、密钥与额度后重新读取。"));
+      for (const model of models) {
+        const data = typeof model === "string" ? { id: model } : model;
+        root.append(el("div", data.displayName || data.id, "choice-row"));
+      }
+    });
+  }
+  function updateKey(provider) {
+    openDialog("更新伙伴访问密钥", (root) => {
+      root.append(paragraph("填写共享方重新交付的密钥。更新后会重新验证此连接，不会修改其他伙伴的密钥。"));
+      const key = field("新的 Gateway Key", "password");
+      const agree = checkbox("我确认密钥来自此共享方");
+      root.append(key.label, agree.label, button("验证并更新", () => {
+        if (!key.input.value.trim() || !agree.input.checked) { dialogError.textContent = "请填写密钥并确认来源。"; dialogError.hidden = false; return; }
+        const input = { id: provider.id, key: key.input.value.trim() }; key.input.value = "";
+        void run("provider-update-key", input, () => closeDialog()).finally(() => { delete input.key; });
+      }, true));
+    });
+  }
+  function render(next) {
+    state = next;
+    shareToggle.textContent = next.status.config.sharingEnabled ? "暂停共享" : "开启共享";
+    consumeToggle.textContent = next.status.config.consumingEnabled ? "暂停使用能力" : "开启使用能力";
+    publishToggle.textContent = next.status.config.catalog?.enabled ? "停止发布目录" : "发布目录";
+    if (!publicationDirty) {
+      const config = record(next.status.config.catalog);
+      displayName.input.value = config.displayName || "";
+      contact.input.value = config.contact || "";
+      minimum.input.value = config.minTopUpUsd ?? "";
+    }
+    if (next.shareCandidates && !modelDirty) {
+      candidates = next.shareCandidates;
+      selectedModels = new Set(policySelection(candidates.models));
+      renderModels();
+    }
+    for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections]]) {
+      const digest = JSON.stringify(value ?? null);
+      if (caches.get(key) !== digest) { caches.set(key, digest); update(); }
+    }
+  }
+  renderModels();
+  return {
+    render,
+    clearSecrets() {
+      closeDialog();
+      state = null;
+      caches.clear();
+      for (const root of Object.values(roots)) root.querySelectorAll("input[type=password],textarea").forEach((node) => { node.value = ""; });
+    },
+    dispose() { closeDialog(); dialog.remove(); },
+  };
+}

@@ -18,6 +18,7 @@
 // bills every call through the remote provider's own Gateway Key.
 
 import { lanIPv4 } from "./paths.ts";
+import { capOnGrid, modelList, RequestValidationError, validateRequestApproval, type ApprovalContext, type ConnectionRequest } from "./connection-request.ts";
 import { logger, registerSecret, writePageStatus } from "./log.ts";
 import { gatewayBaseURL, type CatalogModelMeta, type LimitStatus, type Magpie } from "./magpie.ts";
 import { Provisioner, type ConsumerView } from "./provisioner.ts";
@@ -512,10 +513,9 @@ export class Service {
   /**
    * The wallet module, or null when this node runs none.
    *
-   * A node with no enabled network must not open an RPC connection or write a
-   * second SQLite file, so the module is built on first use and only when a
-   * network is enabled. `deps.wallet` is the test seam; `deps.walletFactory`
-   * lets the host decide the paths.
+   * Construction opens local registry/SQLite stores only; disabled networks
+   * remain administrable without RPC. Passive console reads never construct
+   * this module. `deps.wallet` is the test seam; `deps.walletFactory` supplies paths.
    */
   walletModule(): Wallet | null {
     if (this.walletInstance !== undefined) return this.walletInstance;
@@ -529,21 +529,28 @@ export class Service {
         this.walletInstance = built;
         return built;
       }
-      // No factory (a test or a minimal host): build one over the plugin state
-      // directory only when a network is enabled, so a disabled node stays idle.
+      // Construction opens local stores only. Keep disabled registries available
+      // for configuration: closing and caching null made re-enable impossible.
       const probe = new Wallet({ credit: this.chainCreditSink(), registry: undefined });
-      if (probe.registryView().enabledNetworks().length === 0) {
-        probe.close();
-        this.walletInstance = null;
-        return null;
-      }
       this.walletInstance = probe;
       return probe;
     } catch (e) {
       logger.warn(`the chain wallet is unavailable: ${String(e)}`);
-      this.walletInstance = null;
+      // An unreadable registry is unavailable, never an empty replacement. An
+      // explicit later operation may retry after the operator repairs it.
+      this.walletInstance = undefined;
       return null;
     }
+  }
+
+  /** Local console reads never initialize a wallet or start RPC work. */
+  consoleWalletModule(): Wallet | null {
+    return this.walletInstance === undefined ? (this.deps.wallet ?? null) : this.walletInstance;
+  }
+
+  /** Explicit administration may open disabled stores, without starting watchers. */
+  walletForConfiguration(): Wallet {
+    return this.requireWallet();
   }
 
   /**
@@ -1714,8 +1721,9 @@ export class Service {
   async catalogConnect(
     nodeId: string,
     key: string,
-    opts: { id?: string; acceptance?: CatalogAcceptance } = {},
+    opts: { id?: string; acceptance?: CatalogAcceptance; models?: string[] } = {},
   ): Promise<ProviderView> {
+    return this.serialize(async () => {
     const peer = this.catalogPeers.find((p) => p.identity?.keyId === nodeId || p.nodeId === nodeId || p.hostname === nodeId);
     if (!peer) throw new Error(`no discovered catalogue peer ${nodeId}; refresh the directory first`);
     if (!peer.online) throw new Error(`${peer.hostname} is offline; refresh the directory when it returns`);
@@ -1724,11 +1732,24 @@ export class Service {
     if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
     assertCatalogAcceptance(peer, opts.acceptance);
     const id = opts.id ?? `peer-${peer.quote.node.id.replace(/[^a-z0-9-]/gi, "").slice(0, 20)}`;
-    return this.addProvider({
+    const revalidate = () => {
+      const current = this.catalogPeers.find(p => p.nodeId === peer.nodeId);
+      if (!current || !current.online || !current.quote || !current.mappedCidr) throw new RequestValidationError("the provider disappeared; refresh discovery before connecting");
+      assertCatalogAcceptance(current, opts.acceptance);
+      if (current.mappedCidr !== peer.mappedCidr || current.quote.node.gatewayPort !== peer.quote!.node.gatewayPort) throw new RequestValidationError("the provider address changed while connecting");
+      if (opts.models) {
+        if (opts.models.some(id => !current.quote!.models.some(m => m.id === id)) || catalogPriceVersion(current.quote.models.filter(m => opts.models!.includes(m.id))) !== opts.acceptance?.priceVersion) {
+          throw new RequestValidationError("authorization model prices changed while connecting");
+        }
+      }
+    };
+    revalidate();
+    return this.connectProvider({
       id: id.toLowerCase(),
       mappedCidr: peer.mappedCidr,
       key,
       providerPort: peer.quote.node.gatewayPort,
+    }, { update: false, beforeRegister: revalidate, expectedModels: opts.models });
     });
   }
 
@@ -1932,8 +1953,10 @@ export class Service {
             ? "conflict"
             : entry.route === "self"
               ? "self"
-              : connected
-                ? "connected"
+              : earlier?.status === "identity-changed" || earlier?.status === "stale" || earlier?.status === "unverified"
+                ? earlier.status
+                : connected && earlier?.identity && catalogIdentityAccepted(earlier.nodeId, earlier.identity.fingerprint)
+                  ? "connected"
                 : entry.mappedCidr
                   ? "unreachable"
                   : "no-catalog",
@@ -2055,7 +2078,10 @@ export class Service {
     }
     return {
       ...base,
-      status: base.connectedProviderId ? "connected" : "unreachable",
+      // A failed refresh cannot erase a pending identity or replay warning.
+      status: ["identity-changed", "stale", "unverified"].includes(base.status)
+        ? base.status
+        : base.connectedProviderId && base.identity && catalogIdentityAccepted(base.nodeId, base.identity.fingerprint) ? "connected" : "unreachable",
       detail: lastDetail.slice(0, 300),
       catalogPort: base.catalogPort ?? null,
       fetchedAt: now,
@@ -2155,7 +2181,7 @@ export class Service {
     }
     if (rec.pending && status !== "identity-changed") status = "identity-changed";
     rec.lastSeenAt = now;
-    if (base.connectedProviderId && status !== "identity-changed") status = "connected";
+    if (base.connectedProviderId && status === "verified" && rec.accepted) status = "connected";
     return {
       ...base,
       nodeId,
@@ -2209,7 +2235,7 @@ export class Service {
     });
   }
 
-  private async connectProvider(input: ProviderInput, opts: { update: boolean }): Promise<ProviderView> {
+  private async connectProvider(input: ProviderInput, opts: { update: boolean; beforeRegister?: () => void; expectedModels?: string[] }): Promise<ProviderView> {
     const cfg = this.state.config;
     if (!cfg) throw new Error("configure this node as a provider or consumer first");
     if (!cfg.consumingEnabled) {
@@ -2318,9 +2344,21 @@ export class Service {
         throw new Error(`127.0.0.1:${localPort} did not refuse a wrong key; refusing to trust this endpoint`);
       }
 
+      // Authorization files promise an exact model scope. Read it with the
+      // delivered key before registering anything in native Magpie.
+      const remoteModels = await this.probes.remoteModelIds(localPort, input.key, 15_000);
+      if (!remoteModels || remoteModels.length === 0) {
+        if (opts.expectedModels) throw new RequestValidationError("the provider served no model for the authorization key; ask for a matching authorization");
+        throw new Error("the provider served no model for that key; is the key allowed a model?");
+      }
+      if (opts.expectedModels && !sameSet(remoteModels, opts.expectedModels)) {
+        throw new RequestValidationError("the key's actual model scope differs from the authorization file; ask the provider for a matching authorization");
+      }
+
       // 2. the provider. An entry this plugin owns is replaced; a missing one is
       //    added; anything else was refused above. Re-registering an identical
       //    binding is a no-op.
+      opts.beforeRegister?.();
       const targetOurs = this.ownershipOf(input.id, localPort, input.key) === "ours";
       if (targetOurs) {
         registered = "unchanged";
@@ -2332,11 +2370,7 @@ export class Service {
         registered = "replaced";
       }
 
-      // 3. the consumer must actually see the remote's models through its key
-      const remoteModels = await this.probes.remoteModelIds(localPort, input.key, 15_000);
-      if (!remoteModels || remoteModels.length === 0) {
-        throw new Error(`the provider served no model for that key; is the key allowed a model?`);
-      }
+      // 3. the consumer must see the validated remote through native Magpie.
       if (!(await this.waitLocalModels(input.id, 15_000))) {
         throw new Error(`magpie did not list any ${input.id}/ model within 15s`);
       }
@@ -2392,6 +2426,7 @@ export class Service {
       if (addedForward && !this.state.providers.some((p) => p.localPort === localPort)) {
         await this.recordOrphanForward(localPort, dst);
       }
+      if (e instanceof RequestValidationError) throw e;
       throw new Error(
         `connect failed: ${(e as Error).message}` +
           (this.state.providers.some((p) => p.id !== input.id) ? " (the other providers were kept)" : ""),
@@ -2857,11 +2892,102 @@ export class Service {
     return view;
   }
 
+  /** The local quote/provider evidence used by both import preview and approval. */
+  requestApprovalContext(): ApprovalContext {
+    return {
+      provider: { nodeId: this.state.config?.nodeId ?? null, mappedCidr: this.state.config?.mappedCidr ?? null, gatewayPort: this.gatewayPort() },
+      quote: this.catalogStatus().quote,
+    };
+  }
+
+  /** Keep quote validation and issuance in the same service operation and consumer lock. */
+  async approveConnectionRequest(request: ConnectionRequest, models: string[], capUsd: number): Promise<ConsumerView> {
+    capOnGrid(capUsd);
+    return this.serialize(async () => {
+      await this.publishCatalogNow();
+      const chosen = validateRequestApproval(request, this.requestApprovalContext(), models);
+      this.assertShareable(chosen.models);
+      const candidates = await this.shareCandidates();
+      if (chosen.models.some(id => !candidates.models.some(m => m.id === id && m.completePrice && m.allowedByPolicy))) {
+        throw new RequestValidationError("approved models must be currently priced native models allowed by your sharing policy");
+      }
+      // A repeat is a no-op only for the exact existing approval. It must never
+      // turn into an implicit top-up or silently widen an existing account.
+      const existing = this.provisioner.find(request.consumer.nodeId);
+      if (existing && (existing.revokedAt || existing.acceptedQuoteHash !== request.quote.contentHash || existing.capUsd !== capUsd || !sameSet(existing.models, chosen.models))) {
+        throw new RequestValidationError("this consumer already has a different authorization; manage its existing account explicitly");
+      }
+      return this.ensureConsumer(request.consumer.nodeId, chosen.models, capUsd, {
+        hash: request.quote.contentHash,
+        priceVersion: chosen.priceVersion,
+        beforeApply: () => {
+          validateRequestApproval(request, this.requestApprovalContext(), chosen.models);
+          this.assertShareable(chosen.models);
+          const current = this.provisioner.find(request.consumer.nodeId);
+          if (current && (current.revokedAt || current.acceptedQuoteHash !== request.quote.contentHash || current.capUsd !== capUsd || !sameSet(current.models, chosen.models))) {
+            throw new RequestValidationError("this consumer authorization changed while approval was waiting; review it again");
+          }
+        },
+      });
+    });
+  }
+
+  /** Browser selection requires explicit, completely priced native model IDs. */
+  async setConsoleShareModels(models: string[]): Promise<StatusSnapshot> {
+    const selected = modelList(models);
+    const candidates = await this.shareCandidates();
+    if (selected.some(id => !candidates.models.some(m => m.id === id && m.completePrice))) {
+      throw new RequestValidationError("only native models with a complete effective price can be shared");
+    }
+    return this.setShareModels(selected);
+  }
+
+  consumerReissuePreview(consumerId: string): { consumerId: string; currentPriceVersion: string | null; currentQuoteHash: string | null } {
+    const c = this.provisioner.find(consumerId);
+    if (!c || c.revokedAt) throw new RequestValidationError("no active consumer");
+    const quote = this.catalogStatus().quote;
+    const complete = quote && c.models.every(id => quote.models.some(m => m.id === id));
+    return { consumerId, currentPriceVersion: complete ? catalogPriceVersion(quote.models.filter(m => c.models.includes(m.id))) : null, currentQuoteHash: complete ? quote.contentHash : null };
+  }
+
+  async reissueConsoleConsumer(consumerId: string, acceptPriceVersion?: string, acceptQuoteHash?: string) {
+    return this.serialize(async () => {
+      await this.publishCatalogNow();
+      const preview = this.consumerReissuePreview(consumerId);
+      if (!preview.currentPriceVersion || !preview.currentQuoteHash) throw new RequestValidationError("publish a complete priced quote before reissue");
+      if (acceptPriceVersion !== preview.currentPriceVersion || acceptQuoteHash !== preview.currentQuoteHash) throw new RequestValidationError("review and accept the current model price version and quote before reissue");
+      return this.reissueConsumer(consumerId, acceptPriceVersion, acceptQuoteHash);
+    });
+  }
+
+  async checkConsoleConsumer(consumerId: string) {
+    await this.publishCatalogNow();
+    const consumer = await this.provisioner.checkConsumer(consumerId);
+    return { consumer, ...this.consumerReissuePreview(consumerId) };
+  }
+
+  async setConsumerModels(consumerId: string, models: string[]): Promise<ConsumerView> {
+    const selected = modelList(models);
+    this.assertShareable(selected);
+    const c = this.provisioner.find(consumerId);
+    if (!c || c.revokedAt) throw new RequestValidationError("no active consumer");
+    // Narrowing is safe within the issued authorization. Widening requires a
+    // newly reviewed request and price binding, never an empty/all-models list.
+    if (selected.some(m => !c.models.includes(m))) throw new RequestValidationError("consumer models may only narrow the existing authorization");
+    const candidates = await this.shareCandidates();
+    if (selected.some(id => !candidates.models.some(m => m.id === id && m.completePrice && m.allowedByPolicy))) {
+      throw new RequestValidationError("consumer models must remain priced native models allowed by your policy");
+    }
+    const result = await this.provisioner.setModels(consumerId, selected);
+    this.writeSnapshot();
+    return result;
+  }
+
   async ensureConsumer(
     consumerId: string,
     models: string[],
     capUsd: number,
-    quote: { hash?: string; priceVersion?: string } = {},
+    quote: { hash?: string; priceVersion?: string; beforeApply?: () => void } = {},
   ): Promise<ConsumerView> {
     this.assertShareable(models);
     const v = await this.provisioner.ensure(consumerId, {
@@ -2869,6 +2995,7 @@ export class Service {
       capUsd,
       quoteHash: quote.hash,
       quotePriceVersion: quote.priceVersion,
+      beforeApply: quote.beforeApply,
     });
     if (!this.state.consumers.includes(consumerId)) this.state.consumers.push(consumerId);
     saveState(this.state);
@@ -3157,12 +3284,17 @@ export class Service {
 
   private lastSnapshot: StatusSnapshot | null = null;
 
+  /** Authenticated local console polling: cached evidence, never a network probe or reconciliation. */
+  consoleSnapshot(): StatusSnapshot {
+    return this.lightStatus();
+  }
+
   /** The snapshot without the (network) checks, for the page file. */
   private lightStatus(): StatusSnapshot {
     const et = this.supervisor.snapshot();
     const cfg = this.state.config;
     return {
-      plugin: { version: "0.4.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
+      plugin: { version: "0.5.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
       magpie: { version: this.deps.magpieVersion, gateway: gatewayBaseURL() },
       config: {
         role: cfg ? (cfg.sharingEnabled ? "provider" : "consumer") : null,
@@ -3506,6 +3638,13 @@ function catalogModel(meta: CatalogModelMeta): CatalogModel | null {
   };
 }
 
+/** Connectivity is never evidence of explicit acceptance of a catalogue key. */
+export function catalogIdentityAccepted(nodeId: string | null, fingerprint: string): boolean {
+  if (!nodeId) return false;
+  const trust = loadCatalogTrust()[nodeId];
+  return Boolean(trust?.accepted && !trust.pending && trust.fingerprint === fingerprint);
+}
+
 /**
  * A request/connect is only allowed for an identity the operator accepted and a
  * quote they actually reviewed. Without this, a quote could change between the
@@ -3524,7 +3663,7 @@ function assertCatalogAcceptance(
   if (!/^[0-9a-f]{64}$/.test(acceptance.fingerprint)) throw new Error("the accepted fingerprint must be 64 lowercase hex characters");
   if (!/^[0-9a-f]{64}$/.test(acceptance.quoteHash)) throw new Error("the accepted quote hash must be 64 lowercase hex characters");
   if (!peer.identity) throw new Error(`no catalogue identity from ${peer.hostname} yet`);
-  if (peer.status === "unverified") {
+  if (peer.status === "unverified" || !catalogIdentityAccepted(peer.nodeId, peer.identity.fingerprint)) {
     throw new Error(
       `${peer.hostname} is first-seen and self-signed (TOFU). Run \`catalog trust <node-id> --fingerprint ` +
         `${peer.identity.fingerprint}\` before requesting or connecting`,

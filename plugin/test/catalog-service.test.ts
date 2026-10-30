@@ -8,7 +8,9 @@ import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, Supervis
 import type { CatalogModelMeta, ProviderRecord } from "../src/magpie.ts";
 import { loadCatalogTrust, loadOrCreateCatalogIdentity, signCatalog, verifySignedCatalog, type CatalogIdentity, type CatalogModel, type CatalogQuoteBody, type SignedCatalog } from "../src/catalog.ts";
 import { getProviderKey } from "../src/state.ts";
-import { priceSnapshot } from "../src/pricing.ts";
+import { priceSnapshot, catalogPriceVersion } from "../src/pricing.ts";
+import { consoleAction } from "../src/console-api.ts";
+import { ConsoleWorkflows } from "../src/console-workflows.ts";
 
 // Service-level catalogue tests: a fake Magpie, a fake supervisor, a fake
 // read-only HTTP server and an in-memory peer. No overlay, no real Magpie and
@@ -719,5 +721,102 @@ describe("ledger integration through the service", () => {
     expect(after.capUsd).toBe(2);
     expect(after.creditedUsd).toBe(1);
     expect(after.ledger?.balanceUsd).toBe(2);
+  });
+});
+
+
+describe("catalogue trust remains independent of native connections", () => {
+  test("a legacy manual connection still requires first-seen acceptance for browser requests and authorization imports", async () => {
+    const ident=identity();
+    fetchMap.set("10.66.1.3",JSON.stringify(quote("bbbbbbbb",ident,"10.66.1.3/32",[model("alpha/b")],"10.77.0.3")));
+    sup.peerRows=[selfPeer(),peer("ohmyaihub-bbbbbbbb","10.77.0.3")];
+    sup.route("10.66.1.3","ohmyaihub-bbbbbbbb","10.77.0.3");
+    const s=await service({discovery:true});
+    const key=["sk","test","provider","0001"].join("-");
+    await s.addProvider({id:"manual-peer",mappedCidr:"10.66.1.3/32",key});
+    let found=(await s.refreshCatalog()).find(p=>p.nodeId==="bbbbbbbb")!;
+    expect(s.provider("manual-peer")?.status).toBe("connected");
+    expect(loadCatalogTrust()["bbbbbbbb"].accepted).toBe(false);
+    expect(found.status).toBe("unverified");
+    const acceptance={nodeId:"bbbbbbbb",fingerprint:ident.summary.fingerprint,quoteHash:found.quoteHash!,models:["alpha/b"]};
+    await expect(consoleAction(s,"connection-request",acceptance)).rejects.toThrow(/first-seen|trust/i);
+    const auth={schema:"ohmyaihub.authorization/v1",consumer:{nodeId:s.config()!.nodeId},provider:{nodeId:"bbbbbbbb",mappedCidr:"10.66.1.3/32",gatewayPort:3425},models:["alpha/b"],quote:{identityFingerprint:ident.summary.fingerprint,contentHash:found.quoteHash!,priceVersion:catalogPriceVersion(found.quote!.models)},capUsd:1,key};
+    const w=new ConsoleWorkflows(s);
+    expect(()=>w.previewAuthorization(auth)).toThrow(/explicitly trust/);
+    // Even an erroneous cached display status cannot substitute for the journal.
+    found.status="connected";
+    expect(()=>w.previewAuthorization(auth)).toThrow(/explicitly trust/);
+    await expect(consoleAction(s,"connection-request",acceptance)).rejects.toThrow(/first-seen|trust/i);
+    await s.trustCatalogPeer("bbbbbbbb",ident.summary.fingerprint);
+    found=(await s.refreshCatalog()).find(p=>p.nodeId==="bbbbbbbb")!;
+    expect(found.status).toBe("connected");
+    expect(loadCatalogTrust()["bbbbbbbb"].accepted).toBe(true);
+    expect((await consoleAction(s,"connection-request",acceptance) as any).schema).toBe("ohmyaihub.connection-request/v1");
+    expect(w.previewAuthorization(auth).nodeId).toBe("bbbbbbbb");
+  });
+  test("an unreadable catalogue cannot erase a connected peer's identity-change or stale-quote warning", async () => {
+    const first=identity(),next=identity();
+    const set=(ident:CatalogIdentity,version:number)=>fetchMap.set("10.66.1.3",JSON.stringify(quote("bbbbbbbb",ident,"10.66.1.3/32",[model("alpha/b")],"10.77.0.3",{version})));
+    set(first,2);sup.peerRows=[selfPeer(),peer("ohmyaihub-bbbbbbbb","10.77.0.3")];sup.route("10.66.1.3","ohmyaihub-bbbbbbbb","10.77.0.3");
+    const s=await service({discovery:true});
+    await s.addProvider({id:"manual-peer",mappedCidr:"10.66.1.3/32",key:["sk","test","provider","0001"].join("-")});
+    await s.refreshCatalog();await s.trustCatalogPeer("bbbbbbbb",first.summary.fingerprint);
+    set(first,1);
+    expect((await s.refreshCatalog()).find(p=>p.nodeId==="bbbbbbbb")!.status).toBe("stale");
+    fetchMap.clear();
+    expect((await s.refreshCatalog()).find(p=>p.nodeId==="bbbbbbbb")!.status).toBe("stale");
+    set(next,1);
+    expect((await s.refreshCatalog()).find(p=>p.nodeId==="bbbbbbbb")!.status).toBe("identity-changed");
+    fetchMap.clear();
+    const found=(await s.refreshCatalog()).find(p=>p.nodeId==="bbbbbbbb")!;
+    expect(found.status).toBe("identity-changed");
+    expect(loadCatalogTrust()["bbbbbbbb"].pending?.fingerprint).toBe(next.summary.fingerprint);
+    expect(()=>s.catalogRequest("bbbbbbbb",["alpha/b"],{fingerprint:first.summary.fingerprint,quoteHash:found.quoteHash!})).toThrow(/identity/);
+  });
+});
+
+
+describe("authorization file scope read-back before native registration", () => {
+  async function setup() {
+    const ident=identity();
+    fetchMap.set("10.66.1.3",JSON.stringify(quote("bbbbbbbb",ident,"10.66.1.3/32",[model("alpha/a"),model("beta/c")],"10.77.0.3")));
+    sup.peerRows=[selfPeer(),peer("ohmyaihub-bbbbbbbb","10.77.0.3")];sup.route("10.66.1.3","ohmyaihub-bbbbbbbb","10.77.0.3");
+    let served=["alpha/a"];
+    const s=await service({discovery:true,extra:{remoteModelIds:async()=>served}});
+    let found=(await s.refreshCatalog()).find(p=>p.nodeId==="bbbbbbbb")!;
+    await s.trustCatalogPeer("bbbbbbbb",ident.summary.fingerprint);
+    found=(await s.refreshCatalog()).find(p=>p.nodeId==="bbbbbbbb")!;
+    const document={schema:"ohmyaihub.authorization/v1",consumer:{nodeId:s.config()!.nodeId},provider:{nodeId:"bbbbbbbb",mappedCidr:"10.66.1.3/32",gatewayPort:3425},models:["alpha/a"],quote:{identityFingerprint:ident.summary.fingerprint,contentHash:found.quoteHash!,priceVersion:catalogPriceVersion([found.quote!.models.find(m=>m.id==="alpha/a")!])},capUsd:1,key:["sk","test","provider","0001"].join("-")};
+    return {s,document,setModels(models:string[]){served=models}};
+  }
+  test("extra, missing or duplicate keyed models reject before native writes and preserve other owned and foreign providers",async()=>{
+    const {s,document,setModels}=await setup();
+    sup.route("10.66.1.4","ohmyaihub-cccccccc","10.77.0.4");
+    await s.addProvider({id:"other-peer",mappedCidr:"10.66.1.4/32",key:["sk","test","other","0001"].join("-")});
+    magpie.addManualProvider("foreign-native");
+    const other=structuredClone(magpie.providerById("other-peer"));
+    let nativeWrites=0;const add=magpie.addRemoteProvider.bind(magpie);magpie.addRemoteProvider=async input=>{nativeWrites++;await add(input)};
+    const workflow=new ConsoleWorkflows(s);
+    for(const actual of [["alpha/a","beta/c"],["beta/c"],["alpha/a","alpha/a"]]) {
+      setModels(actual);
+      await expect(workflow.connect(document)).rejects.toThrow(/actual model scope differs/);
+      expect(nativeWrites).toBe(0);
+      expect(magpie.providerById("peer-bbbbbbbb")).toBeUndefined();
+      expect(s.provider("peer-bbbbbbbb")).toBeUndefined();
+      expect(getProviderKey("peer-bbbbbbbb")).toBeNull();
+      expect(magpie.providerById("other-peer")).toEqual(other);
+      expect(magpie.providerById("foreign-native")).toBeDefined();
+    }
+    setModels(["alpha/a"]);
+    expect((await workflow.connect(document)).status).toBe("connected");expect(nativeWrites).toBe(1);
+  });
+  test("quote changing while keyed models are being read rejects before native registration",async()=>{
+    const {s,document}=await setup();let nativeWrites=0;
+    magpie.addRemoteProvider=async()=>{nativeWrites++};
+    (s as any).probes.remoteModelIds=async()=>{
+      const p=(s as any).catalogPeers.find((p:any)=>p.nodeId==="bbbbbbbb");p.quoteHash="c".repeat(64);return ["alpha/a"];
+    };
+    await expect(new ConsoleWorkflows(s).connect(document)).rejects.toThrow(/quote hash/);
+    expect(nativeWrites).toBe(0);expect(s.provider("peer-bbbbbbbb")).toBeUndefined();
   });
 });

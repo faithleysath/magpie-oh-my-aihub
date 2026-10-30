@@ -1,0 +1,33 @@
+{
+  "name": "@oh-my-aihub/magpie-plugin",
+  "version": "0.5.0",
+  "description": "Local browser console for Magpie native P2P model sharing over EasyTier",
+  "type": "module",
+  "main": "plugin/src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/faithleysath/magpie-oh-my-aihub.git"
+  },
+  "keywords": ["magpie-plugin", "easytier", "p2p"],
+  "magpie": {
+    "page": {
+      "title": "Oh My AIHub",
+      "file": "plugin/page/index.html",
+      "icon": "plugin/page/icon.svg"
+    },
+    "permissions": []
+  },
+  "files": [
+    "plugin/package.json",
+    "plugin/src/",
+    "plugin/console/",
+    "plugin/page/index.html",
+    "plugin/page/app.js",
+    "plugin/page/settings.js",
+    "plugin/page/style.css",
+    "plugin/page/icon.svg",
+    "plugin/bin/",
+    "plugin/README.md",
+    "README.md"
+  ]
+}

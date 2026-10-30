@@ -17,7 +17,7 @@
 // immutable price snapshot of the window it belongs to, and never repriced.
 
 import { Database } from "bun:sqlite";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { magpieDataDir, statePath } from "./paths.ts";
@@ -80,6 +80,15 @@ export interface LedgerBalance {
   balanceNanos: number;
   overdraftNanos: number;
   availableNanos: number;
+}
+
+export interface ConsumptionHistoryRow {
+  id: string; kind: string; amountNanos: number; amountUsd: number; model: string;
+  recordedAt: string; priceVersion: string; windowId: string; priceVerified: boolean;
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number };
+}
+export class LedgerHistoryCursorError extends Error {
+  constructor() { super("消费记录分页已失效或无效，请重新打开第一页"); }
 }
 
 export interface ImportResult {
@@ -331,6 +340,8 @@ export function ledgerPath(): string {
 }
 
 export class Ledger {
+  // Opaque cursors contain no readable source/key identifiers and expire with this owner.
+  private readonly historyCursorKey = randomBytes(32);
   private db: Database;
   private closed = false;
 
@@ -625,8 +636,10 @@ export class Ledger {
     return rows.map(mapDeposit);
   }
 
-  depositsFor(consumerId: string): LedgerDeposit[] {
-    const rows = this.db.query("SELECT * FROM deposits WHERE consumer_id=? ORDER BY created_at").all(consumerId) as DepositRow[];
+  depositsFor(consumerId: string, limit?: number): LedgerDeposit[] {
+    const rows = limit === undefined
+      ? this.db.query("SELECT * FROM deposits WHERE consumer_id=? ORDER BY created_at").all(consumerId) as DepositRow[]
+      : this.db.query("SELECT * FROM deposits WHERE consumer_id=? ORDER BY created_at DESC LIMIT ?").all(consumerId, Math.max(1, Math.min(1000, Math.trunc(limit)))) as DepositRow[];
     return rows.map(mapDeposit);
   }
 
@@ -676,6 +689,40 @@ export class Ledger {
       .query("SELECT id,model,recorded_at,amount_nanos,price_verified FROM consumption WHERE window_id=? ORDER BY recorded_at")
       .all(windowId) as { id: string; model: string; recorded_at: string; amount_nanos: number; price_verified: number }[];
     return rows.map((r) => ({ id: r.id, model: r.model, recordedAt: r.recorded_at, amountNanos: r.amount_nanos, priceVerified: r.price_verified === 1 }));
+  }
+
+  /** Consumer-scoped immutable rows only: no import, reconciliation or live repricing. */
+  consumptionHistory(consumerId: string, cursor?: string): { rows: ConsumptionHistoryRow[]; nextCursor: string | null } {
+    let boundary: { recordedAt: string; id: string } | null = null;
+    if (cursor !== undefined) {
+      try {
+        if (typeof cursor !== "string" || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw new Error();
+        const bytes = Buffer.from(cursor, "base64url");
+        if (bytes.length < 29 || bytes.toString("base64url") !== cursor) throw new Error();
+        const decrypt = createDecipheriv("aes-256-gcm", this.historyCursorKey, bytes.subarray(0, 12));
+        decrypt.setAuthTag(bytes.subarray(12, 28));
+        const value = JSON.parse(Buffer.concat([decrypt.update(bytes.subarray(28)), decrypt.final()]).toString("utf8"));
+        if (value.consumerId !== consumerId || typeof value.recordedAt !== "string" || value.recordedAt.length > 128 || typeof value.id !== "string" || value.id.length > 512 || Object.keys(value).sort().join() !== "consumerId,id,recordedAt") throw new Error();
+        boundary = value;
+      } catch { throw new LedgerHistoryCursorError(); }
+    }
+    type Row = { id: string; kind: string; amount_nanos: number; model: string; recorded_at: string; price_version: string; window_id: string; price_verified: number; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number; cache_write_1h_tokens: number };
+    const columns = "id,kind,amount_nanos,model,recorded_at,price_version,window_id,price_verified,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_write_1h_tokens";
+    const records = (boundary
+      ? this.db.query(`SELECT ${columns} FROM consumption WHERE consumer_id=? AND (recorded_at<? OR (recorded_at=? AND id<?)) ORDER BY recorded_at DESC,id DESC LIMIT 51`).all(consumerId, boundary.recordedAt, boundary.recordedAt, boundary.id)
+      : this.db.query(`SELECT ${columns} FROM consumption WHERE consumer_id=? ORDER BY recorded_at DESC,id DESC LIMIT 51`).all(consumerId)) as Row[];
+    const page = records.slice(0, 50);
+    let nextCursor: string | null = null;
+    if (records.length > 50) {
+      const last = page[page.length - 1]!;
+      const iv = randomBytes(12), encrypt = createCipheriv("aes-256-gcm", this.historyCursorKey, iv);
+      const encrypted = Buffer.concat([encrypt.update(JSON.stringify({ consumerId, recordedAt: last.recorded_at, id: last.id }), "utf8"), encrypt.final()]);
+      nextCursor = Buffer.concat([iv, encrypt.getAuthTag(), encrypted]).toString("base64url");
+    }
+    return { rows: page.map(r => ({ id: createHash("sha256").update(r.id).digest("hex"), kind: r.kind,
+      amountNanos: r.amount_nanos, amountUsd: r.amount_nanos / 1_000_000_000, model: r.model,
+      recordedAt: r.recorded_at, priceVersion: r.price_version, windowId: r.window_id, priceVerified: r.price_verified === 1,
+      tokens: { input: r.input_tokens, output: r.output_tokens, cacheRead: r.cache_read_tokens, cacheWrite: r.cache_write_tokens, cacheWrite1h: r.cache_write_1h_tokens } })), nextCursor };
   }
 
   /**
