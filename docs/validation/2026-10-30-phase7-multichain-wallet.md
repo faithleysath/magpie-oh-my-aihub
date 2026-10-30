@@ -455,11 +455,17 @@ New test files and what they cover:
 | Item | Value |
 | --- | --- |
 | PR | https://github.com/faithleysath/magpie-oh-my-aihub/pull/8 |
-| Commit | `0c865db` (`feature/multichain-testnet-wallet`) |
-| Actions | https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40994650032 |
+| Branch | `feature/multichain-testnet-wallet` |
+| Commit | the head of PR #8; `git rev-parse HEAD` on that branch, or the SHA shown on the PR |
+| Actions | the `plugin` workflow run attached to that head (`gh pr checks 8`) |
 | `plugin (linux, bun 1.4.3)` | SUCCESS |
 | `plugin (macos, bun 1.4.3)` | SUCCESS |
 | Merge state | `MERGEABLE` / `CLEAN` against `main` at `4f264d3` |
+
+The commit SHA and CI run are deliberately not written into this file: every commit that records them
+creates a new head with a new run, so a hardcoded pair is stale the moment it is committed. The first
+two commits of this branch (`14b68da`, then `54dfcff`) both went green on Linux and macOS; the PR's
+checks are the authority.
 | Tests | 370 passing, 0 failing, 1352 assertions, 23 files |
 | Base commit | `4f264d3` — the merge of PR #7, whose head was the accepted `2fdd6b2` |
 
