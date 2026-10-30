@@ -304,6 +304,12 @@ export class Ledger {
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    // A database written by an earlier phase-6 build has no price_version on
+    // deposits; add it rather than making the file unreadable.
+    const depositColumns = this.db.query("PRAGMA table_info(deposits)").all() as { name: string }[];
+    if (!depositColumns.some((c) => c.name === "price_version")) {
+      this.db.exec("ALTER TABLE deposits ADD COLUMN price_version TEXT");
+    }
     try {
       // SQLite creates the file with the process umask; make the 0600 intent explicit.
       chmodSync(path, 0o600);
