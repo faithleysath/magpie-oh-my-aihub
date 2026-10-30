@@ -1,12 +1,8 @@
 # Phase 7 — multichain testnet wallet and deposit reconciliation
 
-Status: **implementation complete and tested; local-chain lab PASS; real-testnet end-to-end UNKNOWN
-(testnet gas could not be obtained).** Real funds remain **NO-GO** for the reasons in §13, which are
-the phase-6 blockers plus the new ones this phase measured.
+Status update: **local-chain lab PASS; BSC real-testnet transfer/test-sink credit VERIFIED; corrected Base real-testnet transfer/finality/test-sink credit VERIFIED; real-testnet → live Magpie end-to-end UNKNOWN.** Real funds remain **NO-GO**.
 
-This note does not claim a testnet run happened. §9 states exactly which steps of the requested
-end-to-end experiment were executed on a real chain, which were executed against a local EVM node,
-and which could not be executed at all.
+The original sections below record the earlier no-gas run and are retained as historical evidence, not current progress. See [the testnet handoff](2026-10-30-testnet-handoff.md) and its linked raw receipts for the funded runs, corrected lab inputs and the exact distinction between a test-sink credit and a live Magpie Gateway Key credit.
 
 | Item | Value |
 | --- | --- |

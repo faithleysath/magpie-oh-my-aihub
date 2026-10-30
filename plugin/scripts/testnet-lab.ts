@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
 // The real-testnet half of phase 7: BSC testnet (97) and Base Sepolia (84532).
 //
-// Nothing here is simulated. The script deploys the mock token on each chain,
-// registers it after reading `decimals()` from the chain, asks the wallet module
-// for a deposit intent, signs it with a consumer key, sends a real ERC-20
-// transfer, waits for that chain's own finality condition, and then shows the
-// ledger booking. It refuses to run against a mainnet chain id.
+// Chain reads, writes and wallet signatures are real testnet operations. The
+// accounting destination is an IN-MEMORY TEST SINK, not Ledger/Provisioner or
+// a live Magpie Gateway Key: this lab does not prove an AI call resumes.
+// It deploys/reuses a mock token, verifies decimals, signs a deposit intent,
+// sends a real ERC-20 transfer and waits for the network's finality policy.
+// It refuses to run against a mainnet chain id.
 //
 //   bun scripts/testnet-lab.ts --keys <file with two private keys> [--chains 97,84532]
 //
@@ -18,10 +19,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EvmClient } from "../src/evm.ts";
 import { ChainStore } from "../src/chainstore.ts";
-import { assetIdOf, loadRegistry, NetworkRegistry, NETWORK_REGISTRY_VERSION, type NetworkRecord } from "../src/networks.ts";
+import { NetworkRegistry, NETWORK_REGISTRY_VERSION, type NetworkRecord } from "../src/networks.ts";
 import { buildIntent, intentDigest, intentTypedData, verifyIntentSignature } from "../src/deposits.ts";
-import { ChainWatcher, convertRawToNanos, TRANSFER_TOPIC, finalityVerdict, type CreditSink } from "../src/watcher.ts";
+import { ChainWatcher, convertRawToNanos, type CreditSink } from "../src/watcher.ts";
 import { checksumAddress } from "../src/secp256k1.ts";
+import { castReceipt, labAmount } from "./testnet-lab-utils.ts";
 
 function arg(name: string, fallback?: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -32,21 +34,59 @@ function arg(name: string, fallback?: string): string {
 
 const KEYS_FILE = arg("keys");
 const CHAINS = arg("chains", "97,84532").split(",").map((s) => Number(s.trim()));
-const AMOUNT_RAW = BigInt(arg("amount", "1000000"));
+const RAW_AMOUNT = arg("amount", "");
+const RPC = arg("rpc", "");
+if (RPC && CHAINS.length !== 1) throw new Error("--rpc requires exactly one --chains value");
 const OUT = arg("out", join(mkdtempSync(join(tmpdir(), "testnet-lab-")), "report.json"));
+/** An already-deployed mock token, so a retry reuses it instead of deploying twice. */
+const TOKEN = arg("token", "");
 
 const log = (...p: unknown[]) => console.log(...p);
 
 function keys(): { provider: string; consumer: string } {
   const text = readFileSync(KEYS_FILE, "utf8");
-  const found = [...text.matchAll(/0x[0-9a-fA-F]{64}/g)].map((m) => m[0]);
-  if (found.length < 2) throw new Error("the keys file needs two 32-byte private keys (provider, consumer)");
-  return { provider: found[0]!, consumer: found[1]! };
+  // A foundry `cast wallet new` dump repeats the key on two lines, so the same
+  // key must not be mistaken for two different ones.
+  const found = [...new Set([...text.matchAll(/0x[0-9a-fA-F]{64}/g)].map((m) => m[0]))];
+  if (found.length < 2) throw new Error("the keys file needs two distinct 32-byte private keys (provider, consumer)");
+  const provider = found[0]!;
+  const consumer = found[1]!;
+  if (addressOf(provider) === addressOf(consumer)) throw new Error("the provider and consumer keys are the same account");
+  return { provider, consumer };
+}
+
+/**
+ * Gas flags for a write.
+ *
+ * The price is read from the chain rather than hardcoded: BSC testnet asks
+ * ~0.1 gwei and Base Sepolia ~0.006 gwei, so a fixed 1 gwei is both needlessly
+ * expensive on BSC and unaffordable on a Base wallet holding 0.0001 ETH
+ * (300 000 × 1 gwei = 0.0003 ETH, more than the whole balance).
+ */
+function gasFlags(rpc: string): string[] {
+  const price = run("cast", ["gas-price", "--rpc-url", rpc]).trim();
+  return ["--legacy", "--gas-price", `${price}wei`];
+}
+
+function send(input: { rpc: string; to?: string; value?: string; signature?: string; args?: string[]; key: string; json?: boolean }): Record<string, unknown> {
+  const args = ["send"];
+  if (input.to) args.push(input.to);
+  if (input.signature) args.push(input.signature, ...(input.args ?? []));
+  if (input.value) args.push("--value", input.value);
+  args.push("--rpc-url", input.rpc, "--private-key", input.key, ...gasFlags(input.rpc));
+  args.push("--gas-limit", "300000");
+  if (input.json) args.push("--json");
+  const out = run("cast", args);
+  if (!input.json) return {};
+  return castReceipt(out);
 }
 
 function run(bin: "cast" | "forge", args: string[]): string {
-  const out = Bun.spawnSync(["mise", "x", "foundry", "--", bin, ...args], { stdout: "pipe", stderr: "pipe" });
-  if (out.exitCode !== 0) throw new Error(`${bin} ${args[0] ?? ""} failed: ${out.stderr.toString().slice(0, 500)}`);
+  const out = Bun.spawnSync(["mise", "x", "foundry", "--", bin, ...args], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+  if (out.exitCode !== 0) {
+    const detail = `${out.stderr.toString()} ${out.stdout.toString()}`.replace(/0x[0-9a-fA-F]{64}/g, "<redacted-32-byte-value>").slice(0, 700);
+    throw new Error(`${bin} ${args[0] ?? ""} failed (exit ${out.exitCode}, signal ${out.signalCode}): ${detail}; inspect chain state before retrying`);
+  }
   return out.stdout.toString().trim();
 }
 
@@ -107,21 +147,19 @@ async function main(): Promise<void> {
   log(`provider ${providerAddress}`);
   log(`consumer ${consumerAddress}`);
 
-  const registry = new NetworkRegistry({ version: NETWORK_REGISTRY_VERSION, networks: [], assets: [] });
-  const seeded = loadRegistry(join(mkdtempSync(join(tmpdir(), "reg-")), "networks.json"));
-  void registry;
-  void seeded;
-
   const report: Record<string, unknown>[] = [];
 
   for (const chainId of CHAINS) {
     if (chainId === 56 || chainId === 8453) throw new Error(`chain ${chainId} is mainnet; this lab is testnet only`);
     const perChain: Record<string, unknown> = { chainId };
-    const base = (await import("../src/networks.ts")).DEFAULT_NETWORKS.find((n) => n.chainId === chainId);
+    const seeded = (await import("../src/networks.ts")).DEFAULT_NETWORKS.find((n) => n.chainId === chainId);
+    const base = seeded && { ...seeded, rpcEndpoints: RPC ? [RPC] : seeded.rpcEndpoints };
     if (!base) {
       record(chainId, "network registered", false, `chain ${chainId} is not one of the seeded testnets`);
       continue;
     }
+    const decimals = chainId === 97 ? 6 : 18;
+    const AMOUNT_RAW = labAmount(decimals, RAW_AMOUNT || undefined);
     const client = new EvmClient({ chainId, endpoints: base.rpcEndpoints });
     try {
       await client.verifyChain();
@@ -131,7 +169,7 @@ async function main(): Promise<void> {
       continue;
     }
 
-    // Gas must already be there: this lab never buys or transfers native coin.
+    // Gas must already be there: the lab never buys assets or uses a mainnet.
     const balance = BigInt(await client.call<string>("eth_getBalance", [providerAddress, "latest"]));
     record(chainId, "provider gas", balance > 0n, `provider holds ${balance} wei of ${base.nativeSymbol}`);
     if (balance === 0n) {
@@ -141,36 +179,67 @@ async function main(): Promise<void> {
       continue;
     }
 
+    // The consumer pays for its own ERC-20 transfer, so it needs a little native
+    // coin too. Sending it from the provider means only ONE address per chain
+    // has to be funded from outside, which is what an operator can actually do.
+    const consumerBalance = BigInt(await client.call<string>("eth_getBalance", [consumerAddress, "latest"]));
+    const providerBalance = BigInt(await client.call<string>("eth_getBalance", [providerAddress, "latest"]));
+    const gasPrice = BigInt(await client.call<string>("eth_gasPrice", []));
+    // Match the send's maximum execution allowance with a 2x reserve. This is
+    // testnet budgeting, not an assertion that L1 data fees are always zero.
+    const targetConsumerBalance = 600_000n * gasPrice;
+    const consumerTopUp = targetConsumerBalance > consumerBalance ? targetConsumerBalance - consumerBalance : 0n;
+    if (consumerTopUp > 0n) {
+      if (consumerTopUp + 300_000n * gasPrice >= providerBalance) throw new Error("insufficient testnet gas to fund the consumer safely");
+      const topUp = send({ rpc: base.rpcEndpoints[0]!, to: consumerAddress, value: `${consumerTopUp.toString()}wei`, key: provider, json: true });
+      const topUpHash = String(topUp.transactionHash);
+      record(chainId, "fund the consumer for its own transfer", true, `${consumerTopUp} wei from the provider to ${consumerAddress}`, `${base.blockExplorer}/tx/${topUpHash}`);
+    } else {
+      record(chainId, "consumer already has gas", true, `${consumerBalance} wei on ${consumerAddress} (provider ${providerBalance} wei)`);
+    }
+
     // Deploy the mock token: 6 decimals on BSC, 18 on Base, so both precisions
     // are exercised on a real chain rather than only in a unit test.
-    const decimals = chainId === 97 ? 6 : 18;
     const symbol = `tMOCK${decimals}`;
     const root = join(import.meta.dir, "..", "lab", "chain");
-    const created = run("forge", [
-      "create",
-      "src/MockERC20.sol:MockERC20",
-      "--root",
-      root,
-      "--rpc-url",
-      base.rpcEndpoints[0]!,
-      "--private-key",
-      provider,
-      "--broadcast",
-      "--constructor-args",
-      "Mock Test Dollar",
-      symbol,
-      String(decimals),
-    ]);
-    const deployed = created.split("\n").find((l) => l.startsWith("Deployed to:"))?.replace("Deployed to:", "").trim();
-    const deployTx = created.split("\n").find((l) => l.startsWith("Transaction hash:"))?.replace("Transaction hash:", "").trim();
-    if (!deployed) {
-      record(chainId, "deploy mock token", false, `forge create printed no address: ${created.slice(0, 200)}`);
-      continue;
+    let deployed: string;
+    let deployTx: string | undefined;
+    if (TOKEN) {
+      deployed = TOKEN;
+      record(chainId, "reuse a deployed mock token", true, `${symbol} at ${deployed}`, `${base.blockExplorer}/address/${deployed}`);
+    } else {
+      const created = run("forge", [
+        "create",
+        "src/MockERC20.sol:MockERC20",
+        "--root",
+        root,
+        "--rpc-url",
+        base.rpcEndpoints[0]!,
+        "--private-key",
+        provider,
+        "--broadcast",
+        ...gasFlags(base.rpcEndpoints[0]!),
+        // BSC testnet estimates 200 000 gas for a creation, far too low, so the
+        // limit is stated explicitly.
+        "--gas-limit",
+        "2000000",
+        "--constructor-args",
+        "Mock Test Dollar",
+        symbol,
+        String(decimals),
+      ]);
+      deployed = created.split("\n").find((l) => l.startsWith("Deployed to:"))?.replace("Deployed to:", "").trim() ?? "";
+      deployTx = created.split("\n").find((l) => l.startsWith("Transaction hash:"))?.replace("Transaction hash:", "").trim();
+      if (!deployed) {
+        record(chainId, "deploy mock token", false, `forge create printed no address: ${created.slice(0, 200)}`);
+        continue;
+      }
+      record(chainId, "deploy mock token", true, `${symbol} at ${deployed}`, `${base.blockExplorer}/tx/${deployTx}`);
     }
-    record(chainId, "deploy mock token", true, `${symbol} at ${deployed}`, `${base.blockExplorer}/tx/${deployTx}`);
 
     const onchain = Number(BigInt(await client.callData(deployed, "0x313ce567")));
     record(chainId, "decimals() on chain", onchain === decimals, `${deployed} reports ${onchain}`);
+    if (onchain !== decimals) throw new Error("token decimals mismatch; refusing to mint or transfer");
 
     // Register only after the chain agreed.
     const reg = new NetworkRegistry({
@@ -189,10 +258,11 @@ async function main(): Promise<void> {
     });
 
     // Mint to the consumer and send the transfer from their own wallet.
-    const mint = run("cast", ["send", deployed, "mint(address,uint256)", consumerAddress, (AMOUNT_RAW * 2n).toString(), "--rpc-url", base.rpcEndpoints[0]!, "--private-key", provider, "--json"]);
-    const mintHash = (JSON.parse(mint) as { transactionHash: string }).transactionHash;
+    const mint = send({ rpc: base.rpcEndpoints[0]!, to: deployed, signature: "mint(address,uint256)", args: [consumerAddress, (AMOUNT_RAW * 2n).toString()], key: provider, json: true });
+    const mintHash = String(mint.transactionHash);
 
-    const store = new ChainStore(join(mkdtempSync(join(tmpdir(), `chain-${chainId}-`)), "chain.sqlite"));
+    const storePath = join(mkdtempSync(join(tmpdir(), `chain-${chainId}-`)), "chain.sqlite");
+    const store = new ChainStore(storePath);
     const network: NetworkRecord = { ...base, rpcEndpoints: base.rpcEndpoints };
     const intent = store.insertIntent(
       buildIntent({
@@ -217,9 +287,15 @@ async function main(): Promise<void> {
     if (!check.ok) continue;
     store.setPayer({ invoiceId: intent.invoiceId, payerAddress: check.payer!, digest: intentDigest(intent, network, asset) });
 
-    const sent = run("cast", ["send", deployed, "transfer(address,uint256)", providerAddress, AMOUNT_RAW.toString(), "--rpc-url", base.rpcEndpoints[0]!, "--private-key", consumer, "--json"]);
-    const txHash = (JSON.parse(sent) as { transactionHash: string }).transactionHash;
+    const sent = send({ rpc: base.rpcEndpoints[0]!, to: deployed, signature: "transfer(address,uint256)", args: [providerAddress, AMOUNT_RAW.toString()], key: consumer, json: true });
+    const txHash = String(sent.transactionHash);
     record(chainId, "transfer sent", true, `${AMOUNT_RAW} base units of ${symbol}`, `${base.blockExplorer}/tx/${txHash}`);
+    // Keep enough public state to resume read-only after interruption, without
+    // deploying or paying again. No private keys or signatures are persisted.
+    const checkpointPath = `${OUT}.checkpoint.json`;
+    const checkpoint = { network, asset, storePath, txHash, deployTx, mintHash, providerAddress, consumerAddress, steps, invoiceId: intent.invoiceId, ledgerKind: "in-memory-test-sink", liveMagpieVerified: false };
+    await Bun.write(checkpointPath, JSON.stringify(checkpoint, null, 2));
+    log(`checkpoint: ${checkpointPath}`);
 
     // Wait for this chain's own finality policy. This is the part that differs
     // between the two chains, and the reason each has its own policy.
@@ -232,6 +308,8 @@ async function main(): Promise<void> {
     for (let i = 0; i < 90; i++) {
       const scan = await watcher.scan();
       const event = store.eventByTx(txHash)[0];
+      if (i % 4 === 0 || scan.errors.length) log(`waiting ${chainId}: ${event?.status ?? "unobserved"}; ${event?.reason ?? ""}; ${scan.errors.join("; ")}`);
+      if (event && ["failed", "manualReview", "reverted", "unclaimed"].includes(event.status)) throw new Error(`deposit ${event.status}: ${event.reason}`);
       if (event) lastEvent = `${event.status} (${event.confirmations} confirmations, ${event.reason ?? "—"})`;
       if (scan.credited > 0 || event?.status === "credited") {
         credited = true;
@@ -241,7 +319,12 @@ async function main(): Promise<void> {
     }
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
     const event = store.eventByTx(txHash)[0];
-    record(chainId, "finality reached and credited", credited, credited ? `${elapsed}s; ${lastEvent}` : `after ${elapsed}s: ${lastEvent || "the event was never observed"}`);
+    record(chainId, "finality reached and credited", credited ? true : null, credited ? `${elapsed}s; ${lastEvent}` : `UNKNOWN after ${elapsed}s: ${lastEvent || "the event was never observed"}; checkpoint ${checkpointPath}`);
+    if (!credited) {
+      store.close();
+      report.push({ chainId, txHash, contract: deployed, checkpointPath, unknown: "awaiting finality" });
+      continue;
+    }
     if (event) {
       const conversion = convertRawToNanos({ rawAmount: BigInt(event.amountRaw), asset });
       record(chainId, "conversion", true, `${event.amountRaw} raw → ${conversion.nanos} nanos at ${conversion.priceVersion} (dust ${conversion.dustRaw})`);
@@ -271,6 +354,8 @@ async function main(): Promise<void> {
   log(`\n${steps.length - failed.length - unknown.length}/${steps.length} passed, ${unknown.length} unknown, ${failed.length} failed`);
   const doc = {
     at: new Date().toISOString(),
+    ledgerKind: "in-memory-test-sink",
+    liveMagpieVerified: false,
     providerAddress,
     consumerAddress,
     platform: `${process.platform} ${process.arch}`,
@@ -282,7 +367,7 @@ async function main(): Promise<void> {
   };
   await Bun.write(OUT, JSON.stringify(doc, null, 2));
   log(`report: ${OUT}`);
-  process.exit(failed.length === 0 ? 0 : 1);
+  process.exit(failed.length > 0 ? 1 : unknown.length > 0 ? 2 : 0);
 }
 
 await main();
