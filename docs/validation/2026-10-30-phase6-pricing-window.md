@@ -483,7 +483,7 @@ only until reissue; the pause/reissue response and `secret` hand-over expose the
 
 ```text
 typecheck PASS
-206 tests, 0 failures (15 files)
+208 tests, 0 failures (15 files)
 boot-check PASS
 secret-scan PASS
 ```

@@ -346,6 +346,18 @@ describe("ledger-backed issuance", () => {
     expect(next.ledger?.consumedUsd).toBeCloseTo(0.2, 9);
   });
 
+
+  test("a wildcard whitelist is priced from its actual matching models", async () => {
+    const v = await p.ensure("wild", { models: ["lab/*"], capUsd: 1 });
+    expect(v.models).toEqual(["lab/*"]);
+    expect(v.ledger?.balanceUsd).toBe(1);
+    fake.addUsage(v.keyId, 100_000, 50_000);
+    const after = await p.topUp("wild", 0.5, "wild-dep");
+    expect(after.capUsd).toBe(1.5); // used 0.2 + balance (0.8 + 0.5)
+    expect(after.ledger?.balanceUsd).toBeCloseTo(1.3, 9);
+    expect(after.ledger?.consumedUsd).toBeCloseTo(0.2, 9);
+  });
+
 describe("price changes and windows", () => {
   test("a price change pauses, and reissue carries old-price consumption, not repriced history", async () => {
     const first = await p.ensure("frank", { models: [MODEL], capUsd: 1 });

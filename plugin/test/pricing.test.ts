@@ -37,6 +37,20 @@ describe("price validation", () => {
     expect(priceSnapshot([{ id: "a/m", price: { input: 1 } }], ["a/m"])).toBeNull();
   });
 
+
+  test("a wildcard whitelist expands to every matching model, and refuses an empty match", () => {
+    const metas = [
+      { id: "lab/a", price: p },
+      { id: "lab/b", price: { ...p, output: 3 } },
+      { id: "other/c", price: p },
+    ];
+    const snap = priceSnapshot(metas, ["lab/*"])!;
+    expect(snap.models).toEqual(["lab/a", "lab/b"]);
+    expect(snap.prices["lab/b"].output).toBe(3);
+    expect(priceSnapshot(metas, ["missing/*"])).toBeNull();
+    expect(priceSnapshot(metas, ["lab/*", "lab/a"])!.models).toEqual(["lab/a", "lab/b"]);
+  });
+
   test("catalog price version is recomputable from the quote's models", () => {
     const models = [
       { id: "a/m", pricing: { ...p, unit: "USD per 1M tokens", source: "magpie-gateway" } },

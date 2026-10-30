@@ -170,19 +170,37 @@ export function priceSnapshot(
   metas: { id: string; price: unknown }[],
   models: string[],
 ): PriceSnapshot | null {
-  const wanted = [...new Set(models)].sort();
-  if (wanted.length === 0) return null;
+  // A consumer's whitelist may be a glob (`provider/*`). The native key keeps
+  // the glob, but the snapshot must cover every model it currently matches; a
+  // later model appearing under the glob changes the version and pauses the key.
   const byId = new Map(metas.map((m) => [m.id, m]));
+  const wanted = new Set<string>();
+  for (const pattern of models) {
+    if (!pattern.includes("*")) {
+      wanted.add(pattern);
+      continue;
+    }
+    const rx = new RegExp(`^${pattern.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+    let matched = 0;
+    for (const meta of metas) {
+      if (!rx.test(meta.id)) continue;
+      wanted.add(meta.id);
+      matched += 1;
+    }
+    if (matched === 0) return null;
+  }
+  const ids = [...wanted].sort();
+  if (ids.length === 0) return null;
   const prices: PriceBook = {};
-  for (const id of wanted) {
+  for (const id of ids) {
     const normalized = normalizePrice(byId.get(id)?.price);
     if (!normalized) return null;
     prices[id] = normalized;
   }
   return {
-    version: priceVersionOf(wanted, prices),
-    body: JSON.stringify({ models: wanted, prices }),
-    models: wanted,
+    version: priceVersionOf(ids, prices),
+    body: JSON.stringify({ models: ids, prices }),
+    models: ids,
     prices,
   };
 }
