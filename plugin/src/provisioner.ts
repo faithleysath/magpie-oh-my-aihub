@@ -553,7 +553,19 @@ export class Provisioner {
     opts: { pause: boolean } = { pause: true },
   ): Promise<{ window: LedgerWindow | null; status: LimitStatus | null; reason: string | null }> {
     if (!this.ledger) return { window: null, status: null, reason: null };
-    if (rec.paused) return { window: null, status: null, reason: rec.paused.reason };
+    if (rec.paused) {
+      // A paused consumer has no live key, but a request that was in flight when
+      // it was stopped still settles. Import it, or the charge is lost; the
+      // balance and the overdraft stay visible for the next reissue. No key is
+      // touched here, so nothing is re-opened.
+      const settlement = await this.settleWindows(rec);
+      rec.ledgerUncertain = settlement.gap;
+      if (settlement.gap) {
+        this.ledger.setPaused(rec.consumerId, `log-gap: ${settlement.gap}`);
+        this.persist();
+      }
+      return { window: null, status: null, reason: rec.paused.reason };
+    }
     let window = this.ledger.openWindowFor(rec.consumerId);
     if (!window) window = await this.seedLedger(rec);
     if (!window) {

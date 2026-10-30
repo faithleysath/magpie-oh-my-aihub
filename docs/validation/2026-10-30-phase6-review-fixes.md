@@ -94,6 +94,12 @@ The $4 late charge was charged at the **old** window's frozen price, the balance
 and the consumer was paused with `enforcement: keyRevoked`. Unit tests cover a row written 5 s and
 30 s after reissue, and a row that lands after the window was already called settled.
 
+A second pass found the complementary hole: `ledgerCheck` returned early for a **paused** consumer,
+so a request that was in flight when the key was stopped and settled afterwards was never imported.
+A paused consumer now imports its unsettled windows too (no key is touched), so the charge and the
+resulting overdraft stay visible for the next reissue. Regression test: "a paused consumer still
+gets late charges".
+
 ---
 
 ## 4. C — consumption identity
@@ -182,12 +188,12 @@ same writer as `state.json`.
 
 ```text
 typecheck PASS
-227 tests, 0 failures (16 files)
+228 tests, 0 failures (16 files)
 boot-check PASS: plugin 0.4.0, magpie magpie 0.1.2038, api 34517, checks 1
 secret-scan PASS: no credentials in the working tree
 ```
 
-New file `plugin/test/review-fixes.test.ts` holds 19 tests, one or more per defect, written to fail
+New file `plugin/test/review-fixes.test.ts` holds 20 tests, one or more per defect, written to fail
 on the reviewed HEAD: identical-line double charge, repeated import, truncated log, late row at 5 s
 and 30 s, in-flight at settlement, restart re-scan, late row after settlement, the three enforcement
 levels, the four crash points, tick-only price detection, failure budget withdrawal and recovery, and

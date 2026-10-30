@@ -661,3 +661,20 @@ async function waitFor(fn: () => boolean, ms: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
+
+describe("B/D interaction — a paused consumer still gets late charges", () => {
+  test("a row that settles after the pause is still charged, and the overdraft is visible", async () => {
+    const p = make(50);
+    const v = await p.ensure("sam", { models: [MODEL], capUsd: 1 });
+    fake.rollWindow(v.keyId);
+    const paused = await p.status("sam");
+    expect(paused.paused?.reason).toBe("window-rollover");
+    const before = paused.ledger?.consumedUsd ?? 0;
+    // The request was in flight when the key was stopped; it settles now.
+    fake.addUsage(v.keyId, 4_000_000, 2_000_000);
+    const after = await p.status("sam");
+    expect((after.ledger?.consumedUsd ?? 0) - before).toBeCloseTo(8, 9);
+    expect(after.paused?.reason).toBe("window-rollover");
+    expect(after.ledger?.balanceUsd).toBeCloseTo(-7, 9);
+  });
+});
