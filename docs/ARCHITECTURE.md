@@ -863,11 +863,13 @@ refuses an unlisted platform or a hash mismatch.
 
 Phase-7 additions:
 
-14. **Real-testnet → live Magpie credit remains UNKNOWN.** After faucet funding, BSC's real payment
-    and one test-sink credit were verified; the corrected Base payment also reached finality and
-    produced one test credit with zero on rescan. Neither lab sink writes a live Gateway Key. See
-    [`validation/2026-10-30-testnet-handoff.md`](validation/2026-10-30-testnet-handoff.md) for exact
-    receipts, lab corrections and current status. Local EVM reorg evidence is a separate claim.
+14. **Real-testnet → real Magpie integration replay is VERIFIED, not fresh cross-host acceptance.**
+    Original finalized BSC/Base payments and original signed intents were replayed into a fresh
+    SQLite Ledger, raising the same real portable Magpie key and reproducing 200 → 429 → credit →
+    200 with zero duplicate credits. The upstream was a local deterministic mock and ingress was
+    loopback with a forwarding header, not a new EasyTier/two-host run. See
+    [`validation/2026-10-30-live-magpie-chain-credit.md`](validation/2026-10-30-live-magpie-chain-credit.md).
+    Fresh live-payment/P2P/vendor acceptance and local EVM reorg evidence remain separate claims.
 15. **BSC testnet's finality policy is a substitute.** Its RPCs report `finalized` == `latest`, so 15
     confirmations is a conservative choice, not a measured chain guarantee. No BSC testnet reorg
     distribution was observed.

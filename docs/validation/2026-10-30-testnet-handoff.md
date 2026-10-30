@@ -54,9 +54,9 @@ A JSON result with `success:false`, a missing transaction hash or a reverted rec
 
 BSC's measured price `100000000 wei` is **0.1 gwei**, not the previously reported 100 gwei. General txpool volume is not proof that a particular payment is stuck.
 
-### UNKNOWN — real testnet → real Magpie allowance → successful AI call
+### Follow-up VERIFIED — original payments replayed into real Ledger/Magpie
 
-Both the original `LedgerSink` and the resumable sink are **test destinations**. Neither changes a real Gateway Key. Do not describe this lab as a completed real-Magpie recharge/429/200 acceptance test. Existing fake-gateway tests and the earlier isolated Magpie experiments are separate evidence.
+Both the original `LedgerSink` and the resumable sink above are **test destinations**; neither changes a real Gateway Key. A separate [real-Magpie integration replay](2026-10-30-live-magpie-chain-credit.md) has since applied the original BSC/Base payments and their original signed intents into a fresh real SQLite Ledger and the same real Magpie key, reproducing 200/429/credit/200. Its upstream is a local mock and ingress is a forwarding-header probe, not fresh live-payment/P2P/vendor acceptance. Keep these claims distinct.
 
 ## Reproduce / resume
 
@@ -86,6 +86,6 @@ The completed checkpoint is `/tmp/phase7-lab/testnet-base-handoff.json.checkpoin
 - VERIFIED: additional resume script typecheck and the four lab regression tests pass.
 - VERIFIED: follow-up code commit `b751095330a274c88761d1966086e343926f437c` passed both Linux and macOS GitHub checks on [PR #9](https://github.com/faithleysath/magpie-oh-my-aihub/pull/9).
 - VERIFIED: corrected Base payment reached finality and produced one test credit, with zero on rescan.
-- UNKNOWN: live Magpie Gateway Key/AI-call acceptance remains unverified.
+- VERIFIED in a separate follow-up: existing-payment replay into real Ledger/Magpie with native 200/429/200 and a non-billable mock upstream; fresh combined P2P/vendor acceptance remains UNKNOWN.
 - Cleanup: finality waiting process exited 0; no new deployment or transfer occurred during resume. Public reports were copied into the repository; disposable key files remain outside it.
 - Real funds remain NO-GO; pricing-lock and other architecture blockers are unchanged.

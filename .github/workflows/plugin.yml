@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "plugin/**"
+      - "docs/validation/lab/phase7/**"
       - ".github/workflows/plugin.yml"
   push:
     branches: [main]
     paths:
       - "plugin/**"
+      - "docs/validation/lab/phase7/**"
   workflow_dispatch:
 
 permissions:

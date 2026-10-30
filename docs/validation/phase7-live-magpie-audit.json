@@ -1,0 +1,51 @@
+{
+  "at": "2026-10-30T04:41:20.701836+00:00",
+  "platform": "macOS 26.6.2 (25G83), arm64",
+  "binaryVersion": "0.1.2038",
+  "binarySourceCommit": "8c63c5b7873c6aa7aa797aa17f481d5fa8301876",
+  "binarySha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15",
+  "reopenedLedgerDeposits": [
+    {
+      "id": "opening:lab-consumer",
+      "consumer_id": "lab-consumer",
+      "amount_nanos": 100000,
+      "source": "opening",
+      "status": "applied",
+      "cap_after_nanos": 100000
+    },
+    {
+      "id": "chain:97:0xd711ca4ecd966bb83b572616ac6008795dd4e26c:0x52a600d99c3f2578d01c303044439110400a46e07769a30bec0531c48f6b9879:11",
+      "consumer_id": "lab-consumer",
+      "amount_nanos": 1000000000,
+      "source": "chain:97",
+      "status": "applied",
+      "cap_after_nanos": 1000100000
+    },
+    {
+      "id": "chain:84532:0x2379d65e90b21d4ecb7ef1ad007d6f30a5f17c4f:0x6c192c2aed807871e962f4655860e5f5eda2d6a9eff32e81de04612b01a0abe9:2",
+      "consumer_id": "lab-consumer",
+      "amount_nanos": 1000000000,
+      "source": "chain:84532",
+      "status": "applied",
+      "cap_after_nanos": 2000100000
+    }
+  ],
+  "labKeyRemoved": true,
+  "modelUpstream": "http://127.0.0.1:19081/v1 (local deterministic mock)",
+  "ingress": "127.0.0.1:3447 with forwarding header, not EasyTier",
+  "failedAttempts": [
+    {
+      "reason": "mise signing timed out after HOME isolation; no chain write; lab key removed"
+    },
+    {
+      "reason": "new store had no completed-scan cursor; short initial lookback missed the older payment; no ledger chain credit; lab key removed"
+    }
+  ],
+  "cleanup": {
+    "at": "2026-10-30T04:41:52.857963+00:00",
+    "gatewayStopped": true,
+    "mockUpstreamStopped": true,
+    "listeningPorts3447and19081": "",
+    "portsFree": true
+  }
+}
