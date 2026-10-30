@@ -101,3 +101,18 @@ Magpie data directory.
 - a real clock crossing a day/week/month boundary (the `since` injection exercises the same
   `Limit.Window` arithmetic, but is not a wall-clock observation);
 - Magpie on Windows/Linux (this lab is macOS arm64 only).
+
+## Reproducible real-Magpie checks
+
+Both scripts use only the isolated data directory and revoke the consumer at the end. They never
+print the Gateway Key secret. `real-integration.ts` injects a 3650-day boundary; `real-price-change.ts`
+changes `labmock/lab-model` through Magpie's own `model price` CLI.
+
+```sh
+MAGPIE_DATA="$LAB/data" MAGPIE_BIN="$BIN" MAGPIE_ADDR=127.0.0.1:3446 \
+  bun docs/validation/lab/phase6/real-integration.ts ledgerlab
+
+# restore $BIN model price labmock/lab-model 1,2,0.1,0.2 first
+MAGPIE_DATA="$LAB/data" MAGPIE_BIN="$BIN" MAGPIE_ADDR=127.0.0.1:3446 \
+  bun docs/validation/lab/phase6/real-price-change.ts pricelab
+```

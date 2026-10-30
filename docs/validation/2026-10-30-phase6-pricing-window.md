@@ -95,8 +95,9 @@ MAGPIE_ADDR=127.0.0.1:3446 $BIN serve
 ```
 
 The full command set and the state-injection restriction are in
-[`lab/phase6/README.md`](lab/phase6/README.md). The reproducible real-Magpie check is
-[`lab/phase6/real-integration.ts`](lab/phase6/real-integration.ts).
+[`lab/phase6/README.md`](lab/phase6/README.md). The reproducible real-Magpie checks are
+[`lab/phase6/real-integration.ts`](lab/phase6/real-integration.ts) (window boundary) and
+[`lab/phase6/real-price-change.ts`](lab/phase6/real-price-change.ts) (price change).
 
 ---
 
