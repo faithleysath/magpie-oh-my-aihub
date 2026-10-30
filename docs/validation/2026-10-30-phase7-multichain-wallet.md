@@ -455,8 +455,8 @@ New test files and what they cover:
 | Item | Value |
 | --- | --- |
 | PR | https://github.com/faithleysath/magpie-oh-my-aihub/pull/8 |
-| Commit | `ad11eff0371e61c409e9181485e5c2647082a3ec` (`feature/multichain-testnet-wallet`) |
-| Actions | https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40994456692 |
+| Commit | `0c865db` (`feature/multichain-testnet-wallet`) |
+| Actions | https://github.com/faithleysath/magpie-oh-my-aihub/actions/runs/40994650032 |
 | `plugin (linux, bun 1.4.3)` | SUCCESS |
 | `plugin (macos, bun 1.4.3)` | SUCCESS |
 | Merge state | `MERGEABLE` / `CLEAN` against `main` at `4f264d3` |
