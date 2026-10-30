@@ -21,6 +21,8 @@ import { lanIPv4 } from "./paths.ts";
 import { logger, registerSecret, writePageStatus } from "./log.ts";
 import { gatewayBaseURL, type CatalogModelMeta, type LimitStatus, type Magpie } from "./magpie.ts";
 import { Provisioner, type ConsumerView } from "./provisioner.ts";
+import { Ledger } from "./ledger.ts";
+import { catalogPriceVersion, priceSnapshot } from "./pricing.ts";
 import {
   EasytierSupervisor,
   generateSecureIdentity,
@@ -127,6 +129,61 @@ export interface ServiceDeps {
   lanIp?: () => string | null;
   /** how long an ingress probe retries before giving up (tests shorten it) */
   probeTimeoutMs?: number;
+  /**
+   * How often the accounting safety check runs, independent of /status and the
+   * page. Defaults to ACCOUNTING_TICK_MS.
+   */
+  accountingTickMs?: number;
+  /** consecutive failed checks before the export is withdrawn */
+  accountingFailureBudget?: number;
+  /** a check that takes longer than this is a failure, not a pass */
+  accountingTimeoutMs?: number;
+}
+
+/**
+ * The accounting check's own cadence. It is a poll, not a price lock: a price
+ * edit is acted on at the next check, so the exposure is this interval plus the
+ * time one check takes.
+ */
+export const ACCOUNTING_TICK_MS = 10_000;
+const ACCOUNTING_TIMEOUT_MS = 20_000;
+const ACCOUNTING_FAILURE_BUDGET = 3;
+/** Marks a withdrawal caused by the accounting check, not by the share guard. */
+const ACCOUNTING_SUSPENSION = "accounting-uncertain: ";
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`accounting check exceeded ${ms} ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+export interface AccountingStatus {
+  /** the interval the timer uses */
+  intervalMs: number;
+  /** the largest gap between the end of one check and the start of the next */
+  maxDetectionMs: number;
+  lastCheckAt: string | null;
+  lastCheckMs: number | null;
+  lastOkAt: string | null;
+  /** consecutive failed checks */
+  failures: number;
+  /** true while the check cannot prove the accounting is sound */
+  uncertain: boolean;
+  uncertainReason: string | null;
+  /** consumers paused by this check, with the reason */
+  paused: { consumerId: string; reason: string; enforcement: string; enforced: boolean }[];
+  /** false while the export is withdrawn because the check cannot be trusted */
+  serving: boolean;
 }
 
 export interface StatusSnapshot {
@@ -159,6 +216,7 @@ export interface StatusSnapshot {
   consumers: ConsumerView[];
   providers: ProviderView[];
   catalog: CatalogStatus;
+  accounting: AccountingStatus;
   /** the phase-3 field, kept for older clients: the first provider, or null */
   wiring: { id: string; mappedCidr: string; url: string; createdAt: string } | null;
   checks: { name: string; ok: boolean; detail: string }[];
@@ -240,6 +298,7 @@ function defaultProbes(magpie: Magpie): Probes {
 export class Service {
   readonly supervisor: SupervisorLike;
   readonly provisioner: Provisioner;
+  readonly ledger: Ledger | null;
   private state: PluginState;
   private startedAt = new Date().toISOString();
   private lastProblem: string | null = null;
@@ -252,6 +311,12 @@ export class Service {
   private mutating = 0;
   private lastReconcileAt = 0;
   private lastProviderFingerprint = "";
+  private accountingTimer: ReturnType<typeof setInterval> | null = null;
+  private accountingRunning = false;
+  private accounting: AccountingStatus;
+  private accountingTickMs: number;
+  private accountingFailureBudget: number;
+  private accountingTimeoutMs: number;
   private catalogServer: CatalogServerHandle | null = null;
   private catalogServerError: string | null = null;
   private catalogQuote: SignedCatalog | null = null;
@@ -268,6 +333,21 @@ export class Service {
   constructor(private deps: ServiceDeps) {
     this.state = loadState().state;
     this.probes = { ...defaultProbes(deps.magpie), ...(deps.probes ?? {}) };
+    this.accountingTickMs = Math.max(10, deps.accountingTickMs ?? ACCOUNTING_TICK_MS);
+    this.accountingFailureBudget = Math.max(1, deps.accountingFailureBudget ?? ACCOUNTING_FAILURE_BUDGET);
+    this.accountingTimeoutMs = Math.max(50, deps.accountingTimeoutMs ?? ACCOUNTING_TIMEOUT_MS);
+    this.accounting = {
+      intervalMs: this.accountingTickMs,
+      maxDetectionMs: this.accountingTickMs + this.accountingTimeoutMs,
+      lastCheckAt: null,
+      lastCheckMs: null,
+      lastOkAt: null,
+      failures: 0,
+      uncertain: false,
+      uncertainReason: null,
+      paused: [],
+      serving: true,
+    };
     this.lanIp = deps.lanIp ?? (() => safeLanIp());
     this.probeTimeoutMs = deps.probeTimeoutMs ?? 6000;
     this.supervisor =
@@ -282,8 +362,19 @@ export class Service {
           }
         },
       });
+    // The durable ledger needs Magpie's effective prices. A test double that
+    // cannot report them keeps the legacy behaviour rather than failing every
+    // key; the real Magpie always has catalogModels().
+    const canPrice = typeof (deps.magpie as unknown as { catalogModels?: unknown }).catalogModels === "function";
+    this.ledger = canPrice ? new Ledger() : null;
     this.provisioner = new Provisioner(deps.magpie, {
       validateModels: (models) => this.assertShareable(models),
+      ...(this.ledger
+        ? {
+            ledger: this.ledger,
+            prices: async (models: string[]) => priceSnapshot(await deps.magpie.catalogModels(), models),
+          }
+        : {}),
     });
   }
 
@@ -307,6 +398,139 @@ export class Service {
     } catch {
       return 3425;
     }
+  }
+
+
+  // --- accounting safety -----------------------------------------------------
+
+  /** The accounting check's last result, for the status page and the API. */
+  /** The snapshot without the (network) checks, for tests that only read state. */
+  statusSnapshotForTest(): StatusSnapshot {
+    return this.lightStatus();
+  }
+
+  accountingStatus(): AccountingStatus {
+    return { ...this.accounting, paused: [...this.accounting.paused] };
+  }
+
+  /**
+   * Runs the prepaid-accounting check without being asked.
+   *
+   * It is a **poll**, not a price lock: an external price edit, a window
+   * boundary, a late usage row or a log gap is acted on at the next check. The
+   * exposure is bounded by `intervalMs` plus one check's duration, which
+   * `accountingStatus().maxDetectionMs` reports.
+   *
+   * Fail closed: a check that throws, times out, or cannot read the price source
+   * counts as a failure. After `accountingFailureBudget` consecutive failures the
+   * export is withdrawn (`safetyUncertain`), so consumers cannot keep spending
+   * against accounting the plugin can no longer verify.
+   */
+  async accountingTick(): Promise<AccountingStatus> {
+    if (this.accountingRunning) return this.accountingStatus();
+    this.accountingRunning = true;
+    const startedAt = Date.now();
+    this.accounting.lastCheckAt = new Date(startedAt).toISOString();
+    try {
+      const paused = await withTimeout(this.runAccountingCheck(), this.accountingTimeoutMs);
+      this.accounting.lastCheckMs = Date.now() - startedAt;
+      this.accounting.failures = 0;
+      this.accounting.lastOkAt = new Date().toISOString();
+      this.accounting.paused = paused;
+      if (this.accounting.uncertain) {
+        // A check that passed after the export was withdrawn for accounting
+        // reasons may republish — but only after a full re-validation, which
+        // runAccountingCheck() has just done for every key.
+        this.accounting.uncertain = false;
+        this.accounting.uncertainReason = null;
+        await this.restoreAccountingServing("the accounting check passes again");
+      }
+    } catch (e) {
+      this.accounting.lastCheckMs = Date.now() - startedAt;
+      this.accounting.failures += 1;
+      this.accounting.uncertainReason = String((e as Error).message ?? e);
+      logger.error(`accounting check ${this.accounting.failures}/${this.accountingFailureBudget} failed: ${this.accounting.uncertainReason}`);
+      if (this.accounting.failures >= this.accountingFailureBudget) {
+        this.accounting.uncertain = true;
+        await this.withdrawForAccounting(
+          `the prepaid accounting check failed ${this.accounting.failures} times in a row (${this.accounting.uncertainReason})`,
+        );
+      }
+    } finally {
+      this.accountingRunning = false;
+      this.accounting.serving = this.sharingActive();
+      this.writeSnapshot();
+    }
+    return this.accountingStatus();
+  }
+
+  private async runAccountingCheck(): Promise<AccountingStatus["paused"]> {
+    const paused: AccountingStatus["paused"] = [];
+    for (const rec of this.provisioner.all()) {
+      if (rec.revokedAt) continue;
+      // The same per-consumer lock as topUp/reissue/revoke: a check never races
+      // a money operation on the same consumer.
+      await this.provisioner.checkConsumer(rec.consumerId);
+      const after = this.provisioner.find(rec.consumerId);
+      if (after?.paused) {
+        paused.push({
+          consumerId: after.consumerId,
+          reason: after.paused.reason,
+          enforcement: after.paused.enforcement,
+          enforced: after.paused.enforced,
+        });
+      }
+    }
+    // A pause that could not stop the key (remove and rotate both failed) is not
+    // a stopped consumer: withdraw the overlay publication as well.
+    const unenforced = paused.filter((p) => !p.enforced);
+    if (unenforced.length > 0) {
+      await this.withdrawForAccounting(
+        `a consumer could not be stopped (${unenforced.map((p) => `${p.consumerId}: ${p.enforcement}`).join(", ")})`,
+      );
+    }
+    return paused;
+  }
+
+  private async withdrawForAccounting(reason: string): Promise<void> {
+    if (!this.state.config?.sharingEnabled) return;
+    if (this.state.shareSuspended?.reason.startsWith(ACCOUNTING_SUSPENSION)) {
+      this.state.shareSuspended = { at: new Date().toISOString(), reason: `${ACCOUNTING_SUSPENSION}${reason}` };
+      saveState(this.state);
+      return;
+    }
+    try {
+      await this.suspendSharing(`${ACCOUNTING_SUSPENSION}${reason}`);
+      this.accounting.serving = false;
+    } catch (e) {
+      // Withdrawing failed: the export is still up. That is reported, never
+      // treated as a successful stop.
+      logger.error(`could not withdraw sharing for accounting: ${String(e)}`);
+      this.accounting.uncertain = true;
+      this.accounting.uncertainReason = `${reason}; the overlay publication could not be withdrawn: ${String(e)}`;
+      this.accounting.serving = this.sharingActive();
+    }
+  }
+
+  /**
+   * Republishes after an accounting withdrawal, but only when the check that
+   * just passed could actually verify every consumer. A consumer whose charges
+   * are still uncertain (a usage-log gap) keeps the export down: restoring it
+   * would let the node serve against accounting it cannot prove. A merely
+   * paused consumer does not block it — its key is already revoked, which is
+   * the stop; the export is what serves the others.
+   */
+  private async restoreAccountingServing(reason: string): Promise<void> {
+    if (!this.state.shareSuspended?.reason.startsWith(ACCOUNTING_SUSPENSION)) return;
+    const blocked = this.provisioner.all().filter((c) => !c.revokedAt && (c.ledger?.uncertain ?? null));
+    if (blocked.length > 0) {
+      this.accounting.uncertainReason =
+        `still uncertain: ${blocked.map((c) => c.consumerId).join(", ")}; the export stays withdrawn`;
+      logger.warn(this.accounting.uncertainReason);
+      return;
+    }
+    await this.resumeSharing().catch((e) => logger.error(`could not restore sharing: ${String(e)}`));
+    logger.info(`sharing restored: ${reason}`);
   }
 
   // --- lifecycle -------------------------------------------------------------
@@ -343,12 +567,44 @@ export class Service {
     await this.reconcileProviders({ quiet: true, verifyModels: true }).catch((e) =>
       logger.warn(`reconcile after start failed: ${String(e)}`),
     );
-    this.ticking = setInterval(() => {
-      void this.tick();
-    }, 15_000);
+    // Reconcile Magpie's keys, the ledger and consumers.json before serving:
+    // a crash between the three must never leave an unbacked key live.
+    await this.provisioner
+      .recover()
+      .then((r) => {
+        if (r.recovered.length || r.removed.length || r.uncertain.length) {
+          logger.warn(
+            `accounting recovery: adopted ${r.recovered.join(",") || "none"}; removed ${r.removed.join(",") || "none"}; uncertain ${r.uncertain.join(",") || "none"}`,
+          );
+        }
+      })
+      .catch((e) => logger.error(`accounting recovery failed: ${String(e)}`));
+    this.startLoops();
     // Do not make boot wait for peers: the directory fills in the background.
     void this.catalogTick();
     this.writeSnapshot();
+  }
+
+  /**
+   * Installs the background loops once. Both `start()` and `configure()` call
+   * it: a node configured through the loopback API (index.ts does not call
+   * start() then) must run the accounting check too, or a price edit would only
+   * be noticed when somebody opened the page.
+   */
+  private startLoops(): void {
+    if (!this.ticking) {
+      this.ticking = setInterval(() => {
+        void this.tick();
+      }, 15_000);
+    }
+    if (!this.accountingTimer) {
+      this.accountingTimer = setInterval(() => {
+        void this.accountingTick();
+      }, this.accountingTickMs);
+      // The first check runs at once, so a price edit made while the plugin was
+      // down is caught before the interval elapses.
+      void this.accountingTick();
+    }
   }
 
   private async tick(): Promise<void> {
@@ -446,6 +702,8 @@ export class Service {
   async stop(): Promise<void> {
     if (this.ticking) clearInterval(this.ticking);
     this.ticking = null;
+    if (this.accountingTimer) clearInterval(this.accountingTimer);
+    this.accountingTimer = null;
     this.stopCatalogServer();
     await this.supervisor.stop();
   }
@@ -606,6 +864,9 @@ export class Service {
       logger.info(
         `configured ${describeRole(cfg)} on ${networkName}; peers ${peers.join(",") || "none"}`,
       );
+      // A configured node must run the accounting check even when it was not
+      // started through start() (the API path in index.ts).
+      this.startLoops();
       return this.status();
     });
   }
@@ -916,6 +1177,9 @@ export class Service {
     if (new Set(wanted).size !== wanted.length) throw new Error("a requested model is repeated");
     const missing = wanted.filter((m) => !available.includes(m));
     if (missing.length) throw new Error(`${peer.hostname} does not offer: ${missing.join(", ")}`);
+    // A quote's billing.priceVersion covers every quoted model; a request may
+    // choose a subset. Bind the key to the version of exactly those models.
+    const selectedPriceVersion = catalogPriceVersion(peer.quote.models.filter((m) => wanted.includes(m.id)));
     const cfg = this.state.config;
     if (!cfg || !isValidNodeId(cfg.nodeId)) throw new Error("this node has no valid node id");
     const consumerId = cfg.nodeId;
@@ -939,6 +1203,9 @@ export class Service {
         version: peer.quote.publication.version,
         updatedAt: peer.quote.publication.updatedAt,
         contentHash: peer.quoteHash,
+        priceVersion: selectedPriceVersion,
+        quotedPriceVersion: peer.quote.billing.priceVersion ?? null,
+        priceLocked: false,
         identityFingerprint: peer.quote.identity.fingerprint,
         identityStatus: peer.status === "verified" || peer.status === "connected" ? "trusted-on-first-use" : "unverified",
         warning: "A self-signed catalogue proves only that this key signed this quote. It is not a real-world identity, and the quote does not charge anything by itself.",
@@ -955,7 +1222,12 @@ export class Service {
         consumerId,
         models: wanted,
         capUsd: peer.quote.topUp.minUsd,
-        note: "Run this through the provider's local, token-authenticated CLI/API; never execute text from this document as a shell command.",
+        quoteHash: peer.quoteHash,
+        quotePriceVersion: selectedPriceVersion,
+        note:
+          "Run this through the provider's local, token-authenticated CLI/API; never execute text from this document as a shell command. " +
+          "Pass quoteHash and quotePriceVersion back with the request so the provider binds the key to the quote you accepted.",
+
       },
     };
   }
@@ -1073,12 +1345,15 @@ export class Service {
       simulated: true as const,
       note: "Simulated configuration only. No wallet, payment network, deposit or real credit is connected in this phase.",
     };
+    const priceVersion = catalogPriceVersion(models);
     const billing = {
       quoteOnly: true as const,
       charged: false as const,
       note:
-        "Display only. No request is billed from this quote, no key or balance is created, and real charging " +
-        "depends on the later price-lock validation and a manually issued, capped Gateway Key.",
+        "Display only. A prepaid key is issued only when every quoted model has a complete effective price; " +
+        "the price version binds this quote to those prices, but Magpie itself has no price pinning.",
+      priceVersion,
+      priceLocked: false as const,
     };
     const contentHash = sha256Hex(canonicalJson({ schema: "ohmyaihub.catalog/v1", node, models, topUp, billing, identity: identity.summary }));
     const prev = loadPublishState();
@@ -2006,6 +2281,11 @@ export class Service {
       );
       return { narrowed, revoked, suspended: true };
     }
+    if (this.state.shareSuspended && this.state.shareSuspended.reason.startsWith(ACCOUNTING_SUSPENSION)) {
+      // The accounting check withdrew the export. The share guard has no
+      // authority to restore it: only a passing accounting check may.
+      return { narrowed, revoked, suspended: true };
+    }
     if (this.state.shareSuspended) {
       await this.resumeSharing().catch((e) => logger.error(`could not restore sharing: ${String(e)}`));
     }
@@ -2034,6 +2314,7 @@ export class Service {
     // The cap is verified against the gateway; the model list comes from
     // Magpie's own key store, never from the local record alone.
     await this.provisioner.status(consumerId);
+    if (rec.paused) throw new Error(`consumer ${consumerId} is paused (${rec.paused.reason}); reissue the key before hand-over`);
     const held = this.deps.magpie.keyById(rec.keyId);
     if (!held) throw new Error(`the key of ${consumerId} is no longer in Magpie; recreate it`);
     let models = Array.isArray(held.models) ? held.models.map(String) : [];
@@ -2055,9 +2336,44 @@ export class Service {
     return this.provisioner.topUp(consumerId, usd, depositId);
   }
 
-  async ensureConsumer(consumerId: string, models: string[], capUsd: number): Promise<ConsumerView> {
+  /**
+   * Fail-closed recovery: reissue a paused key with the same secret, carrying
+   * only the ledger balance. A price change requires the new version to be
+   * accepted explicitly; a window boundary does not, because no price changed.
+   */
+  /**
+   * Records an audited resolution of a usage-log gap. It does not reconstruct
+   * the missing charges or adjust the balance; it states what the operator
+   * accepted, so a later reissue can proceed on the recorded balance.
+   */
+  async resolveConsumerGap(
+    consumerId: string,
+    opts: { logId: string; resolvedBy: string; note: string; acceptedOffset?: number },
+  ): Promise<ConsumerView> {
+    const view = await this.provisioner.resolveUsageGap(consumerId, opts);
+    this.writeSnapshot();
+    return view;
+  }
+
+  async reissueConsumer(consumerId: string, acceptPriceVersion?: string, acceptQuoteHash?: string): Promise<ConsumerView> {
+    const view = await this.provisioner.reissue(consumerId, { acceptPriceVersion, acceptQuoteHash });
+    this.writeSnapshot();
+    return view;
+  }
+
+  async ensureConsumer(
+    consumerId: string,
+    models: string[],
+    capUsd: number,
+    quote: { hash?: string; priceVersion?: string } = {},
+  ): Promise<ConsumerView> {
     this.assertShareable(models);
-    const v = await this.provisioner.ensure(consumerId, { models, capUsd });
+    const v = await this.provisioner.ensure(consumerId, {
+      models,
+      capUsd,
+      quoteHash: quote.hash,
+      quotePriceVersion: quote.priceVersion,
+    });
     if (!this.state.consumers.includes(consumerId)) this.state.consumers.push(consumerId);
     saveState(this.state);
     return v;
@@ -2259,6 +2575,7 @@ export class Service {
     const snap: StatusSnapshot = {
       ...this.lightStatus(),
       consumers: await this.provisioner.refreshAll(),
+      accounting: this.accountingStatus(),
       checks,
     };
     this.lastSnapshot = snap;
@@ -2272,7 +2589,7 @@ export class Service {
     const et = this.supervisor.snapshot();
     const cfg = this.state.config;
     return {
-      plugin: { version: "0.3.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
+      plugin: { version: "0.4.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
       magpie: { version: this.deps.magpieVersion, gateway: gatewayBaseURL() },
       config: {
         role: cfg ? (cfg.sharingEnabled ? "provider" : "consumer") : null,
@@ -2298,6 +2615,7 @@ export class Service {
       },
       easytier: et,
       consumers: this.provisioner.all(),
+      accounting: this.accountingStatus(),
       providers: this.providers(),
       catalog: this.catalogStatus(),
       wiring: this.state.providers[0]

@@ -23,6 +23,7 @@ import {
   type CatalogTrustRecord,
   type SignedCatalog,
 } from "../src/catalog.ts";
+import { catalogPriceVersion } from "../src/pricing.ts";
 
 let dir: string;
 
@@ -372,5 +373,34 @@ describe("SOCKS5 client", () => {
     await expect(
       socksHttpGet({ socksPort, host: "10.66.1.2", port: httpPort, path: CATALOG_PATH, timeoutMs: 3000, maxBytes: 5 }),
     ).rejects.toThrow(/exceeds 5 bytes/);
+  });
+});
+
+describe("price version binding", () => {
+  test("a signed quote can bind its displayed prices, and a mismatch is refused", () => {
+    const identity = loadOrCreateCatalogIdentity();
+    const m = model("alpha/x");
+    const priceVersion = catalogPriceVersion([m])!;
+    expect(priceVersion).toMatch(/^[0-9a-f]{64}$/);
+    const b = body(identity, [m]);
+    b.billing = { ...b.billing, priceVersion, priceLocked: false };
+    const signed = signCatalog(b, identity);
+    expect(verifySignedCatalog(signed).quote.billing.priceVersion).toBe(priceVersion);
+
+    const wrong = body(identity, [m]);
+    wrong.billing = { ...wrong.billing, priceVersion: "0".repeat(64), priceLocked: false };
+    expect(() => verifySignedCatalog(signCatalog(wrong, identity))).toThrow(/priceVersion/);
+
+    const repriced = body(identity, [{ ...m, pricing: { ...m.pricing!, input: 9 } }]);
+    repriced.billing = { ...repriced.billing, priceVersion, priceLocked: false };
+    expect(() => verifySignedCatalog(signCatalog(repriced, identity))).toThrow(/priceVersion/);
+  });
+
+  test("a quote without a price version stays readable, but a false lock claim is refused", () => {
+    const identity = loadOrCreateCatalogIdentity();
+    expect(() => verifySignedCatalog(quote(identity))).not.toThrow();
+    const b = body(identity);
+    b.billing = { ...b.billing, priceLocked: true as never };
+    expect(() => verifySignedCatalog(signCatalog(b, identity))).toThrow(/priceLocked/);
   });
 });

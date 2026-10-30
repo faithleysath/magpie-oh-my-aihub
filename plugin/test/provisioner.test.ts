@@ -314,7 +314,9 @@ describe("a deposit while the consumer is calling models", () => {
   test("the plugin never calls limit reset", () => {
     const src = readFileSync(new URL("../src/provisioner.ts", import.meta.url), "utf8");
     expect(src).not.toMatch(/"reset"/);
-    expect(src).not.toMatch(/limit.*reset|reset.*limit/);
+    // The dangerous call is the CLI reset (`gateway-key limit <id> reset`), not
+    // reading limit.reset (the window's end time) in status or in the ledger.
+    expect(src).not.toMatch(/gateway-key[^\n]*\blimit\b[^\n]*\breset\b/);
   });
 });
 

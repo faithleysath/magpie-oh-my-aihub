@@ -2,7 +2,7 @@
 
 A private-community P2P AI API sharing project based on Magpie, EasyTier no-TUN networking, and wallet-funded Gateway Key quotas.
 
-**Status: phase 5 — one Magpie node can share its own channels, consume several remote Magpies, and discover signed read-only model/price catalogues from peers in the same EasyTier network. Verified against Magpie 0.1.2038 and EasyTier 2.6.4. No wallet, no chain, no real payments.**
+**Status: phase 6 — one Magpie node can share its own channels, consume several remote Magpies, discover signed read-only model/price catalogues, and keep a local immutable prepaid ledger with fail-closed key reissue across price changes and quota-window boundaries. Verified against Magpie 0.1.2038 and EasyTier 2.6.4. No wallet, no chain, no real payments; real funds are blocked by the native price-lock finding.**
 
 ## Current planned division of responsibilities
 
@@ -14,6 +14,42 @@ A private-community P2P AI API sharing project based on Magpie, EasyTier no-TUN 
 Do **not** implement a second AI API proxy, token router or charging gateway unless real integration tests demonstrate a hard security/compatibility limit in the native path.
 
 Read [architecture](docs/ARCHITECTURE.md), [verification tasks](docs/VALIDATION.md), and [agent instructions](AGENTS.md).
+
+## Phase 6: prepaid credit that survives price changes and window ends
+
+Magpie remains the only charging point. Magpie 0.1.2038 has no price pinning and recomputes a key's
+used cost at today's price, so the plugin now keeps the balance of record itself:
+
+- a local SQLite ledger in `oh-my-aihub/ledger.sqlite` (integer nano-USD, unique deposit and usage
+  ids, immutable price snapshot per window);
+- top-up = `native used + ledger balance`, never `old cap + amount`; the deposit is credited only
+  after Magpie's cap read-back;
+- a price-version mismatch, a native window boundary or native-vs-ledger drift **pauses** the key
+  (`gateway-key remove`, falling back to `gateway-key rotate`) instead of pretending the old cap is
+  still safe, and records how far the stop really went;
+- the check runs on its own 10 s cadence, not only when the page is opened; a check that cannot
+  verify the books withdraws the overlay publication;
+- a row that settles after a rotation is charged at the old window's frozen price and tightens the
+  live key; consumption identity is the usage-log line position, not a content hash;
+- `consumers reissue` creates a new key with `cap = ledger balance`, preserving a plugin-owned
+  secret, and requires an explicit `acceptPriceVersion` after a price change;
+- quotes carry `billing.priceVersion` and `priceLocked: false`, so a signed quote is a record of
+  what was quoted, not a claim that Magpie will keep that price.
+
+The measured price/window behaviour, the three candidate strategies and the exact GO/NO-GO are in
+[`docs/validation/2026-10-30-phase6-pricing-window.md`](docs/validation/2026-10-30-phase6-pricing-window.md).
+The accounting-safety review patch (periodic check, late-row settlement, log-position identity,
+enforcement levels, crash recovery) is in
+[`docs/validation/2026-10-30-phase6-review-fixes.md`](docs/validation/2026-10-30-phase6-review-fixes.md).
+The final targeted patch (an unreadable limit fails the check; a usage-log gap blocks reissue until
+an audited resolution) is in
+[`docs/validation/2026-10-30-phase6-final-fixes.md`](docs/validation/2026-10-30-phase6-final-fixes.md).
+**GO for testnet accounting development; NO-GO for real USDC until the native price-lock blocker is
+solved.**
+
+```sh
+bun plugin/bin/ohmyaihub.ts --data ~/.config/magpie consumers reissue <consumer-id> --accept-price-version <sha256>
+```
 
 ## Phase 5: peer discovery and a read-only catalogue
 
@@ -39,7 +75,8 @@ Inbound stays Drop with no rules, so the virtual-IP/loopback path is not a way i
   real-world identity.
 - Quotes are display data: they do not create a key, a balance or a charge. The existing manual
   `consumers add` → `secret` → `provider add` flow still issues every Gateway Key, and a quote price
-  change never alters a key's cost cap.
+  change never alters a key's cost cap. Since phase 6 a quote also carries a recomputable
+  `billing.priceVersion` and `priceLocked: false`; a key is bound to the accepted version.
 - The plugin page stays read-only and CSP-compatible: it renders a generated snapshot with the peer
   directory, quotes, native key limits and warnings.
 

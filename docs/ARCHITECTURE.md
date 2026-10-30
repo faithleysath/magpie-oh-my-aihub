@@ -1,12 +1,16 @@
-# Architecture decision record — updated 2026-10-30 (phase 5)
+# Architecture decision record — updated 2026-10-30 (phase 6)
 
-Phase 5 adds opt-in peer discovery and a read-only quote catalogue, and does not add a wallet, a
-central directory or an automatic key issuer. Phase 4 turned the two mutually exclusive roles into
-two independent capabilities on one node (share my Magpie, consume other Magpies) and replaced the
-single consumer wiring with a set of remote providers. Everything measured in phase 3 still holds;
-the phase-4 decisions are 5–12 and the phase-5 decisions are 13–17. Evidence is in
-[`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md)
-and [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md).
+Phase 6 adds a local immutable prepaid ledger and fail-closed key reissue for price changes and
+window boundaries. It does **not** add a wallet, chain payment or a second AI gateway; Magpie
+remains the only charging point. Phase 5 added opt-in peer discovery and a read-only quote
+catalogue. Phase 4 turned the two mutually exclusive roles into two independent capabilities on one
+node (share my Magpie, consume other Magpies) and replaced the single consumer wiring with a set of
+remote providers. Everything measured in phase 3 still holds; the phase-4 decisions are 5–12, the
+phase-5 decisions are 13–17, the phase-6 decisions are 18–20, the phase-6 review patch's are 21–24
+and the final targeted patch's are 25–26. Evidence is in
+[`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
+[`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md) and
+[`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md).
 
 Supersedes the 2026-10-29 draft. Every claim below is backed by a measured result in
 [`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md) or
@@ -82,9 +86,11 @@ One provider-owned Gateway Key per consumer, always **held**:
 - a positive cost cap on a window (`gateway-key limit <id> day --cost <USD>`), never zero,
 - caps are written on Magpie's **$0.0001 grid**; a smaller value silently becomes *unlimited*.
 
-Top-up = raise the same key's cumulative cost cap (`limit <id> day --cost <newTotal>`), which keeps
-the used cost and takes effect immediately. Never `reset` for a top-up (it erases usage). Revocation
-is `gateway-key remove <id>` (or `rotate` to invalidate the secret while keeping the key).
+Top-up = raise the same key's cumulative cost cap while its window is open; the phase-6 ledger
+recomputes the cap as `native used + ledger balance`, never as `old cap + amount` (Decision 18).
+Changing the period or cycle restarts the window - it is never a top-up. Never `reset` for a
+top-up (it erases usage). Revocation is `gateway-key remove <id>` (or `rotate` to invalidate the
+secret while keeping the key).
 
 `GET /v1/magpie/limit` with the consumer key (loopback, managed key) is the authoritative read-back
 for the key's own numbers; every write is verified by reading it back.
@@ -95,10 +101,14 @@ Semantics the product must accept (measured):
   bounded by in-flight reservations and by output length versus the reservation, not by one call.
 - A refused call is a native **429** with `Retry-After` and `X-Magpie-Limit-Reset`; the plugin adds
   no refusal of its own.
-- Cost is Magpie's estimate at its **current** prices, recomputed over history. The MVP therefore
-  **must not change the price of a shared model while prepaid credit is outstanding**; a price
-  change can move a consumer over budget retroactively. Whether Magpie can pin a price is an
-  **open blocker** (see below), not something a ledger snapshot may paper over.
+- Cost is Magpie's estimate at its **current** prices, recomputed over history. Measured in phase 6:
+  `/v1/magpie/limit` reprices old calls immediately, while the running admission sums stay at the
+  price they were first read at until a restart/new window/key change. A price change can therefore
+  both deny credit that is still there and admit calls the read endpoint already calls spent. There
+  is no native price pin or per-key price. The plugin's ledger preserves the USD balance and fails
+  closed after detection, but it **cannot prevent** a call in the detection gap from being repriced;
+  see Decision 20 and the phase-6 note. Real funds remain blocked until this is solved upstream or
+  by a request-path guard.
 - An interrupted request (Magpie restart, crash) is **lost from both sides' accounting**; the
   vendor still bills it. Reconciliation must treat unfinished calls as unbillable and never invent
   a charge.
@@ -263,8 +273,11 @@ immutable or a request-path intermediary; **LIMITATION**, see
   from it;
 - a provider's forward set is written into the generated TOML, so an EasyTier restart restores
   every listener without a second source of truth;
-- no database service is introduced: the document is small, local and single-writer (the host
-  lock), and SQLite would add a dependency without removing the need for the backup/rename.
+- no database service is introduced: `state.json`, `consumers.json` and the key store are small,
+  local and single-writer (the host lock), and continue to use the backup/rename. Phase 6 adds one
+  embedded SQLite file for the money ledger only (`ledger.sqlite`, WAL, `FULL` sync), because a
+  deposit, a cap write and a usage import need multi-row uniqueness and transactions; Bun ships
+  SQLite, so there is no server and no new dependency.
 
 ## Decision 12 — EasyTier 2.6.4 cannot remove a port forward at runtime
 
@@ -403,8 +416,11 @@ per 1M tokens, with cache read/write and tiers when present. A model with no
 configured price is published as "no published price", never invented. The
 minimum top-up is a simulated display field (`simulated: true`); no wallet is
 connected. A quote change does not call the provisioner and cannot change a
-Gateway Key's cost cap. Real charging still depends on the price-lock work in
-Decision 4/known blockers.
+Gateway Key's cost cap. Since phase 6 the quote also carries
+`billing.priceVersion` (recomputed by the reader) and `billing.priceLocked:
+false`; a consumer's accepted quote hash/price version is bound to its key, and
+a mismatch pauses it for an explicit reissue (Decision 20). Real charging still
+depends on the price-lock work in Decision 4/known blockers.
 
 The provider page cannot fetch (`connect-src 'none'`); it renders a generated
 `status.js` snapshot with the peer directory, quotes, connected providers,
@@ -422,6 +438,204 @@ is therefore ~15 s for provider id/type changes and ~45 s for a direct key-store
 whitelist edit, not 15 s for both. Catalogue refresh never invokes the guard and
 never changes a key.
 
+## Decision 18 — Prepaid credit is a local immutable ledger, not native `used`
+
+Magpie has no immutable per-call cost: a key's used cost is summed from `usage.jsonl` and each
+record is priced at the **current** effective price (`internal/budget/budget.go`, `internal/usage/
+ledger.go`). A price change therefore reprices history, and a window end makes the old used cost
+zero. The plugin's balance of record is a local SQLite ledger (`plugin/src/ledger.ts`, 0600, WAL,
+`FULL` sync); Magpie remains the only enforcement point and the only source of token counts.
+
+Money is integer nano-USD. For a consumer:
+
+```text
+T = sum of applied deposits (the opening credit is one deposit)
+L = sum of settled usage snapshots, each priced at its window's bound price
+B = T - L                         (negative is an overdraft)
+U = Magpie's native cost in the current window
+while open: native cap = floorGrid(U + B)
+new window: native cap = floorGrid(B)
+```
+
+A top-up never uses `old cap + amount`; it recomputes from `U + B + amount`. A cap is floored to
+Magpie's `$0.0001` grid, never rounded up. `0 <= B < $0.0001` is dust and cannot produce a usable
+key; it stays in the ledger. Consumption rows are copied from Magpie's own `usage.jsonl` with a
+stable id and a byte offset advanced in the same transaction. The plugin does not count tokens,
+route requests or meter a second time.
+
+Deposits are idempotent intents: the intent is written first, the cap is written, the gateway is
+read back, and only then is the deposit applied. A crash leaves an intent; `reconcile()` applies it
+only if the read-back shows exactly that cap, otherwise it marks it failed. The same id with another
+amount is refused. A top-up, a usage import and a key change for one consumer are serialized.
+
+## Decision 19 — Long window, but every boundary is a reissue
+
+The default window is `days 3650` (Magpie's maximum), so a day/week reset cannot re-grant credit
+every midnight. It is **not** treated as permanent: `Limit.Window` still ends it, and a 3650-day
+test was made to end by state injection. At a boundary, or if the native window start differs from
+the ledger's, the plugin removes the key and pauses the consumer. `reissue` then:
+
+1. imports the old window's settled usage (including a request that started before the boundary and
+   finished after it; Magpie records its start time);
+2. removes the old key, so no new request can enter;
+3. waits a bounded drain for in-flight streams;
+4. closes the old window and recomputes `B`;
+5. if `B < $0.0001`, leaves the consumer paused as `overdraft`/`dust` and issues no key;
+6. otherwise creates a new key with `cap = floorGrid(B)` and a new price version.
+
+New ledger-managed keys use a plugin-owned secret (`sk-ohmy-…`) so reissue can keep the same
+credential. Magpie's generated `sk-magpie-…` secret cannot be passed back through `gateway-key add
+--key`; a legacy key gets a new secret on its first reissue and must be handed over again. The
+plugin never calls `limit reset`, never changes a window to top up, and never issues a key with a
+zero cap (zero means unlimited).
+
+The drain is bounded, not an atomic proof against an arbitrarily long stream. A stream that settles
+after reissue is imported on the next reconcile and reduces the balance then; it is an explicit
+operational uncertainty, never treated as free.
+
+## Decision 20 — A quote binds a price version, but Magpie cannot lock a price
+
+Each signed catalogue quote carries `billing.priceVersion` (SHA-256 of sorted model prices) and
+`billing.priceLocked: false`. A reader recomputes the version from the quoted models; a wrong value
+is refused. A consumer's accepted `contentHash` and price version are stored with its key, and a key
+is refused if the live effective price at issuance differs from the accepted version.
+
+A later mismatch pauses the key. `reissue` requires `acceptPriceVersion=<new>` explicitly; settled
+consumption stays at the old snapshot, so the carried balance is not repriced. A new quote may be
+published at any time, but it is an accurate billing promise only after active keys are paused and
+reissued at the new version; otherwise the quote is marked `priceLocked:false` and must not be
+presented as a lock. Detection is polled. A call made between an external price edit and the next
+reconcile can still be charged at the new price: this is **not real-time price protection**, and it
+is the blocker in section "Known blockers". The same applies to a price decrease: the native read
+endpoint can show more credit while the running admission sums still hold the old, higher cost;
+only a key change/restart/new window clears them.
+
+## Decision 21 — The accounting check runs on its own cadence, and stops serving when it cannot prove the books
+
+`Provisioner.ledgerCheck` used to run only when somebody asked for a status or opened the page.
+A price edit or a window boundary with nobody watching therefore went unnoticed. The service now
+runs `accountingTick()` every `ACCOUNTING_TICK_MS` (10 s) plus once at start and once at configure,
+serialized per consumer with `topUp`/`reissue`/`revoke`/`handOver` by the same lock.
+
+- It is a **poll**, not a price lock. `accountingStatus()` reports `intervalMs`,
+  `maxDetectionMs` (interval + timeout), the last check and its duration, so the real exposure is
+  visible instead of implied.
+- A check that throws, times out (20 s) or cannot read the price source counts as a failure. After
+  `accountingFailureBudget` (3) consecutive failures the export is withdrawn with a reason prefixed
+  `accounting-uncertain:`, which `guardSharedKeys` may **not** clear. Only a passing check
+  re-validates every key and republishes, and it refuses while any consumer's charges are still
+  uncertain.
+- `configure()` installs the loops as well as `start()`: a node configured through the loopback API
+  is not left without the check.
+
+Measured on the isolated Magpie: an external `magpie model price` edit was detected and the key
+revoked in 146 ms of check time; the next remote call was 401.
+
+## Decision 22 — Consumption identity is the log position, and old windows keep being audited
+
+Magpie's `usage.jsonl` has **no unique request id**. `route_id` is a per-process counter seeded from
+`UnixMilli` (`internal/gateway/trace.go`, `trace.begin`), it restarts near the same value on the next
+run, and a rejected row carries none; `rid` is the vendor's id and absent for most calls. A content
+hash therefore collides two genuinely identical calls and cannot distinguish them from a re-read of
+one line.
+
+A consumption event is identified by `(usage-log id, byte offset of the line, caller key id)`, hashed
+into the row's primary key. The log id is the SHA-256 of the resolved path, so a replaced file cannot
+collide with the old one. Consequences, all tested:
+
+- two byte-identical lines at different offsets are two charges;
+- re-reading from offset 0 charges nothing twice;
+- a log that shrank below the cursor, or disappeared, is a **gap**: the consumer is paused
+  (`log-gap`) and the export stays withdrawn rather than treating missing rows as zero;
+- the rows and the cursor advance in one SQLite transaction.
+
+`reissue` no longer treats a short drain as proof that an old window is finished. Every unsettled
+window, and every window closed within the audit horizon (30 min), is re-read for late rows at each
+check; a late row is charged at that window's frozen price snapshot, reopens a window that had been
+called settled, and **tightens the live key's cap** to `native used + balance` — or pauses it when
+the balance is negative or below one grid unit. A window is marked settled only on evidence: the
+gateway reports no request in flight (`GET /v1/magpie/concurrency`) and the log has no unread bytes.
+That evidence can still be overtaken by a request that ends immediately afterwards, which is why the
+audit horizon exists; the status shows `openSettlements` and `uncertain` instead of claiming a clean
+close.
+
+## Decision 23 — A pause is only "enforced" at the level it really reached
+
+A removed key is 401 for a remote caller, but Magpie serves a **loopback** caller with the same
+secret (loopback is trusted by construction, `internal/gateway/lan.go`). A `$0.0001` cap is not a
+stop either: measured, a 10/10-token call still returned 200 with 6e-05 used of 0.0001. Both facts
+are now recorded instead of assumed.
+
+`paused.enforcement` is one of:
+
+| Level | Meaning |
+| --- | --- |
+| `keyRevoked` | the key is gone; a remote call with its secret is 401 |
+| `secretRotated` | removal failed, so `gateway-key rotate` replaced the secret; the old one is 401 and the usage is kept |
+| `capRestricted` | only the cap was lowered; the key still answers 200 |
+| `networkWithdrawn` | the overlay publication was withdrawn as well |
+| `safetyUncertain` | none of the above could be proven; the status says the consumer may still be served |
+
+`enforced` is true only for the first two. If any paused consumer is not enforced, the accounting
+check withdraws the export too, and a withdrawal that fails is reported, never treated as a stop.
+`--cost 0` is never used: Magpie reads a zero cap as unlimited.
+
+## Decision 24 — The three stores are reconciled before serving
+
+`Provisioner.recover()` runs at start and reconciles Magpie's key list, `ledger.sqlite` and
+`consumers.json`:
+
+| Crash point | Recovery |
+| --- | --- |
+| ledger account + window, key alive, record missing | adopt the record from the ledger and the key (a reissue whose file write was lost) |
+| ledger window, key gone | keep the balance, report the consumer as uncertain, serve nothing |
+| key named `ohmyaihub-*` with no ledger account | remove it: an unbound key has no balance behind it |
+| record with no ledger account | seed from `cap - used` and start reading the log at its current end |
+| `consumers.json` unreadable | refuse to start with an empty list; recover `.prev` when it is valid |
+
+`consumers.json` now uses the same atomic writer as `state.json` (temp file, fsync, rename,
+directory fsync, `.prev`). It used a plain `writeFileSync`, which a crash could truncate.
+
+## Decision 25 — An unverifiable check is a failed check
+
+`ledgerCheck` used to return `reason: "unreadable"` when `GET /v1/magpie/limit` threw, and
+`checkConsumer` turned that into a normal view. The periodic check therefore counted an unreadable
+key as **healthy**: a gateway that kept accepting AI calls while its limit endpoint failed could
+serve indefinitely with nobody able to prove the books.
+
+- `ledgerCheck` now reports `verified: false` with the reason, and `checkConsumer` throws
+  `VerificationUnavailableError`. A transient read error and a real cap mismatch stay different
+  things (the first does not pause a key; the second does), but **neither is a pass**.
+- The service counts every throw as a failure. `lastOkAt` only moves on a check that verified every
+  consumer; `failures`, `uncertain`, `uncertainReason` and `serving` are updated from the real
+  result. After `accountingFailureBudget` consecutive failures the export is withdrawn.
+- A passing check re-verifies every consumer before republishing. A paused consumer has no key to
+  read and is verified by absence, not by a read that cannot fail.
+- A key whose charges cannot be read is not paused for that alone (a read outage is not evidence of
+  fraud), but it is marked `ledgerUncertain`, so it is not reported as healthy either.
+
+Measured on the isolated Magpie with the plugin pointed at a closed port: `checkConsumer` rejected,
+the gateway still answered a real AI call `200` during the outage, and the state returned to healthy
+only after the read worked again.
+
+## Decision 26 — A usage-log gap is persistent and blocks reissue
+
+A gap means the log no longer holds what the cursor had already passed, or a complete line cannot be
+parsed: charges may be missing. It used to live only in a function's return value, so `reissue()`
+could ignore it and grant a balance the plugin could not prove.
+
+- Gaps are stored in SQLite (`usage_gaps`, per consumer and log, with first/last seen and an
+  occurrence count) on **every** path that finds one, including an early return.
+- `reissue()` refuses while any gap is unresolved, before creating a key and without touching the
+  recorded balance. The refusal survives a restart because the row does.
+- The log coming back, or reading some rows again, does not clear it: only
+  `resolveGap()` does, and only with `resolvedBy` and a note. It records the accepted byte offset as
+  the new baseline (otherwise the next read would rediscover the same truncation) and keeps the
+  previous offset in the event log. **No money is reconstructed or compensated** in this phase; the
+  reissue that follows carries the recorded balance only.
+- A complete line that is not valid JSON marks the same uncertainty instead of being skipped as a
+  zero-cost call.
+
 ## Preferred dataflow
 
 ```
@@ -434,18 +648,23 @@ consumer agent -> consumer Magpie (Remote Magpie provider)
 Deposits (future): chain -> provider's verified receipt watcher -> idempotent deposit event ->
 `cap += credit` on the mapped key -> read back `/v1/magpie/limit` -> consumer balance view.
 
-## Payment invariants (unchanged, future phase)
+## Payment invariants (phase 6 accounting; chain still future)
 
 - Wallet identity signed and bound to the peer public key, not to an IP or a peer ID.
 - Base native USDC (8453) is the candidate asset; testnet only during development.
 - Credit only a confirmed ERC-20 `Transfer` receipt to the intended provider, from a registered
   sender or an explicit signed invoice.
-- Deposit dedupe key: `(chain ID, token contract, tx hash, log index)`.
+- Deposit dedupe key: `(chain ID, token contract, tx hash, log index)`; the local ledger uses the
+  same unique-id intent.
 - Durable intent state machine; an unknown broadcast must be reconciled before any retry; one
-  outstanding top-up per counterparty.
+  outstanding top-up per counterparty. The plugin's `depositIntent`/`markDepositApplied` is the
+  local half of this and is already tested across a crash.
 - No per-request chain write; the provider's Magpie estimate is the billing basis.
-- Store a **price snapshot per charge**; never recompute a settled invoice from current prices.
-- Window rollover and price changes need explicit reconciliation, not a blind reset.
+- Store a **price snapshot per charge**; never recompute a settled invoice from current prices. The
+  phase-6 ledger does this for every imported usage row.
+- Window rollover and price changes need explicit reconciliation, not a blind reset. A boundary is a
+  key reissue with `cap = ledger balance`; a price change is a pause plus explicit version accept.
+- Real funds stay blocked until the price-lock blocker is solved; simulated credit only.
 
 ## Pinned versions
 
@@ -459,11 +678,17 @@ refuses an unlisted platform or a hash mismatch.
 
 ## Known blockers / open questions
 
-1. **Pricing lock:** Magpie has no price pinning for a settled window; changing a model's price
-   recomputes past charges. Must be solved before real credit is outstanding (blocker).
+1. **Pricing lock (real-funds blocker):** Magpie has no price pinning, no per-key price and no
+   immutable cost per call; changing a model's price recomputes past charges. Phase 6 measured that
+   `/v1/magpie/limit` reprices immediately while running admission sums keep the old price until a
+   restart/new window/key change. The ledger preserves the balance and pauses after detection, but
+   a call in the detection gap can still be repriced. Must be solved upstream or by a request-path
+   guard before real credit is outstanding.
 2. **Overshoot tolerance** has no closed form (in-flight burst, output length). Prepaid credit needs
    an explicit tolerance or the provider accepts the overrun.
-3. **Interrupted calls** are unbilled on both sides.
+3. **Interrupted calls** that never produce a usage row are unbilled on both sides. A call that
+   completes after a window boundary does produce a row with the request-start time; the ledger
+   imports it, but the native new window does not count it (Decision 19).
 4. Windows and Linux **Magpie** provider behaviour is untested; Linux EasyTier is verified.
 5. `easytier-cli acl set` is absent in 2.6.4 (restart required).
 6. The community plugin **page cannot reach the network** (`internal/gui/pluginpage.go`, CSP
@@ -492,6 +717,39 @@ refuses an unlisted platform or a hash mismatch.
 13. **The consumer's SOCKS5 listener is loopback-only but unauthenticated.** Any local process could
     use it to reach the private overlay while discovery is on. It creates no persistent forward and
     is stopped when discovery is off; local process isolation is out of scope.
+14. **A native window boundary is not atomic with a cap rebase.** Phase 6 removes the key and
+    requires `reissue`; it does not silently adjust the cap at the computed reset time. A consumer
+    is therefore briefly refused at a boundary (and after a price change) until reissue. A 3650-day
+    default makes this rare, not permanent.
+15. **Stale admission sums after a price change** are a Magpie-internal property, not something the
+    plugin can flush. A read of `/v1/magpie/limit` is not proof of the admission result; only
+    revoking/rotating the key (or restarting Magpie) clears the kept sums.
+16. **Legacy `sk-magpie-` secrets cannot be reused by `gateway-key add --key`.** New ledger-managed
+    keys use `sk-ohmy-…`; a legacy consumer's first reissue gets a different secret and must be
+    handed over again.
+17. **`reissue` still drains for a bounded time** (`drainMs`, default 1.5 s) before it closes the old
+    window, but that is no longer how a late row is handled: every unsettled window, and every one
+    closed within 30 min, is re-read at each accounting check and its late rows are charged at the
+    frozen price and tighten the live cap (Decision 22). The drain only shortens the window in
+    which a late row can arrive.
+18. **"Settled" is evidence-based, not a guarantee.** A window is marked settled when the gateway
+    reports nothing in flight and the log has no unread bytes. A request can end immediately after
+    that check; the audit horizon catches it and reopens the window. The status reports
+    `openSettlements` rather than claiming every window is closed.
+19. **The accounting check is polled at 10 s** (plus its own duration, reported as
+    `maxDetectionMs`). A price edit inside that window can still be repriced by Magpie. This is
+    detection, not a price lock.
+20. **A pause may not fully stop a local caller.** Removing a key is 401 for a remote caller, but
+    Magpie serves a loopback caller with the same secret. If removal and rotation both fail, the
+    level is `capRestricted` (the key still answers 200) or `safetyUncertain`; the export is then
+    withdrawn and the failure is reported instead of being called a stop.
+21. **A usage-log gap is permanent until an operator resolves it.** The missing charges are never
+    reconstructed: resolution records who accepted what and the byte offset treated as accounted
+    for, and the reissue that follows carries the recorded balance. A gap inside the accounting
+    check's own read path is not silently retried into health.
+22. **An unreadable limit endpoint is a failed check, not a healthy one.** It does not pause the key
+    by itself (an outage is not evidence of fraud), but it counts against the failure budget and
+    withdraws the export after the threshold.
 
 ## References
 
@@ -501,5 +759,6 @@ refuses an unlisted platform or a hash mismatch.
   [`validation/2026-10-29-acl-fix-and-two-host.md`](validation/2026-10-29-acl-fix-and-two-host.md),
   [`validation/2026-10-30-plugin-phase3.md`](validation/2026-10-30-plugin-phase3.md),
   [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
-  [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md)
+  [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md),
+  [`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md)
 - Corrected provider config: [`validation/lab/provider-acl.toml`](validation/lab/provider-acl.toml)
