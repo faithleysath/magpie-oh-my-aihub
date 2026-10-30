@@ -1,0 +1,15 @@
+Platform: macOS26.6.2 arm64; Bun1.4.3
+Command: cd plugin && bun run ci
+Exit:0
+
+$ bun run typecheck && bun run test && bun run boot-check && bun run secret-scan
+$ tsc --noEmit
+$ bun test ./test ./console ../docs/validation/lab/phase9/wallet-fixture
+ 745 pass
+ 0 fail
+ 5930 expect() calls
+Ran 745 tests across 52 files. [20.36s]
+$ bun run scripts/boot-check.ts
+boot-check PASS: plugin 0.5.0, magpie magpie 0.1.2038, api 34517, checks 1, page snapshot 0600
+$ bun run scripts/secret-scan.ts
+secret-scan PASS: no credentials in the working tree

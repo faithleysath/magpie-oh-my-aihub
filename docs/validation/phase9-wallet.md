@@ -96,6 +96,13 @@ caches and correct a missing-timestamp label; final-tree confirmation and WebKit
 are separately recorded in the final Phase9 report. The tests do not weaken existing native cap,
 ledger idempotency, finality or reorg handling.
 
+**REPRODUCED final WebKit follow-up:** [the nine-step UI result](phase9-browser/webkit-wallet.json)
+created a new0.5BSC request through the same production file/signature path. Before finality,
+cumulative credit/cap stayed2.0001; after15confirmations both reached2.5001, repeated event/scan
+kept that total, and the consumer native model test succeeded. This run used provider39c297a
+and consumer03d9981. All three installed production trees were subsequently updated and hashed
+against cf9833e, and final consumption-history/security UI passed separately.
+
 The fixture proves GUI → production business code → native credit behavior for controlled chain
 responses. It does not measure RPC consensus, a real external wallet extension, a new public-chain
 payment, chain reorganization probability or production-fund safety. Native overshoot and pricing

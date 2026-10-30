@@ -37,7 +37,7 @@
 
 本轮普通 GUI 安装/更新、浏览器入口/配对、真实网络、双节点申请审批/授权导入、原生 Remote Magpie 及 Test models 的 200→429 在两份全新 **Magpie 0.1.2171** 环境与 **EasyTier 2.6.4** 上实测；模型上游为受控模拟服务。EasyTier 二进制通过 `src/easytier-manifest.ts` 的 SHA-256 校验。
 
-Ego 已完成 BSC/Base 受控本地模拟 RPC、实际 EIP-712 合成外部签名、生产观察器/账本/原生额度读回（1.0001→2.0001）、重复扫描、无签名账单交接与 RPC503未知状态；原生模型调用从429恢复200。WebKit 第二提供方完整手动流程，以及字面文本注入不执行、提供方暂停隔离/恢复已通过。[共享报告](../docs/validation/phase9-stage2.md)、[钱包报告](../docs/validation/phase9-wallet.md)、[安全报告](../docs/validation/phase9-security.md)给出逐项范围。本地模拟没有新的公链转账；WebKit钱包9步真实UI复测亦已通过新增0.5BSC模拟入账、最终性/重放和原生Test models200，见[WebKit记录](../docs/validation/phase9-browser/webkit-wallet.json)。最终清理与全面结论由最终报告记录。
+Ego 已完成 BSC/Base 受控本地模拟 RPC、实际 EIP-712 合成外部签名、生产观察器/账本/原生额度读回（1.0001→2.0001）、重复扫描、无签名账单交接与 RPC503未知状态；原生模型调用从429恢复200。WebKit 第二提供方完整手动流程，以及字面文本注入不执行、提供方暂停隔离/恢复已通过。[共享报告](../docs/validation/phase9-stage2.md)、[钱包报告](../docs/validation/phase9-wallet.md)、[安全报告](../docs/validation/phase9-security.md)给出逐项范围。本地模拟没有新的公链转账；WebKit钱包9步真实UI复测亦已通过新增0.5BSC模拟入账、最终性/重放和原生Test models200，见[WebKit记录](../docs/validation/phase9-browser/webkit-wallet.json)。最终三节点源码一致性、浏览器检查及清理结果见[Phase 9 完整报告](../docs/validation/2026-10-30-phase9-local-web-console.md)。
 
 历史价格/计费基线仍为 Magpie **0.1.2038**，0.1.2171 未重测全部计费语义。历史 Linux0.1.2057 消费容器及 PR11 真实测试网证据保留独立范围。真实浏览器钱包扩展、原生 WKWebView、Linux/Windows 桌面与 SSH 端到端仍未知。账单上限48KiB；未知入账申请预留需要高级人工恢复，普通界面不清除此阻止。钱包只处理测试代币，真实资金与主网不开放。
 

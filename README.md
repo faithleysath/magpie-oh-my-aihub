@@ -32,7 +32,7 @@ AI 请求始终走「你的应用 → 你的 Magpie → EasyTier → 伙伴的 M
 
 **已实测的受控模拟范围**：Ego 浏览器完成 BSC/Base 两条本地模拟 RPC、真实 EIP-712 文档与合成外部钱包签名 → 生产 Watcher/Ledger/Provisioner → 原生额度读回 `$1.0001`、再到 `$2.0001`；Base 只增加最新高度不入账，达到 finalized 后才入账；重复事件/扫描不重复记账，原生 Magpie 调用从 429 恢复为 200。消费者导入无签名账单通过，RPC503 保留为未知。WebKit 完成第二提供方完整手动授权流程；注入内容显示为字面文本且不执行，暂停第二提供方时第一方原生调用仍200，恢复通过。详见[共享与多提供方](docs/validation/phase9-stage2.md)、[钱包验证](docs/validation/phase9-wallet.md)和[安全边界](docs/validation/phase9-security.md)。
 
-WebKit 钱包9步真实 UI 复测也已通过：新增0.5 BSC模拟入账、最终性/重放和原生 Test models200，见[WebKit钱包记录](docs/validation/phase9-browser/webkit-wallet.json)。最终清理与全面结论由最终报告记录。
+WebKit 钱包9步真实 UI 复测也已通过：新增0.5 BSC模拟入账、最终性/重放和原生 Test models200，见[WebKit钱包记录](docs/validation/phase9-browser/webkit-wallet.json)。三节点最终源码比对、745项本地测试、浏览器检查和清理结果见[Phase 9 完整验收报告](docs/validation/2026-10-30-phase9-local-web-console.md)。
 
 **仍未确认（UNKNOWN）**：真实浏览器钱包扩展、原生 WKWebView、Linux/Windows 桌面、SSH 端到端交互未完成本轮验收。本地模拟没有新的公链付款，也不代表真实资金安全。账单导入/导出上限48KiB；崩溃后结果不明的入账申请预留保持阻止状态，需要高级人工恢复。
 
