@@ -60,6 +60,52 @@ export interface WalletDeps {
   initialLookback?: number;
 }
 
+/** Event totals over the whole store, never over a truncated page of rows. */
+export interface ChainEventTotals {
+  credited: number;
+  finalized: number;
+  /** finalized but the ledger has not applied it yet */
+  crediting: number;
+  /** observed + confirming */
+  pending: number;
+  unclaimed: number;
+  uncertain: number;
+  reverted: number;
+  manualReview: number;
+  failed: number;
+  creditedNanos: number;
+  events: number;
+}
+
+export interface WalletTotals extends ChainEventTotals {
+  byChain: ({ chainId: number } & ChainEventTotals)[];
+}
+
+export interface ConsumerChainCredit extends ChainEventTotals {
+  chainId: number;
+}
+
+/**
+ * Chain credit per consumer, for the "wallet credit" view.
+ *
+ * `ledger` is the ledger's own balance (which includes simulated credits), and
+ * `chainCredit` is the chain-attributed part. They are shown separately on
+ * purpose: adding them would double-count nothing but would mislabel a
+ * simulated top-up as a chain deposit.
+ */
+export interface WalletConsumerCredit {
+  consumerId: string;
+  chainCredit: ConsumerChainCredit[];
+  chainCreditedNanos: number;
+  ledger: { depositedNanos: number; consumedNanos: number; balanceNanos: number } | null;
+  updatedAt: string | null;
+}
+
+export interface StatusOptions {
+  /** consumers to describe even when they have no chain intent yet */
+  consumerIds?: string[];
+}
+
 export interface WalletStatus {
   registry: {
     networks: {
@@ -90,16 +136,65 @@ export interface WalletStatus {
   events: ChainDepositEvent[];
   anomalies: ChainAnomaly[];
   receiving: ReceivingAddress[];
-  totals: {
-    credited: number;
-    finalized: number;
-    pending: number;
-    unclaimed: number;
-    uncertain: number;
-    reverted: number;
-  };
+  totals: WalletTotals;
+  consumers: WalletConsumerCredit[];
   /** true when nothing on this node is enabled: the page must say so */
   disabled: boolean;
+}
+
+function emptyTotals(): ChainEventTotals {
+  return {
+    credited: 0,
+    finalized: 0,
+    crediting: 0,
+    pending: 0,
+    unclaimed: 0,
+    uncertain: 0,
+    reverted: 0,
+    manualReview: 0,
+    failed: 0,
+    creditedNanos: 0,
+    events: 0,
+  };
+}
+
+function addEventTotal(target: ChainEventTotals, row: { status: string; count: number; creditedNanos: number }): void {
+  target.events += row.count;
+  switch (row.status) {
+    case "credited":
+      target.credited += row.count;
+      target.creditedNanos += row.creditedNanos;
+      break;
+    case "finalized":
+      target.finalized += row.count;
+      break;
+    case "crediting":
+      target.crediting += row.count;
+      break;
+    case "observed":
+    case "confirming":
+      target.pending += row.count;
+      break;
+    case "unclaimed":
+      target.unclaimed += row.count;
+      break;
+    case "uncertain":
+      target.uncertain += row.count;
+      break;
+    case "reverted":
+      target.reverted += row.count;
+      break;
+    case "manualReview":
+      target.manualReview += row.count;
+      break;
+    case "failed":
+      target.failed += row.count;
+      break;
+  }
+}
+
+function addTotals(target: ChainEventTotals, source: ChainEventTotals): void {
+  for (const key of Object.keys(emptyTotals()) as (keyof ChainEventTotals)[]) target[key] += source[key];
 }
 
 /**
@@ -116,6 +211,8 @@ export class Wallet {
   private now: () => Date;
   private initialLookback: number;
   private lastScan = new Map<number, ScanResult>();
+  /** the last authenticated health probe, for the zero-RPC local status */
+  private lastHealth = new Map<number, ChainHealth>();
   private scanTimers = new Map<number, ReturnType<typeof setInterval>>();
   private inFlight = new Set<number>();
 
@@ -452,7 +549,9 @@ export class Wallet {
         now: this.now,
       });
       try {
-        out.push(await watcher.health());
+        const health = await watcher.health();
+        this.lastHealth.set(net.chainId, health);
+        out.push(health);
       } catch (e) {
         out.push({
           chainId: net.chainId,
@@ -478,13 +577,35 @@ export class Wallet {
 
   // --- status -----------------------------------------------------------------
 
-  async status(): Promise<WalletStatus> {
-    const chains = await this.health();
-    const events = this.registry.networks().flatMap((n) => this.store.eventsForChain(n.chainId, 100));
-    const count = (status: ChainDepositEvent["status"]) => events.filter((e) => e.status === status).length;
+  /**
+   * The authenticated status: probes every enabled chain's RPC, then renders.
+   * Use this from the CLI. A page snapshot must use `statusLocal()` instead,
+   * because a snapshot writer must never wait for a chain.
+   */
+  async status(opts: StatusOptions = {}): Promise<WalletStatus> {
+    await this.health();
+    return this.buildStatus(opts);
+  }
+
+  /**
+   * The local status: no RPC, no timers, no writes. Chain health is whatever the
+   * last authenticated probe measured (or an explicit "not probed yet" shape),
+   * and every count is a SQL aggregate over the whole store, not over the last
+   * page of rows.
+   *
+   * `consumerIds` lets the host include consumers that have no chain intent yet
+   * (their ledger balance is still real). Without it, only consumers visible in
+   * `deposit_intents` are described.
+   */
+  statusLocal(opts: StatusOptions = {}): WalletStatus {
+    return this.buildStatus(opts);
+  }
+
+  private buildStatus(opts: StatusOptions): WalletStatus {
+    const networks = this.registry.networks();
     return {
       registry: {
-        networks: this.registry.networks().map((n) => ({
+        networks: networks.map((n) => ({
           chainId: n.chainId,
           displayName: n.displayName,
           networkType: n.networkType,
@@ -507,32 +628,130 @@ export class Wallet {
           priceVersion: a.pricing.version,
         })),
       },
-      chains,
+      chains: networks.map((n) => {
+        const base = this.lastHealth.get(n.chainId) ?? this.localHealth(n);
+        // `recordScanError` deliberately keeps no cursor for a chain that never
+        // completed a scan, so the error lives only in the last scan result.
+        const scanError = this.lastScanResult(n.chainId)?.errors?.[0];
+        return base.lastError || !scanError ? base : { ...base, lastError: scanError.slice(0, 300) };
+      }),
       intents: this.store.allIntents(100),
-      events,
-      anomalies: this.registry.networks().flatMap((n) => this.store.anomalies(n.chainId, 25)),
+      // A page list stays bounded; the totals below do not use it.
+      events: networks.flatMap((n) => this.store.eventsForChain(n.chainId, 100)),
+      anomalies: networks.flatMap((n) => this.store.anomalies(n.chainId, 25)),
       receiving: this.receivingAddresses(),
-      totals: {
-        credited: count("credited"),
-        finalized: count("finalized"),
-        pending: count("observed") + count("confirming"),
-        unclaimed: count("unclaimed"),
-        uncertain: count("uncertain"),
-        reverted: count("reverted"),
-      },
+      totals: this.totals(),
+      consumers: this.consumerCredits(opts.consumerIds),
       disabled: this.registry.enabledNetworks().length === 0,
     };
   }
 
-  /** The consumer's chain credit, read from the ledger (never a second balance). */
-  consumerChainCredit(consumerId: string): { depositedUsd: number; balanceUsd: number; events: ChainDepositEvent[] } {
-    const balance = this.credit.balance(consumerId);
-    const invoices = new Set(this.store.intentsFor(consumerId, 500).map((i) => i.invoiceId));
-    const events = this.registry
-      .networks()
-      .flatMap((n) => this.store.eventsForChain(n.chainId, 500))
-      .filter((e) => e.invoiceId !== null && invoices.has(e.invoiceId));
-    return { depositedUsd: nanosToUsd(balance.depositedNanos), balanceUsd: nanosToUsd(balance.balanceNanos), events };
+  /** A chain health row with no probe behind it: nulls, never invented values. */
+  private localHealth(net: NetworkRecord): ChainHealth {
+    const cursor = this.store.cursor(net.chainId);
+    return {
+      chainId: net.chainId,
+      displayName: net.displayName,
+      enabled: net.enabled,
+      networkType: net.networkType,
+      blockExplorer: net.blockExplorer,
+      endpoints: [],
+      head: null,
+      finalizedBlock: null,
+      cursor: cursor?.lastBlock ?? null,
+      cursorHash: cursor?.lastBlockHash ?? null,
+      lagBlocks: null,
+      lastScanAt: cursor?.lastScanAt ?? null,
+      lastError: this.store.lastError(net.chainId) ?? cursor?.lastError ?? null,
+      finality: { mode: net.finality.mode, confirmations: net.finality.confirmations, rationale: net.finality.rationale },
+      assets: this.registry.assetsForChain(net.chainId).map((a) => {
+        const check = this.store.assetCheck(a.assetId);
+        return {
+          assetId: a.assetId,
+          symbol: a.symbol,
+          decimals: a.decimals,
+          enabled: a.enabled,
+          onchainDecimals: check?.onchainDecimals ?? null,
+          decimalsOk: check ? check.ok : null,
+        };
+      }),
+    };
+  }
+
+  private totals(): WalletTotals {
+    const byChain = this.registry.networks().map((n) => ({ chainId: n.chainId, ...emptyTotals() }));
+    for (const row of this.store.eventTotals()) {
+      const target = byChain.find((b) => b.chainId === row.chainId);
+      if (!target) continue;
+      addEventTotal(target, row);
+    }
+    const all = emptyTotals();
+    for (const b of byChain) addTotals(all, b);
+    return { ...all, byChain };
+  }
+
+  private consumerCredits(ids: string[] | undefined): WalletConsumerCredit[] {
+    const known = new Set<string>(ids ?? []);
+    if (!ids) {
+      for (const intent of this.store.allIntents(1000)) known.add(intent.consumerId);
+    }
+    const out: WalletConsumerCredit[] = [];
+    for (const consumerId of [...known].sort()) {
+      const chainCredit = this.registry.networks().map((n) => ({ chainId: n.chainId, ...emptyTotals() }));
+      let updatedAt: string | null = null;
+      for (const row of this.store.eventTotalsForConsumer(consumerId)) {
+        const target = chainCredit.find((b) => b.chainId === row.chainId);
+        if (!target) continue;
+        addEventTotal(target, row);
+        if (row.updatedAt && (!updatedAt || row.updatedAt > updatedAt)) updatedAt = row.updatedAt;
+      }
+      let ledger: WalletConsumerCredit["ledger"] = null;
+      try {
+        const b = this.credit.balance(consumerId);
+        ledger = { depositedNanos: b.depositedNanos, consumedNanos: b.consumedNanos, balanceNanos: b.balanceNanos };
+      } catch {
+        // A ledger that cannot be read is not a zero balance.
+        ledger = null;
+      }
+      out.push({
+        consumerId,
+        chainCredit,
+        chainCreditedNanos: chainCredit.reduce((sum, c) => sum + c.creditedNanos, 0),
+        ledger,
+        updatedAt,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * One consumer's credit, read from the ledger and the chain store.
+   *
+   * The ledger balance includes simulated credits, so it is returned as
+   * `ledger` and never presented as "chain credit".
+   */
+  consumerChainCredit(consumerId: string): {
+    consumerId: string;
+    chainCredit: ConsumerChainCredit[];
+    chainCreditedNanos: number;
+    depositedUsd: number;
+    balanceUsd: number;
+    ledger: { depositedNanos: number; consumedNanos: number; balanceNanos: number };
+    events: ChainDepositEvent[];
+    updatedAt: string | null;
+  } {
+    const credit = this.consumerCredits([consumerId]).find((c) => c.consumerId === consumerId)!;
+    const balance = credit.ledger ?? { depositedNanos: 0, consumedNanos: 0, balanceNanos: 0 };
+    return {
+      consumerId,
+      chainCredit: credit.chainCredit,
+      chainCreditedNanos: credit.chainCreditedNanos,
+      depositedUsd: nanosToUsd(balance.depositedNanos),
+      balanceUsd: nanosToUsd(balance.balanceNanos),
+      ledger: balance,
+      events: this.store.eventsForConsumer(consumerId, 200),
+      updatedAt: credit.updatedAt,
+    };
   }
 }
 

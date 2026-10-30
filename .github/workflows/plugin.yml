@@ -5,12 +5,14 @@ on:
     paths:
       - "plugin/**"
       - "docs/validation/lab/phase7/**"
+      - "docs/validation/lab/phase8/**"
       - ".github/workflows/plugin.yml"
   push:
     branches: [main]
     paths:
       - "plugin/**"
       - "docs/validation/lab/phase7/**"
+      - "docs/validation/lab/phase8/**"
   workflow_dispatch:
 
 permissions:

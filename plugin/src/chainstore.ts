@@ -512,6 +512,59 @@ export class ChainStore {
     return rows.map(mapEvent);
   }
 
+  // --- read-only aggregation --------------------------------------------------
+  //
+  // A status view must not count "the last 100 rows" and present it as a total.
+  // These queries are aggregates over the whole table; they write nothing and
+  // they are the only place the page's totals come from.
+
+  /** Event counts and credited nano-USD, grouped by chain and status. */
+  eventTotals(chainId?: number): EventTotalRow[] {
+    const rows =
+      chainId === undefined
+        ? (this.db
+            .query(
+              `SELECT chain_id, status, COUNT(*) AS n, COALESCE(SUM(credited_nanos),0) AS nanos, MAX(updated_at) AS updated
+               FROM deposit_events GROUP BY chain_id, status ORDER BY chain_id, status`,
+            )
+            .all() as EventTotalDbRow[])
+        : (this.db
+            .query(
+              `SELECT chain_id, status, COUNT(*) AS n, COALESCE(SUM(credited_nanos),0) AS nanos, MAX(updated_at) AS updated
+               FROM deposit_events WHERE chain_id=? GROUP BY chain_id, status ORDER BY status`,
+            )
+            .all(chainId) as EventTotalDbRow[]);
+    return rows.map((r) => ({ chainId: r.chain_id, status: r.status as ChainEventStatus, count: r.n, creditedNanos: r.nanos, updatedAt: r.updated }));
+  }
+
+  /**
+   * Event totals for one consumer, through the intent that claimed the event.
+   * An event with no intent (a stranger's transfer) belongs to no consumer and
+   * is deliberately absent here.
+   */
+  eventTotalsForConsumer(consumerId: string): EventTotalRow[] {
+    const rows = this.db
+      .query(
+        `SELECT e.chain_id AS chain_id, e.status AS status, COUNT(*) AS n, COALESCE(SUM(e.credited_nanos),0) AS nanos, MAX(e.updated_at) AS updated
+         FROM deposit_events e JOIN deposit_intents i ON i.invoice_id = e.invoice_id
+         WHERE i.consumer_id=?
+         GROUP BY e.chain_id, e.status ORDER BY e.chain_id, e.status`,
+      )
+      .all(consumerId) as EventTotalDbRow[];
+    return rows.map((r) => ({ chainId: r.chain_id, status: r.status as ChainEventStatus, count: r.n, creditedNanos: r.nanos, updatedAt: r.updated }));
+  }
+
+  /** Events this consumer's own signed requests claimed, newest first. */
+  eventsForConsumer(consumerId: string, limit = 200): ChainDepositEvent[] {
+    const rows = this.db
+      .query(
+        `SELECT e.* FROM deposit_events e JOIN deposit_intents i ON i.invoice_id = e.invoice_id
+         WHERE i.consumer_id=? ORDER BY e.block_number DESC, e.log_index DESC LIMIT ?`,
+      )
+      .all(consumerId, limit) as EventRow[];
+    return rows.map(mapEvent);
+  }
+
   /**
    * Events that were stored but not yet verified, so a temporary RPC failure is
    * retried instead of losing the payment.
@@ -919,6 +972,23 @@ interface IntentRow {
   rate_nanos_per_token: string | null;
   rate_decimals: number | null;
   rate_asset_id: string | null;
+}
+
+/** One `(chain, status)` aggregate row; read-only, from `eventTotals()`. */
+export interface EventTotalRow {
+  chainId: number;
+  status: ChainEventStatus;
+  count: number;
+  creditedNanos: number;
+  updatedAt: string | null;
+}
+
+interface EventTotalDbRow {
+  chain_id: number;
+  status: string;
+  n: number;
+  nanos: number;
+  updated: string | null;
 }
 
 interface EventRow {

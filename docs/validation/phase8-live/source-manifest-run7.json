@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "tested plugin copy is not identical to the repo source or changed during the run",
+  "files": []
+}

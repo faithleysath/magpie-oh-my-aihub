@@ -1,0 +1,68 @@
+{
+  "ownedBefore": [
+    {
+      "pid": 19317,
+      "command": "/tmp/ohmyaihub-phase8-17425/P/Magpie.app/Contents/MacOS/magpie serve"
+    },
+    {
+      "pid": 19331,
+      "command": "/tmp/ohmyaihub-phase8-17425/P/home/.cache/magpie/bun/1.4.2/magpie-bun run /tmp/ohmyaihub-phase8-17425/P/home/.cache/magpie/plugin-host/host-"
+    },
+    {
+      "pid": 19335,
+      "command": "/private/tmp/ohmyaihub-phase8-17425/P/home/.config/magpie/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private/tmp/ohmyaihub-p"
+    },
+    {
+      "pid": 19389,
+      "command": "/tmp/ohmyaihub-phase8-17425/C/Magpie.app/Contents/MacOS/magpie serve"
+    },
+    {
+      "pid": 19401,
+      "command": "/tmp/ohmyaihub-phase8-17425/C/home/.cache/magpie/bun/1.4.2/magpie-bun run /tmp/ohmyaihub-phase8-17425/C/home/.cache/magpie/plugin-host/host-"
+    },
+    {
+      "pid": 20509,
+      "command": "/private/tmp/ohmyaihub-phase8-17425/C/home/.config/magpie/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private/tmp/ohmyaihub-p"
+    }
+  ],
+  "remainingAfter": [],
+  "ports": {
+    "P": {
+      "gateway": 52745,
+      "upstream": 24161,
+      "listen": 11071,
+      "catalog": 34946
+    },
+    "C": {
+      "gateway": 41500,
+      "upstream": 19476,
+      "listen": 11841,
+      "catalog": 34945,
+      "socks": 13587
+    },
+    "P2": {
+      "gateway": 32234,
+      "upstream": 25587,
+      "listen": 17255,
+      "catalog": 34947
+    }
+  },
+  "portsFree": {
+    "P.gateway": true,
+    "P.upstream": true,
+    "P.listen": true,
+    "P.catalog": true,
+    "C.gateway": true,
+    "C.upstream": true,
+    "C.listen": true,
+    "C.catalog": true,
+    "C.socks": true,
+    "P2.gateway": true,
+    "P2.upstream": true,
+    "P2.listen": true,
+    "P2.catalog": true
+  },
+  "kept": false,
+  "labRoot": null,
+  "removed": true
+}

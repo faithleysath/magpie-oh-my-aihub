@@ -175,6 +175,16 @@ export function roundCap(usd: number): number {
   return Math.round(usd * GRID) / GRID;
 }
 
+/**
+ * A deposit whose id came from a chain event (`chain:<event id>`). Its id is
+ * derived, not chosen, so it can never be "retried with a new id" the way a
+ * simulated top-up can; treating it as permanently failed would strand a real
+ * payment with no operator path back.
+ */
+export function isChainDerivedDeposit(deposit: { id: string; source: string }): boolean {
+  return deposit.source.startsWith("chain:") || deposit.id.startsWith("chain:");
+}
+
 /** A cap Magpie can actually hold: finite, positive, on its grid, and bounded. */
 export function assertCap(usd: number): number {
   if (typeof usd !== "number" || !Number.isFinite(usd)) throw new Error("a cost cap must be a finite number");
@@ -838,7 +848,20 @@ export class Provisioner {
     return this.list.find((c) => c.consumerId === consumerId);
   }
 
-  /** Finishes or discards a cap that was written but not committed locally. */
+  /**
+   * Finishes or discards a cap that was written but not committed locally.
+   *
+   * The two outcomes are deliberately asymmetric:
+   *  - the pending cap IS in force → the deposit is proven applied (a read-back,
+   *    not a guess) and is booked as applied;
+   *  - it is not → nothing was granted by this attempt. A simulated deposit may
+   *    be marked `failed` because a caller can retry with a new id. A **chain**
+   *    deposit cannot: its id is derived from the chain event, `applyChainDeposit`
+   *    refuses a failed id, and no operator command can un-fail one. Marking it
+   *    failed would strand a real payment whose cap write never landed, so it
+   *    stays `intent` and the watcher retries the same id (after re-proving
+   *    canonicality and finality). Nothing is credited and no row is deleted.
+   */
   async reconcile(c: ConsumerRecord): Promise<void> {
     if (!c.pending || !c.secret) return;
     let status: LimitStatus;
@@ -877,13 +900,21 @@ export class Provisioner {
       }
       logger.info(`reconciled ${c.consumerId}: the cap written before the restart is in force`);
     } else {
-      if (this.ledger && cap !== undefined && Math.abs(cap - c.capUsd) < 1e-9) {
-        const dep = this.ledger.deposit(pending.depositId);
-        if (dep?.status === "intent") this.ledger.markDepositFailed(dep.id, "Magpie did not apply the cap");
+      const dep = this.ledger?.deposit(pending.depositId) ?? null;
+      if (dep?.status === "intent" && isChainDerivedDeposit(dep)) {
+        // Magpie does not hold the pending cap, so this attempt granted nothing.
+        // The chain deposit keeps its id and stays booked for the next scan.
+        logger.warn(
+          `reconciled ${c.consumerId}: the pending chain deposit ${pending.depositId} is not in Magpie (cap ${String(cap)}); it stays booked for retry`,
+        );
+      } else {
+        if (dep?.status === "intent" && cap !== undefined && Math.abs(cap - c.capUsd) < 1e-9) {
+          this.ledger!.markDepositFailed(dep.id, "Magpie did not apply the cap");
+        }
+        logger.warn(
+          `reconciled ${c.consumerId}: the pending cap ${pending.capUsd} is not what Magpie holds (${String(cap)}); dropped the intent`,
+        );
       }
-      logger.warn(
-        `reconciled ${c.consumerId}: the pending cap ${pending.capUsd} is not what Magpie holds (${String(cap)}); dropped the intent`,
-      );
     }
     c.pending = null;
     this.persist();

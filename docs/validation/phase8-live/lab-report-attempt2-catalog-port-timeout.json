@@ -1,0 +1,209 @@
+{
+  "at": "2026-10-30T07:57:43.102Z",
+  "platform": {
+    "os": "26.6.2",
+    "arch": "arm64",
+    "bun": "1.4.3"
+  },
+  "magpie": {
+    "app": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app",
+    "bin": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie",
+    "version": "magpie 0.1.2038",
+    "sha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15"
+  },
+  "easytier": {
+    "version": "2.6.4",
+    "zipSha256": "4be1882d1aa36d31c1d6ba0596f2cf8a097e371f8da124212324b2e0f8df7e4b",
+    "cache": "/Users/laysath/Projects/lab/et/easytier-macos-aarch64"
+  },
+  "plugin": {
+    "commit": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+    "dirty": true
+  },
+  "network": "phase8-lab-49883",
+  "isolation": {
+    "nodes": [
+      "P",
+      "C",
+      "P2"
+    ],
+    "pluginCopyPerNode": true,
+    "userProfileTouched": false
+  },
+  "lab": {
+    "root": null,
+    "evidence": "/Users/laysath/Projects/magpie-oh-my-aihub-import/docs/validation/phase8-live",
+    "magpie": {
+      "app": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app",
+      "bin": "/Users/laysath/Projects/lab/magpie-iso/Magpie.app/Contents/MacOS/magpie",
+      "version": "magpie 0.1.2038",
+      "sha256": "0640889d004edfc1da0cd12bf8995e134968ea9b8ac4887d295d8989dadd4e15"
+    },
+    "plugin": {
+      "commit": "bf7a27dfd6cc785db61b22808d5a36f625d13419",
+      "dirty": true
+    },
+    "platform": {
+      "os": "26.6.2",
+      "arch": "arm64",
+      "bun": "1.4.3"
+    },
+    "provider": {
+      "nodeId": "dacdc3f7",
+      "mappedCidr": "10.66.162.31/32",
+      "gatewayPort": 50584,
+      "catalogPort": 3542,
+      "quoteHash": "03aad22df2291223ca962594663c66966938b62f96b4b2d7c157e6a2abc4f545",
+      "fingerprint": "f73041a927a0ef80b317ce5a8e96787a7417cea1afa71fea29cf8ff13261d72f",
+      "priceVersion": "148dca967ca6e5ee3db8801b9ed5118160525cf7686cc770bdb66e3b3850fa33"
+    },
+    "ports": {
+      "P": {
+        "gateway": 50584,
+        "upstream": 23597,
+        "listen": 12902,
+        "catalog": 3542
+      },
+      "C": {
+        "gateway": 46536,
+        "upstream": 20512,
+        "listen": 11204,
+        "socks": 13460
+      },
+      "P2": {
+        "gateway": 41712,
+        "upstream": 19380,
+        "listen": 13610
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "P: fresh Magpie 0.1.2038, own plugin copy, real host and EasyTier 2.6.4",
+      "ok": true,
+      "detail": "preflight: Magpie 0.1.2038, EasyTier 2.6.4 verified, host true, no overlay yet",
+      "ms": 9369,
+      "required": true
+    },
+    {
+      "name": "C: second fresh Magpie, own plugin copy, gateway enforces a key",
+      "ok": true,
+      "detail": "C gateway 192.168.132.218:46536 answered 401 without a key",
+      "ms": 8856,
+      "required": true
+    },
+    {
+      "name": "P setup: provider overlay, sharing, published native model",
+      "ok": true,
+      "detail": "P dacdc3f7 exports 10.66.162.31/32; quote v1 03aad22df229…, priceVersion 148dca967ca6…, priceLocked false",
+      "ms": 3122,
+      "required": true
+    },
+    {
+      "name": "C setup: same overlay, consume-only, discovery on",
+      "ok": true,
+      "detail": "C c185695d joined; discovery enabled on SOCKS 13460",
+      "ms": 1694,
+      "required": true
+    },
+    {
+      "name": "C discovers P through EasyTier; TOFU fingerprint and quote hash are shown",
+      "ok": false,
+      "detail": "timed out waiting for C sees P catalogue",
+      "ms": 121101,
+      "required": true
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "failed": 1
+  },
+  "http": [
+    {
+      "at": "2026-10-30T07:55:19.689Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:23597/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:55:20.890Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:23597/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:55:27.077Z",
+      "method": "GET",
+      "url": "http://<lan>:50584/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:55:28.278Z",
+      "method": "GET",
+      "url": "http://<lan>:50584/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:55:28.279Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34518/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:55:29.005Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:20512/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:55:30.207Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:20512/v1/models",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:55:35.982Z",
+      "method": "GET",
+      "url": "http://<lan>:46536/v1/models",
+      "status": 0,
+      "note": "ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+    },
+    {
+      "at": "2026-10-30T07:55:37.184Z",
+      "method": "GET",
+      "url": "http://<lan>:46536/v1/models",
+      "status": 401,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:55:37.185Z",
+      "method": "GET",
+      "url": "http://127.0.0.1:34517/health",
+      "status": 200,
+      "note": ""
+    },
+    {
+      "at": "2026-10-30T07:55:37.185Z",
+      "method": "GET",
+      "url": "http://<lan>:46536/v1/models",
+      "status": 401,
+      "note": ""
+    }
+  ],
+  "wallet": {
+    "ran": false
+  },
+  "claims": {
+    "realRemoteMagpie": "UNKNOWN",
+    "walletTypedData": "UNKNOWN",
+    "trustRace": "not observed"
+  },
+  "secrets": "redacted; raw state stayed in the disposable lab root"
+}
