@@ -12,6 +12,10 @@ attempts and their corrections are in [`phase8-live/ATTEMPTS.md`](phase8-live/AT
 documentation is [`../ONBOARDING.md`](../ONBOARDING.md), [`../OPERATIONS.md`](../OPERATIONS.md) and
 [`../../plugin/README.md`](../../plugin/README.md).
 
+A subsequent pre-merge entry review found and repaired three options/startup defects. See
+[PR #12 options review fixes](2026-10-30-pr12-options-review-fixes.md) for the failing-before/passing-after
+regressions and the updated **577-test** local result. The frozen live evidence below is unchanged.
+
 ## 1. Result in one screen
 
 | Area | Result | Evidence |

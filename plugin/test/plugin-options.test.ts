@@ -106,6 +106,14 @@ describe("parseOptions: what is not usable is refused, never rewritten", () => {
           return ["tcp://relay:11010"];
         case "publishedPorts":
           return [3425];
+        case "shareModels":
+          return ["native/approved"];
+        case "rpcPort":
+          return 15901;
+        case "catalogPort":
+          return 3496;
+        case "catalogDiscovery":
+          return true;
         default:
           return /Enabled|secureMode/.test(k) ? true : "127.0.0.1:11010";
       }

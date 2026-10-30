@@ -20,7 +20,6 @@ import { Service } from "./service.ts";
 import { startApi } from "./server.ts";
 import {
   decideOptions,
-  newRecord,
   parseOptions,
   pageOptionsView,
   readAppliedRecord,
@@ -113,18 +112,22 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         finalRecord = { ...attempt, phase: "done", error: failure.slice(0, 300) };
         writeAppliedRecord(finalRecord);
         logger.error(`plugin options (${decision.kind}) were not applied: ${failure}; the stored state stays in force`);
-        await service.start();
       }
     } else {
       if (decision.record) {
         // "preferences only", a migration, or a save that changed only page
         // preferences: the running configuration is still the previous snapshot.
-        finalRecord = withPreviousApplied(decision.record, before);
+        // A first migration records the options as observed. Dropping that
+        // baseline would replay every stale value on the next preference save.
+        finalRecord = before ? withPreviousApplied(decision.record, before) : decision.record;
         writeAppliedRecord(finalRecord);
       }
       if (decision.reason) logger.info(`plugin options not applied: ${decision.reason}`);
-      await service.start();
     }
+
+    // configure() applies an overlay patch; every fresh host must also recover
+    // issued keys, reconcile Remote Magpies and start its chain watchers.
+    await service.start();
 
     const api = startApi({ port: opt.apiPort ? Number(opt.apiPort) : undefined, service });
     service.writeSnapshot();

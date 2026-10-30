@@ -90,22 +90,11 @@ export const PAGE_KEYS = ["pagePrefs"] as const;
 export const DIGEST_KEYS: readonly string[] = [...CONFIG_KEYS, ...PAGE_KEYS];
 
 /**
- * The keys the first-run wizard may seed. Sharing and consuming are here because
- * a brand-new node has no other way to choose them; once a configuration exists
- * they belong to `share on|off` / `consume on|off` and the page shows them
- * read-only.
+ * First-run options honor every supported configuration field, including an
+ * explicit model whitelist and RPC/catalogue ports. The successful record marks
+ * these fields applied, so omitting any here would silently discard it forever.
  */
-export const SEED_KEYS = [
-  "role",
-  "sharingEnabled",
-  "consumingEnabled",
-  "networkName",
-  "networkSecret",
-  "peers",
-  "listenAddr",
-  "publishedPorts",
-  "secureMode",
-] as const;
+export const SEED_KEYS = CONFIG_KEYS;
 
 /**
  * How long a failed attempt with the same digest is left alone before the next
