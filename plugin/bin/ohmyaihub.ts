@@ -78,10 +78,27 @@ function printProviders(providers: any[]): void {
   }
   for (const p of providers) {
     const fp = p.fingerprint ? ` peer=${p.fingerprint.hostname}${p.fingerprint.peerId ? `#${p.fingerprint.peerId}` : ""}` : "";
+    const lim = p.limit
+      ? ` limit=${p.limit.cost ?? "?"}/${p.limit.costLimit ?? "?"} USD${p.limit.spent ? " spent" : ""}`
+      : "";
     console.log(
       `${p.id}  ${p.mappedCidr}:${p.providerPort} -> 127.0.0.1:${p.localPort}  ${p.status}` +
-        `${p.detail ? ` (${p.detail})` : ""}${fp}`,
+        `${p.detail ? ` (${p.detail})` : ""}${fp}${lim}`,
     );
+  }
+}
+
+function printCatalogPeers(peers: any[]): void {
+  if (!peers.length) {
+    console.log("no catalogue peers (enable discovery, or wait for a refresh)");
+    return;
+  }
+  for (const p of peers) {
+    const where = p.mappedCidr ? `${p.mappedCidr}:${p.catalogPort ?? "?"}` : "no exported address";
+    const route = p.route ? `${p.route}${p.latencyMs ? ` ${p.latencyMs}ms` : ""}` : "?";
+    const fp = p.identity ? ` id=${p.identity.keyId} ${p.identity.fingerprint.slice(0, 12)}…` : " id=—";
+    const quote = p.quote ? ` quote v${p.quote.publication.version} (${p.quote.models.length} models)` : " quote=—";
+    console.log(`${p.hostname}  ${p.virtualIpv4}  ${where}  ${route}  ${p.status}${fp}${quote}${p.detail ? `  — ${p.detail}` : ""}`);
   }
 }
 
@@ -119,6 +136,15 @@ switch (cmd) {
           },
           providers: s.providers,
           consumers: s.consumers,
+          catalog: s.catalog
+            ? {
+                publishing: s.catalog.publishing,
+                server: s.catalog.server,
+                quote: s.catalog.quote,
+                peers: s.catalog.peers,
+                lastRefreshAt: s.catalog.lastRefreshAt,
+              }
+            : null,
           checks: s.checks,
         },
         null,
@@ -297,6 +323,59 @@ switch (cmd) {
     const s = await call("GET", "/checks");
     for (const c of s.checks) console.log(`${c.ok ? "PASS" : "FAIL"}  ${c.name}: ${c.detail}`);
     if (s.checks.some((c: any) => !c.ok)) process.exit(1);
+    break;
+  }
+  case "catalog": {
+    const sub = rest[1];
+    if (sub === "publish" || sub === "discover") {
+      const on = rest[2];
+      if (on !== "on" && on !== "off") throw new Error(`catalog ${sub} on|off`);
+      const r = await call("POST", sub === "publish" ? "/catalog/publish" : "/catalog/discover", { enabled: on === "on" });
+      console.log(JSON.stringify({ ok: true, catalog: r.catalog }, null, 2));
+    } else if (sub === "config") {
+      const r = await call("POST", "/catalog/configure", {
+        displayName: flag("display-name"),
+        contact: flag("contact"),
+        port: flag("port") ? Number(flag("port")) : undefined,
+        socksPort: flag("socks-port") ? Number(flag("socks-port")) : undefined,
+        refreshSec: flag("refresh") ? Number(flag("refresh")) : undefined,
+        minTopUpUsd: flag("min-topup") ? Number(flag("min-topup")) : undefined,
+      });
+      console.log(JSON.stringify({ ok: true, catalog: r.catalog }, null, 2));
+    } else if (sub === "refresh") {
+      const r = await call("POST", "/catalog/refresh", {});
+      printCatalogPeers(r.peers);
+    } else if (sub === "trust") {
+      const [nodeId] = positional(2);
+      if (!nodeId) throw new Error("catalog trust <node-id> [--fingerprint <sha256>]");
+      const r = await call("POST", "/catalog/trust", { nodeId, fingerprint: flag("fingerprint") });
+      console.log(JSON.stringify(r, null, 2));
+    } else if (sub === "request") {
+      const [nodeId] = positional(2);
+      if (!nodeId) throw new Error("catalog request <node-id> [--models a,b]");
+      const models = flag("models") ? flag("models")!.split(",") : undefined;
+      console.log(JSON.stringify(await call("POST", "/catalog/request", { nodeId, models }), null, 2));
+    } else if (sub === "connect") {
+      const [nodeId] = positional(2);
+      if (!nodeId || !flag("key")) throw new Error("catalog connect <node-id> --key sk-… [--id <provider-id>]");
+      const p = await call("POST", "/catalog/connect", { nodeId, key: flag("key"), id: flag("id") });
+      console.log(JSON.stringify({ ok: true, provider: p }, null, 2));
+    } else if (sub === "peers" || sub === undefined || sub === "status") {
+      const r = await call("GET", "/catalog");
+      if (has("json")) console.log(JSON.stringify(r, null, 2));
+      else {
+        const c = r.catalog;
+        console.log(
+          `catalogue: ${c.publishing ? "publishing" : "off"}` +
+            (c.quote ? ` · version ${c.quote.version} · ${c.quote.modelCount} model(s) · identity ${c.quote.identity?.fingerprint ?? "—"}` : "") +
+            (c.server?.error ? ` · ERROR ${c.server.error}` : "") +
+            (c.error ? ` · ERROR ${c.error}` : ""),
+        );
+        if (sub === "peers" || sub === undefined) printCatalogPeers(c.peers || []);
+      }
+    } else {
+      throw new Error("catalog [status|peers|publish on|off|discover on|off|config|refresh|trust|request|connect]");
+    }
     break;
   }
   default:

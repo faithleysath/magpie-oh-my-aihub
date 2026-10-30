@@ -23,11 +23,19 @@ import { backupFile, readJsonWithBackup, writeJsonAtomic } from "./store.ts";
 import { logger, registerSecret } from "./log.ts";
 import { randomMappedCidr } from "./addresses.ts";
 
-export const STATE_VERSION = 2;
+export const STATE_VERSION = 3;
 
 /** The overlay's forward-port range; one port per remote provider. */
 export const FORWARD_PORT_FROM = 13425;
 export const FORWARD_PORT_TO = 13499;
+
+/** The read-only catalog's fixed default port. It is opt-in and never the gateway. */
+export const CATALOG_PORT = 3426;
+/** Loopback ports EasyTier's SOCKS5 listener may use for on-demand catalog reads. */
+export const CATALOG_SOCKS_FROM = 13400;
+export const CATALOG_SOCKS_TO = 13424;
+/** How often a peer catalogue is re-read, in seconds. */
+export const CATALOG_REFRESH_SEC = 20;
 
 export interface SecureIdentity {
   privateKey: string;
@@ -42,6 +50,30 @@ export interface SecureIdentity {
 export interface SharePolicy {
   /** globs over native model ids (`provider/model`, `provider/*`); ["*"] is all */
   models: string[];
+}
+
+/**
+ * The opt-in read-only catalogue a node may publish, and the opt-in discovery
+ * that reads other nodes' catalogues. Neither is a gateway and neither carries
+ * an AI request; see docs/ARCHITECTURE.md, Decision 13 onwards.
+ */
+export interface CatalogConfig {
+  /** publish this node's shareable native models and quotes */
+  enabled: boolean;
+  /** read peers' catalogues through the local EasyTier SOCKS5 listener */
+  discoveryEnabled: boolean;
+  /** human label shown in the catalogue; null means the overlay hostname */
+  displayName: string | null;
+  /** optional manual contact text, never an address the plugin dials */
+  contact: string | null;
+  /** local catalogue port, and the port discovery probes by default */
+  port: number;
+  /** loopback SOCKS5 listener EasyTier opens for on-demand catalogue reads */
+  socksPort: number;
+  /** seconds between peer catalogue refreshes (10-300) */
+  refreshSec: number;
+  /** simulated minimum top-up, for display only; never charged here */
+  minTopUpUsd: number;
 }
 
 export interface PluginConfig {
@@ -68,6 +100,7 @@ export interface PluginConfig {
   secureMode: boolean;
   secureIdentity: SecureIdentity | null;
   share: SharePolicy;
+  catalog: CatalogConfig;
 }
 
 export type ConnectionStatus = "connected" | "degraded" | "disabled" | "identity-mismatch";
@@ -78,6 +111,18 @@ export interface PeerFingerprint {
   virtualIpv4: string;
   /** session-scoped: EasyTier assigns a new peer_id on every start */
   peerId: string | null;
+}
+
+/** The provider's own Gateway Key numbers, as its gateway reports them. */
+export interface ProviderLimitView {
+  period?: string;
+  calls?: number;
+  cost?: number;
+  costLimit?: number;
+  costLeft?: number;
+  tokens?: number;
+  spent?: boolean;
+  reset?: string;
 }
 
 export interface ProviderConnection {
@@ -99,6 +144,7 @@ export interface ProviderConnection {
   fingerprint: PeerFingerprint | null;
   status: ConnectionStatus;
   detail: string | null;
+  limit: ProviderLimitView | null;
   createdAt: string;
   updatedAt: string;
   lastConnectedAt: string | null;
@@ -148,6 +194,7 @@ interface LegacyConfig {
   secureMode?: boolean;
   secureIdentity?: SecureIdentity | null;
   share?: SharePolicy;
+  catalog?: Partial<CatalogConfig>;
   sharingEnabled?: boolean;
   consumingEnabled?: boolean;
 }
@@ -269,12 +316,74 @@ function normalizeConfig(raw: LegacyConfig, wiring: LegacyWiring | null): Plugin
     secureMode: raw.secureMode ?? true,
     secureIdentity: raw.secureIdentity ?? null,
     share: normalizeShare(raw.share),
+    // A phase-4 document has no catalogue yet: both switches stay off, so an
+    // upgrade never starts a listener or publishes anything by itself.
+    catalog: normalizeCatalogConfig(raw.catalog),
   };
 }
 
 function normalizeShare(share: SharePolicy | undefined): SharePolicy {
   const models = Array.isArray(share?.models) ? share.models.map(String).filter(Boolean) : ["*"];
   return { models: models.length ? models : ["*"] };
+}
+
+function portIn(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1024 && n <= 65535 ? n : fallback;
+}
+
+/** Catalogue defaults are deliberately opt-in: publishing is never implicit. */
+export function defaultCatalogConfig(): CatalogConfig {
+  return {
+    enabled: false,
+    discoveryEnabled: false,
+    displayName: null,
+    contact: null,
+    port: CATALOG_PORT,
+    socksPort: CATALOG_SOCKS_FROM,
+    refreshSec: CATALOG_REFRESH_SEC,
+    minTopUpUsd: 1,
+  };
+}
+
+/** Cleans the human fields and, when asked, refuses a port that collides with a service. */
+export function normalizeCatalogConfig(
+  raw: Partial<CatalogConfig> | undefined,
+  opts: { gatewayPort?: number; reserved?: number[]; strict?: boolean } = {},
+): CatalogConfig {
+  const d = defaultCatalogConfig();
+  const text = (v: unknown, max: number): string | null => {
+    if (typeof v !== "string") return null;
+    const s = v.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max);
+    return s || null;
+  };
+  const reserved = opts.reserved ?? [];
+  let port = portIn(raw?.port, d.port);
+  if (port === opts.gatewayPort || reserved.includes(port)) {
+    if (opts.strict) {
+      throw new Error(`the catalogue port ${port} is already used by the gateway, the host API or the EasyTier RPC`);
+    }
+    port = d.port;
+    while (port === opts.gatewayPort || reserved.includes(port)) port += 1;
+  }
+  let socksPort = portIn(raw?.socksPort, d.socksPort);
+  if (socksPort === opts.gatewayPort || socksPort === port || reserved.includes(socksPort)) {
+    if (opts.strict) throw new Error(`the catalogue SOCKS5 port ${socksPort} collides with another service`);
+    socksPort = d.socksPort;
+    while (socksPort === opts.gatewayPort || socksPort === port || reserved.includes(socksPort)) socksPort += 1;
+  }
+  const refreshSec = Number(raw?.refreshSec);
+  const minTopUpUsd = Number(raw?.minTopUpUsd);
+  return {
+    enabled: Boolean(raw?.enabled),
+    discoveryEnabled: Boolean(raw?.discoveryEnabled),
+    displayName: text(raw?.displayName, 64),
+    contact: text(raw?.contact, 120),
+    port,
+    socksPort,
+    refreshSec: Number.isFinite(refreshSec) ? Math.min(300, Math.max(10, Math.round(refreshSec))) : d.refreshSec,
+    minTopUpUsd: Number.isFinite(minTopUpUsd) && minTopUpUsd >= 0.0001 && minTopUpUsd <= 1_000_000 ? Math.round(minTopUpUsd * 1e4) / 1e4 : d.minTopUpUsd,
+  };
 }
 
 export interface LoadedState {
@@ -318,6 +427,7 @@ export function loadState(): LoadedState {
         fingerprint: p.fingerprint ?? null,
         status: p.status ?? "degraded",
         detail: p.detail ?? null,
+        limit: p.limit ?? null,
         createdAt: p.createdAt ?? new Date().toISOString(),
         updatedAt: p.updatedAt ?? p.createdAt ?? new Date().toISOString(),
         lastConnectedAt: p.lastConnectedAt ?? null,
@@ -339,6 +449,7 @@ export function loadState(): LoadedState {
       fingerprint: null,
       status: "degraded",
       detail: "migrated from the phase-3 provider wiring; not verified since",
+      limit: null,
       createdAt: wiring.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       lastConnectedAt: null,
@@ -390,6 +501,8 @@ export interface ProviderView {
   status: ConnectionStatus;
   detail: string | null;
   fingerprint: PeerFingerprint | null;
+  /** the provider's own native limit numbers, read through its keyed forward */
+  limit: ProviderLimitView | null;
   createdAt: string;
   updatedAt: string;
   lastConnectedAt: string | null;
@@ -407,6 +520,7 @@ export function providerView(p: ProviderConnection): ProviderView {
     status: p.status,
     detail: p.detail,
     fingerprint: p.fingerprint,
+    limit: p.limit ?? null,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
     lastConnectedAt: p.lastConnectedAt,

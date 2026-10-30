@@ -16,6 +16,7 @@ const cfg: EasytierConfig = {
   proxyCidr: "192.0.2.84/32",
   mappedCidr: "10.66.7.9/32",
   publishedPorts: [3425],
+  socks5Proxy: null,
   portForwards: [{ bindAddr: "127.0.0.1:13425", dstAddr: "10.66.1.2:3425" }],
   secureMode: true,
   secureIdentity: { privateKey: "aa", publicKey: "bb" },
@@ -68,5 +69,24 @@ describe("generated identity", () => {
     expect(text).toContain('dst_addr = "10.66.1.2:3425"');
     const off = renderConfig({ ...cfg, consumingEnabled: false });
     expect(off).not.toContain("[[port_forward]]");
+  });
+});
+
+describe("catalogue transport in the generated config", () => {
+  test("renders the loopback SOCKS5 listener and the catalogue in the Forward ACL", () => {
+    const text = renderConfig({
+      ...cfg,
+      socks5Proxy: "socks5://127.0.0.1:13400",
+      publishedPorts: [3425, 3426],
+    });
+    expect(text).toContain('socks5_proxy = "socks5://127.0.0.1:13400"');
+    expect(text).toContain('ports = ["3426"]');
+    expect(text).toContain('name = "allow-3426"');
+  });
+
+  test("refuses a SOCKS5 listener that is not loopback", () => {
+    expect(() => renderConfig({ ...cfg, socks5Proxy: "socks5://0.0.0.0:13400" })).toThrow(/not 127\.0\.0\.1/);
+    expect(() => renderConfig({ ...cfg, socks5Proxy: "http://127.0.0.1:13400" })).toThrow(/not 127\.0\.0\.1/);
+    expect(() => renderConfig({ ...cfg, socks5Proxy: "socks5://127.0.0.1" })).toThrow(/not 127\.0\.0\.1/);
   });
 });

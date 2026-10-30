@@ -17,6 +17,7 @@ const provider: EasytierConfig = {
   proxyCidr: "192.0.2.84/32",
   mappedCidr: "10.66.7.9/32",
   publishedPorts: [3425],
+  socks5Proxy: null,
   portForwards: [{ bindAddr: "127.0.0.1:13425", dstAddr: "10.66.1.2:3425" }],
   secureMode: true,
   secureIdentity: { privateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" },

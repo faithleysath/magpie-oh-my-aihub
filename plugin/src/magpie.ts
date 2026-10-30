@@ -59,6 +59,42 @@ export interface LimitStatus {
   limits?: unknown[];
 }
 
+/** The price shape Magpie stores in settings.json (USD per 1M tokens). */
+export interface ModelPriceRecord {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+  cache_write_1h?: number;
+  tiers?: { above: number; input: number; output: number; cache_read: number; cache_write: number; cache_write_1h?: number }[];
+}
+
+/** One model as the catalogue publishes it, before share-policy filtering. */
+export interface CatalogModelMeta {
+  id: string;
+  displayName: string | null;
+  gatewayApis: string[];
+  nativeApis: string[] | null;
+  contextWindow: number | null;
+  maxOutputTokens: number | null;
+  images: boolean | null;
+  modalities: { input?: string[]; output?: string[] } | null;
+  reasoningLevels: string[] | null;
+  price: ModelPriceRecord | null;
+  priceSource: "magpie-gateway" | "magpie-settings" | null;
+  capabilitiesSource: "magpie-gateway" | "magpie-settings" | "configured-endpoints";
+}
+
+interface SettingsFile {
+  modelPrices?: Record<string, ModelPriceRecord>;
+  modelAPIs?: Record<string, string>;
+  modelImages?: Record<string, boolean>;
+  modelKinds?: Record<string, string>;
+  modelOutputs?: Record<string, number>;
+  modelCompacts?: Record<string, number>;
+  modelReasonless?: Record<string, boolean>;
+}
+
 /** The gateway port Magpie told the host about. */
 export function gatewayBaseURL(): string {
   const addr = (process.env.MAGPIE_ADDR || "").trim();
@@ -157,6 +193,102 @@ export class Magpie {
       return Array.isArray(list) ? list : [];
     } catch {
       return [];
+    }
+  }
+
+  /** The user's own model settings, read-only; keys and providers are untouched. */
+  settings(): SettingsFile {
+    try {
+      const parsed = JSON.parse(readFileSync(join(magpieDataDir(), "settings.json"), "utf8")) as SettingsFile;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * The model metadata the catalogue publishes: Magpie's own local
+   * `/v1/models` when the gateway answers on loopback (no key: a loopback caller
+   * is local), otherwise the explicit per-model settings. Nothing here invents a
+   * capability or a price.
+   */
+  async catalogModels(): Promise<CatalogModelMeta[]> {
+    const ids = await this.modelIds().catch(() => []);
+    if (ids.length === 0) return [];
+    const gateway = await this.localModelList();
+    const settings = this.settings();
+    const native = this.nativeProviderIds();
+    const byId = new Map((gateway ?? []).map((m) => [String(m.id ?? ""), m]));
+    const out: CatalogModelMeta[] = [];
+    for (const id of ids) {
+      const [provider] = id.split("/");
+      if (!native.has(provider)) continue;
+      const g = byId.get(id) ?? null;
+      const endpointNames = g ? endpointsToNames(Array.isArray(g.native_endpoints) ? g.native_endpoints.map(String) : []) : null;
+      const settingApis = settingFor(settings.modelAPIs, id);
+      const configured = configuredProtocols(this.providerById(provider));
+      const gatewayApis = endpointNames && endpointNames.length > 0
+        ? endpointNames
+        : settingApis
+          ? [normalizeProtocol(settingApis)]
+          : configured;
+      const images = g
+        ? Array.isArray((g.modalities as { input?: unknown })?.input)
+          ? ((g.modalities as { input: string[] }).input.includes("image") ? true : null)
+          : null
+        : settingFor(settings.modelImages, id) ?? null;
+      const output = g && Number.isFinite(Number(g.max_output_tokens))
+        ? Number(g.max_output_tokens)
+        : settingFor(settings.modelOutputs, id) ?? null;
+      const context = g && Number.isFinite(Number(g.context_window ?? g.max_input_tokens))
+        ? Number(g.context_window ?? g.max_input_tokens)
+        : null;
+      const reasoning = g && Array.isArray(g.reasoning_levels)
+        ? g.reasoning_levels.map(String)
+        : settingFor(settings.modelReasonless, id) === true
+          ? []
+          : null;
+      const magpiePrice = (g as { magpie_price?: ModelPriceRecord } | null)?.magpie_price ?? null;
+      const storedPrice = magpiePrice ?? settingFor(settings.modelPrices, id) ?? null;
+      const anySetting =
+        settingApis !== undefined || images !== null || output !== null || storedPrice !== null ||
+        settingFor(settings.modelReasonless, id) !== undefined;
+      out.push({
+        id,
+        displayName: g && typeof g.display_name === "string" ? g.display_name : null,
+        gatewayApis: gatewayApis.length ? gatewayApis : ["chat", "responses", "anthropic"],
+        nativeApis: endpointNames && endpointNames.length ? endpointNames : null,
+        contextWindow: context,
+        maxOutputTokens: output,
+        images,
+        modalities: g && g.modalities && typeof g.modalities === "object" ? (g.modalities as { input?: string[]; output?: string[] }) : null,
+        reasoningLevels: reasoning,
+        price: storedPrice,
+        priceSource: storedPrice ? (magpiePrice ? "magpie-gateway" : "magpie-settings") : null,
+        capabilitiesSource: g ? "magpie-gateway" : anySetting ? "magpie-settings" : "configured-endpoints",
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Magpie's model list over the loopback gateway, with the user's prices when
+   * the gateway is on loopback. A gateway pinned to a LAN address has no
+   * loopback listener; the caller then falls back to settings.json.
+   */
+  private async localModelList(): Promise<Record<string, unknown>[] | null> {
+    try {
+      const base = new URL(gatewayBaseURL());
+      const port = base.port || "3425";
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        headers: { "x-magpie-prices": "1" },
+        signal: AbortSignal.timeout(1500),
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as { data?: unknown };
+      return Array.isArray(body.data) ? (body.data as Record<string, unknown>[]) : null;
+    } catch {
+      return null;
     }
   }
 
@@ -304,4 +436,39 @@ export class Magpie {
     if (!res.ok) throw new Error(`GET /v1/magpie/limit: HTTP ${res.status}`);
     return (await res.json()) as LimitStatus;
   }
+}
+
+/** A per-model setting: exact id, then `provider/*`, then the any-provider entry. */
+export function settingFor<T>(map: Record<string, T> | undefined, id: string): T | undefined {
+  if (!map) return undefined;
+  const [provider, ...rest] = id.split("/");
+  const model = rest.join("/");
+  return map[id] ?? map[`${provider}/*`] ?? map[`*/${model}`];
+}
+
+function normalizeProtocol(value: string): string {
+  const v = value.trim().toLowerCase();
+  if (v === "messages" || v === "anthropic") return "anthropic";
+  if (v === "responses") return "responses";
+  return "chat";
+}
+
+function endpointsToNames(paths: string[]): string[] {
+  const out: string[] = [];
+  for (const p of paths) {
+    if (p === "/v1/chat/completions") out.push("chat");
+    else if (p === "/v1/responses") out.push("responses");
+    else if (p === "/v1/messages") out.push("anthropic");
+  }
+  return [...new Set(out)];
+}
+
+/** The API paths a provider's configured endpoints say it speaks. */
+function configuredProtocols(p: ProviderRecord | undefined): string[] {
+  if (!p) return ["chat"];
+  const out: string[] = [];
+  if (p.chat) out.push("chat");
+  if (p.responses) out.push("responses");
+  if (p.anthropic) out.push("anthropic");
+  return out.length ? out : ["chat"];
 }

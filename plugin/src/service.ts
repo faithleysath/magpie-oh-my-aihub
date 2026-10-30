@@ -19,7 +19,7 @@
 
 import { lanIPv4 } from "./paths.ts";
 import { logger, registerSecret, writePageStatus } from "./log.ts";
-import { gatewayBaseURL, type Magpie } from "./magpie.ts";
+import { gatewayBaseURL, type CatalogModelMeta, type LimitStatus, type Magpie } from "./magpie.ts";
 import { Provisioner, type ConsumerView } from "./provisioner.ts";
 import {
   EasytierSupervisor,
@@ -33,6 +33,35 @@ import {
 } from "./easytier.ts";
 import { mappedHost, randomMappedCidr, randomVirtualIp } from "./addresses.ts";
 import {
+  CATALOG_MAX_MODELS,
+  CATALOG_PATH,
+  CatalogServer,
+  canonicalJson,
+  classifyPeers,
+  isValidModelId,
+  isValidNodeId,
+  isValidOverlayHostname,
+  keyIdOf,
+  loadCatalogTrust,
+  loadOrCreateCatalogIdentity,
+  loadPublishState,
+  mappedOf,
+  saveCatalogTrust,
+  savePublishState,
+  sha256Hex,
+  signCatalog,
+  socksHttpGet,
+  verifySignedCatalog,
+  type CatalogIdentity,
+  type CatalogModel,
+  type CatalogPrice,
+  type CatalogQuoteBody,
+  type CatalogServerHandle,
+  type CatalogTrustRecord,
+  type DirectoryPeer,
+  type SignedCatalog,
+} from "./catalog.ts";
+import {
   FORWARD_PORT_FROM,
   FORWARD_PORT_TO,
   deleteProviderKey,
@@ -40,13 +69,16 @@ import {
   loadState,
   newNodeId,
   newInstanceId,
+  normalizeCatalogConfig,
   providerKeyRef,
   providerView,
   saveState,
   setProviderKey,
+  type CatalogConfig,
   type PluginConfig,
   type PluginState,
   type ProviderConnection,
+  type ProviderLimitView,
   type ProviderView,
   type SharePolicy,
 } from "./state.ts";
@@ -76,6 +108,14 @@ export interface Probes {
   remoteModelIds: (localPort: number, key: string, timeoutMs: number) => Promise<string[] | null>;
   /** the models this node's Magpie lists (through its own CLI) */
   localModelIds: () => Promise<string[]>;
+  /** the local Magpie's own model metadata, read-only, for the catalogue */
+  catalogModels: () => Promise<CatalogModelMeta[]>;
+  /** a connected provider's own `/v1/magpie/limit`, through its forward */
+  remoteLimit: (localPort: number, key: string, timeoutMs: number) => Promise<LimitStatus | null>;
+  /** one GET through EasyTier's loopback SOCKS5 listener */
+  catalogHttpGet: (opts: { socksPort: number; host: string; port: number; path: string; timeoutMs: number }) => Promise<{ status: number; body: string }>;
+  /** a local catalogue server; injectable so a unit test keeps the LAN untouched */
+  catalogServer: (opts: { hostname: string; port: number; document: () => SignedCatalog | null }) => CatalogServerHandle;
 }
 
 export interface ServiceDeps {
@@ -113,14 +153,59 @@ export interface StatusSnapshot {
     share: SharePolicy;
     nativeProviders: string[];
     remoteProviders: string[];
+    catalog: CatalogConfig;
   };
   easytier: SupervisorState;
   consumers: ConsumerView[];
   providers: ProviderView[];
+  catalog: CatalogStatus;
   /** the phase-3 field, kept for older clients: the first provider, or null */
   wiring: { id: string; mappedCidr: string; url: string; createdAt: string } | null;
   checks: { name: string; ok: boolean; detail: string }[];
   logs: string[];
+}
+
+export interface CatalogPeerView extends DirectoryPeer {
+  /** the stable node id the peer signed in its catalogue, once one was read */
+  nodeId: string | null;
+  status:
+    | "self"
+    | "connected"
+    | "verified"
+    | "unverified"
+    | "identity-changed"
+    | "stale"
+    | "unreachable"
+    | "no-catalog"
+    | "conflict"
+    | "offline";
+  detail: string | null;
+  catalogPort: number | null;
+  identity: { fingerprint: string; keyId: string; publicKey: string; firstSeenAt: string } | null;
+  pendingFingerprint: string | null;
+  quote: SignedCatalog | null;
+  quoteHash: string | null;
+  fetchedAt: string | null;
+  connectedProviderId: string | null;
+}
+
+export interface CatalogStatus {
+  config: CatalogConfig;
+  publishing: boolean;
+  server: { running: boolean; port: number | null; address: string | null; error: string | null };
+  quote: {
+    version: number;
+    updatedAt: string;
+    publishedAt: string;
+    contentHash: string;
+    modelCount: number;
+    models: CatalogModel[];
+    identity: { fingerprint: string; keyId: string; publicKey: string; createdAt: string } | null;
+  } | null;
+  peers: CatalogPeerView[];
+  lastRefreshAt: string | null;
+  refreshing: boolean;
+  error: string | null;
 }
 
 /** Who wrote the Magpie provider entry that currently holds this id. */
@@ -145,6 +230,10 @@ function defaultProbes(magpie: Magpie): Probes {
     statusWith: statusIs,
     remoteModelIds,
     localModelIds: () => magpie.modelIds(),
+    catalogModels: () => magpie.catalogModels(),
+    remoteLimit,
+    catalogHttpGet: socksHttpGet,
+    catalogServer: (opts) => new CatalogServer(opts).start(),
   };
 }
 
@@ -163,6 +252,18 @@ export class Service {
   private mutating = 0;
   private lastReconcileAt = 0;
   private lastProviderFingerprint = "";
+  private catalogServer: CatalogServerHandle | null = null;
+  private catalogServerError: string | null = null;
+  private catalogQuote: SignedCatalog | null = null;
+  private catalogQuoteHash: string | null = null;
+  private catalogQuoteVersion = 0;
+  private catalogQuoteUpdatedAt: string | null = null;
+  private catalogPeers: CatalogPeerView[] = [];
+  private catalogLastRefreshAt: string | null = null;
+  private catalogRefreshing = false;
+  private catalogError: string | null = null;
+  private catalogNextQuoteAt = 0;
+  private catalogNextRefreshAt = 0;
 
   constructor(private deps: ServiceDeps) {
     this.state = loadState().state;
@@ -238,12 +339,15 @@ export class Service {
     // pretending the state is safe.
     await this.guardSharedKeys().catch((e) => logger.warn(`share guard at start failed: ${String(e)}`));
     this.lastProviderFingerprint = this.providerFingerprint();
+    await this.applyCatalog().catch((e) => logger.error(`catalogue at start failed: ${String(e)}`));
     await this.reconcileProviders({ quiet: true, verifyModels: true }).catch((e) =>
       logger.warn(`reconcile after start failed: ${String(e)}`),
     );
     this.ticking = setInterval(() => {
       void this.tick();
     }, 15_000);
+    // Do not make boot wait for peers: the directory fills in the background.
+    void this.catalogTick();
     this.writeSnapshot();
   }
 
@@ -266,8 +370,32 @@ export class Service {
         await this.guardSharedKeys().catch((e) => logger.warn(`share guard after a provider change failed: ${String(e)}`));
       }
     }
+    await this.catalogTick().catch((e) => logger.warn(`catalogue tick failed: ${String(e)}`));
     if (Date.now() - this.lastReconcileAt < 45_000) return;
     await this.reconcileProviders({ quiet: true }).catch(() => {});
+  }
+
+  /**
+   * Catalogue work is separate from the sharing guard and never restarts the
+   * core. A peer refresh is one SOCKS5 GET per peer (bounded, no forward); a
+   * local quote rebuild is rate-limited and only changes the served document.
+   */
+  private async catalogTick(): Promise<void> {
+    const cfg = this.state.config;
+    if (!cfg) return;
+    if (cfg.catalog.discoveryEnabled && Date.now() >= this.catalogNextRefreshAt) {
+      await this.refreshCatalogPeers().catch((e) => {
+        this.catalogError = String((e as Error).message ?? e);
+        logger.warn(`catalogue refresh failed: ${this.catalogError}`);
+      });
+    }
+    if (this.catalogPublishing() && Date.now() >= this.catalogNextQuoteAt) {
+      await this.publishCatalogNow().catch((e) => {
+        this.catalogError = String((e as Error).message ?? e);
+        logger.warn(`catalogue rebuild failed: ${this.catalogError}`);
+        this.writeSnapshot();
+      });
+    }
   }
 
   /** A cheap summary of Magpie's provider list, to notice external changes. */
@@ -298,6 +426,7 @@ export class Service {
     this.state.shareSuspended = { at: new Date().toISOString(), reason };
     saveState(this.state);
     await this.applyConfig(cfg);
+    await this.applyCatalog();
     logger.error(`sharing withdrawn: ${reason}`);
   }
 
@@ -307,13 +436,17 @@ export class Service {
     this.state.shareSuspended = null;
     saveState(this.state);
     const cfg = this.state.config;
-    if (cfg) await this.applyConfig(cfg);
+    if (cfg) {
+      await this.applyConfig(cfg);
+      await this.applyCatalog();
+    }
     logger.info("sharing restored: every shared key names only this node's own providers");
   }
 
   async stop(): Promise<void> {
     if (this.ticking) clearInterval(this.ticking);
     this.ticking = null;
+    this.stopCatalogServer();
     await this.supervisor.stop();
   }
 
@@ -353,6 +486,14 @@ export class Service {
     rpcPort?: number;
     virtualIpv4?: string;
     shareModels?: string[];
+    catalogEnabled?: boolean;
+    catalogDiscovery?: boolean;
+    catalogDisplayName?: string | null;
+    catalogContact?: string | null;
+    catalogPort?: number;
+    catalogSocksPort?: number;
+    catalogRefreshSec?: number;
+    catalogMinTopUpUsd?: number;
   }): Promise<StatusSnapshot> {
     return this.serialize(async () => {
       const prev = this.state.config;
@@ -403,6 +544,28 @@ export class Service {
 
       const secureIdentity = secureMode ? (prev?.secureIdentity ?? generateSecureIdentity()) : null;
       const share = input.shareModels ? { models: normalizeShareModels(input.shareModels) } : (prev?.share ?? { models: ["*"] });
+      const catalog = normalizeCatalogConfig(
+        {
+          ...(prev?.catalog ?? {}),
+          ...(input.catalogEnabled !== undefined ? { enabled: input.catalogEnabled } : {}),
+          ...(input.catalogDiscovery !== undefined ? { discoveryEnabled: input.catalogDiscovery } : {}),
+          ...(input.catalogDisplayName !== undefined ? { displayName: input.catalogDisplayName } : {}),
+          ...(input.catalogContact !== undefined ? { contact: input.catalogContact } : {}),
+          ...(input.catalogPort !== undefined ? { port: input.catalogPort } : {}),
+          ...(input.catalogSocksPort !== undefined ? { socksPort: input.catalogSocksPort } : {}),
+          ...(input.catalogRefreshSec !== undefined ? { refreshSec: input.catalogRefreshSec } : {}),
+          ...(input.catalogMinTopUpUsd !== undefined ? { minTopUpUsd: input.catalogMinTopUpUsd } : {}),
+        },
+        { gatewayPort: this.gatewayPort(), reserved: [rpcPort], strict: true },
+      );
+      if (catalog.enabled && !sharingEnabled) {
+        if (input.catalogEnabled === true) {
+          throw new Error("publishing a catalogue requires sharing this node's Magpie; enable sharing first");
+        }
+        // Turning sharing off withdraws the catalogue with it; leaving the
+        // intent on would make the next boot fail or advertise a dead port.
+        catalog.enabled = false;
+      }
 
       const cfg: PluginConfig = {
         sharingEnabled,
@@ -422,17 +585,20 @@ export class Service {
         secureMode,
         secureIdentity,
         share,
+        catalog,
       };
       this.state.config = cfg;
       registerSecret(networkSecret);
       saveState(this.state);
 
       await this.applyConfig(cfg);
+      await this.applyCatalog();
       // A new configuration can change what is shareable (and a previous
       // suspension may have to be lifted or re-applied).
       if (cfg.sharingEnabled) {
         await this.guardSharedKeys().catch((e) => logger.warn(`share guard after configure: ${String(e)}`));
         this.lastProviderFingerprint = this.providerFingerprint();
+        await this.publishCatalogNow().catch((e) => logger.warn(`catalogue rebuild after configure: ${String(e)}`));
       }
       // Turning consumption off must cut the remote providers this node added,
       // and nothing else: a provider the operator made by hand stays.
@@ -465,11 +631,20 @@ export class Service {
       rpcPort: cfg.rpcPort,
       proxyCidr: cfg.sharingEnabled ? cfg.proxyCidr : null,
       mappedCidr: cfg.sharingEnabled ? cfg.mappedCidr : null,
-      publishedPorts: cfg.sharingEnabled ? cfg.publishedPorts : [],
+      publishedPorts: this.publishedPorts(cfg),
+      socks5Proxy: cfg.catalog.discoveryEnabled ? `socks5://127.0.0.1:${cfg.catalog.socksPort}` : null,
       portForwards: cfg.consumingEnabled ? this.forwardSpecs() : [],
       secureMode: cfg.secureMode,
       secureIdentity: cfg.secureIdentity,
     };
+  }
+
+  /** The Forward ACL's ports: the gateway plus the catalogue only while it is published. */
+  private publishedPorts(cfg: PluginConfig): number[] {
+    if (!cfg.sharingEnabled) return [];
+    const ports = [...cfg.publishedPorts];
+    if (this.catalogPublishing()) ports.push(cfg.catalog.port);
+    return [...new Set(ports)];
   }
 
   private forwardSpecs(): ForwardSpec[] {
@@ -499,11 +674,13 @@ export class Service {
       this.state.config = next;
       saveState(this.state);
       await this.applyConfig(next);
+      await this.applyCatalog();
       if (enabled) {
         // Never republish blindly: the guard may keep the export withdrawn.
         await this.guardSharedKeys().catch((e) => logger.warn(`share guard after enabling sharing: ${String(e)}`));
         this.lastProviderFingerprint = this.providerFingerprint();
         await this.reconcileProviders({ quiet: true }).catch(() => {});
+        await this.publishCatalogNow().catch((e) => logger.warn(`catalogue rebuild after enabling sharing: ${String(e)}`));
       }
       logger.info(enabled ? "sharing enabled: the gateway is published on the overlay" : "sharing disabled: the network publication was withdrawn");
       return this.status();
@@ -557,8 +734,678 @@ export class Service {
       cfg.share = { models: normalizeShareModels(models) };
       saveState(this.state);
       await this.guardSharedKeys();
+      await this.publishCatalogNow().catch((e) => logger.warn(`catalogue rebuild after share models: ${String(e)}`));
       return this.status();
     });
+  }
+
+  // --- read-only catalogue ---------------------------------------------------
+
+  /** Whether the catalogue should be on the network right now. */
+  private catalogPublishing(): boolean {
+    const cfg = this.state.config;
+    return Boolean(cfg?.catalog.enabled && cfg.sharingEnabled && this.sharingActive() && !this.state.shareSuspended);
+  }
+
+  async setCatalogPublishing(enabled: boolean): Promise<StatusSnapshot> {
+    return this.serialize(async () => {
+      const cfg = this.state.config;
+      if (!cfg) throw new Error("configure this node first");
+      if (enabled && !cfg.sharingEnabled) {
+        throw new Error("publishing a catalogue requires sharing this node's Magpie; enable sharing first");
+      }
+      const next: PluginConfig = { ...cfg, catalog: { ...cfg.catalog, enabled } };
+      this.state.config = next;
+      saveState(this.state);
+      // The catalogue port is part of the Forward ACL, so changing publication
+      // is a config change and a supervised core restart (2.6.4 has no hot ACL).
+      await this.applyConfig(next);
+      await this.applyCatalog();
+      if (enabled) await this.publishCatalogNow();
+      logger.info(enabled ? "catalogue publishing enabled" : "catalogue publishing disabled; its Forward port is withdrawn");
+      return this.status();
+    });
+  }
+
+  async setCatalogDiscovery(enabled: boolean): Promise<StatusSnapshot> {
+    return this.serialize(async () => {
+      const cfg = this.state.config;
+      if (!cfg) throw new Error("configure this node first");
+      const next: PluginConfig = { ...cfg, catalog: { ...cfg.catalog, discoveryEnabled: enabled } };
+      this.state.config = next;
+      saveState(this.state);
+      // The SOCKS5 listener lives in the generated TOML; start/stop is a restart.
+      await this.applyConfig(next);
+      this.catalogNextRefreshAt = 0;
+      if (enabled) await this.refreshCatalogPeers();
+      else this.catalogPeers = [];
+      logger.info(enabled ? "catalogue discovery enabled" : "catalogue discovery disabled");
+      return this.status();
+    });
+  }
+
+  async setCatalogOptions(patch: {
+    displayName?: string | null;
+    contact?: string | null;
+    port?: number;
+    socksPort?: number;
+    refreshSec?: number;
+    minTopUpUsd?: number;
+  }): Promise<StatusSnapshot> {
+    return this.serialize(async () => {
+      const cfg = this.state.config;
+      if (!cfg) throw new Error("configure this node first");
+      const catalog = normalizeCatalogConfig(
+        {
+          ...cfg.catalog,
+          ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
+          ...(patch.contact !== undefined ? { contact: patch.contact } : {}),
+          ...(patch.port !== undefined ? { port: patch.port } : {}),
+          ...(patch.socksPort !== undefined ? { socksPort: patch.socksPort } : {}),
+          ...(patch.refreshSec !== undefined ? { refreshSec: patch.refreshSec } : {}),
+          ...(patch.minTopUpUsd !== undefined ? { minTopUpUsd: patch.minTopUpUsd } : {}),
+        },
+        { gatewayPort: this.gatewayPort(), reserved: [cfg.rpcPort], strict: true },
+      );
+      const networkChanged = catalog.port !== cfg.catalog.port || catalog.socksPort !== cfg.catalog.socksPort;
+      const next: PluginConfig = { ...cfg, catalog };
+      this.state.config = next;
+      saveState(this.state);
+      if (networkChanged) {
+        await this.applyConfig(next);
+        await this.applyCatalog();
+      } else {
+        await this.publishCatalogNow().catch((e) => logger.warn(`catalogue rebuild after options: ${String(e)}`));
+      }
+      this.catalogNextRefreshAt = 0;
+      return this.status();
+    });
+  }
+
+  catalogStatus(): CatalogStatus {
+    const cfg = this.state.config?.catalog;
+    return {
+      config: cfg ?? normalizeCatalogConfig(undefined),
+      publishing: this.catalogPublishing(),
+      server: {
+        running: this.catalogServer !== null,
+        port: this.catalogServer?.port ?? null,
+        address: this.catalogServer && cfg ? `${this.lanIp() ?? "?"}:${cfg.port}` : null,
+        error: this.catalogServerError,
+      },
+      quote: this.catalogQuote
+        ? {
+            version: this.catalogQuote.publication.version,
+            updatedAt: this.catalogQuote.publication.updatedAt,
+            publishedAt: this.catalogQuote.publication.publishedAt,
+            contentHash: this.catalogQuoteHash ?? "",
+            modelCount: this.catalogQuote.models.length,
+            models: this.catalogQuote.models.map((m) => ({ ...m })),
+            identity: this.catalogQuote.identity,
+          }
+        : null,
+      peers: this.catalogPeers.map((p) => ({ ...p })),
+      lastRefreshAt: this.catalogLastRefreshAt,
+      refreshing: this.catalogRefreshing,
+      error: this.catalogError,
+    };
+  }
+
+  peersInDirectory(): CatalogPeerView[] {
+    return this.catalogPeers.map((p) => ({ ...p }));
+  }
+
+  /** The signed document the catalogue server returns; null unless published. */
+  localCatalog(): SignedCatalog | null {
+    return this.catalogPublishing() ? this.catalogQuote : null;
+  }
+
+  async refreshCatalog(): Promise<CatalogPeerView[]> {
+    await this.refreshCatalogPeers();
+    return this.peersInDirectory();
+  }
+
+  async trustCatalogPeer(nodeId: string, fingerprint?: string): Promise<CatalogTrustRecord> {
+    if (!isValidNodeId(nodeId)) throw new Error("a catalogue node id must be 8-64 lowercase hex characters");
+    const trust = loadCatalogTrust();
+    if (!Object.hasOwn(trust, nodeId)) throw new Error(`no catalogue identity is known for node ${nodeId}`);
+    const rec = trust[nodeId];
+    if (!rec.pending) {
+      rec.accepted = true;
+      saveCatalogTrust(trust);
+      return rec;
+    }
+    if (fingerprint && fingerprint !== rec.pending.fingerprint) {
+      throw new Error(`the seen fingerprint is ${rec.pending.fingerprint}, not ${fingerprint}`);
+    }
+    rec.publicKey = rec.pending.publicKey;
+    rec.fingerprint = rec.pending.fingerprint;
+    rec.keyId = rec.pending.keyId;
+    rec.overlayHostname = rec.pending.hostname;
+    rec.firstSeenAt = new Date().toISOString();
+    rec.lastSeenAt = rec.firstSeenAt;
+    rec.accepted = true;
+    rec.pending = null;
+    // An explicitly accepted key may have reset its quote version. Do not let
+    // the old key's version make the new identity look like a rollback.
+    rec.quoteVersion = 0;
+    rec.quoteHash = null;
+    saveCatalogTrust(trust);
+    logger.warn(`accepted a changed catalogue identity for ${nodeId}: ${rec.fingerprint}`);
+    await this.refreshCatalogPeers().catch(() => {});
+    return rec;
+  }
+
+  /** A manual connection request; never creates a key or a paid account. */
+  catalogRequest(nodeId: string, models?: string[]): Record<string, unknown> {
+    const peer = this.catalogPeers.find((p) => p.identity?.keyId === nodeId || p.nodeId === nodeId || p.hostname === nodeId);
+    if (!peer) throw new Error(`no discovered catalogue peer ${nodeId}; refresh the directory first`);
+    if (!peer.online) throw new Error(`${peer.hostname} is offline; refresh the directory when it returns`);
+    if (peer.status === "identity-changed") {
+      throw new Error(`the identity of ${peer.hostname} changed; accept its new fingerprint locally before requesting a connection`);
+    }
+    if (peer.status === "stale") throw new Error(`${peer.hostname} offered an older or replayed quote; refresh the directory first`);
+    if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
+    if (models !== undefined && !Array.isArray(models)) throw new Error("models must be an array of provider/model ids");
+    const available = peer.quote.models.map((m) => m.id);
+    const wanted = models && models.length ? models : available;
+    if (!Array.isArray(wanted) || wanted.length === 0 || wanted.length > CATALOG_MAX_MODELS) {
+      throw new Error(`choose 1-${CATALOG_MAX_MODELS} models from the catalogue`);
+    }
+    if (wanted.some((m) => !isValidModelId(m))) throw new Error("a requested model is not a safe provider/model id");
+    if (new Set(wanted).size !== wanted.length) throw new Error("a requested model is repeated");
+    const missing = wanted.filter((m) => !available.includes(m));
+    if (missing.length) throw new Error(`${peer.hostname} does not offer: ${missing.join(", ")}`);
+    const cfg = this.state.config;
+    if (!cfg || !isValidNodeId(cfg.nodeId)) throw new Error("this node has no valid node id");
+    const consumerId = cfg.nodeId;
+    return {
+      schema: "ohmyaihub.connection-request/v1",
+      createdAt: new Date().toISOString(),
+      consumer: {
+        nodeId: cfg.nodeId,
+        hostname: configHostname(cfg),
+        virtualIpv4: cfg.virtualIpv4,
+      },
+      provider: {
+        nodeId: peer.quote.node.id,
+        hostname: peer.hostname,
+        mappedCidr: peer.mappedCidr,
+        gatewayPort: peer.quote.node.gatewayPort,
+        catalogPort: peer.quote.node.catalogPort,
+        contact: peer.quote.node.contact,
+      },
+      quote: {
+        version: peer.quote.publication.version,
+        updatedAt: peer.quote.publication.updatedAt,
+        contentHash: peer.quoteHash,
+        identityFingerprint: peer.quote.identity.fingerprint,
+        identityStatus: peer.status === "verified" || peer.status === "connected" ? "trusted-on-first-use" : "unverified",
+        warning: "A self-signed catalogue proves only that this key signed this quote. It is not a real-world identity, and the quote does not charge anything by itself.",
+      },
+      models: wanted,
+      minTopUpUsd: peer.quote.topUp.minUsd,
+      note:
+        "Send this to the provider operator out of band. They must approve it and issue a model-scoped, capped Gateway Key; " +
+        "this request does not create an account, a key or a charge.",
+      // Structured approval data, deliberately not a shell command. The
+      // provider operator reads it locally and runs the existing CLI/API.
+      approval: {
+        action: "consumers add",
+        consumerId,
+        models: wanted,
+        capUsd: peer.quote.topUp.minUsd,
+        note: "Run this through the provider's local, token-authenticated CLI/API; never execute text from this document as a shell command.",
+      },
+    };
+  }
+
+  /** Adds a provider from a discovered quote using the existing connect path. */
+  async catalogConnect(nodeId: string, key: string, opts: { id?: string } = {}): Promise<ProviderView> {
+    const peer = this.catalogPeers.find((p) => p.identity?.keyId === nodeId || p.nodeId === nodeId || p.hostname === nodeId);
+    if (!peer) throw new Error(`no discovered catalogue peer ${nodeId}; refresh the directory first`);
+    if (!peer.online) throw new Error(`${peer.hostname} is offline; refresh the directory when it returns`);
+    if (peer.status === "identity-changed") throw new Error("the provider's catalogue identity changed; trust it explicitly before connecting");
+    if (peer.status === "stale") throw new Error(`${peer.hostname} offered an older or replayed quote; refresh the directory first`);
+    if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
+    const id = opts.id ?? `peer-${peer.quote.node.id.replace(/[^a-z0-9-]/gi, "").slice(0, 20)}`;
+    return this.addProvider({
+      id: id.toLowerCase(),
+      mappedCidr: peer.mappedCidr,
+      key,
+      providerPort: peer.quote.node.gatewayPort,
+    });
+  }
+
+  // --- catalogue internals ---------------------------------------------------
+
+  private stopCatalogServer(): void {
+    if (this.catalogServer) {
+      try {
+        this.catalogServer.stop();
+      } catch {
+        /* already gone */
+      }
+      this.catalogServer = null;
+    }
+  }
+
+  /** Starts, keeps or stops the local catalogue listener for the current state. */
+  private async applyCatalog(): Promise<void> {
+    if (!this.catalogPublishing()) {
+      this.stopCatalogServer();
+      this.catalogQuote = null;
+      this.catalogQuoteHash = null;
+      this.catalogServerError = null;
+      this.writeSnapshot();
+      return;
+    }
+    const cfg = this.state.config!;
+    const host = this.lanIp();
+    if (!host) {
+      this.catalogServerError = "no usable LAN address to bind the catalogue";
+      this.stopCatalogServer();
+      logger.error(this.catalogServerError);
+      return;
+    }
+    try {
+      if (!this.catalogServer || this.catalogServer.port !== cfg.catalog.port) {
+        this.stopCatalogServer();
+        this.catalogServer = this.probes.catalogServer({
+          hostname: host,
+          port: cfg.catalog.port,
+          document: () => this.localCatalog(),
+        });
+      }
+      await this.publishCatalogNow();
+      this.catalogServerError = null;
+    } catch (e) {
+      this.catalogServerError = String((e as Error).message ?? e);
+      this.stopCatalogServer();
+      logger.error(`the catalogue could not be published: ${this.catalogServerError}`);
+      this.writeSnapshot();
+    }
+  }
+
+  /**
+   * Builds and signs the current quote. The version rises only when the signed
+   * content changes, so a reader can tell a refresh from a new quote. No key,
+   * upstream address, network secret or admin field is ever placed in it.
+   */
+  private async publishCatalogNow(): Promise<void> {
+    const cfg = this.state.config;
+    if (!cfg || !this.catalogPublishing()) return;
+    const identity = loadOrCreateCatalogIdentity();
+    const metas = await this.probes.catalogModels().catch(() => [] as CatalogModelMeta[]);
+    const native = this.deps.magpie.nativeProviderIds();
+    const remote = this.deps.magpie.remoteProviderIds();
+    const models: CatalogModel[] = [];
+    for (const meta of metas) {
+      const provider = meta.id.split("/")[0];
+      if (!meta.id.includes("/") || provider.startsWith("group") || provider.startsWith("auto")) continue;
+      if (remote.has(provider) || !native.has(provider)) continue;
+      if (!allowedByPolicy(meta.id, cfg.share)) continue;
+      if (!isValidModelId(meta.id)) {
+        logger.warn(`not publishing ${JSON.stringify(meta.id)}: it is not a safe provider/model id`);
+        continue;
+      }
+      const model = catalogModel(meta);
+      if (model) models.push(model);
+    }
+    models.sort((a, b) => a.id.localeCompare(b.id));
+    if (models.length > CATALOG_MAX_MODELS) {
+      logger.warn(`catalogue has ${models.length} models; publishing the first ${CATALOG_MAX_MODELS}`);
+      models.length = CATALOG_MAX_MODELS;
+    }
+    const now = new Date().toISOString();
+    const node = {
+      id: cfg.nodeId,
+      displayName: cfg.catalog.displayName ?? configHostname(cfg),
+      hostname: configHostname(cfg),
+      virtualIpv4: cfg.virtualIpv4.replace(/\/\d+$/, ""),
+      mappedCidr: cfg.mappedCidr ?? "",
+      gatewayPort: this.gatewayPort(),
+      catalogPort: cfg.catalog.port,
+      contact: cfg.catalog.contact,
+    };
+    const topUp = {
+      minUsd: cfg.catalog.minTopUpUsd,
+      simulated: true as const,
+      note: "Simulated configuration only. No wallet, payment network, deposit or real credit is connected in this phase.",
+    };
+    const billing = {
+      quoteOnly: true as const,
+      charged: false as const,
+      note:
+        "Display only. No request is billed from this quote, no key or balance is created, and real charging " +
+        "depends on the later price-lock validation and a manually issued, capped Gateway Key.",
+    };
+    const contentHash = sha256Hex(canonicalJson({ schema: "ohmyaihub.catalog/v1", node, models, topUp, billing, identity: identity.summary }));
+    const prev = loadPublishState();
+    let version = prev.versionNumber;
+    let updatedAt = prev.updatedAt ?? now;
+    let publishedAt = prev.publishedAt ?? now;
+    if (contentHash !== prev.contentHash) {
+      version = Math.max(1, prev.versionNumber + 1);
+      updatedAt = now;
+      publishedAt = prev.publishedAt ?? now;
+      savePublishState({ version: 1, publishedAt, versionNumber: version, updatedAt, contentHash });
+    } else if (!version) {
+      version = 1;
+      updatedAt = now;
+      publishedAt = prev.publishedAt ?? now;
+      savePublishState({ version: 1, publishedAt, versionNumber: version, updatedAt, contentHash });
+    }
+    const body: CatalogQuoteBody = {
+      schema: "ohmyaihub.catalog/v1",
+      node,
+      publication: {
+        status: "published",
+        version,
+        updatedAt,
+        publishedAt,
+        note:
+          "Read-only display data. Real charging requires a manually approved, model-scoped, capped Gateway Key and a later " +
+          "price-lock check; this quote never changes a key's limit or creates an account.",
+      },
+      models,
+      topUp,
+      billing,
+      identity: identity.summary,
+    };
+    this.catalogQuote = signCatalog(body, identity);
+    this.catalogQuoteHash = contentHash;
+    this.catalogQuoteVersion = version;
+    this.catalogQuoteUpdatedAt = updatedAt;
+    this.catalogNextQuoteAt = Date.now() + Math.max(30, cfg.catalog.refreshSec) * 1000;
+    this.catalogError = null;
+    this.writeSnapshot();
+  }
+
+  /**
+   * Reads every reachable peer's catalogue through the loopback SOCKS5
+   * listener. It never adds a port forward, never restarts EasyTier and never
+   * writes to another node.
+   */
+  private async refreshCatalogPeers(): Promise<CatalogPeerView[]> {
+    const cfg = this.state.config;
+    if (!cfg?.catalog.discoveryEnabled) {
+      this.catalogPeers = [];
+      return [];
+    }
+    if (this.catalogRefreshing) return this.catalogPeers;
+    this.catalogRefreshing = true;
+    this.catalogError = null;
+    try {
+      const [peers, routes] = await Promise.all([this.supervisor.peers(), this.supervisor.routes()]);
+      const classified = classifyPeers(peers, routes, {
+        hostname: configHostname(cfg),
+        virtualIpv4: this.supervisor.snapshot().virtualIpv4 ?? cfg.virtualIpv4,
+      });
+      const trust = loadCatalogTrust();
+      const prev = new Map(this.catalogPeers.map((p) => [p.hostname, p]));
+      const now = new Date().toISOString();
+      const previousViews: CatalogPeerView[] = [];
+      const liveHosts = new Set<string>();
+      const candidates: { entry: DirectoryPeer; view: CatalogPeerView }[] = [];
+
+      for (const entry of classified) {
+        liveHosts.add(entry.hostname);
+        const earlier = prev.get(entry.hostname);
+        const connected = this.state.providers.find(
+          (p) =>
+            (entry.mappedCidr && mappedHost(p.mappedCidr) === mappedHost(entry.mappedCidr)) ||
+            (entry.hostname && p.fingerprint?.hostname === entry.hostname),
+        );
+        const view: CatalogPeerView = {
+          ...entry,
+          nodeId: earlier?.nodeId ?? null,
+          status: entry.conflict
+            ? "conflict"
+            : entry.route === "self"
+              ? "self"
+              : connected
+                ? "connected"
+                : entry.mappedCidr
+                  ? "unreachable"
+                  : "no-catalog",
+          detail: entry.conflict,
+          catalogPort: earlier?.catalogPort ?? null,
+          identity: earlier?.identity ?? null,
+          pendingFingerprint: earlier?.pendingFingerprint ?? null,
+          quote: earlier?.quote ?? null,
+          quoteHash: earlier?.quoteHash ?? null,
+          fetchedAt: earlier?.fetchedAt ?? null,
+          connectedProviderId: connected?.id ?? null,
+        };
+        if (view.status !== "self" && view.status !== "conflict" && entry.mappedCidr) {
+          candidates.push({ entry, view });
+        }
+        previousViews.push(view);
+      }
+
+      const fetched = await mapLimit(candidates, 4, ({ entry, view }) => this.fetchCatalogFor(entry, view, cfg, trust));
+      const byHost = new Map<string, CatalogPeerView>();
+      for (const v of previousViews) byHost.set(v.hostname, v);
+      for (const v of fetched) byHost.set(v.hostname, v);
+
+      // Offline: keep the last quote for an hour so the page can say who was
+      // seen, but never keep probing a peer EasyTier no longer lists.
+      for (const [host, old] of prev) {
+        if (liveHosts.has(host)) continue;
+        const seen = old.fetchedAt ?? old.lastSeenAt;
+        if (seen && Date.now() - Date.parse(seen) > 60 * 60_000) continue;
+        byHost.set(host, {
+          ...old,
+          online: false,
+          status: "offline",
+          detail: "not present in EasyTier's current peer list",
+          lastSeenAt: old.lastSeenAt,
+        });
+      }
+
+      this.catalogPeers = [...byHost.values()].sort((a, b) => a.hostname.localeCompare(b.hostname));
+      this.catalogLastRefreshAt = now;
+      this.catalogNextRefreshAt = Date.now() + Math.max(10, cfg.catalog.refreshSec) * 1000;
+      saveCatalogTrust(trust);
+      this.writeSnapshot();
+      return this.catalogPeers;
+    } catch (e) {
+      this.catalogError = String((e as Error).message ?? e);
+      this.catalogNextRefreshAt = Date.now() + Math.max(10, cfg.catalog.refreshSec) * 1000;
+      this.writeSnapshot();
+      throw e;
+    } finally {
+      this.catalogRefreshing = false;
+    }
+  }
+
+  private async fetchCatalogFor(
+    entry: DirectoryPeer,
+    base: CatalogPeerView,
+    cfg: PluginConfig,
+    trust: Record<string, CatalogTrustRecord>,
+  ): Promise<CatalogPeerView> {
+    const mapped = mappedHost(entry.mappedCidr!);
+    const now = new Date().toISOString();
+    // The default port is 3426. A host that runs several isolated lab instances
+    // (or an operator who changed the port) may publish on the next few; probe a
+    // small bounded range only until one answers, then remember that port.
+    const candidates = base.catalogPort
+      ? [base.catalogPort]
+      : [cfg.catalog.port, cfg.catalog.port + 1, cfg.catalog.port + 2, cfg.catalog.port + 3, cfg.catalog.port + 4].filter((p) => p <= 65535);
+    let lastDetail = "no catalogue answer";
+    let lastPort = candidates[0];
+    for (const port of candidates) {
+      lastPort = port;
+      let res: { status: number; body: string };
+      try {
+        res = await this.probes.catalogHttpGet({
+          socksPort: cfg.catalog.socksPort,
+          host: mapped,
+          port,
+          path: CATALOG_PATH,
+          timeoutMs: 5000,
+        });
+      } catch (e) {
+        lastDetail = `no catalogue answer through the overlay: ${(e as Error).message}`;
+        continue;
+      }
+      if (res.status !== 200) {
+        lastDetail = `the catalogue endpoint answered HTTP ${res.status} on port ${port}`;
+        continue;
+      }
+      let verified;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(res.body);
+        verified = verifySignedCatalog(parsed);
+      } catch (e) {
+        lastDetail = `invalid catalogue: ${(e as Error).message}`;
+        continue;
+      }
+      const quote = verified.quote;
+      if (quote.node.hostname !== entry.hostname || quote.node.virtualIpv4 !== entry.virtualIpv4) {
+        lastDetail = `catalogue identifies ${quote.node.hostname}/${quote.node.virtualIpv4}, not ${entry.hostname}/${entry.virtualIpv4}`;
+        continue;
+      }
+      if (!isValidOverlayHostname(entry.hostname, quote.node.id)) {
+        lastDetail = `EasyTier hostname ${entry.hostname} does not belong to node id ${quote.node.id}`;
+        continue;
+      }
+      if (mappedHost(quote.node.mappedCidr) !== mapped) {
+        // Another peer (or this host) answered on this port; a catalogue must
+        // name the address it was reached on. Keep looking, never accept it.
+        lastDetail = `catalogue on port ${port} says ${quote.node.mappedCidr}, not ${mapped}`;
+        continue;
+      }
+      if (quote.node.catalogPort !== port) {
+        lastDetail = `catalogue says port ${quote.node.catalogPort} but was read on ${port}`;
+        continue;
+      }
+      return this.finishCatalogPeer(entry, base, cfg, trust, quote, verified, parsed, port, now);
+    }
+    return {
+      ...base,
+      status: base.connectedProviderId ? "connected" : "unreachable",
+      detail: lastDetail.slice(0, 300),
+      catalogPort: base.catalogPort ?? null,
+      fetchedAt: now,
+    };
+  }
+
+  private finishCatalogPeer(
+    entry: DirectoryPeer,
+    base: CatalogPeerView,
+    cfg: PluginConfig,
+    trust: Record<string, CatalogTrustRecord>,
+    quote: import("./catalog.ts").CatalogQuoteBody,
+    verified: import("./catalog.ts").VerifiedCatalog,
+    parsed: unknown,
+    port: number,
+    now: string,
+  ): CatalogPeerView {
+    const nodeId = quote.node.id;
+    const fp = quote.identity.fingerprint;
+    const known = Object.hasOwn(trust, nodeId) ? trust[nodeId] : undefined;
+    // A cached quote from a different identity says nothing about this key's
+    // version. After an explicit identity acceptance the new key may start at
+    // v1 even though the old key reached v3.
+    const baseSameIdentity = Boolean(base.quote && base.quote.identity.fingerprint === fp);
+    const lastVersion = Math.max(known?.quoteVersion ?? 0, baseSameIdentity ? base.quote?.publication.version ?? 0 : 0);
+    const lastHash = known?.quoteHash || (baseSameIdentity ? base.quoteHash : null) || null;
+    // A changed key is an identity warning, not a version replay: do not let
+    // the old key's version mask it. Neither path accepts the new quote.
+    const keyChanged = Boolean(known && known.fingerprint !== fp);
+    if (!keyChanged && quote.publication.version < lastVersion) {
+      return {
+        ...base,
+        nodeId,
+        status: "stale",
+        detail: `catalogue offered v${quote.publication.version}, older than the last accepted v${lastVersion}; the newer cached quote was kept`,
+        online: true,
+        catalogPort: port,
+        fetchedAt: now,
+      };
+    }
+    if (!keyChanged && quote.publication.version === lastVersion && lastHash && verified.contentHash !== lastHash) {
+      return {
+        ...base,
+        nodeId,
+        status: "stale",
+        detail: `catalogue reuses v${quote.publication.version} with different content (${verified.contentHash.slice(0, 12)}… vs ${lastHash.slice(0, 12)}…); refused`,
+        online: true,
+        catalogPort: port,
+        fetchedAt: now,
+      };
+    }
+    let rec = known;
+    let status: CatalogPeerView["status"] = "unverified";
+    let detail: string | null = null;
+    if (!rec) {
+      rec = {
+        nodeId,
+        overlayHostname: entry.hostname,
+        publicKey: quote.identity.publicKey,
+        fingerprint: fp,
+        keyId: quote.identity.keyId,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        quoteVersion: quote.publication.version,
+        quoteHash: verified.contentHash,
+        accepted: false,
+        pending: null,
+      };
+      trust[nodeId] = rec;
+      status = "unverified";
+      detail = "first seen: self-signed key (TOFU), not a real-world identity";
+    } else if (rec.pending && rec.pending.fingerprint === fp) {
+      status = "identity-changed";
+      detail = `a different key (${fp}) is still awaiting local acceptance; the previously trusted key is ${rec.fingerprint}`;
+    } else if (rec.pending && rec.fingerprint !== fp) {
+      // The key changed again while the previous change was pending. Keep the
+      // newest pending key; the operator must still accept it explicitly.
+      rec.pending = { publicKey: quote.identity.publicKey, fingerprint: fp, keyId: quote.identity.keyId, hostname: entry.hostname, seenAt: now };
+      status = "identity-changed";
+      detail = `the catalogue key changed to ${fp}; not accepted automatically`;
+    } else if (rec.fingerprint !== fp) {
+      rec.pending = { publicKey: quote.identity.publicKey, fingerprint: fp, keyId: quote.identity.keyId, hostname: entry.hostname, seenAt: now };
+      status = "identity-changed";
+      detail = `the catalogue key changed from ${rec.fingerprint} to ${fp}; not accepted automatically`;
+    } else {
+      // The key is the one first seen (or the one an operator accepted). It is
+      // still self-signed: "verified" means "the same key as before", never a
+      // real-world identity.
+      rec.pending = null;
+      rec.overlayHostname = entry.hostname;
+      rec.quoteVersion = quote.publication.version;
+      rec.quoteHash = verified.contentHash;
+      status = rec.accepted ? "verified" : "unverified";
+      detail = rec.accepted
+        ? "the same Ed25519 key as the one accepted locally"
+        : "same key as first seen; accept it locally with catalog trust to stop showing unverified";
+    }
+    if (rec.pending && status !== "identity-changed") status = "identity-changed";
+    rec.lastSeenAt = now;
+    if (base.connectedProviderId && status !== "identity-changed") status = "connected";
+    return {
+      ...base,
+      nodeId,
+      status,
+      detail,
+      online: true,
+      catalogPort: port,
+      identity: {
+        fingerprint: rec.fingerprint,
+        keyId: rec.keyId,
+        publicKey: rec.publicKey,
+        firstSeenAt: rec.firstSeenAt,
+      },
+      pendingFingerprint: rec.pending?.fingerprint ?? null,
+      quote: parsed as SignedCatalog,
+      quoteHash: verified.contentHash,
+      fetchedAt: now,
+    };
   }
 
   // --- remote providers ------------------------------------------------------
@@ -728,6 +1575,7 @@ export class Service {
 
       // 4. only now commit the connection record
       const now = new Date().toISOString();
+      const limit = limitView(await this.probes.remoteLimit(localPort, input.key, 8000));
       const rec: ProviderConnection = {
         id: input.id,
         remoteMagpieId: input.id,
@@ -738,6 +1586,7 @@ export class Service {
         fingerprint: owner ? { hostname: owner.hostname, virtualIpv4: owner.ipv4, peerId: owner.peerId } : null,
         status: "connected",
         detail: null,
+        limit,
         createdAt: prev?.createdAt ?? now,
         updatedAt: now,
         lastConnectedAt: now,
@@ -985,6 +1834,12 @@ export class Service {
       conn.detail = "the provider does not answer with this Gateway Key (offline, revoked or a different provider)";
       conn.updatedAt = new Date().toISOString();
       return true;
+    }
+
+    const limit = limitView(await this.probes.remoteLimit(conn.localPort, key, 5000));
+    if (JSON.stringify(limit) !== JSON.stringify(conn.limit)) {
+      conn.limit = limit;
+      changed = true;
     }
 
     if (opts.verifyModels) {
@@ -1259,6 +2114,64 @@ export class Service {
       });
       const guard = await this.shareGuardReport();
       out.push({ name: "shared-models-native-only", ok: guard.ok, detail: guard.detail });
+      out.push({
+        name: "share-guard-cadence",
+        ok: true,
+        detail:
+          "provider-id/type changes are noticed on the 15s tick; a direct edit of a Gateway Key's model whitelist " +
+          "is noticed by the full guard on the reconcile pass (about 45s) or at the next hand-over",
+      });
+    }
+    const cat = this.catalogStatus();
+    if (cfg.catalog.enabled) {
+      const published = cat.publishing && cat.server.running && et.publishedPorts.includes(cfg.catalog.port);
+      out.push({
+        name: "catalog-published",
+        ok: published,
+        detail: published
+          ? `${cat.server.address}${CATALOG_PATH} (Forward ACL allows tcp/${cfg.catalog.port})`
+          : `publishing is ${cat.publishing ? "on but not serving" : "off"}: ${cat.server.error ?? "no catalogue listener"}`,
+      });
+      out.push({
+        name: "catalog-forward-port",
+        ok: !cat.publishing || et.publishedPorts.includes(cfg.catalog.port),
+        detail: `catalogue port ${cfg.catalog.port}; Forward ACL ports [${et.publishedPorts.join(", ")}]`,
+      });
+      out.push({
+        name: "catalog-quote",
+        ok: Boolean(cat.quote),
+        detail: cat.quote
+          ? `version ${cat.quote.version}, ${cat.quote.modelCount} model(s), updated ${cat.quote.updatedAt}, identity ${cat.quote.identity?.fingerprint ?? "none"}`
+          : "no signed quote yet",
+      });
+      out.push({
+        name: "catalog-identity",
+        ok: Boolean(cat.quote?.identity),
+        detail: cat.quote?.identity
+          ? `self-signed Ed25519 ${cat.quote.identity.fingerprint} (not a real-world identity)`
+          : "no identity yet",
+      });
+    }
+    if (cfg.catalog.discoveryEnabled) {
+      out.push({
+        name: "catalog-socks5-loopback",
+        ok: Boolean(et.socks5Port && et.aclOk),
+        detail: et.socks5Port
+          ? `127.0.0.1:${et.socks5Port} (on-demand reads; no per-peer port forward)`
+          : "the SOCKS5 listener is not running",
+      });
+      const changed = cat.peers.filter((p) => p.status === "identity-changed").length;
+      const stale = cat.peers.filter((p) => p.status === "stale").length;
+      out.push({
+        name: "catalog-peers",
+        ok: changed === 0,
+        detail:
+          `${cat.peers.filter((p) => p.online && p.status !== "self").length} online, ` +
+          `${cat.peers.filter((p) => p.status === "offline").length} offline` +
+          (changed ? `, ${changed} with a changed identity awaiting local acceptance` : "") +
+          (stale ? `, ${stale} with an older/replayed quote refused` : "") +
+          (cat.error ? `; last error: ${cat.error}` : ""),
+      });
     }
     if (cfg.consumingEnabled) {
       const forwards = await this.supervisor.listPortForwards().catch(() => []);
@@ -1359,7 +2272,7 @@ export class Service {
     const et = this.supervisor.snapshot();
     const cfg = this.state.config;
     return {
-      plugin: { version: "0.2.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
+      plugin: { version: "0.3.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
       magpie: { version: this.deps.magpieVersion, gateway: gatewayBaseURL() },
       config: {
         role: cfg ? (cfg.sharingEnabled ? "provider" : "consumer") : null,
@@ -1381,10 +2294,12 @@ export class Service {
         share: cfg?.share ?? { models: [] },
         nativeProviders: [...this.deps.magpie.nativeProviderIds()],
         remoteProviders: [...this.deps.magpie.remoteProviderIds()],
+        catalog: cfg?.catalog ?? normalizeCatalogConfig(undefined),
       },
       easytier: et,
       consumers: this.provisioner.all(),
       providers: this.providers(),
+      catalog: this.catalogStatus(),
       wiring: this.state.providers[0]
         ? {
             id: this.state.providers[0].id,
@@ -1619,5 +2534,94 @@ async function remoteModelIds(localPort: number, key: string, timeoutMs: number)
   } catch {
     return null;
   }
+}
+
+/** The provider's own native limit numbers, through its keyed forward. */
+async function remoteLimit(localPort: number, key: string, timeoutMs: number): Promise<LimitStatus | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${localPort}/v1/magpie/limit`, {
+      headers: { authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as LimitStatus;
+  } catch {
+    return null;
+  }
+}
+
+function finitePrice(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function limitView(status: LimitStatus | null): ProviderLimitView | null {
+  const l = status?.limit;
+  if (!l) return null;
+  const out: ProviderLimitView = {};
+  if (l.period) out.period = l.period;
+  if (typeof l.calls === "number") out.calls = l.calls;
+  if (typeof l.cost === "number") out.cost = l.cost;
+  if (typeof l.costLimit === "number") out.costLimit = l.costLimit;
+  if (typeof l.costLeft === "number") out.costLeft = l.costLeft;
+  if (typeof l.tokens === "number") out.tokens = l.tokens;
+  if (typeof l.spent === "boolean") out.spent = l.spent;
+  if (typeof l.reset === "string") out.reset = l.reset;
+  return out;
+}
+
+function priceFrom(p: import("./magpie.ts").ModelPriceRecord, source: "magpie-gateway" | "magpie-settings"): CatalogPrice | null {
+  const input = finitePrice(p.input);
+  const output = finitePrice(p.output);
+  const cacheRead = finitePrice(p.cache_read);
+  const cacheWrite = finitePrice(p.cache_write);
+  if (input === null || output === null || cacheRead === null || cacheWrite === null) return null;
+  const tiers: CatalogPrice["tiers"] = [];
+  for (const t of p.tiers ?? []) {
+    const ti = finitePrice(t.input);
+    const to = finitePrice(t.output);
+    const tr = finitePrice(t.cache_read);
+    const tw = finitePrice(t.cache_write);
+    const above = finitePrice(t.above);
+    if (ti === null || to === null || tr === null || tw === null || above === null || above <= 0) continue;
+    tiers.push({ above, input: ti, output: to, cacheRead: tr, cacheWrite: tw, ...(finitePrice(t.cache_write_1h) !== null ? { cacheWrite1h: finitePrice(t.cache_write_1h)! } : {}) });
+  }
+  const out: CatalogPrice = { unit: "USD per 1M tokens", input, output, cacheRead, cacheWrite, source };
+  const oneHour = finitePrice(p.cache_write_1h);
+  if (oneHour !== null) out.cacheWrite1h = oneHour;
+  if (tiers.length) out.tiers = tiers;
+  return out;
+}
+
+function catalogModel(meta: CatalogModelMeta): CatalogModel | null {
+  if (!meta.id) return null;
+  const pricing = meta.price ? priceFrom(meta.price, meta.priceSource === "magpie-gateway" ? "magpie-gateway" : "magpie-settings") : null;
+  return {
+    id: meta.id,
+    displayName: meta.displayName,
+    gatewayApis: [...meta.gatewayApis],
+    nativeApis: meta.nativeApis ? [...meta.nativeApis] : null,
+    contextWindow: meta.contextWindow,
+    maxOutputTokens: meta.maxOutputTokens,
+    images: meta.images,
+    modalities: meta.modalities ?? null,
+    reasoningLevels: meta.reasoningLevels ? [...meta.reasoningLevels] : null,
+    pricing,
+    capabilitiesSource: meta.capabilitiesSource,
+  };
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 

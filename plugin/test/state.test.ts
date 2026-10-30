@@ -154,6 +154,7 @@ describe("phase-3 migration", () => {
       secureMode: false,
       secureIdentity: null,
       share: { models: ["alpha/*"] },
+      catalog: { enabled: false, discoveryEnabled: false, displayName: null, contact: null, port: 3426, socksPort: 13400, refreshSec: 20, minTopUpUsd: 1 },
     };
     saveState(st);
     const again = loadState();
@@ -197,5 +198,52 @@ describe("crash safety", () => {
     const raw = readFileSync(stateFile(), "utf8");
     expect(raw).not.toContain("sk-test-store-a");
     expect(raw).not.toContain("sk-test-store-b");
+  });
+});
+
+describe("phase-5 catalogue migration", () => {
+  test("a v2 document gains an opt-in catalogue (both switches off) and is backed up", () => {
+    writeLegacy({
+      version: 2,
+      config: {
+        ...legacyProvider.config,
+        sharingEnabled: true,
+        consumingEnabled: false,
+      },
+      consumers: [],
+      providers: [],
+      orphanForwards: [],
+      shareSuspended: null,
+    });
+    const loaded = loadState();
+    expect(loaded.migratedFrom).toBe(2);
+    expect(loaded.backupPath).not.toBeNull();
+    expect(loaded.state.config!.catalog).toMatchObject({
+      enabled: false,
+      discoveryEnabled: false,
+      port: 3426,
+      refreshSec: 20,
+    });
+  });
+
+  test("an invalid catalogue port falls back instead of breaking the load", () => {
+    writeLegacy({
+      version: 3,
+      config: {
+        ...legacyProvider.config,
+        sharingEnabled: true,
+        consumingEnabled: false,
+        catalog: { enabled: false, discoveryEnabled: false, port: 22, socksPort: 22, refreshSec: 1, minTopUpUsd: 0 },
+      },
+      consumers: [],
+      providers: [],
+      orphanForwards: [],
+      shareSuspended: null,
+    });
+    const loaded = loadState();
+    expect(loaded.state.config!.catalog.port).toBe(3426);
+    expect(loaded.state.config!.catalog.socksPort).toBe(13400);
+    expect(loaded.state.config!.catalog.refreshSec).toBe(10); // clamped to the 10s floor
+    expect(loaded.state.config!.catalog.minTopUpUsd).toBe(1);
   });
 });

@@ -89,6 +89,12 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
   if (req.method === "GET" && path === "/providers") {
     return json({ sharingEnabled: svc.config()?.sharingEnabled ?? false, consumingEnabled: svc.config()?.consumingEnabled ?? false, providers: svc.providers() });
   }
+  if (req.method === "GET" && path === "/catalog") {
+    return json({ catalog: svc.catalogStatus() });
+  }
+  if (req.method === "GET" && path === "/catalog/peers") {
+    return json({ peers: svc.peersInDirectory() });
+  }
   if (req.method === "GET" && path === "/consumers") {
     const s = await svc.status();
     return json({ consumers: s.consumers });
@@ -124,6 +130,44 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
         const { models } = body as { models?: unknown };
         if (!Array.isArray(models)) return json({ error: "models (string[]) is required" }, 400);
         return json(await svc.setShareModels(models.map(String)));
+      }
+      case "/catalog/publish": {
+        const { enabled } = body as { enabled?: unknown };
+        if (typeof enabled !== "boolean") return json({ error: "enabled (boolean) is required" }, 400);
+        return json(await svc.setCatalogPublishing(enabled));
+      }
+      case "/catalog/discover": {
+        const { enabled } = body as { enabled?: unknown };
+        if (typeof enabled !== "boolean") return json({ error: "enabled (boolean) is required" }, 400);
+        return json(await svc.setCatalogDiscovery(enabled));
+      }
+      case "/catalog/configure": {
+        const { displayName, contact, port, socksPort, refreshSec, minTopUpUsd } = body as {
+          displayName?: string | null;
+          contact?: string | null;
+          port?: number;
+          socksPort?: number;
+          refreshSec?: number;
+          minTopUpUsd?: number;
+        };
+        return json(await svc.setCatalogOptions({ displayName, contact, port, socksPort, refreshSec, minTopUpUsd }));
+      }
+      case "/catalog/refresh":
+        return json({ peers: await svc.refreshCatalog() });
+      case "/catalog/trust": {
+        const { nodeId, fingerprint } = body as { nodeId?: string; fingerprint?: string };
+        if (!nodeId) return json({ error: "nodeId is required" }, 400);
+        return json({ trust: await svc.trustCatalogPeer(nodeId, fingerprint) });
+      }
+      case "/catalog/request": {
+        const { nodeId, models } = body as { nodeId?: string; models?: string[] };
+        if (!nodeId) return json({ error: "nodeId is required" }, 400);
+        return json(svc.catalogRequest(nodeId, Array.isArray(models) ? models.map(String) : undefined));
+      }
+      case "/catalog/connect": {
+        const { nodeId, key, id } = body as { nodeId?: string; key?: string; id?: string };
+        if (!nodeId || !key) return json({ error: "nodeId and key are required" }, 400);
+        return json(await svc.catalogConnect(nodeId, key, { id }));
       }
       case "/publish":
         return json(await svc.publishPorts((body.ports as number[]) ?? []));
