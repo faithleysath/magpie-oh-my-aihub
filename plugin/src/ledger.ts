@@ -19,7 +19,7 @@
 import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { magpieDataDir, statePath } from "./paths.ts";
 import { costNanos, parsePriceSnapshot, type PriceSnapshot, type UsageTokens } from "./pricing.ts";
 
@@ -54,6 +54,10 @@ export interface LedgerWindow {
   openedAt: string;
   closedAt: string | null;
   closeReason: string | null;
+  /** true only when nothing can still bill against this window */
+  settled: boolean;
+  settledAt: string | null;
+  settleReason: string | null;
 }
 
 export interface LedgerDeposit {
@@ -83,6 +87,12 @@ export interface ImportResult {
   skipped: number;
   unpriced: number;
   lastOffset: number;
+  /**
+   * The log no longer contains what the cursor had already passed (truncated,
+   * replaced or rotated). Charges may be missing; the caller must treat the
+   * window as uncertain instead of assuming the missing rows cost nothing.
+   */
+  gap: string | null;
 }
 
 interface AccountRow {
@@ -112,6 +122,9 @@ interface WindowRow {
   opened_at: string;
   closed_at: string | null;
   close_reason: string | null;
+  settled: number;
+  settled_at: string | null;
+  settle_reason: string | null;
 }
 
 interface DepositRow {
@@ -175,7 +188,10 @@ CREATE TABLE IF NOT EXISTS windows (
   status TEXT NOT NULL,
   opened_at TEXT NOT NULL,
   closed_at TEXT,
-  close_reason TEXT
+  close_reason TEXT,
+  settled INTEGER NOT NULL DEFAULT 0,
+  settled_at TEXT,
+  settle_reason TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_window
   ON windows(consumer_id) WHERE status IN ('open', 'draining');
@@ -227,6 +243,13 @@ CREATE TABLE IF NOT EXISTS usage_offsets (
   offset INTEGER NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage_cursors (
+  log_id TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  offset INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (log_id, key_id)
+);
 `;
 
 function mapAccount(r: AccountRow): LedgerAccount {
@@ -259,6 +282,9 @@ function mapWindow(r: WindowRow): LedgerWindow {
     openedAt: r.opened_at,
     closedAt: r.closed_at,
     closeReason: r.close_reason,
+    settled: r.settled === 1,
+    settledAt: r.settled_at,
+    settleReason: r.settle_reason,
   };
 }
 
@@ -338,6 +364,12 @@ export class Ledger {
       }
       throw e;
     }
+  }
+
+  /** Every account, for recovery after a lost or truncated consumers.json. */
+  accounts(): LedgerAccount[] {
+    const rows = this.db.query("SELECT * FROM accounts ORDER BY created_at").all() as AccountRow[];
+    return rows.map(mapAccount);
   }
 
   account(consumerId: string): LedgerAccount | null {
@@ -604,16 +636,14 @@ export class Ledger {
     };
   }
 
-  /** Marks bytes up to `offset` as already accounted for a key (migration). */
-  setUsageOffset(keyId: string, offset: number): void {
-    this.db
-      .query("INSERT INTO usage_offsets(key_id,offset,updated_at) VALUES(?,?,?) ON CONFLICT(key_id) DO UPDATE SET offset=excluded.offset,updated_at=excluded.updated_at")
-      .run(keyId, Math.max(0, Math.trunc(offset) || 0), nowIso());
-  }
-
-  usageOffset(keyId: string): number {
-    const row = this.db.query("SELECT offset FROM usage_offsets WHERE key_id=?").get(keyId) as { offset: number } | null;
-    return row?.offset ?? 0;
+  /** The models a window was issued for, from its frozen price document. */
+  windowModels(window: LedgerWindow): string[] {
+    try {
+      const parsed = JSON.parse(window.priceBody) as { models?: unknown };
+      return Array.isArray(parsed.models) ? parsed.models.map(String) : [];
+    } catch {
+      return [];
+    }
   }
 
   windowConsumption(windowId: string): number {
@@ -637,10 +667,19 @@ export class Ledger {
   }
 
   /**
-   * Imports Magpie's own usage rows for one key/window, exactly once. The byte
-   * offset is advanced in the same transaction as the rows, so a crash either
-   * imports a row or leaves it for the next attempt; the consumption primary
-   * key is the second guard.
+   * Imports Magpie's own usage rows for one key/window, exactly once.
+   *
+   * Identity is the log line's position: `(log id, byte offset, row ordinal)`.
+   * A content hash cannot tell two genuinely identical calls apart, and Magpie
+   * has no unique request field in usage.jsonl (`route_id` is a per-process
+   * counter that restarts near `UnixMilli`, and rejected rows carry none).
+   * Two equal lines at different offsets are therefore two charges, and the
+   * same line read twice is one.
+   *
+   * The rows and the cursor advance in one transaction. A log that no longer
+   * holds the bytes the cursor had passed (truncated, replaced, rotated) is
+   * reported as a `gap`: the caller must treat the window as uncertain rather
+   * than as "the missing rows cost nothing".
    */
   importUsage(input: {
     consumerId: string;
@@ -652,12 +691,21 @@ export class Ledger {
     const path = input.logPath ?? usageLogPath();
     const snapshot = parsePriceSnapshot(input.window.priceBody);
     if (!snapshot) throw new Error(`window ${input.window.id} has a corrupt price snapshot`);
-    const offsetRow = this.db.query("SELECT offset FROM usage_offsets WHERE key_id=?").get(input.window.keyId) as { offset: number } | null;
-    let offset = input.fromOffset ?? offsetRow?.offset ?? 0;
-    if (!existsSync(path)) return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset };
+    const logId = usageLogId(path);
+    const cursor = this.db
+      .query("SELECT offset FROM usage_cursors WHERE log_id=? AND key_id=?")
+      .get(logId, input.window.keyId) as { offset: number } | null;
+    let offset = input.fromOffset ?? cursor?.offset ?? 0;
+    if (!existsSync(path)) {
+      return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap: offset > 0 ? `${logId} is missing` : null };
+    }
     const size = statSync(path).size;
-    if (size < offset) offset = 0;
-    if (size === offset) return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset };
+    let gap: string | null = null;
+    if (size < offset) {
+      gap = `${logId} shrank from ${offset} to ${size} bytes (truncated or replaced)`;
+      offset = 0;
+    }
+    if (size === offset) return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap };
     const length = Math.min(size - offset, input.maxBytes ?? 8 * 1024 * 1024);
     const buf = Buffer.allocUnsafe(length);
     const fd = openSync(path, "r");
@@ -672,15 +720,15 @@ export class Ledger {
       closeSync(fd);
     }
     const chunk = buf.subarray(0, read);
-    const rows: { line: string; end: number }[] = [];
+    const rows: { line: string; at: number }[] = [];
     let pos = 0;
     while (pos < chunk.length) {
       const nl = chunk.indexOf(10, pos);
       if (nl < 0) break; // a partial last line stays for the next read
-      rows.push({ line: chunk.subarray(pos, nl).toString("utf8"), end: nl + 1 });
+      rows.push({ line: chunk.subarray(pos, nl).toString("utf8"), at: offset + pos });
       pos = nl + 1;
     }
-    if (rows.length === 0) return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset };
+    if (rows.length === 0) return { imported: 0, skipped: 0, unpriced: 0, lastOffset: offset, gap };
 
     let imported = 0;
     let skipped = 0;
@@ -699,7 +747,7 @@ export class Ledger {
         if (r.source === "reported") continue;
         if (r.computer) continue;
         if (r.callerKeyId !== input.window.keyId) continue;
-        const id = usageId(input.window.keyId, r);
+        const id = usageEventId(logId, row.at, input.window.keyId);
         const model = `${r.provider ?? ""}/${r.model ?? ""}`;
         const price = snapshot.prices[model] ?? (r.req ? snapshot.prices[r.req] : undefined);
         const tokens: UsageTokens = {
@@ -731,17 +779,100 @@ export class Ledger {
             tokens.cacheWrite,
             tokens.cacheWrite1h ?? 0,
             price ? 1 : 0,
-            "usage.jsonl",
+            `usage.jsonl@${logId}:${row.at}`,
             at,
           );
         if (result.changes > 0) imported += 1;
       }
-      const next = offset + pos;
-      this.db
-        .query("INSERT INTO usage_offsets(key_id,offset,updated_at) VALUES(?,?,?) ON CONFLICT(key_id) DO UPDATE SET offset=excluded.offset,updated_at=excluded.updated_at")
-        .run(input.window.keyId, next, at);
+      this.advanceCursor(logId, input.window.keyId, offset + pos, at);
     });
-    return { imported, skipped, unpriced, lastOffset: offset + pos };
+    return { imported, skipped, unpriced, lastOffset: offset + pos, gap };
+  }
+
+  private advanceCursor(logId: string, keyId: string, offset: number, at: string): void {
+    this.db
+      .query(
+        "INSERT INTO usage_cursors(log_id,key_id,offset,updated_at) VALUES(?,?,?,?) ON CONFLICT(log_id,key_id) DO UPDATE SET offset=excluded.offset,updated_at=excluded.updated_at",
+      )
+      .run(logId, keyId, offset, at);
+  }
+
+  /** Where this key's read of a log stands, for a migration that must not replay it. */
+  cursorFor(logPath: string, keyId: string): number {
+    const row = this.db
+      .query("SELECT offset FROM usage_cursors WHERE log_id=? AND key_id=?")
+      .get(usageLogId(logPath), keyId) as { offset: number } | null;
+    return row?.offset ?? 0;
+  }
+
+  /** Marks a key's read of a log as already complete up to `offset`. */
+  seedCursor(logPath: string, keyId: string, offset: number): void {
+    this.advanceCursor(usageLogId(logPath), keyId, Math.max(0, Math.trunc(offset) || 0), nowIso());
+  }
+
+  /**
+   * A window that can still be billed against: open, draining, or closed but
+   * not proven settled. Late rows are imported for these at every check.
+   */
+  unsettledWindows(consumerId?: string): LedgerWindow[] {
+    const rows = consumerId
+      ? (this.db
+          .query("SELECT * FROM windows WHERE consumer_id=? AND settled=0 ORDER BY opened_at")
+          .all(consumerId) as WindowRow[])
+      : (this.db.query("SELECT * FROM windows WHERE settled=0 ORDER BY opened_at").all() as WindowRow[]);
+    return rows.map(mapWindow);
+  }
+
+  /**
+   * Windows to re-read for late rows: every unsettled one, plus any closed
+   * within `horizonMs`.
+   *
+   * "Settled" is a claim about the evidence available at that moment (nothing
+   * in flight, nothing unread). A request can end between that check and the
+   * next read and still be written afterwards, so the scan cannot stop at the
+   * settlement flag alone; it keeps auditing recent windows and reopens one
+   * that turns out to have a late row.
+   */
+  windowsToScan(consumerId: string, horizonMs: number): LedgerWindow[] {
+    const since = new Date(Date.now() - Math.max(0, horizonMs)).toISOString();
+    const rows = this.db
+      .query(
+        "SELECT * FROM windows WHERE consumer_id=? AND (settled=0 OR closed_at IS NULL OR closed_at >= ?) ORDER BY opened_at",
+      )
+      .all(consumerId, since) as WindowRow[];
+    return rows.map(mapWindow);
+  }
+
+  /** A late row reached a window that had been called settled. */
+  reopenWindow(windowId: string, reason: string): void {
+    this.db
+      .query("UPDATE windows SET settled=0,settled_at=NULL,settle_reason=NULL WHERE id=?")
+      .run(windowId);
+    const row = this.db.query("SELECT consumer_id FROM windows WHERE id=?").get(windowId) as { consumer_id: string } | null;
+    if (row) this.event(row.consumer_id, "window-reopened", { windowId, reason: reason.slice(0, 300) });
+  }
+
+  windowsFor(consumerId: string): LedgerWindow[] {
+    const rows = this.db.query("SELECT * FROM windows WHERE consumer_id=? ORDER BY opened_at").all(consumerId) as WindowRow[];
+    return rows.map(mapWindow);
+  }
+
+  /**
+   * Records that a window is fully settled. Only a caller that has proven no
+   * request can still bill against it may do this; "we waited N seconds" is not
+   * such a proof.
+   */
+  markWindowSettled(windowId: string, reason: string): void {
+    this.db
+      .query("UPDATE windows SET settled=1,settled_at=?,settle_reason=? WHERE id=?")
+      .run(nowIso(), reason.slice(0, 300), windowId);
+  }
+
+  windowSettlement(windowId: string): { settled: boolean; reason: string | null; at: string | null } {
+    const row = this.db.query("SELECT settled,settle_reason,settled_at FROM windows WHERE id=?").get(windowId) as
+      | { settled: number; settle_reason: string | null; settled_at: string | null }
+      | null;
+    return { settled: row?.settled === 1, reason: row?.settle_reason ?? null, at: row?.settled_at ?? null };
   }
 
   /** A migration/repair adjustment, still immutable and auditable. */
@@ -791,7 +922,29 @@ function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
 }
 
-function usageId(keyId: string, r: UsageRecord): string {
+/**
+ * A stable name for one log file, so cursors and event ids follow the file
+ * rather than the process. Magpie keeps one `usage.jsonl`; a test or an
+ * operator may point at another, and the path is what tells them apart.
+ */
+export function usageLogId(path: string): string {
+  return createHash("sha256").update(resolve(path)).digest("hex").slice(0, 32);
+}
+
+/**
+ * One consumption event: this log file, this byte offset, this key.
+ *
+ * Not a content hash. Magpie's usage rows have no unique id (`route_id` is a
+ * per-process counter seeded from `UnixMilli` and absent on rejected rows), so
+ * two identical calls would collide under a content hash while the same line
+ * read twice would not. The byte offset is unique per row by construction and
+ * survives a restart; the log id keeps a replaced file from colliding.
+ */
+export function usageEventId(logId: string, offset: number, keyId: string): string {
+  return createHash("sha256").update(`${logId}\u0000${offset}\u0000${keyId}`).digest("hex");
+}
+
+function legacyUsageId(keyId: string, r: UsageRecord): string {
   const caller = r.callerKeyId ?? "";
   const stable = [
     keyId,

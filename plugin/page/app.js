@@ -130,7 +130,7 @@ function renderStatus(s) {
     body.append(
       h,
       table(
-        ["consumer", "models", "cap", "used", "left", "ledger balance", "calls", "state"],
+        ["consumer", "models", "cap", "used", "left", "ledger balance", "settlement", "calls", "state"],
         s.consumers.map((c) => [
           c.consumerId,
           c.models.join(", "),
@@ -138,15 +138,42 @@ function renderStatus(s) {
           fmtUsd(c.usedUsd ?? 0),
           fmtUsd(c.leftUsd ?? 0),
           fmtUsd(c.ledger?.balanceUsd ?? c.capUsd - (c.usedUsd ?? 0)),
+          c.ledger?.uncertain
+            ? "uncertain: charges may be missing"
+            : (c.ledger?.openSettlements ?? 0) > 0
+              ? `${c.ledger?.openSettlements} window(s) not proven settled`
+              : "settled",
           c.calls ?? 0,
           c.paused
-            ? `paused: ${c.paused.reason}${c.paused.enforced ? "" : " (NOT enforced)"}`
+            ? `paused: ${c.paused.reason} [${c.paused.enforcement}${c.paused.enforced ? "" : ", NOT stopped"}]`
             : c.revokedAt
               ? "revoked"
               : c.spent
                 ? "spent"
                 : "open",
         ]),
+      ),
+    );
+  }
+
+  if (s.accounting) {
+    const h = document.createElement("h2");
+    h.textContent = "Accounting safety";
+    const a = s.accounting;
+    body.append(
+      h,
+      table(
+        ["field", "value"],
+        [
+          ["check interval", `${Math.round(a.intervalMs / 1000)} s (a poll, not a price lock)`],
+          ["max detection", `${Math.round(a.maxDetectionMs / 1000)} s`],
+          ["last check", a.lastCheckAt ? `${a.lastCheckAt} · ${a.lastCheckMs ?? 0} ms` : "never"],
+          ["last ok", a.lastOkAt ?? "never"],
+          ["failures in a row", String(a.failures)],
+          ["state", a.uncertain ? `uncertain: ${a.uncertainReason ?? ""}` : "ok"],
+          ["export", a.serving ? "published" : "WITHDRAWN"],
+          ["paused consumers", a.paused.length ? a.paused.map((p) => `${p.consumerId} (${p.reason}, ${p.enforcement}${p.enforced ? "" : " NOT stopped"})`).join(", ") : "none"],
+        ],
       ),
     );
   }

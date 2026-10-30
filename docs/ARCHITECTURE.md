@@ -6,7 +6,8 @@ remains the only charging point. Phase 5 added opt-in peer discovery and a read-
 catalogue. Phase 4 turned the two mutually exclusive roles into two independent capabilities on one
 node (share my Magpie, consume other Magpies) and replaced the single consumer wiring with a set of
 remote providers. Everything measured in phase 3 still holds; the phase-4 decisions are 5–12, the
-phase-5 decisions are 13–17 and the phase-6 decisions are 18–20. Evidence is in
+phase-5 decisions are 13–17, the phase-6 decisions are 18–20 and the phase-6 review patch's are
+21–24. Evidence is in
 [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
 [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md) and
 [`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md).
@@ -509,6 +510,92 @@ is the blocker in section "Known blockers". The same applies to a price decrease
 endpoint can show more credit while the running admission sums still hold the old, higher cost;
 only a key change/restart/new window clears them.
 
+## Decision 21 — The accounting check runs on its own cadence, and stops serving when it cannot prove the books
+
+`Provisioner.ledgerCheck` used to run only when somebody asked for a status or opened the page.
+A price edit or a window boundary with nobody watching therefore went unnoticed. The service now
+runs `accountingTick()` every `ACCOUNTING_TICK_MS` (10 s) plus once at start and once at configure,
+serialized per consumer with `topUp`/`reissue`/`revoke`/`handOver` by the same lock.
+
+- It is a **poll**, not a price lock. `accountingStatus()` reports `intervalMs`,
+  `maxDetectionMs` (interval + timeout), the last check and its duration, so the real exposure is
+  visible instead of implied.
+- A check that throws, times out (20 s) or cannot read the price source counts as a failure. After
+  `accountingFailureBudget` (3) consecutive failures the export is withdrawn with a reason prefixed
+  `accounting-uncertain:`, which `guardSharedKeys` may **not** clear. Only a passing check
+  re-validates every key and republishes, and it refuses while any consumer's charges are still
+  uncertain.
+- `configure()` installs the loops as well as `start()`: a node configured through the loopback API
+  is not left without the check.
+
+Measured on the isolated Magpie: an external `magpie model price` edit was detected and the key
+revoked in 146 ms of check time; the next remote call was 401.
+
+## Decision 22 — Consumption identity is the log position, and old windows keep being audited
+
+Magpie's `usage.jsonl` has **no unique request id**. `route_id` is a per-process counter seeded from
+`UnixMilli` (`internal/gateway/trace.go`, `trace.begin`), it restarts near the same value on the next
+run, and a rejected row carries none; `rid` is the vendor's id and absent for most calls. A content
+hash therefore collides two genuinely identical calls and cannot distinguish them from a re-read of
+one line.
+
+A consumption event is identified by `(usage-log id, byte offset of the line, caller key id)`, hashed
+into the row's primary key. The log id is the SHA-256 of the resolved path, so a replaced file cannot
+collide with the old one. Consequences, all tested:
+
+- two byte-identical lines at different offsets are two charges;
+- re-reading from offset 0 charges nothing twice;
+- a log that shrank below the cursor, or disappeared, is a **gap**: the consumer is paused
+  (`log-gap`) and the export stays withdrawn rather than treating missing rows as zero;
+- the rows and the cursor advance in one SQLite transaction.
+
+`reissue` no longer treats a short drain as proof that an old window is finished. Every unsettled
+window, and every window closed within the audit horizon (30 min), is re-read for late rows at each
+check; a late row is charged at that window's frozen price snapshot, reopens a window that had been
+called settled, and **tightens the live key's cap** to `native used + balance` — or pauses it when
+the balance is negative or below one grid unit. A window is marked settled only on evidence: the
+gateway reports no request in flight (`GET /v1/magpie/concurrency`) and the log has no unread bytes.
+That evidence can still be overtaken by a request that ends immediately afterwards, which is why the
+audit horizon exists; the status shows `openSettlements` and `uncertain` instead of claiming a clean
+close.
+
+## Decision 23 — A pause is only "enforced" at the level it really reached
+
+A removed key is 401 for a remote caller, but Magpie serves a **loopback** caller with the same
+secret (loopback is trusted by construction, `internal/gateway/lan.go`). A `$0.0001` cap is not a
+stop either: measured, a 10/10-token call still returned 200 with 6e-05 used of 0.0001. Both facts
+are now recorded instead of assumed.
+
+`paused.enforcement` is one of:
+
+| Level | Meaning |
+| --- | --- |
+| `keyRevoked` | the key is gone; a remote call with its secret is 401 |
+| `secretRotated` | removal failed, so `gateway-key rotate` replaced the secret; the old one is 401 and the usage is kept |
+| `capRestricted` | only the cap was lowered; the key still answers 200 |
+| `networkWithdrawn` | the overlay publication was withdrawn as well |
+| `safetyUncertain` | none of the above could be proven; the status says the consumer may still be served |
+
+`enforced` is true only for the first two. If any paused consumer is not enforced, the accounting
+check withdraws the export too, and a withdrawal that fails is reported, never treated as a stop.
+`--cost 0` is never used: Magpie reads a zero cap as unlimited.
+
+## Decision 24 — The three stores are reconciled before serving
+
+`Provisioner.recover()` runs at start and reconciles Magpie's key list, `ledger.sqlite` and
+`consumers.json`:
+
+| Crash point | Recovery |
+| --- | --- |
+| ledger account + window, key alive, record missing | adopt the record from the ledger and the key (a reissue whose file write was lost) |
+| ledger window, key gone | keep the balance, report the consumer as uncertain, serve nothing |
+| key named `ohmyaihub-*` with no ledger account | remove it: an unbound key has no balance behind it |
+| record with no ledger account | seed from `cap - used` and start reading the log at its current end |
+| `consumers.json` unreadable | refuse to start with an empty list; recover `.prev` when it is valid |
+
+`consumers.json` now uses the same atomic writer as `state.json` (temp file, fsync, rename,
+directory fsync, `.prev`). It used a plain `writeFileSync`, which a crash could truncate.
+
 ## Preferred dataflow
 
 ```
@@ -600,9 +687,22 @@ refuses an unlisted platform or a hash mismatch.
 16. **Legacy `sk-magpie-` secrets cannot be reused by `gateway-key add --key`.** New ledger-managed
     keys use `sk-ohmy-…`; a legacy consumer's first reissue gets a different secret and must be
     handed over again.
-17. **`reissue` drains for a bounded time** (`drainMs`, default 1.5 s), not until an arbitrary stream
-    ends. A longer stream settles after the new key exists; the next reconcile imports it and
-    reduces the balance. This is an operational uncertainty, not an atomic guarantee.
+17. **`reissue` still drains for a bounded time** (`drainMs`, default 1.5 s) before it closes the old
+    window, but that is no longer how a late row is handled: every unsettled window, and every one
+    closed within 30 min, is re-read at each accounting check and its late rows are charged at the
+    frozen price and tighten the live cap (Decision 22). The drain only shortens the window in
+    which a late row can arrive.
+18. **"Settled" is evidence-based, not a guarantee.** A window is marked settled when the gateway
+    reports nothing in flight and the log has no unread bytes. A request can end immediately after
+    that check; the audit horizon catches it and reopens the window. The status reports
+    `openSettlements` rather than claiming every window is closed.
+19. **The accounting check is polled at 10 s** (plus its own duration, reported as
+    `maxDetectionMs`). A price edit inside that window can still be repriced by Magpie. This is
+    detection, not a price lock.
+20. **A pause may not fully stop a local caller.** Removing a key is 401 for a remote caller, but
+    Magpie serves a loopback caller with the same secret. If removal and rotation both fail, the
+    level is `capRestricted` (the key still answers 200) or `safetyUncertain`; the export is then
+    withdrawn and the failure is reported instead of being called a stop.
 
 ## References
 

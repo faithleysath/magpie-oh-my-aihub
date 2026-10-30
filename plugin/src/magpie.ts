@@ -172,6 +172,14 @@ export class Magpie {
     return next;
   }
 
+  /**
+   * Magpie's own key store, read as a list. Used by recovery to find a key this
+   * plugin named but no ledger account backs.
+   */
+  keyList(): KeyRecord[] {
+    return this.keys();
+  }
+
   /** All gateway keys, read from Magpie's own store (caller-keys.json). */
   keys(): KeyRecord[] {
     try {
@@ -362,6 +370,42 @@ export class Magpie {
   async setModels(id: string, models: string[]): Promise<void> {
     if (models.length === 0) throw new Error("refusing to set an empty model whitelist");
     await this.serial(() => runOk([this.bin, "gateway-key", "models", id, ...models], { timeoutMs: 30_000 }));
+  }
+
+  /**
+   * Replaces the key's secret, keeping the key, its usage and its limits
+   * (`gateway-key rotate`). The old secret is then refused by a remote caller,
+   * which is what makes this the fail-closed fallback when removal fails.
+   */
+  async rotateKey(id: string): Promise<string> {
+    const out = await this.serial(() => runOk([this.bin, "gateway-key", "rotate", id], { timeoutMs: 30_000 }));
+    const secret = out
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^sk-/.test(l))
+      .pop();
+    if (!secret) throw new Error("magpie gateway-key rotate printed no key");
+    registerSecret(secret);
+    return secret;
+  }
+
+  /**
+   * How many gateway requests are in flight right now, or null when the gateway
+   * cannot say. Loopback is enough for this read: a loopback caller is local.
+   * This is a hint for settlement, never a charge.
+   */
+  async inFlightRequests(timeoutMs = 5_000): Promise<number | null> {
+    try {
+      const res = await fetch(`${gatewayBaseURL()}/v1/magpie/concurrency`, {
+        headers: { "x-magpie-prices": "0" },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as { requests?: unknown };
+      return typeof body.requests === "number" && Number.isFinite(body.requests) ? body.requests : null;
+    } catch {
+      return null;
+    }
   }
 
   async setCostLimit(id: string, window: string, usd: number): Promise<void> {

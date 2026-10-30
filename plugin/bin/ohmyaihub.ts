@@ -17,6 +17,7 @@
 //   ... consumers reissue <id> [--accept-price-version <sha256>] [--accept-quote-hash <sha256>]
 //   ... topup <id> <usd> [--deposit-id <id>]
 //   ... revoke <id>
+//   ... accounting                the periodic accounting check's state
 //   ... checks
 
 import { readFileSync } from "node:fs";
@@ -303,6 +304,11 @@ switch (cmd) {
     }
     break;
   }
+  case "accounting": {
+    const r = await call("GET", "/accounting");
+    console.log(JSON.stringify(r.accounting, null, 2));
+    break;
+  }
   case "topup": {
     const [id, usd] = positional(1);
     const c = await call("POST", "/topup", {
@@ -397,7 +403,7 @@ switch (cmd) {
   default:
     console.error(
       "usage: status | providers | provider add|update|rm|reconcile | share on|off|models | consume on|off | " +
-        "configure | consumers [add|models|reissue] | topup | secret | revoke | guard | checks | start | stop",
+        "configure | consumers [add|models|reissue] | topup | accounting | secret | revoke | guard | checks | start | stop",
     );
     process.exit(2);
 }

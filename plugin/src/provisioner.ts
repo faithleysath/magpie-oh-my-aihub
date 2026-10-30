@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { stateDir, statePath } from "./paths.ts";
 import { logger, registerSecret } from "./log.ts";
 import type { Magpie, LimitStatus } from "./magpie.ts";
+import { readJsonWithBackup, writeJsonAtomic } from "./store.ts";
 import { Ledger, usageLogPath, type LedgerWindow } from "./ledger.ts";
 import {
   GRID_NANOS,
@@ -12,6 +13,17 @@ import {
   usdToNanos,
   type PriceSnapshot,
 } from "./pricing.ts";
+
+export type PauseReason =
+  | "price-mismatch"
+  | "window-rollover"
+  | "drift"
+  | "unpriced"
+  | "overdraft"
+  | "dust"
+  | "manual"
+  | "log-gap"
+  | "unsettled";
 
 export interface Deposit {
   id: string;
@@ -47,15 +59,42 @@ export interface ConsumerRecord {
    */
   paused: {
     at: string;
-    reason: "price-mismatch" | "window-rollover" | "drift" | "unpriced" | "overdraft" | "dust" | "manual";
+    reason:
+      | "price-mismatch"
+      | "window-rollover"
+      | "drift"
+      | "unpriced"
+      | "overdraft"
+      | "dust"
+      | "manual"
+      | "log-gap"
+      | "unsettled";
     detail: string;
     windowId: string | null;
+    /** true only when the recorded enforcement really stops a remote caller */
     enforced: boolean;
+    /**
+     * How far the stop actually went:
+     *  - keyRevoked    the key is gone; a remote call with its secret is 401
+     *  - secretRotated the key stayed (remove failed) but its secret changed;
+     *                  the old secret is 401 and was never handed out again
+     *  - capRestricted only the cap was lowered; the key still answers 200
+     *  - networkWithdrawn the overlay publication was withdrawn as well
+     *  - safetyUncertain none of the above could be proven
+     */
+    enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "networkWithdrawn" | "safetyUncertain";
+    /** why the strongest attempt failed, when enforcement is weaker than revoked */
+    enforcementError: string | null;
   } | null;
   /** the immutable price version this consumer's current window was issued at */
   priceVersion?: string | null;
   /** the signed catalogue quote the consumer accepted at issuance, if any */
   acceptedQuoteHash?: string | null;
+  /**
+   * Why this consumer's charges cannot be proven complete (a usage-log gap, an
+   * unreadable log). Null when every imported row was accounted for.
+   */
+  ledgerUncertain?: string | null;
   createdAt: string;
   revokedAt: string | null;
   lastCheck: {
@@ -102,6 +141,10 @@ export interface ConsumerView {
     overdraftUsd: number;
     unsettledUsd: number;
     unpricedCalls: number;
+    /** windows that can still be billed against, so not proven settled */
+    openSettlements: number;
+    /** a log gap or an unreadable log means charges may be missing */
+    uncertain: string | null;
   } | null;
   /** the key secret is never returned by the status view */
 }
@@ -141,12 +184,28 @@ export interface ProvisionerOptions {
   usageLog?: () => string;
   /** how long reissue() waits for in-flight usage rows to settle */
   drainMs?: number;
+  /** how long a closed window is still audited for late rows */
+  auditHorizonMs?: number;
 }
 
+/**
+ * Reads the consumer records. A document that exists but cannot be parsed is an
+ * error, never an empty list: "no consumers" would orphan every live Gateway Key
+ * and make the ledger look like the only record of money that was spent.
+ */
 export function loadConsumers(): ConsumerRecord[] {
   const file = statePath(FILE);
   if (!existsSync(file)) return [];
-  const parsed = JSON.parse(readFileSync(file, "utf8")) as ConsumersFile;
+  const read = readJsonWithBackup<ConsumersFile>(file);
+  if (read.value === null) {
+    throw new Error(
+      `consumers.json is unreadable (${read.error ?? "no valid document"}); refusing to start with an empty consumer list`,
+    );
+  }
+  const parsed = read.value;
+  if (read.from === "previous") {
+    logger.error(`consumers.json was unreadable; recovered the previous copy (${read.error ?? "unknown"})`);
+  }
   const list = Array.isArray(parsed.consumers) ? parsed.consumers : [];
   for (const c of list) {
     registerSecret(c.secret);
@@ -158,14 +217,10 @@ export function loadConsumers(): ConsumerRecord[] {
 }
 
 function saveConsumers(list: ConsumerRecord[]): void {
-  mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
-  const file = statePath(FILE);
-  writeFileSync(file, JSON.stringify({ consumers: list }, null, 1), { mode: 0o600 });
-  try {
-    chmodSync(file, 0o600);
-  } catch {
-    /* best effort on filesystems without modes */
-  }
+  // The same crash-safe writer the rest of the plugin uses: temp file, fsync,
+  // rename, directory fsync, and the replaced document kept as `.prev`. A
+  // truncated write can therefore never be read back as "no consumers".
+  writeJsonAtomic(statePath(FILE), { consumers: list }, 0o600);
 }
 
 function view(c: ConsumerRecord, status: LimitStatus | null, ledger?: Ledger): ConsumerView {
@@ -176,16 +231,17 @@ function view(c: ConsumerRecord, status: LimitStatus | null, ledger?: Ledger): C
     if (account) {
       const w = ledger.openWindowFor(c.consumerId);
       const balance = ledger.balance(c.consumerId);
-      let unsettled = 0;
+      let unsettledNanos = 0;
       let unpriced = 0;
       if (w) {
         for (const row of ledger.consumptionForWindow(w.id)) {
           if (!row.priceVerified) {
             unpriced += 1;
-            unsettled += row.amountNanos;
+            unsettledNanos += row.amountNanos;
           }
         }
       }
+      const unsettled = ledger.unsettledWindows(c.consumerId);
       ledgerView = {
         priceVersion: account.priceVersion,
         windowId: w?.id ?? account.windowId,
@@ -195,8 +251,10 @@ function view(c: ConsumerRecord, status: LimitStatus | null, ledger?: Ledger): C
         consumedUsd: nanosToUsd(balance.consumedNanos),
         balanceUsd: nanosToUsd(balance.balanceNanos),
         overdraftUsd: nanosToUsd(balance.overdraftNanos),
-        unsettledUsd: nanosToUsd(unsettled),
+        unsettledUsd: nanosToUsd(unsettledNanos),
         unpricedCalls: unpriced,
+        openSettlements: unsettled.length,
+        uncertain: c.ledgerUncertain ?? null,
       };
     }
   }
@@ -250,6 +308,12 @@ export class Provisioner {
   private prices: ((models: string[]) => Promise<PriceSnapshot | null>) | undefined;
   private usageLog: () => string;
   private drainMs: number;
+  /**
+   * How long a closed window is still audited for late rows. Magpie records a
+   * request's start time, so a long stream that started before the close can
+   * settle after it; the horizon bounds how long that is watched for.
+   */
+  private auditHorizonMs: number;
 
   constructor(private magpie: Magpie, opts: ProvisionerOptions = {}) {
     this.save = opts.save ?? saveConsumers;
@@ -258,6 +322,7 @@ export class Provisioner {
     this.prices = opts.prices;
     this.usageLog = opts.usageLog ?? usageLogPath;
     this.drainMs = opts.drainMs ?? 1500;
+    this.auditHorizonMs = opts.auditHorizonMs ?? 30 * 60_000;
     this.list = loadConsumers();
     // The ledger account is seeded lazily by status/top-up/ensure: a constructor
     // must not race a CLI read or a gateway that is not up yet. A key can
@@ -287,15 +352,15 @@ export class Provisioner {
     return this.list.map((c) => view(c, null, this.ledger));
   }
 
-  /** Magpie's effective prices, or null when any model has no whole price. */
+  /**
+   * Magpie's effective prices. A model with no complete price is a null
+   * snapshot; a price source that cannot be read at all is an error, because
+   * "unreadable" must not be confused with "free" (the caller turns it into a
+   * failed accounting check, which withdraws the export).
+   */
   private async snapshotFor(models: string[]): Promise<PriceSnapshot | null> {
     if (!this.prices) return null;
-    try {
-      return await this.prices(models);
-    } catch (e) {
-      logger.warn(`cannot read effective prices: ${String(e)}`);
-      return null;
-    }
+    return this.prices(models);
   }
 
   /** The window bounds a fresh limit of this spec gets (local calendar for day/week/month). */
@@ -340,8 +405,11 @@ export class Provisioner {
     } catch {
       status = null;
     }
+    // A price source that cannot be read must not seed a window: an "unpriced"
+    // window would make every later charge free. The accounting check turns
+    // this into a failed check instead.
     const snap =
-      (await this.snapshotFor(rec.models)) ?? {
+      (await this.snapshotFor(rec.models).catch(() => null)) ?? {
         version: "unpriced",
         body: JSON.stringify({ models: [...rec.models].sort(), prices: {} }),
         models: [...rec.models].sort(),
@@ -378,7 +446,7 @@ export class Provisioner {
     // count the same calls a second time.
     try {
       const size = existsSync(this.usageLog()) ? statSync(this.usageLog()).size : 0;
-      this.ledger.setUsageOffset(rec.keyId, size);
+      this.ledger.seedCursor(this.usageLog(), rec.keyId, size);
     } catch {
       /* an unreadable log leaves the offset at 0; the unique ids still guard */
     }
@@ -387,50 +455,91 @@ export class Provisioner {
     return window;
   }
 
-  /** Removes/freezes a key and records why; never claims enforcement it did not get. */
+  /**
+   * Stops a consumer and records exactly how far the stop went.
+   *
+   * Measured against Magpie 0.1.2038 (see the phase-6 review note):
+   *  - a removed key is 401 for a remote caller, but a *loopback* caller with
+   *    the same secret is still served (loopback is trusted), so removal is a
+   *    remote stop, not a local one;
+   *  - `gateway-key rotate` is also 401 for the old secret and keeps the usage,
+   *    which makes it the fallback when removal fails;
+   *  - a $0.0001 cap is NOT a stop: a 10/10-token call still returned 200 with
+   *    cost 6e-05 of 0.0001 left. It is only ever recorded as `capRestricted`,
+   *    never as enforced.
+   */
   private async pause(
     rec: ConsumerRecord,
-    reason: NonNullable<ConsumerRecord["paused"]>["reason"],
+    reason: PauseReason,
     detail: string,
     force = false,
   ): Promise<void> {
     if (rec.paused && !force) return;
-    let enforced = true;
+    let enforcement: NonNullable<ConsumerRecord["paused"]>["enforcement"] = "safetyUncertain";
+    let enforcementError: string | null = null;
+    let newSecret: string | null = null;
     if (rec.keyId && this.magpie.keyById(rec.keyId)) {
-      enforced = false;
+      // 1. Removing the key is the strong stop.
       try {
         await this.magpie.removeKey(rec.keyId);
-        enforced = !this.magpie.keyById(rec.keyId);
+        if (!this.magpie.keyById(rec.keyId)) enforcement = "keyRevoked";
       } catch (e) {
-        logger.warn(`could not remove paused key ${rec.keyName}: ${String(e)}`);
+        enforcementError = `remove: ${String((e as Error).message ?? e)}`;
+        logger.warn(`could not remove paused key ${rec.keyName}: ${enforcementError}`);
       }
-      if (!enforced) {
-        // Removing is the strong stop; if it failed, collapse the cap to the
-        // smallest enforceable value and read it back. A cap of 0 is unlimited,
-        // so never write that.
+      // 2. Rotating the secret stops every caller that holds the old one, and
+      //    keeps the usage record (unlike remove + add, which loses it).
+      if (enforcement !== "keyRevoked") {
         try {
-          await this.magpie.setCostLimit(rec.keyId, rec.window, 0.0001);
-          const st = await this.magpie.limitStatus(rec.secret);
-          enforced = Math.abs((st.limit?.costLimit ?? 0) - 0.0001) < 1e-9;
+          const rotated = await this.magpie.rotateKey(rec.keyId);
+          if (rotated && rotated !== rec.secret) {
+            newSecret = rotated;
+            enforcement = "secretRotated";
+            registerSecret(rotated);
+          }
         } catch (e) {
-          logger.error(`could not freeze paused key ${rec.keyName}: ${String(e)}`);
+          enforcementError = `${enforcementError ? `${enforcementError}; ` : ""}rotate: ${String((e as Error).message ?? e)}`;
+          logger.error(`could not rotate paused key ${rec.keyName}: ${String(e)}`);
         }
       }
+      // 3. A minimum cap is not a stop. Only record it as the weakest level.
+      if (enforcement === "safetyUncertain") {
+        try {
+          await this.magpie.setCostLimit(rec.keyId, rec.window, 0.0001);
+          const st = await this.magpie.limitStatus(newSecret ?? rec.secret);
+          if (Math.abs((st.limit?.costLimit ?? 0) - 0.0001) < 1e-9) {
+            enforcement = "capRestricted";
+            enforcementError = `${enforcementError ? `${enforcementError}; ` : ""}a $0.0001 cap still admits calls`;
+          }
+        } catch (e) {
+          enforcementError = `${enforcementError ? `${enforcementError}; ` : ""}cap: ${String((e as Error).message ?? e)}`;
+        }
+      }
+    } else {
+      enforcement = "keyRevoked";
     }
+    if (newSecret) rec.secret = newSecret;
     const window = this.ledger?.openWindowFor(rec.consumerId) ?? null;
     rec.paused = {
       at: new Date().toISOString(),
       reason,
       detail,
       windowId: window?.id ?? null,
-      enforced,
+      enforced: enforcement === "keyRevoked" || enforcement === "secretRotated",
+      enforcement,
+      enforcementError,
     };
     if (this.ledger) {
       this.ledger.setPaused(rec.consumerId, `${reason}: ${detail}`);
+      // The window is closed for new charges but stays unsettled until nothing
+      // can still bill against it; late rows are imported by settleWindows().
       if (window) this.ledger.closeWindow(window.id, `paused:${reason}`);
     }
     this.persist();
-    logger.warn(`paused ${rec.consumerId}: ${reason} (${detail}); enforced=${enforced}`);
+    logger.warn(
+      `paused ${rec.consumerId}: ${reason} (${detail}); enforcement=${enforcement}` +
+        (enforcementError ? ` (${enforcementError})` : ""),
+    );
   }
 
   /**
@@ -451,11 +560,16 @@ export class Provisioner {
       if (opts.pause) await this.pause(rec, "manual", "ledger account has no open window");
       return { window: null, status: null, reason: "no-window" };
     }
-    const imported = this.ledger.importUsage({
-      consumerId: rec.consumerId,
-      window,
-      logPath: this.usageLog(),
-    });
+    // Import every window that can still be billed against, not only the open
+    // one: a request that started before a rotation settles afterwards, and its
+    // row must be charged at that old window's frozen price. A log gap means
+    // charges may be missing, which is never treated as zero.
+    const settlement = await this.settleWindows(rec);
+    if (settlement.gap) {
+      rec.ledgerUncertain = settlement.gap;
+    } else {
+      rec.ledgerUncertain = null;
+    }
     if (!this.magpie.keyById(rec.keyId)) {
       if (opts.pause) await this.pause(rec, "manual", "the key was removed outside the plugin");
       return { window, status: null, reason: "missing-key" };
@@ -469,9 +583,15 @@ export class Provisioner {
       return { window, status: null, reason: "unreadable" };
     }
     const snap = await this.snapshotFor(rec.models);
-    let reason: string | null = null;
+    let reason: PauseReason | null = null;
     let detail = "";
-    if (!snap) {
+    if (settlement.gap) {
+      reason = "log-gap";
+      detail = settlement.gap;
+    } else if (settlement.unpriced > 0) {
+      reason = "unpriced";
+      detail = `${settlement.unpriced} settled call(s) had no price in the bound snapshot`;
+    } else if (!snap) {
       reason = "unpriced";
       detail = "at least one shared model has no complete effective price";
     } else if (snap.version !== window.priceVersion) {
@@ -483,9 +603,6 @@ export class Provisioner {
     } else if (status.limit?.start && Math.abs(Date.parse(status.limit.start) - Date.parse(window.startAt)) > 1000) {
       reason = "window-rollover";
       detail = `native window starts at ${status.limit.start}, ledger at ${window.startAt}`;
-    } else if (imported.unpriced > 0) {
-      reason = "unpriced";
-      detail = `${imported.unpriced} settled call(s) had no price in the bound snapshot`;
     } else {
       const native = usdToNanos(status.limit?.cost ?? 0);
       const recorded = this.ledger.windowConsumption(window.id);
@@ -495,8 +612,136 @@ export class Provisioner {
         detail = `native used ${nanosToUsd(native).toFixed(9)} USD, ledger ${nanosToUsd(recorded).toFixed(9)} USD`;
       }
     }
-    if (reason && opts.pause) await this.pause(rec, reason as NonNullable<ConsumerRecord["paused"]>["reason"], detail);
+    if (!reason && settlement.lateNanos > 0) {
+      // Late charges from an old window reduce the balance after the current
+      // key was issued. Tighten the live cap to the new balance, or pause when
+      // there is nothing left to grant.
+      const tightened = await this.tightenCap(rec, status);
+      if (tightened.reason) {
+        reason = tightened.reason;
+        detail = tightened.detail ?? "";
+      } else if (tightened.status) {
+        status = tightened.status;
+      }
+    }
+    if (reason && opts.pause) await this.pause(rec, reason, detail);
     return { window, status, reason };
+  }
+
+  /**
+   * Imports Magpie's own settled rows for every window of this consumer that is
+   * not proven settled. The open window and any closed/draining one are read
+   * with their own frozen price snapshot, so a late call is charged what it was
+   * quoted at, never today's price.
+   */
+  async settleWindows(rec: ConsumerRecord): Promise<{ lateNanos: number; gap: string | null; unpriced: number }> {
+    const ledger = this.ledger;
+    if (!ledger) return { lateNanos: 0, gap: null, unpriced: 0 };
+    let lateNanos = 0;
+    let gap: string | null = null;
+    let unpriced = 0;
+    const openId = ledger.openWindowFor(rec.consumerId)?.id ?? null;
+    // Unsettled windows and recently closed ones: a request can end between the
+    // settlement check and the next read, so a settled window is still audited
+    // for the audit horizon and reopened if a late row lands in it.
+    for (const window of ledger.windowsToScan(rec.consumerId, this.auditHorizonMs)) {
+      const before = ledger.windowConsumption(window.id);
+      const result = ledger.importUsage({
+        consumerId: rec.consumerId,
+        window,
+        logPath: this.usageLog(),
+      });
+      if (result.gap) gap = result.gap;
+      unpriced += result.unpriced;
+      if (window.id !== openId) {
+        const after = ledger.windowConsumption(window.id);
+        if (after > before) {
+          lateNanos += after - before;
+          if (window.settled) {
+            ledger.reopenWindow(window.id, `a late row of ${nanosToUsd(after - before)} USD arrived after settlement`);
+            logger.warn(`${rec.consumerId}: reopened ${window.id} for a late row`);
+          }
+        }
+        // The window can only be called settled when the gateway proves nothing
+        // is in flight and no unread bytes remain. Waiting a fixed time is not
+        // such a proof.
+        await this.trySettleWindow(window);
+      }
+    }
+    if (lateNanos > 0) {
+      logger.warn(`${rec.consumerId}: ${nanosToUsd(lateNanos)} USD settled against an older window`);
+    }
+    return { lateNanos, gap, unpriced };
+  }
+
+  /**
+   * Settles an older window only on evidence: the gateway reports no request in
+   * flight and its usage log has no unread bytes. Otherwise the window stays
+   * open for late rows and is reported as not settled.
+   */
+  private async trySettleWindow(window: LedgerWindow): Promise<boolean> {
+    const ledger = this.ledger;
+    if (!ledger) return false;
+    // Read the flag from the database, not the caller's copy: a window reopened
+    // for a late row in this same pass must be settled again on evidence.
+    if (ledger.windowSettlement(window.id).settled) return true;
+    const inFlight =
+      typeof this.magpie.inFlightRequests === "function"
+        ? await this.magpie.inFlightRequests().catch(() => null)
+        : null;
+    if (inFlight === null) {
+      ledger.event(window.consumerId, "settlement-unproven", { windowId: window.id, reason: "gateway would not say what is in flight" });
+      return false;
+    }
+    if (inFlight > 0) return false;
+    const path = this.usageLog();
+    const size = existsSync(path) ? statSync(path).size : 0;
+    if (ledger.cursorFor(path, window.keyId) < size) return false;
+    ledger.markWindowSettled(window.id, "no request in flight and no unread usage bytes");
+    return true;
+  }
+
+  /**
+   * Re-aligns the live key's cap with the ledger after a late charge. The cap is
+   * `native used + balance`, so it only ever moves down here; a balance below
+   * one grid unit pauses the consumer instead of issuing a cap it cannot hold.
+   */
+  private async tightenCap(
+    rec: ConsumerRecord,
+    status: LimitStatus,
+  ): Promise<{ status?: LimitStatus; reason?: PauseReason; detail?: string }> {
+    const ledger = this.ledger!;
+    const balance = ledger.balance(rec.consumerId);
+    const used = usdToNanos(status.limit?.cost ?? 0);
+    const target = floorGrid(used + balance.balanceNanos);
+    const current = usdToNanos(status.limit?.costLimit ?? 0);
+    if (balance.balanceNanos < 0) {
+      return {
+        reason: "overdraft",
+        detail: `late charges left an overdraft of ${nanosToUsd(balance.overdraftNanos).toFixed(4)} USD`,
+      };
+    }
+    if (target < GRID_NANOS) {
+      return {
+        reason: "dust",
+        detail: `late charges left ${nanosToUsd(balance.balanceNanos).toFixed(9)} USD, below the $0.0001 minimum`,
+      };
+    }
+    if (target >= current) return {};
+    try {
+      await this.magpie.setCostLimit(rec.keyId, rec.window, target / 1_000_000_000);
+      const after = await this.magpie.limitStatus(rec.secret);
+      if (Math.abs((after.limit?.costLimit ?? 0) - target / 1_000_000_000) > 1e-9) {
+        return { reason: "drift", detail: `could not tighten the cap to ${nanosToUsd(target)}` };
+      }
+      rec.capUsd = target / 1_000_000_000;
+      this.persist();
+      ledger.event(rec.consumerId, "cap-tightened", { capNanos: target, usedNanos: used });
+      logger.info(`tightened ${rec.consumerId} to ${rec.capUsd} after a late charge`);
+      return { status: after };
+    } catch (e) {
+      return { reason: "drift", detail: `could not tighten the cap after a late charge: ${String(e)}` };
+    }
   }
 
   /**
@@ -741,6 +986,25 @@ export class Provisioner {
     };
     this.persist();
     return status;
+  }
+
+  /**
+   * The accounting check for one consumer, serialized with every money
+   * operation on it. It imports settled usage from every unsettled window,
+   * compares the bound price/window/native cost with the ledger, and pauses the
+   * consumer when any of them cannot be proven.
+   */
+  async checkConsumer(consumerId: string): Promise<ConsumerView> {
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec || rec.revokedAt) throw new Error(`no active consumer ${consumerId}`);
+      await this.reconcile(rec);
+      if (this.ledger) {
+        const check = await this.ledgerCheck(rec);
+        return view(rec, check.status, this.ledger);
+      }
+      return view(rec, await this.verify(rec), this.ledger);
+    });
   }
 
   async status(consumerId: string): Promise<ConsumerView> {
@@ -1044,12 +1308,16 @@ export class Provisioner {
         return view(rec, status, this.ledger);
       } catch (e) {
         if (key) await this.magpie.removeKey(key.id).catch(() => {});
+        // The old key is already gone and no new key survived the failure, so
+        // nothing can be called; the failure itself is still reported.
         rec.paused = {
           at: new Date().toISOString(),
           reason: "manual",
           detail: `reissue failed: ${String(e)}`,
           windowId: oldWindow?.id ?? null,
-          enforced: true,
+          enforced: !rec.keyId || !this.magpie.keyById(rec.keyId),
+          enforcement: !rec.keyId || !this.magpie.keyById(rec.keyId) ? "keyRevoked" : "safetyUncertain",
+          enforcementError: String((e as Error).message ?? e),
         };
         ledger.setPaused(consumerId, `reissue failed: ${String(e)}`);
         this.persist();
@@ -1107,6 +1375,97 @@ export class Provisioner {
       }
       return view(rec, await this.verify(rec), this.ledger);
     });
+  }
+
+  /**
+   * Reconciles the three stores after a crash: Magpie's key list, the ledger and
+   * consumers.json. It never mints credit and never adopts a key it cannot bind
+   * to a ledger window.
+   *
+   *  - ledger account + open window, key present  → adopt the record (or finish
+   *    a reissue whose consumers.json write was lost);
+   *  - ledger window, key absent                  → pause (`manual`); the
+   *    balance stays in the ledger for a later reissue;
+   *  - Magpie key named like ours, no ledger      → remove it: an unbound key has
+   *    no balance behind it, so it must not serve;
+   *  - record with no ledger account              → seed from `cap - used`, as a
+   *    legacy migration does.
+   */
+  async recover(): Promise<{ recovered: string[]; removed: string[]; uncertain: string[] }> {
+    const ledger = this.ledger;
+    const recovered: string[] = [];
+    const removed: string[] = [];
+    const uncertain: string[] = [];
+    if (!ledger) return { recovered, removed, uncertain };
+    const known = new Set(this.list.map((c) => c.consumerId));
+    for (const account of ledger.accounts()) {
+      if (account.status === "revoked" || known.has(account.consumerId)) continue;
+      const window = ledger.openWindowFor(account.consumerId);
+      const held = window ? this.magpie.keyById(window.keyId) : undefined;
+      if (!window || !held) {
+        // Money is recorded but no key can serve it. Keep the ledger, report it.
+        uncertain.push(account.consumerId);
+        ledger.event(account.consumerId, "recovery-uncertain", { windowId: window?.id ?? null, keyId: window?.keyId ?? null });
+        logger.error(
+          `recovery: ledger has ${account.consumerId} but no usable key` +
+            (window ? ` (${window.keyId} is gone)` : " (no open window)") +
+            "; its balance is kept and it is not served",
+        );
+        continue;
+      }
+      // A committed window and a live key with no consumer record: the reissue
+      // finished in Magpie and SQLite, then the process died before the record.
+      this.list.push({
+        consumerId: account.consumerId,
+        keyName: account.keyName ?? window.keyName,
+        keyId: window.keyId,
+        secret: held.secret,
+        models: [...(held.models ?? [])].length ? [...(held.models ?? [])].map(String) : this.ledger!.windowModels(window),
+        window: window.windowSpec,
+        capUsd: window.capNanos / 1_000_000_000,
+        creditedUsd: 0,
+        deposits: [],
+        pending: null,
+        paused: null,
+        priceVersion: window.priceVersion,
+        acceptedQuoteHash: null,
+        createdAt: account.createdAt,
+        revokedAt: null,
+        lastCheck: null,
+      });
+      registerSecret(held.secret);
+      recovered.push(account.consumerId);
+      ledger.event(account.consumerId, "recovery-adopted", { windowId: window.id, keyId: window.keyId });
+      logger.warn(`recovery: adopted ${account.consumerId} from the ledger and key ${window.keyId}`);
+    }
+    // A key this plugin named but no ledger window backs: it has no balance, so
+    // it must not be usable. Only the exact naming scheme is touched.
+    for (const key of this.magpie.keyList()) {
+      const prefix = "ohmyaihub-";
+      if (!key.name?.startsWith(prefix)) continue;
+      const consumerId = key.name.slice(prefix.length);
+      if (known.has(consumerId) || ledger.account(consumerId)) continue;
+      try {
+        await this.magpie.removeKey(key.id);
+        removed.push(consumerId);
+        logger.error(`recovery: removed unbound key ${key.name} (${key.id}): no ledger account backs it`);
+      } catch (e) {
+        uncertain.push(consumerId);
+        logger.error(`recovery: could not remove unbound key ${key.name}: ${String(e)}`);
+      }
+    }
+    for (const rec of this.list) {
+      if (rec.revokedAt) continue;
+      if (!ledger.account(rec.consumerId)) {
+        await this.seedLedger(rec).catch((e) => {
+          uncertain.push(rec.consumerId);
+          logger.error(`recovery: could not seed ${rec.consumerId}: ${String(e)}`);
+        });
+        recovered.push(rec.consumerId);
+      }
+    }
+    this.persist();
+    return { recovered, removed, uncertain };
   }
 
   static keyName(consumerId: string): string {

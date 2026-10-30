@@ -102,6 +102,19 @@ Magpie data directory.
   `Limit.Window` arithmetic, but is not a wall-clock observation);
 - Magpie on Windows/Linux (this lab is macOS arm64 only).
 
+## Review-patch check (one consolidated run)
+
+`review-verification.ts` proves the three behaviours the review asked for against the real binary:
+an external price change paused with no status call, a remote call with the stopped key's secret
+being refused, a late in-flight row charged at the old window's frozen price, and reissue restoring
+service with the same secret. It calls the gateway the way a **remote** consumer does (a forwarding
+header), because Magpie trusts a loopback caller and would answer 200 with a removed key.
+
+```sh
+MAGPIE_DATA="$LAB/data" MAGPIE_BIN="$BIN" MAGPIE_ADDR=127.0.0.1:3446 \
+  bun docs/validation/lab/phase6/review-verification.ts reviewlab
+```
+
 ## Reproducible real-Magpie checks
 
 Both scripts use only the isolated data directory and revoke the consumer at the end. They never

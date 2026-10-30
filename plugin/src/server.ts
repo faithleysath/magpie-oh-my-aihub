@@ -95,6 +95,9 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
   if (req.method === "GET" && path === "/catalog/peers") {
     return json({ peers: svc.peersInDirectory() });
   }
+  if (req.method === "GET" && path === "/accounting") {
+    return json({ accounting: svc.accountingStatus() });
+  }
   if (req.method === "GET" && path === "/consumers") {
     const s = await svc.status();
     return json({ consumers: s.consumers });

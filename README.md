@@ -25,7 +25,12 @@ used cost at today's price, so the plugin now keeps the balance of record itself
 - top-up = `native used + ledger balance`, never `old cap + amount`; the deposit is credited only
   after Magpie's cap read-back;
 - a price-version mismatch, a native window boundary or native-vs-ledger drift **pauses** the key
-  (`gateway-key remove`) instead of pretending the old cap is still safe;
+  (`gateway-key remove`, falling back to `gateway-key rotate`) instead of pretending the old cap is
+  still safe, and records how far the stop really went;
+- the check runs on its own 10 s cadence, not only when the page is opened; a check that cannot
+  verify the books withdraws the overlay publication;
+- a row that settles after a rotation is charged at the old window's frozen price and tightens the
+  live key; consumption identity is the usage-log line position, not a content hash;
 - `consumers reissue` creates a new key with `cap = ledger balance`, preserving a plugin-owned
   secret, and requires an explicit `acceptPriceVersion` after a price change;
 - quotes carry `billing.priceVersion` and `priceLocked: false`, so a signed quote is a record of
@@ -33,6 +38,9 @@ used cost at today's price, so the plugin now keeps the balance of record itself
 
 The measured price/window behaviour, the three candidate strategies and the exact GO/NO-GO are in
 [`docs/validation/2026-10-30-phase6-pricing-window.md`](docs/validation/2026-10-30-phase6-pricing-window.md).
+The accounting-safety review patch (periodic check, late-row settlement, log-position identity,
+enforcement levels, crash recovery) is in
+[`docs/validation/2026-10-30-phase6-review-fixes.md`](docs/validation/2026-10-30-phase6-review-fixes.md).
 **GO for testnet accounting development; NO-GO for real USDC until the native price-lock blocker is
 solved.**
 

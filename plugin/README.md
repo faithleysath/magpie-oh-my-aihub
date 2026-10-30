@@ -200,6 +200,17 @@ What the plugin enforces on every key (the architecture's non-negotiables):
   balance of record; a top-up is `native used + ledger balance`, never `old cap + amount`; a price
   mismatch, window boundary or native/ledger drift pauses the key and `consumers reissue` carries
   only the ledger balance (same secret for a plugin-owned key);
+- the accounting check runs every 10 s by itself (`bun bin/ohmyaihub.ts accounting`), so an external
+  price edit or a window boundary is acted on without anyone opening the page. It is a poll, not a
+  price lock; a check that cannot verify the books withdraws the overlay publication;
+- a pause records the level it really reached (`keyRevoked`, `secretRotated`, `capRestricted`,
+  `networkWithdrawn`, `safetyUncertain`); only the first two are called enforced. A `$0.0001` cap is
+  not a stop — measured, it still admits calls;
+- usage identity is the `usage.jsonl` line position, so two identical calls are two charges and a
+  re-read is none. A truncated or replaced log is a `log-gap`: the consumer is paused and the export
+  stays down;
+- a row that settles after a rotation is charged at that window's frozen price, reopens a window that
+  had been called settled, and tightens the live key's cap or pauses it;
 - a key whose whitelist or cap cannot be applied is **deleted**, never handed over,
 - a hand-over runs the share guard first, then re-reads the key from Magpie: a key revoked during
   the check is never delivered, an empty (all-models) whitelist is repaired first, and the returned
