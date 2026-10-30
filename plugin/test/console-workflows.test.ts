@@ -8,8 +8,10 @@ import { Service } from "../src/service.ts";
 import { FakeMagpie, LAB_MODEL, LAB_PRICE } from "./support/fake-magpie.ts";
 import { consoleAction, CONSOLE_ACTIONS } from "../src/console-api.ts";
 import { ConsoleInputError } from "../src/console-server.ts";
+import { saveCatalogTrust, fingerprintOf, keyIdOf } from "../src/catalog.ts";
 
-const FP = "a".repeat(64), HASH = "b".repeat(64), NODE = "d".repeat(16);
+const PUBLIC_KEY = Buffer.alloc(32, 7).toString("base64");
+const FP = fingerprintOf(PUBLIC_KEY), HASH = "b".repeat(64), NODE = "d".repeat(16);
 const price = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
 const models = [{id:LAB_MODEL,pricing:price},{id:"lab/other",pricing:price}];
 function context() { return {provider:{nodeId:NODE,mappedCidr:"10.66.1.2/32",gatewayPort:3425},quote:{contentHash:HASH,identity:{fingerprint:FP},models:structuredClone(models)}}; }
@@ -71,6 +73,8 @@ describe("local request journal",()=>{
 
 describe("authorization handover and import",()=>{
   function fixture() {
+    process.chdir(mkdtempSync("/tmp/console-auth-trust-"));
+    saveCatalogTrust({ [NODE]: {nodeId:NODE,accepted:true,fingerprint:FP,publicKey:PUBLIC_KEY,keyId:keyIdOf(PUBLIC_KEY),overlayHostname:`ohmyaihub-${NODE}`,firstSeenAt:new Date().toISOString(),lastSeenAt:new Date().toISOString(),quoteVersion:1,quoteHash:HASH,pending:null} });
     let current=context();let consumer={acceptedQuoteHash:HASH,priceVersion:catalogPriceVersion([models[0]!])};let connects=0;
     const svc={requestApprovalContext:()=>current,config:()=>({nodeId:"alice"}),handover:async()=>({consumerId:"alice",models:[LAB_MODEL],capUsd:1,key:"fixture-authorization-secret"}),provisioner:{find:()=>consumer},peersInDirectory:()=>[directoryPeer()],catalogConnect:async()=>{connects++;return {id:"peer-one"};}} as unknown as Service;
     return {svc,setCurrent(v:any){current=v},setConsumer(v:any){consumer=v},get connects(){return connects}};

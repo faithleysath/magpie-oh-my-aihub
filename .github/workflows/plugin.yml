@@ -38,7 +38,7 @@ jobs:
       - name: TypeScript
         run: bun run typecheck
       - name: Unit tests
-        run: bun test
+        run: bun run test
       - name: Plugin entry boots (stub Magpie, isolated HOME)
         run: bun run boot-check
       - name: No credentials in the tree
@@ -59,6 +59,8 @@ jobs:
       - name: TypeScript
         run: bun run typecheck
       - name: Unit tests
-        run: bun test
+        run: bun run test
       - name: Plugin entry boots (stub Magpie, isolated HOME)
         run: bun run boot-check
+      - name: No credentials in the tree
+        run: bun run secret-scan

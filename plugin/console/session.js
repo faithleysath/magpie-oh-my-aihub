@@ -151,7 +151,7 @@ export function createSessionClient({ fetch: fetcher = globalThis.fetch.bind(glo
     state: (signal) => request("/ui/api/state", { signal }),
     async action(name, input = {}, { signal, key = crypto.randomUUID() } = {}) {
       if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new ConsoleError("无法识别的操作。", 400);
-      const response = await request(`/ui/api/action/${name}`, { method: "POST", body: input, signal, action: true, key, requestTimeoutMs: name === "configure" ? configureTimeoutMs : timeoutMs });
+      const response = await request(`/ui/api/action/${name}`, { method: "POST", body: input, signal, action: true, key, requestTimeoutMs: ["configure", "wallet-refresh", "wallet-scan", "wallet-asset-register", "wallet-stop", "wallet-network", "accounting-refresh"].includes(name) ? configureTimeoutMs : timeoutMs });
       return response.result;
     },
     async logout() {

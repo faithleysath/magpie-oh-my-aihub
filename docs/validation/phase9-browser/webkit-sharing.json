@@ -1,0 +1,30 @@
+{
+  "at": "2026-10-30T11:40:16.390Z",
+  "engine": "WebKit",
+  "version": "27.2",
+  "steps": [
+    {
+      "name": "second provider installed from GitHub and paired through Magpie UI",
+      "ok": true
+    },
+    {
+      "name": "provider uses UI for network, native model selection, signed catalog publication",
+      "ok": true
+    },
+    {
+      "name": "consumer compares full fingerprint with provider UI and exports bound request",
+      "ok": true
+    },
+    {
+      "name": "provider manually approves positive scoped cap and privately exports authorization",
+      "ok": true
+    },
+    {
+      "name": "consumer imports authorization and retains two independent native Remote Magpies",
+      "ok": true
+    }
+  ],
+  "pass": true,
+  "cliBusinessOperations": false,
+  "manualAdminHttp": false
+}

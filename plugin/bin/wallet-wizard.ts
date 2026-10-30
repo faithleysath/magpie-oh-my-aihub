@@ -24,6 +24,7 @@
 //    applied to the key AND was read back from Magpie.
 
 import { readFileSync } from "node:fs";
+import { decodeSignatureText } from "../src/wallet-workflows.ts";
 import type { WalletStatus } from "../src/wallet.ts";
 import type { WalletViewInput } from "../src/walletview.ts";
 import { accountingLine, journeyLines, walletView } from "../src/walletview.ts";
@@ -102,18 +103,7 @@ function usdLine(raw: string, decimals: number, nanosPerToken: string): string {
 }
 
 function signatureFromFile(path: string): { signature: string; payerAddress: string | null } {
-  const raw = readFileSync(path, "utf8").slice(0, 8192).trim();
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const signature = typeof parsed.signature === "string" ? parsed.signature : null;
-    if (signature) {
-      const payer = typeof parsed.payerAddress === "string" ? parsed.payerAddress : typeof parsed.payer === "string" ? parsed.payer : null;
-      return { signature, payerAddress: payer };
-    }
-  } catch {
-    // Not JSON: treat the file as the bare signature.
-  }
-  return { signature: raw, payerAddress: null };
+  return decodeSignatureText(readFileSync(path, "utf8"));
 }
 
 function validSignature(value: string): boolean {

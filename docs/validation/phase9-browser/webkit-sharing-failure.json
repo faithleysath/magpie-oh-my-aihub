@@ -1,0 +1,11 @@
+{
+  "at": "2026-10-30T11:38:29.367Z",
+  "steps": [
+    {
+      "name": "second provider installed from GitHub and paired through Magpie UI",
+      "ok": true
+    }
+  ],
+  "pass": false,
+  "error": "TimeoutError: waitFor: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('#sharing-panel input[data-model-id]') to be visible\n"
+}

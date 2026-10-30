@@ -215,6 +215,8 @@ export class Wallet {
   private lastHealth = new Map<number, ChainHealth>();
   private scanTimers = new Map<number, ReturnType<typeof setInterval>>();
   private inFlight = new Set<number>();
+  private scanPromises = new Map<number, Promise<ScanResult>>();
+  private started = false;
 
   constructor(deps: WalletDeps) {
     this.registry = deps.registry ?? loadRegistry(deps.registryPath);
@@ -247,14 +249,16 @@ export class Wallet {
   setNetworkEnabled(chainId: number, enabled: boolean): NetworkRecord {
     const net = this.registry.setNetworkEnabled(chainId, enabled);
     if (!enabled) this.stopChain(chainId);
+    else if (this.started) this.startChain(chainId);
     return net;
   }
 
   setRpcEndpoints(chainId: number, endpoints: string[]): NetworkRecord {
+    const restart = this.started && this.running.has(chainId);
     const net = this.registry.setRpcEndpoints(chainId, endpoints);
-    // The running watcher holds its own client with the old list.
+    // Remember running intent before stopping the sole active chain.
     this.stopChain(chainId);
-    if (net.enabled && this.running.size > 0) {
+    if (net.enabled && restart) {
       try {
         this.startChain(chainId);
       } catch (e) {
@@ -468,6 +472,7 @@ export class Wallet {
 
   /** Starts every enabled chain's watcher, each on its own timer. */
   start(): void {
+    this.started = true;
     for (const net of this.registry.enabledNetworks()) {
       this.startChain(net.chainId);
     }
@@ -487,12 +492,8 @@ export class Wallet {
     this.watchers.set(chainId, watcher);
     const tick = () => {
       if (this.inFlight.has(chainId)) return;
-      this.inFlight.add(chainId);
-      watcher
-        .scan()
-        .then((r) => this.lastScan.set(chainId, r))
-        .catch((e) => logger.warn(`chain ${chainId} scan failed: ${String(e)}`))
-        .finally(() => this.inFlight.delete(chainId));
+      void this.runScan(chainId, watcher)
+        .catch((e) => logger.warn(`chain ${chainId} scan failed: ${String(e)}`));
     };
     const timer = setInterval(tick, Math.max(2, net.scanIntervalSec) * 1000);
     timer.unref?.();
@@ -510,7 +511,27 @@ export class Wallet {
   }
 
   stop(): void {
+    this.started = false;
     for (const id of [...this.running.keys()]) this.stopChain(id);
+  }
+
+  /** Explicit stop/disable can await already admitted scans, which are not cancellable. */
+  async settleScans(): Promise<void> {
+    await Promise.allSettled([...this.scanPromises.values()]);
+  }
+
+  scanningChains(): number[] { return [...this.inFlight]; }
+
+  private runScan(chainId: number, watcher: ChainWatcher): Promise<ScanResult> {
+    const existing = this.scanPromises.get(chainId);
+    if (existing) return existing;
+    this.inFlight.add(chainId);
+    const promise = Promise.resolve().then(() => watcher.scan()).then(result => {
+      this.lastScan.set(chainId, result);
+      return result;
+    }).finally(() => { this.inFlight.delete(chainId); this.scanPromises.delete(chainId); });
+    this.scanPromises.set(chainId, promise);
+    return promise;
   }
 
   runningChains(): number[] {
@@ -527,9 +548,7 @@ export class Wallet {
       initialLookback: this.initialLookback,
       now: this.now,
     });
-    const result = await watcher.scan();
-    this.lastScan.set(chainId, result);
-    return result;
+    return this.runScan(chainId, watcher);
   }
 
   lastScanResult(chainId: number): ScanResult | null {
@@ -540,6 +559,7 @@ export class Wallet {
   async health(): Promise<ChainHealth[]> {
     const out: ChainHealth[] = [];
     for (const net of this.registry.networks()) {
+      if (!net.enabled) { out.push(this.localHealth(net)); continue; }
       const watcher = this.watchers.get(net.chainId) ?? this.makeWatcher({
         network: net,
         registry: this.registry,

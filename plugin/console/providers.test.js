@@ -252,6 +252,24 @@ describe("real mounted workflow handlers", () => {
     } finally { r.cleanup(); }
   });
 
+  test("active legacy and changed-quote authorizations offer explicit backend-derived reissue without autoacceptance", async () => {
+    for (const acceptedQuoteHash of [null, "e".repeat(64)]) {
+      const state = baseState(); state.status.consumers = [{ consumerId: "friend", models: [model.id], acceptedQuoteHash, priceVersion: "old-version", paused: null }];
+      const currentPriceVersion = "c".repeat(64);
+      const r = runtime(state, async () => ({ consumer: state.status.consumers[0], currentPriceVersion, currentQuoteHash: quoteHash }));
+      try {
+        await find(r.roots["sharing-panel"], "button", "检查授权").click(); await flush();
+        expect(r.dialog.open).toBeTrue(); expect(r.dialog.textContent).toContain("尚未绑定当前目录报价");
+        expect(r.calls).toEqual([{ name: "consumer-check", input: { consumerId: "friend" } }]);
+        const submit = find(r.dialog, "button", "接受并重新签发"); expect(submit.disabled).toBeTrue();
+        await submit.click(); await flush(); expect(r.calls).toHaveLength(1);
+        const agree = all(r.dialog, "input")[0]; agree.checked = true; await agree.emit("change");
+        await submit.click(); await flush();
+        expect(r.calls[1]).toEqual({ name: "consumer-reissue", input: { consumerId: "friend", acceptPriceVersion: currentPriceVersion, acceptQuoteHash: quoteHash } });
+      } finally { r.cleanup(); }
+    }
+  });
+
   test("authorization file import previews before a second explicit confirmation creates the connection", async () => {
     const authorization = { schema: "ohmyaihub.authorization/v1", provider: { nodeId: peer.nodeId, hostname: peer.hostname }, consumer: { nodeId: "local-consumer" }, models: [model.id], quote: { identityFingerprint: fingerprint, contentHash: quoteHash }, key: "fixture-delivered-key", capUsd: 1 };
     const r = runtime(baseState(), async (name) => name === "connection-preview" ? { document: { ...authorization, key: undefined } } : {});

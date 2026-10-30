@@ -513,10 +513,9 @@ export class Service {
   /**
    * The wallet module, or null when this node runs none.
    *
-   * A node with no enabled network must not open an RPC connection or write a
-   * second SQLite file, so the module is built on first use and only when a
-   * network is enabled. `deps.wallet` is the test seam; `deps.walletFactory`
-   * lets the host decide the paths.
+   * Construction opens local registry/SQLite stores only; disabled networks
+   * remain administrable without RPC. Passive console reads never construct
+   * this module. `deps.wallet` is the test seam; `deps.walletFactory` supplies paths.
    */
   walletModule(): Wallet | null {
     if (this.walletInstance !== undefined) return this.walletInstance;
@@ -530,21 +529,28 @@ export class Service {
         this.walletInstance = built;
         return built;
       }
-      // No factory (a test or a minimal host): build one over the plugin state
-      // directory only when a network is enabled, so a disabled node stays idle.
+      // Construction opens local stores only. Keep disabled registries available
+      // for configuration: closing and caching null made re-enable impossible.
       const probe = new Wallet({ credit: this.chainCreditSink(), registry: undefined });
-      if (probe.registryView().enabledNetworks().length === 0) {
-        probe.close();
-        this.walletInstance = null;
-        return null;
-      }
       this.walletInstance = probe;
       return probe;
     } catch (e) {
       logger.warn(`the chain wallet is unavailable: ${String(e)}`);
-      this.walletInstance = null;
+      // An unreadable registry is unavailable, never an empty replacement. An
+      // explicit later operation may retry after the operator repairs it.
+      this.walletInstance = undefined;
       return null;
     }
+  }
+
+  /** Local console reads never initialize a wallet or start RPC work. */
+  consoleWalletModule(): Wallet | null {
+    return this.walletInstance === undefined ? (this.deps.wallet ?? null) : this.walletInstance;
+  }
+
+  /** Explicit administration may open disabled stores, without starting watchers. */
+  walletForConfiguration(): Wallet {
+    return this.requireWallet();
   }
 
   /**
@@ -1743,7 +1749,7 @@ export class Service {
       mappedCidr: peer.mappedCidr,
       key,
       providerPort: peer.quote.node.gatewayPort,
-    }, { update: false, beforeRegister: revalidate });
+    }, { update: false, beforeRegister: revalidate, expectedModels: opts.models });
     });
   }
 
@@ -1947,8 +1953,10 @@ export class Service {
             ? "conflict"
             : entry.route === "self"
               ? "self"
-              : connected
-                ? "connected"
+              : earlier?.status === "identity-changed" || earlier?.status === "stale" || earlier?.status === "unverified"
+                ? earlier.status
+                : connected && earlier?.identity && catalogIdentityAccepted(earlier.nodeId, earlier.identity.fingerprint)
+                  ? "connected"
                 : entry.mappedCidr
                   ? "unreachable"
                   : "no-catalog",
@@ -2070,7 +2078,10 @@ export class Service {
     }
     return {
       ...base,
-      status: base.connectedProviderId ? "connected" : "unreachable",
+      // A failed refresh cannot erase a pending identity or replay warning.
+      status: ["identity-changed", "stale", "unverified"].includes(base.status)
+        ? base.status
+        : base.connectedProviderId && base.identity && catalogIdentityAccepted(base.nodeId, base.identity.fingerprint) ? "connected" : "unreachable",
       detail: lastDetail.slice(0, 300),
       catalogPort: base.catalogPort ?? null,
       fetchedAt: now,
@@ -2170,7 +2181,7 @@ export class Service {
     }
     if (rec.pending && status !== "identity-changed") status = "identity-changed";
     rec.lastSeenAt = now;
-    if (base.connectedProviderId && status !== "identity-changed") status = "connected";
+    if (base.connectedProviderId && status === "verified" && rec.accepted) status = "connected";
     return {
       ...base,
       nodeId,
@@ -2224,7 +2235,7 @@ export class Service {
     });
   }
 
-  private async connectProvider(input: ProviderInput, opts: { update: boolean; beforeRegister?: () => void }): Promise<ProviderView> {
+  private async connectProvider(input: ProviderInput, opts: { update: boolean; beforeRegister?: () => void; expectedModels?: string[] }): Promise<ProviderView> {
     const cfg = this.state.config;
     if (!cfg) throw new Error("configure this node as a provider or consumer first");
     if (!cfg.consumingEnabled) {
@@ -2333,6 +2344,17 @@ export class Service {
         throw new Error(`127.0.0.1:${localPort} did not refuse a wrong key; refusing to trust this endpoint`);
       }
 
+      // Authorization files promise an exact model scope. Read it with the
+      // delivered key before registering anything in native Magpie.
+      const remoteModels = await this.probes.remoteModelIds(localPort, input.key, 15_000);
+      if (!remoteModels || remoteModels.length === 0) {
+        if (opts.expectedModels) throw new RequestValidationError("the provider served no model for the authorization key; ask for a matching authorization");
+        throw new Error("the provider served no model for that key; is the key allowed a model?");
+      }
+      if (opts.expectedModels && !sameSet(remoteModels, opts.expectedModels)) {
+        throw new RequestValidationError("the key's actual model scope differs from the authorization file; ask the provider for a matching authorization");
+      }
+
       // 2. the provider. An entry this plugin owns is replaced; a missing one is
       //    added; anything else was refused above. Re-registering an identical
       //    binding is a no-op.
@@ -2348,11 +2370,7 @@ export class Service {
         registered = "replaced";
       }
 
-      // 3. the consumer must actually see the remote's models through its key
-      const remoteModels = await this.probes.remoteModelIds(localPort, input.key, 15_000);
-      if (!remoteModels || remoteModels.length === 0) {
-        throw new Error(`the provider served no model for that key; is the key allowed a model?`);
-      }
+      // 3. the consumer must see the validated remote through native Magpie.
       if (!(await this.waitLocalModels(input.id, 15_000))) {
         throw new Error(`magpie did not list any ${input.id}/ model within 15s`);
       }
@@ -2408,6 +2426,7 @@ export class Service {
       if (addedForward && !this.state.providers.some((p) => p.localPort === localPort)) {
         await this.recordOrphanForward(localPort, dst);
       }
+      if (e instanceof RequestValidationError) throw e;
       throw new Error(
         `connect failed: ${(e as Error).message}` +
           (this.state.providers.some((p) => p.id !== input.id) ? " (the other providers were kept)" : ""),
@@ -3619,6 +3638,13 @@ function catalogModel(meta: CatalogModelMeta): CatalogModel | null {
   };
 }
 
+/** Connectivity is never evidence of explicit acceptance of a catalogue key. */
+export function catalogIdentityAccepted(nodeId: string | null, fingerprint: string): boolean {
+  if (!nodeId) return false;
+  const trust = loadCatalogTrust()[nodeId];
+  return Boolean(trust?.accepted && !trust.pending && trust.fingerprint === fingerprint);
+}
+
 /**
  * A request/connect is only allowed for an identity the operator accepted and a
  * quote they actually reviewed. Without this, a quote could change between the
@@ -3637,7 +3663,7 @@ function assertCatalogAcceptance(
   if (!/^[0-9a-f]{64}$/.test(acceptance.fingerprint)) throw new Error("the accepted fingerprint must be 64 lowercase hex characters");
   if (!/^[0-9a-f]{64}$/.test(acceptance.quoteHash)) throw new Error("the accepted quote hash must be 64 lowercase hex characters");
   if (!peer.identity) throw new Error(`no catalogue identity from ${peer.hostname} yet`);
-  if (peer.status === "unverified") {
+  if (peer.status === "unverified" || !catalogIdentityAccepted(peer.nodeId, peer.identity.fingerprint)) {
     throw new Error(
       `${peer.hostname} is first-seen and self-signed (TOFU). Run \`catalog trust <node-id> --fingerprint ` +
         `${peer.identity.fingerprint}\` before requesting or connecting`,

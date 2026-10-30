@@ -625,8 +625,10 @@ export class Ledger {
     return rows.map(mapDeposit);
   }
 
-  depositsFor(consumerId: string): LedgerDeposit[] {
-    const rows = this.db.query("SELECT * FROM deposits WHERE consumer_id=? ORDER BY created_at").all(consumerId) as DepositRow[];
+  depositsFor(consumerId: string, limit?: number): LedgerDeposit[] {
+    const rows = limit === undefined
+      ? this.db.query("SELECT * FROM deposits WHERE consumer_id=? ORDER BY created_at").all(consumerId) as DepositRow[]
+      : this.db.query("SELECT * FROM deposits WHERE consumer_id=? ORDER BY created_at DESC LIMIT ?").all(consumerId, Math.max(1, Math.min(1000, Math.trunc(limit)))) as DepositRow[];
     return rows.map(mapDeposit);
   }
 

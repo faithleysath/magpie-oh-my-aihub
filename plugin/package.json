@@ -5,11 +5,11 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "test": "bun test",
+    "test": "bun test ./test ./console ../docs/validation/lab/phase9/wallet-fixture",
     "typecheck": "tsc --noEmit",
     "boot-check": "bun run scripts/boot-check.ts",
     "secret-scan": "bun run scripts/secret-scan.ts",
-    "ci": "bun run typecheck && bun test && bun run boot-check && bun run secret-scan"
+    "ci": "bun run typecheck && bun run test && bun run boot-check && bun run secret-scan"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",

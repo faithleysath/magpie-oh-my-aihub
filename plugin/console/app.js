@@ -1,5 +1,6 @@
 import { ConsoleError, consumeTicketFragment, createSessionClient, pollState, waitForPairing } from "./session.js";
 import { mountProviders, checkLabel } from "./providers.js";
+import { mountWallet } from "./wallet.js";
 
 // Remove the one-use credential before any asynchronous work or page rendering.
 let ticket = consumeTicketFragment(window.location, window.history);
@@ -56,6 +57,7 @@ function sessionEnded(title = "会话已结束", detail = "请回到 Magpie 的 
   poller?.stop();
   stopPairing();
   providers.clearSecrets();
+  wallet.clearSecrets();
   client.reset();
   initialized = false;
   lastUpdate = null;
@@ -73,10 +75,11 @@ function sessionEnded(title = "会话已结束", detail = "请回到 Magpie 的 
   setText("session-title", title);
   setText("session-detail", detail);
   connection("未连接", "neutral");
-  for (const name of ["overview", "settings", "discovery", "sharing", "connections"]) $("nav-" + name).disabled = true;
+  for (const name of ["overview", "settings", "discovery", "sharing", "connections", "wallet", "accounting"]) $("nav-" + name).disabled = true;
 }
 const client = createSessionClient({ onExpired: () => sessionEnded() });
 const providers = mountProviders({ client, getState: () => consoleState, onState: renderState, notice, setBusy, refreshState: () => poller?.refresh() });
+const wallet = mountWallet({ client, getState: () => consoleState, onState: renderState, notice, setBusy, refreshState: () => poller?.refresh() });
 
 function setBusy(value) {
   busy = value;
@@ -88,9 +91,9 @@ function setBusy(value) {
 function navigate(target) {
   if (!authenticated) return;
   editing = target === "settings";
-  const labels = { overview: "总览", discovery: "发现模型", sharing: "我的共享", connections: "我的连接", settings: firstRun ? "开始设置" : "网络与设置" };
+  const labels = { overview: "总览", discovery: "发现模型", sharing: "我的共享", connections: "我的连接", wallet: "测试网钱包", accounting: "用量与账单", settings: firstRun ? "开始设置" : "网络与设置" };
   show("overview", target === "overview");
-  for (const name of ["settings", "discovery", "sharing", "connections"]) show(name + "-panel", name === target);
+  for (const name of ["settings", "discovery", "sharing", "connections", "wallet", "accounting"]) show(name + "-panel", name === target);
   setText("breadcrumb", labels[target]);
   for (const name of Object.keys(labels)) {
     const active = name === target;
@@ -218,8 +221,9 @@ function renderState(value) {
   show("private-content", true);
   show("logout", true);
   $("nav-settings").disabled = false;
-  for (const name of ["overview", "discovery", "sharing", "connections"]) $("nav-" + name).disabled = !value.configured;
+  for (const name of ["overview", "discovery", "sharing", "connections", "wallet", "accounting"]) $("nav-" + name).disabled = !value.configured;
   providers.render(value);
+  wallet.render(value);
   connection("本机已连接", "good");
   updated();
   if (!busy) notice();
@@ -392,7 +396,7 @@ $("accept-incoming").addEventListener("change", () => {
 $("wizard-next").addEventListener("click", () => { if (!busy) { step = Math.min(2, step + 1); renderWizard(); } });
 $("wizard-back").addEventListener("click", () => { if (!busy) { step = Math.max(0, step - 1); renderWizard(); } });
 $("wizard-done").addEventListener("click", () => { firstRun = false; navigate("overview"); });
-for (const name of ["overview", "discovery", "sharing", "connections"]) $("nav-" + name).addEventListener("click", () => navigate(name));
+for (const name of ["overview", "discovery", "sharing", "connections", "wallet", "accounting"]) $("nav-" + name).addEventListener("click", () => navigate(name));
 for (const id of ["nav-settings", "edit-network"]) $(id).addEventListener("click", () => navigate("settings"));
 for (const id of ["run-checks", "wizard-run-checks"]) $(id).addEventListener("click", checks);
 $("refresh").addEventListener("click", () => { if (!busy) poller?.refresh(); });
@@ -457,6 +461,6 @@ $("theme").addEventListener("click", () => {
   document.documentElement.dataset.theme = dark ? "light" : "dark";
   $("theme").setAttribute("aria-label", dark ? "切换深色模式" : "切换浅色模式");
 });
-window.addEventListener("pagehide", () => { poller?.stop(); stopPairing(); providers.clearSecrets(); client.dispose(); });
+window.addEventListener("pagehide", () => { poller?.stop(); stopPairing(); providers.clearSecrets(); wallet.clearSecrets(); client.dispose(); });
 window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
 void connect();

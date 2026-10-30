@@ -1,4 +1,48 @@
-# Architecture decision record — updated 2026-10-30 (phase 7; phase 8 onboarding note)
+# Architecture decision record — updated 2026-10-30 (Phase 9 Web Console)
+
+## Phase 9 authoritative interface decisions
+
+**以下决策优先于本文历史章节中“普通用户必须使用 CLI”“插件页是完整只读产品界面”及“钱包只能 CLI/API 操作”的描述。** 历史实验、财务约束、原生写入路径与价格测量不因此失效。普通用户使用中文[首次使用](ONBOARDING.md)和[日常操作](OPERATIONS.md)；维护者 CLI 保留在[高级参考](ADVANCED-CLI.md)。
+
+### Decision 34 — Magpie native launcher and independent browser console
+
+用户从 Magpie **Plugins → Discover**底部手动添加 `github:faithleysath/magpie-oh-my-aihub`；发现搜索为空不表示无法安装。常规地址用于合并后的版本，分支后缀只用于开发验证。Magpie 管理 Bun、安装位置和数据目录，普通流程不要求 PATH、终端或源码。原生 Oh My AIHub 页是受官方 CSP 约束的入口与低权限快照，真正业务界面由独立 `127.0.0.1` HTTP 服务提供。不会放宽原生页 CSP、创建假 Provider、Electron、Quick Tunnel 或额外 AI 代理。
+
+原生“打开控制台”通过官方 options 桥提交短期 nonce；唯一 owner 先绑定控制台，再消费请求并使用固定程序/argv 请求系统浏览器打开一次性 URL。默认第一次经确认的本机桌面启动可打开一次，可退出该偏好；SSH、无桌面、CLI 与测试导入不循环打开。成功启动 opener 不代表页面可见或已经登录。
+
+### Decision 35 — Short-lived browser authority, explicit alternative-browser pairing
+
+控制台仅接受精确回环 Host/端口、自己的 Origin 与浏览器请求边界；静态资源显式白名单，无任意文件或 Magpie `/api/*` 转发。浏览器使用短期一次性票据换 HttpOnly、SameSite=Strict、`/ui/` Cookie 和内存 CSRF；原有文件 Bearer API 与之隔离。私有读取要求会话和专用请求头，写入还要求 CSRF、精确 Origin、限长 JSON、允许动作和 UUID 幂等键；默认不自动重试结果不明的写入。只读轮询不延长人的空闲期限，空闲30分钟、绝对8小时，宿主重启全部失效。
+
+其他浏览器从原生页的**普通无票据 origin**进入匿名壳，明确点击“配对此浏览器”，返回 Magpie 核对完整八位码并批准。仅公开 id/code/expiry 进入原生快照，浏览器256位临时秘密只留其内存；自有0700目录/0600记录仅存哈希、短期状态和消费墓碑。配对最多8条、两分钟，无有效记录淘汰。批准只对应未过期的命名请求，持有 code 或批准对象而无秘密不能登录。先持久消费，再建立新宿主实例会话；已消费不能因重启或重复批准复活。SSH 高级转发仍只连接回环同端口，不提供匿名或公网管理。
+
+### Decision 36 — Shared-host handoff and direct Service actions
+
+官方 options 保存会替换本插件完整选项并重启**共用 Bun 宿主**，旧宿主可为在途请求退役等待最多10分钟。原生页仅合并打开/偏好/批准字段并重载托管 HTML 唤醒新宿主；普通控制台配置、模型、审批、连接、钱包动作直接复用 Service，不保存 options、不调用操作者 CLI。网络配置本身可能重启唯一 EasyTier 核心；它与宿主重启、浏览器重连是三种不同过程。
+
+每数据目录只允许一个 Service/核心 owner。SQLite 独占事务作为崩溃可释放的文件锁，兼容 `host.lock` 元数据；不抢活 owner，不根据未知父进程终止进程，旧 `.reclaim` 目录不再参与回收。候补最多等待11分钟，失去父进程或停止时退出，不在之后接管。构造/异步启动前即注册退出保护，失败启动清理部分服务，停止自己确有 ownership 的核心后才释放锁。打开请求先写消费记录，崩溃可丢一次尝试，不能重复开浏览器；配对预授权可跨有意批准重启，登录会话不能。
+
+### Decision 37 — Explicit native model approval and private file delivery
+
+控制台是已有目录/Service/Provisioner 的适配，不复制授权或计费规则。使用方核对完整 TOFU 指纹、当前报价/价格版本与模型，下载结构化申请；提供方导入后选择有价本机模型子集、手动正额度并确认批准。提交时重新核验当前身份/报价，拒绝过期绑定。0 原生上限表示无限额，不能当停止；网格最低0.0001USD。报价一直 `priceLocked:false`，手动初始信用不是付款。
+
+只有明确交付动作才返回含 Key 的授权文件；普通状态、目录、原生快照、日志无 Key。敏感交付操作仅保留 UUID/请求指纹墓碑，不在通用幂等响应缓存保留密钥。使用方导入时先验证接受方、提供方、当前身份/报价与模型，明确确认后建立原生 Remote Magpie。浏览器下载/剪贴板由用户环境控制，**不承诺0600文件权限**。账目按提供方、消费者隔离，不引入跨节点统一余额。
+
+### Decision 38 — Wallet/accounting browser workflow, no financial scope expansion
+
+Phase 9第三阶段正在开发“测试网钱包”“用量与账单”；本轮 GUI 钱包验收尚未完成。动作沿用 Wallet、ChainWatcher、Ledger、Provisioner 与纯 walletView；普通状态本地投影，RPC/额度读回/扫描显式执行并显示证据时间，秘密 RPC URL 不回显。BSC97/Base84532平等、显式选链，只注册测试资产，无新链、主网、私钥代管或自动转账。
+
+提供方选实际消费者/网络/资产/精确金额，预览再创建一次入账申请，下载真实 EIP-712 文档；使用方导入申请后经本机服务纯校验，下载真实 EIP-712 签名数据，在自己的外部钱包审阅并签署；返回控制台填写公开付款地址和65字节签名，由服务校验摘要/恢复地址并生成签名交付文件，不要求钱包导出 AIHub 格式。提供方导入验证付款地址/签名后才交付精确转账指引。可选注入浏览器钱包在完整文档审阅确认后才请求账户，核对精确链后用服务已验证的文档调用 `eth_signTypedData_v4`；不自动切链、不广播交易，无 WalletConnect/SDK/私钥输入，缺扩展时保留文件流程。目前仅模拟注入钱包测试，实际实验走文件，不声称通用扩展兼容。普通用户不构造 JSON、不提交私钥。待处理/未知创建先恢复或取消，不盲目创建第二份。链最终性、账本应用、Key额度读回和可调用是独立证据，充值不忽略暂停。异常备注不新增信用，日志基线审计不补造消费，消费者账单摘要不是签名/付款证明；普通界面无手动测试充值。
+
+### Current Phase 9 acceptance boundary
+
+**REPRODUCED，限定本轮范围**：两份全新隔离 Magpie0.1.2171 GUI + EasyTier2.6.4；正常 GitHub UI install/Update；默认系统浏览器、八位码配对、首次配置；提供方发布有价本机模型、使用方完整指纹核对、申请文件交接、手动正额度批准、授权下载/隐藏与导入、原生 Remote Magpie；Magpie原生 Test models 观察到200后429，受控模拟模型上游。不是所有版本/平台/供应商或所有计费语义验收。
+
+**UNKNOWN / development**：第三阶段完整浏览器钱包/账目、外部真实钱包适配与本轮新公链付款，Linux GUI/Windows全流程。0.1.2038保留历史价格/计费 pin；0.1.2171未重测完整重定价、并发超额、窗口语义。PR11真实BSC/Base付款及双主机证据仅在其历史报告范围有效；本地模拟RPC/签名器不代表新公链转账。没有本轮最终全面GO或真实资金GO。
+
+---
+
+## Historical decisions and evidence (Phases 3–8)
 
 Phase 7 adds the **testnet chain wallet**: a registry in which every network is a peer, a per-chain
 deposit watcher, signed deposit attribution and one bridge into the existing ledger and provisioner.
@@ -165,7 +209,9 @@ A node has `sharingEnabled` and `consumingEnabled`; both may be on. The phase-3 
 - The Magpie administrative interface (`magpie web`'s page and `/api/*`) is never exposed to anyone,
   overlay members included.
 
-## Decision 7 — the plugin's control surface is the CLI plus read-back
+## Decision 7 — native writes use Magpie CLI plus read-back (historical user interface superseded)
+
+Phase 9 supersedes the ordinary-user CLI control surface with Decisions 34–38. The implementation may still use the measured native Magpie CLI internally for Key management; the browser calls existing Service directly and never spawns an operator command.
 
 Magpie 0.1.2038 has **no public management API**. Key writes go through
 `magpie gateway-key add|models|limit|quotas|remove|rotate`, which is the product's own path
@@ -441,7 +487,7 @@ false`; a consumer's accepted quote hash/price version is bound to its key, and
 a mismatch pauses it for an explicit reissue (Decision 20). Real charging still
 depends on the price-lock work in Decision 4/known blockers.
 
-The provider page cannot fetch (`connect-src 'none'`); it renders a generated
+Historical Phase5 native page design (superseded as the ordinary product UI by Decisions34–38): the provider page cannot fetch (`connect-src 'none'`); it renders a generated
 `status.js` snapshot with the peer directory, quotes, connected providers,
 native `/v1/magpie/limit` numbers, identity warnings, errors and timestamps. The
 CSP is not relaxed and the host API is not exposed on the LAN.
@@ -777,8 +823,7 @@ BSC, and Peer's guide to buying with Alipay — as fixed HTTPS URLs with no quer
 `rel="noopener noreferrer external"`, labelled as third-party sites that are not part of this
 product, with an explicit statement that Peer and Alipay have no partnership with this project and
 that the guides are about real mainnet assets and do not obtain test tokens. Tests assert there are
-exactly two such links, that no URL is built at runtime, and that the only buttons on the page are
-"Reload snapshot" and the settings form's "Save".
+exactly two such links, that no URL is built at runtime, and that the old Phase7 page had only "Reload snapshot" and settings "Save" buttons. That button-count statement is historical and superseded by the Phase9 launcher/explicit approval controls; the financial no-buy/no-swap/no-bridge constraint remains.
 
 ## Preferred dataflow
 
@@ -833,14 +878,13 @@ methods, none of which is a key operation.
 | Magpie | 0.1.2038 | **host/CLI and pricing/billing pin**; tag `v0.1.2038` = `8c63c5b7873c6aa7aa797aa17f481d5fa8301876` |
 | Magpie | 0.1.2057 | official Linux no-GUI container, **consumer only**; `ghcr.io/yetone/magpie@sha256:900711e2867299e6dbc7d9b02112e86d0a00add626f61bacfad83be0da5fbe5e`; see the fresh two-host report |
 | Magpie | 0.1.2120 | **page/bridge source comparison**; tag `v0.1.2120` = `eed140c4d9a7916a77e382d8a9c8b3f071f602b2`; full host/CLI UNKNOWN |
-| Magpie | 0.1.2171 | isolated `magpie web` **page/CSP/Save browser evidence only**; no host/CLI verification; desktop WKWebView UNKNOWN |
+| Magpie | 0.1.2171 | Phase9 two fresh real GUI profiles: GitHub install/update, native page/browser/pairing/configure, real EasyTier, provider/consumer authorization and native Test models200→429; mock model upstream; full billing semantics/wallet GUI not revalidated |
 | EasyTier | 2.6.4 | tag `v2.6.4` = `8428a89d2dabc94c97d370ec607c6ca142473626` |
-| Bun | 1.4.3 | operator CLI and CI |
+| Bun | 1.4.3 | measured development/CLI/CI; ordinary plugin runtime managed by Magpie, no PATH installation required |
 | Foundry | 1.8.6 | testnet wallet labs; commit `6bad0a66de7c83f7b33695044138f0f5fa4c5990` |
 
 The plugin pins the EasyTier release assets by SHA-256 in `plugin/src/easytier-manifest.ts` and
-refuses an unlisted platform or a hash mismatch. The 0.1.2120 comparison does not change the
-0.1.2038 billing pin. The 0.1.2171 browser run is page evidence, not a host/CLI compatibility claim.
+refuses an unlisted platform or a hash mismatch. The 0.1.2120 comparison and Phase9 0.1.2171 GUI/native-call acceptance do not change the 0.1.2038 billing pin. Phase9 confirms only the explicitly observed 0.1.2171 paths, not all CLI commands or billing semantics.
 
 ## Known blockers / open questions
 
@@ -857,12 +901,9 @@ refuses an unlisted platform or a hash mismatch. The 0.1.2120 comparison does no
    imports it, but the native new window does not count it (Decision 19).
 4. **Platform coverage is not symmetric.** Linux EasyTier is verified; the official Linux Magpie
    0.1.2057 **consumer** container is verified; Linux Magpie **GUI/provider** behaviour is untested;
-   Windows is untested. Magpie 0.1.2120 is a page/bridge comparison; 0.1.2171 has an isolated `magpie web` page run only (desktop WKWebView UNKNOWN).
+   Windows is untested. Magpie0.1.2120 is a historical page/bridge comparison; Phase9 0.1.2171 real GUI entry and the scoped provider/consumer/native-call paths passed on macOS. Linux GUI and Windows remain unmeasured.
 5. `easytier-cli acl set` is absent in 2.6.4 (restart required).
-6. The community plugin **page cannot reach the network** (`internal/gui/pluginpage.go`, CSP
-   `connect-src 'none'`). It is read-only after onboarding and renders a generated snapshot; the
-   official options bridge is only for the initial setup and display preferences. A live fetch needs
-   a future first-class bridge.
+6. The native community plugin **page cannot reach the network** (`connect-src 'none'`). Phase9 preserves this constraint: that page is launcher/public snapshot/manual pairing approval only; official options save restarts the shared host. Independent loopback browser console carries authenticated live actions (Decisions34–36). The old full read-only-page-as-product constraint is superseded.
 7. **Remote provider identity is not cryptographic in 2.6.4**: the CLI does not expose a peer's
    `noise_static_pubkey`, and `peer_id` changes on every start. The mapped prefix + hostname check +
    Gateway Key is what this phase can prove; binding funds to a peer needs the public key exposed
@@ -943,13 +984,11 @@ Phase-7 testnet-wallet additions:
     `uncertain` and credits nothing. Safe, but a real usability limit; per-consumer addresses or
     amount uniqueness would fix it and are explicitly out of scope for this phase.
 27. **Attribution depends on the consumer keeping their wallet key.** A payment from an exchange
-    withdrawal address is `unclaimed` forever without manual review. There is an anomaly table and a
-    CLI, not a resolution workflow.
+    withdrawal address is `unclaimed` forever without manual review. There is an anomaly table and an advanced CLI; Phase9 adds an audit-note UI, which still does not invent attribution, credit, or automatic unfreezing.
 28. **The watcher trusts the configured RPC for a log's existence.** It cross-checks the receipt and
     re-reads the block at finality time, and reports endpoint health, but a provider that lies
     consistently about a block and its hash would not be caught. There is no consensus read.
-29. **The wallet page is read-only.** Enabling a network, registering an asset, creating or signing an
-    intent are CLI/API operations, because the page cannot reach the network (`connect-src 'none'`).
+29. **Historical Phase7 native wallet page was read-only.** Phase9 replaces the ordinary-user workflow with independent authenticated browser actions; the native CSP remains unchanged. Wallet/accounting GUI is currently Stage3 development, with full new browser acceptance still UNKNOWN; prior chain/ledger evidence keeps its own scope.
 30. **No HD wallet, no per-consumer addresses, no key custody.** The plugin stores no private key for
     either side; the provider's receiving address is one they already own.
 

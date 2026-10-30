@@ -1,12 +1,22 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { consoleAction, consoleState } from "../src/console-api.ts";
 import { ConsoleInputError } from "../src/console-server.ts";
 import { registerSecret } from "../src/log.ts";
 import type { Service, StatusSnapshot } from "../src/service.ts";
 
+let previousDirectory = process.cwd();
+let temporaryDirectories: string[] = [];
+beforeEach(() => { previousDirectory = process.cwd(); temporaryDirectories = []; });
+afterEach(() => {
+  process.chdir(previousDirectory);
+  for (const dir of temporaryDirectories) rmSync(dir, { recursive: true, force: true });
+});
+
 function fixture() {
-  process.chdir(mkdtempSync("/tmp/console-api-fixture-"));
+  const dir = mkdtempSync("/tmp/console-api-fixture-");
+  temporaryDirectories.push(dir);
+  process.chdir(dir);
   const calls: string[] = [];
   const snapshot = {
     plugin: { version: "0.5.0", startedAt: "2026-10-30T00:00:00Z", stateVersion: 3, pid: 999, dataDir: "/private/host/data" },
@@ -20,6 +30,8 @@ function fixture() {
   const service = {
     consoleSnapshot() { calls.push("snapshot"); return snapshot; },
     requestApprovalContext() { return {provider:{nodeId:"local-node",mappedCidr:null,gatewayPort:3425},quote:null}; },
+    consoleWalletModule() { return null; },
+    provisioner: { all() { return []; } },
     async configure(input: Record<string, unknown>) { calls.push("configure"); Object.assign(snapshot.config, input); return snapshot; },
     async checks() { calls.push("checks"); return []; },
     async status() { throw new Error("polling must never run active status"); },

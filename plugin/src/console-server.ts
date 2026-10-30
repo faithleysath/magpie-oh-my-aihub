@@ -462,6 +462,10 @@ export function startConsoleServer(options: ConsoleServerOptions): ConsoleServer
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: options.port ?? 0,
+    // First-use EasyTier download and explicit RPC checks can take minutes.
+    // Browser commands have their own bounded deadlines; do not close the
+    // socket at Bun's short default while a validated action is still running.
+    idleTimeout: 255,
     fetch: (request) => transport?.handle(request) ?? error("console_starting", 503),
   });
   try {

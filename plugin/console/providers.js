@@ -490,7 +490,8 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       if (!consumer.revokedAt) {
         const actions = el("div", null, "workflow-actions");
         actions.append(button("检查授权", () => void run("consumer-check", { consumerId: consumer.consumerId }, (result) => {
-          if (consumer.paused) reissueConsumer(consumer, result);
+          const current = result.consumer || consumer;
+          if (current.paused || !current.acceptedQuoteHash || current.acceptedQuoteHash !== result.currentQuoteHash || current.priceVersion !== result.currentPriceVersion) reissueConsumer(current, result);
         })), button("交付访问授权", () => revealAuthorization(consumer)), button("调整模型范围", () => editConsumerModels(consumer)), button("撤销授权", () => confirmAction("撤销伙伴授权", "撤销后，此伙伴原有密钥将失效。已有账目会保留。", "consumer-revoke", { consumerId: consumer.consumerId }, "我确认撤销此伙伴的访问授权")));
         row.append(actions);
       }
@@ -511,7 +512,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
   function reissueConsumer(consumer, preview) {
     openDialog("重新确认并恢复授权", (root) => {
-      root.append(paragraph("此伙伴的授权已暂停。只有当前模型价格、报价与账目都能验证时，才可重新签发授权。该操作不会增加余额，也不会重置历史使用量。"), details("当前待接受的价格绑定", [["伙伴", consumer.consumerId], ["模型", items(consumer.models).join("、")], ["当前价格版本", preview.currentPriceVersion], ["当前报价指纹", preview.currentQuoteHash], ["暂停原因", preview.consumer?.paused?.reason || consumer.paused?.reason], ["价格锁定", "否（priceLocked: false）"]]));
+      root.append(paragraph(consumer.paused ? "此伙伴的授权已暂停。只有当前模型价格、报价与账目都能验证时，才可重新签发授权。该操作不会增加余额，也不会重置历史使用量。" : "此伙伴的授权尚未绑定当前目录报价，或接受的报价与当前版本不同。只有明确核对并接受当前价格与报价后，才可重新签发并交付授权。该操作不会增加余额，也不会重置历史使用量。"), details("当前待接受的价格绑定", [["伙伴", consumer.consumerId], ["模型", items(consumer.models).join("、")], ["当前价格版本", preview.currentPriceVersion], ["当前报价指纹", preview.currentQuoteHash], ["暂停原因", preview.consumer?.paused?.reason || consumer.paused?.reason], ["价格锁定", "否（priceLocked: false）"]]));
       if (!preview.currentPriceVersion || !preview.currentQuoteHash) { root.append(el("p", "当前报价缺少完整价格或模型范围，暂时不能重新签发。请先检查模型目录和价格。", "inline-warning")); return; }
       const agree = checkbox("我已核对上述完整报价与模型，并接受新的价格绑定");
       const submit = button("接受并重新签发", () => {

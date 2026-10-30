@@ -5,7 +5,7 @@ import { writeJsonAtomic } from "./store.ts";
 import { canonicalJson } from "./catalog.ts";
 import { catalogPriceVersion } from "./pricing.ts";
 import { boundedDocument, capOnGrid, hex64, modelList, object, RequestValidationError, validateConnectionRequest, validateRequestApproval, type ConnectionRequest } from "./connection-request.ts";
-import type { Service, ShareCandidatesView } from "./service.ts";
+import { catalogIdentityAccepted, type Service, type ShareCandidatesView } from "./service.ts";
 
 export interface RequestRecord {
   id: string;
@@ -141,7 +141,7 @@ export class ConsoleWorkflows {
     const models = modelList(r.models);
     if (!hex64(q.contentHash) || !hex64(q.identityFingerprint) || !hex64(q.priceVersion)) return bad("authorization has no complete quote binding");
     const peer = this.service.peersInDirectory().find(peer => peer.nodeId === p.nodeId);
-    if (!peer || !peer.quote || !peer.identity || !peer.online || !["verified", "connected"].includes(peer.status)) return bad("discover and explicitly trust this provider before importing its authorization");
+    if (!peer || !peer.quote || !peer.identity || !peer.online || !["verified", "connected"].includes(peer.status) || !catalogIdentityAccepted(peer.nodeId, peer.identity.fingerprint)) return bad("discover and explicitly trust this provider before importing its authorization");
     if (peer.identity.fingerprint !== q.identityFingerprint || peer.quoteHash !== q.contentHash || peer.mappedCidr !== p.mappedCidr || peer.quote.node.gatewayPort !== p.gatewayPort) return bad("authorization identity, address or quote differs from the current trusted provider");
     if (models.some(m => !peer.quote!.models.some(q => q.id === m)) || catalogPriceVersion(peer.quote.models.filter(m => models.includes(m.id))) !== q.priceVersion) return bad("authorization models or price version differ from the current quote");
     const key = keyOverride ?? r.key;

@@ -1,525 +1,117 @@
-# Onboarding — from zero to a first shared model
-
-This is the short path for a Magpie user who can copy a few commands; no coding is required. It
-uses the real Magpie gateway, the guided plugin commands and one EasyTier no-TUN overlay. It does
-**not** use a laboratory script, a public testnet payment or real money.
-
-Phase 8 adds the guided entries `setup`, `share setup`, `connect`, `share approve`, `share handover`,
-`remote`, `wallet wizard`, `wallet status` and `wallet statement`. The explicit two-chain commands in
-§6 remain the reference for debugging and for a fully manual run. The CLI's `--help` is the final
-authority.
-
-**Scope and safety**
-
-- Sharing and consuming are for a private community. Never expose Magpie's administrative interface
-  (`magpie web` or `/api/*`), even to overlay members. Do not use `magpie web --lan`, and do not share
-  the plugin page URL: it is a capability URL for the page, and the setup form can contain the
-  overlay secret.
-- The chain wallet is **testnet only**. It credits mock test tokens on BSC testnet (97) and Base
-  Sepolia (84532). It is not money and it is not a buy/swap/bridge service. Real funds are NO-GO.
-- A Gateway Key is a bearer secret. Hand it over out of band (a password manager or an encrypted
-  message), never in a group chat, a screenshot, a commit or a shell history line. The phase-8
-  commands write a key to a 0600 file; use that file, do not echo it.
-- `magpie plugin add` installs a local package. `bun` must be on `PATH` for the operator CLI;
-  Magpie's internal Bun is not a shell command.
-
-## 1. What you need
-
-| Item | What it is |
-| --- | --- |
-| Two Magpie nodes | Provider P shares its own Magpie; consumer C uses it. They can be two machines or two fresh isolated profiles for a trial. |
-| Magpie 0.1.2038 | The verified host/CLI and pricing/billing pin. A Linux 0.1.2057 container was verified as a consumer. 0.1.2120 is page/bridge source and 0.1.2171 has isolated `magpie web` page evidence; their host/CLI is UNKNOWN, so `setup` reports a warning, not a silent pass. |
-| Bun 1.4.3 | Runs `plugin/bin/ohmyaihub.ts`. |
-| A reachable peer path | A LAN address, or an EasyTier relay such as `tcp://relay.example.com:11010`. |
-| A native model with a price | P's own Magpie provider, for example `deepseek/deepseek-flash`, with a complete effective price. A model without a price cannot back a cost-capped key. |
-| A test token (only for §6) | A mock ERC-20 on 97/84532. No contract address ships in this repository. |
-
-The plugin stores state in `<magpie config dir>/oh-my-aihub/`. On macOS and Linux the usual
-directory is `~/.config/magpie`; a portable Magpie uses its own `data/` directory. The examples use
-`~/.config/magpie`; substitute the real path.
-
-Set a portable shell function so paths with spaces and repeated `--data` stay correct (works in
-zsh and bash):
-
-```sh
-REPO="$HOME/Projects/magpie-oh-my-aihub-import"
-MAGPIE_DATA="$HOME/.config/magpie"
-ohmyaihub() { bun "$REPO/plugin/bin/ohmyaihub.ts" --data "$MAGPIE_DATA" "$@"; }
-```
-
-Substitute your clone path and your Magpie data directory. Do not use `CLI="bun …"` and `$CLI`: zsh
-(the macOS default) does not word-split an unquoted variable, so the command would be passed as one
-word.
-
-## 2. Five-minute provider start
-
-### 2.1 Install and verify the host
-
-1. Install Magpie and turn on **Settings → Share on local network** (the gateway must listen on a
-   non-loopback address; otherwise the key check is meaningless).
-2. Install Bun 1.4.3. From the repository root:
-
-   ```sh
-   magpie plugin add /absolute/path/to/this/repo/plugin
-   magpie plugin list
-   ```
-
-3. Open the plugin page **Oh My AIHub** once. If Magpie has not started the host yet, opening the
-   page does. Then run the read-only preflight:
-
-   ```sh
-   ohmyaihub setup --check
-   ```
-
-   `setup --check` (or `preflight`/`doctor`) reports the platform, Bun, the Magpie version and
-   whether it matches the tested 0.1.2038, the host's `api-port`/`api-token`/lock, EasyTier's pinned
-   hashes and the LAN gateway's 401 probe. It never changes a configuration. On a brand-new node the
-   host may not be running yet; if it says the host is not reachable, open the page or restart
-   Magpie and retry.
-
-### 2.2 Configure the overlay and sharing
-
-A first setup can prompt for the network secret without echoing it:
-
-```sh
-ohmyaihub setup \
-  --network my-private-net \
-  --peer tcp://relay.example.com:11010 \
-  --listen 0.0.0.0:11010 \
-  --ports 3425 \
-  --share --no-consume \
-  --prompt-secret
-```
-
-- `--secret-file <0600 file>` is the non-interactive alternative. The file must be a regular,
-  owner-only file (mode 0600, no symlink) and is checked before use. Do not pass the secret as an
-  argument; it would land in shell history and process lists.
-- `--peer` may be repeated. `--listen 0.0.0.0:11010` accepts peers; use `127.0.0.1:11010` only for a
-  dial-only node. `--clear-peers` is the explicit way to remove peers.
-- `--ports 3425` must be Magpie's gateway port. If Magpie listens elsewhere, set the real port.
-- `--share --no-consume` is a provider-only node. A node may do both; see §3.
-- A node that already has a configuration is **not** changed by `setup`; it prints `resume` /
-  `--reconfigure` instead. Use `--reconfigure` only when you mean to change the overlay.
-
-A save from the page makes Magpie restart the shared plugin host: the EasyTier core, the overlay and
-the local operator API disappear for a few seconds. Magpie starts the host again only when
-something asks it (opening the page does). Reload the page and check `status`; `pid` and
-`startedAt` prove the restart. Do not save while an AI request is in flight.
-
-### 2.3 Publish only your own models
-
-```sh
-ohmyaihub share setup --all-priced --publish
-ohmyaihub checks
-```
-
-`share setup` lists **native** models with their effective price, refuses a model without a complete
-price, writes the allow list through the existing `share models` path and optionally publishes the
-catalogue. Publishing is opt-in (`--publish`); sharing alone does not publish a quote. It prints the
-quote's `priceVersion` and always `priceLocked:false`. A Remote Magpie, `group/…` or `auto/…` is never
-a share candidate.
-
-Expected healthy checks: `core-running`, `acl`, `gateway-key-required`, `mapped-cidr`,
-`published-gateway`, `shared-models-native-only` and the catalogue checks if publishing. `checks`
-exits `1` if any check fails.
-
-### 2.4 Issue one key for one consumer
-
-For a direct handover without a catalogue request:
-
-```sh
-ohmyaihub consumers add alice deepseek/deepseek-flash 1
-ohmyaihub share handover alice --key-file "$HOME/alice.key"
-```
-
-- `consumers add` creates a Magpie Gateway Key with a non-empty model whitelist and a positive cost
-  cap (here $1). The plugin owns the key and records the cap in its ledger.
-- `share handover` writes the key to a **new 0600 file** (`O_EXCL`; use `--force` only to replace
-  your own file) and prints only the consumer, models, cap and path. It never prints the key.
-- `topup alice 1 --deposit-id <unique-id>` adds simulated credit. The deposit id makes a replay a
-  no-op. The chain wallet is separate (§6).
-- Do not reuse a consumer id after `revoke`; create a new id. A revoked key is not reissued under
-  the same name.
-
-If the consumer sent a catalogue request, use the approval path instead:
-
-```sh
-ohmyaihub share approve request.json --cap 1 --yes
-ohmyaihub share handover <consumer-id> --key-file "$HOME/<consumer>.key"
-```
-
-`share approve` validates the `ohmyaihub.connection-request/v1` document against this node: the
-request's provider, mapped address/gateway port, current catalogue fingerprint/content hash, current
-selected price version and models must match. It requires **you** to choose a positive cap, shows the
-request for confirmation, and in a non-interactive shell requires `--yes`. It never accepts the
-consumer's suggested cap as authoritative and never prints a key.
-
-### 2.5 What to give the consumer
-
-The **network invitation** and the **Gateway Key** are two different handovers:
-
-- The network name and secret are needed by every node before setup. P sends that invitation to C
-  once, through a trusted private channel (a password manager entry, an encrypted message, or a
-  face-to-face transfer). If that channel is not private, choose a new network secret before adding
-  anyone. The consumer needs the invitation to join; it is not optional.
-- After C has joined and requested a key, P sends only the **mapped address** from `ohmyaihub status`
-  (`node.mappedCidr`, for example `10.66.12.34/32`), the gateway port (normally 3425), and the
-  **key file** produced by `share handover`, through an encrypted channel.
-
-At the key-approval stage, do not send Magpie admin credentials, the plugin API token, or a new
-copy of the network secret. C already has the network secret from the invitation. If the invitation
-was exposed, rotate it for both nodes rather than resending it with a key.
-
-### 2.6 Stop sharing safely
-
-```sh
-ohmyaihub share off
-ohmyaihub revoke alice
-```
-
-`share off` withdraws the export and catalogue and stops new remote connections; it **does not**
-remove issued keys from Magpie. `revoke alice` removes the key and wipes the stored secret. If you
-only want to pause new business, `share off` is enough; if you want to stop a specific consumer,
-revoke that key. See [operations](OPERATIONS.md#3-stop-sharing-revoke-and-remove-a-provider).
-
-## 3. Five-minute consumer start
-
-C needs the network name and secret from P's trusted private **network invitation**, and at least one
-peer path to P. The invitation is delivered before setup; the Gateway Key is a separate later
-handover (§2.5). C may also share its own Magpie; that is a separate capability.
-
-```sh
-ohmyaihub setup \
-  --network my-private-net \
-  --peer tcp://relay.example.com:11010 \
-  --listen 0.0.0.0:11011 \
-  --consume --no-share \
-  --prompt-secret
-```
-
-`setup` merges only the fields you name; it does not clear peers or a listen address. A node with an
-existing configuration is left alone unless `--reconfigure` is passed.
-
-### 3.1 Catalogue discovery and TOFU approval
-
-The catalogue is a read-only signed document; it is not a key and it does not charge. It is optional.
-On P, publishing was enabled by `share setup --publish`. Keep the catalogue port at the default
-**3426** (or 3427–3430): discovery probes that base and the next four ports only. If you must use a
-port outside that range, set C's catalogue base to match before discovery.
-
-On C:
-
-```sh
-ohmyaihub catalog discover on
-ohmyaihub connect
-```
-
-`connect` without `--node` lists peers with their full TOFU fingerprint, quote version/hash,
-`priceVersion`, `priceLocked:false`, mapped address and models. The first sight is **unverified**.
-Pick the peer and review it:
-
-```sh
-ohmyaihub connect --node <node-id>
-```
-
-In a terminal it displays the full fingerprint and quote hash and asks you to type the first 12 hex
-of each. Non-interactive use must pass the same values explicitly:
-
-```sh
-ohmyaihub connect --node <node-id> \
-  --trust --fingerprint <64-hex> --quote <64-hex> \
-  --request-out "$HOME/request.json"
-```
-
-The request file is written 0600. It contains the consumer id, selected models, mapped address,
-quote hash, price version and an approval block; it deliberately contains no shell command. A
-changed fingerprint is `identity-changed` and is refused until you review it; `--trust` with the
-exact new fingerprint is the only local acceptance.
-
-Send `request.json` to P out of band. P reviews it, runs
-`share approve request.json --cap 1 --yes` and
-`share handover <consumer> --key-file "$HOME/<consumer>.key"`, then returns the key file.
-
-C connects with the returned file and the **same** accepted fingerprint/quote:
-
-```sh
-ohmyaihub connect --node <node-id> \
-  --key-file "$HOME/<consumer>.key" \
-  --fingerprint <64-hex> --quote <64-hex>
-ohmyaihub remote list
-```
-
-The service re-checks the accepted fingerprint/hash and the existing provider probe/rollback path.
-The key is read from the file and is never printed; other providers are kept.
-
-### 3.2 Direct handover (no catalogue)
-
-If P already sent the mapped address and key file:
-
-```sh
-ohmyaihub remote add peer-p --cidr 10.66.12.34/32 --key-file "$HOME/alice.key" --port 3425
-ohmyaihub remote test peer-p
-ohmyaihub remote models peer-p
-```
-
-`remote add` creates the loopback forward, registers P as a native **Remote Magpie**, and refuses to
-finish unless P answers 401 without a key **and** with a wrong key, and the valid key lists at least
-one model. A failure restores the previous registration and leaves other providers alone.
-`remote test`/`remote models` are read-only and touch only the named provider; `remote recover`
-re-runs reconcile without changing the others.
-
-### 3.3 Test the real path
-
-There are two different keys; do not mix them up:
-
-| Key | Owner | Used by |
-| --- | --- | --- |
-| C's own Magpie gateway key | C, created in Magpie's Gateway page or used by C's agent | C's agent → C's Magpie |
-| P's Gateway Key for C | P, written by `share handover` | C's plugin → Remote Magpie → P |
-
-`remote test peer-p` proves P's handover key through C's own forward and does not print it. For a
-manual ingress check, do not put a key in a shell argument. Create a 0600 curl config with an editor
-or password manager:
-
-```sh
-umask 077
-$EDITOR "$HOME/p-gateway.curl"     # one line: header = "Authorization: Bearer <P-key-for-C>"
-curl -sS -o /dev/null -w '%{http_code}\n' --config "$HOME/p-gateway.curl" \
-  http://<P-LAN-IP>:3425/v1/models
-```
-
-Check no key and a wrong key separately without any secret in argv; both must be `401`. Never
-continue if the unauthenticated or wrong-key probe succeeds: the ingress is not enforcing the key.
-
-A full Remote Magpie call uses C's own gateway key and the model id `remote models` showed, normally
-`peer-p/<provider>/<model>`. Use your agent, Magpie's Gateway page, or a 0600 curl config:
-
-```sh
-$EDITOR "$HOME/c-magpie.curl"      # header = "Authorization: Bearer <C-own-magpie-key>"
-curl -sS --config "$HOME/c-magpie.curl" http://127.0.0.1:3425/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"peer-p/deepseek/deepseek-flash","messages":[{"role":"user","content":"hello"}]}'
-```
-
-If C's Magpie listens on a LAN address, use that address and a Magpie gateway key; a loopback
-caller is treated as local by Magpie. `429` means P's native cost cap is spent; ask P to top up or issue a new key. A native window
-boundary is different: it pauses the key and P must run `consumers reissue` (accepting the new price
-version if it changed); waiting for the next window does not restore it. `401` means the key is
-wrong, revoked or not yet handed over. Do not paste a key
-into a command, a history line or a screenshot.
-
-### 3.4 Stop consuming
-
-```sh
-ohmyaihub remote remove peer-p
-ohmyaihub remote list
-ohmyaihub consume off
-```
-
-`remote remove` removes C's loopback forward, C's stored key and the Remote Magpie entry the plugin
-owns. It does **not** revoke the key at P; ask P to `revoke <consumer>` as well. `consume off`
-unregisters all plugin-owned remote providers but keeps their records and keys, so it is reversible;
-a hand-made provider is never touched.
-
-## 4. Key ownership and handover rules
-
-- One provider-owned key per consumer. Never share one key between two consumers.
-- The key is a bearer secret. Do not put it in a URL, a screenshot, a commit, a log or a chat.
-- `share handover` writes a 0600 file; `remote add`/`remote update-key`/`connect --key-file` read
-  one. The legacy `secret`/`provider add --key` path still exists for compatibility but exposes the
-  key to shell history and process lists; do not use it for a real handover.
-- `revoke` wipes the stored secret and the consumer id cannot be reused.
-- A changed key is a new handover: P issues a new key, C runs `remote update-key <id> --key-file
-  <file>`. The old key may remain valid at P until P revokes it.
-- A provider should revoke a consumer when the relationship ends; C removing its provider is not a
-  revocation at P.
-
-## 5. First-run troubleshooting
-
-| Symptom | Check | Action |
-| --- | --- | --- |
-| `setup` says the host is not reachable | `api-port` missing or `/health` does not answer | Open the plugin page once or restart Magpie; retry `setup --check` |
-| `setup` warns `Magpie … compatibility is UNKNOWN` | The installed version is not 0.1.2038 | Read the warning; 0.1.2120 is page/bridge-only. Use 0.1.2038 for a verified host/CLI run |
-| `setup` refuses a missing secret | No `--secret-file`/`--prompt-secret` on a first setup | Use a 0600 regular file or the hidden prompt; do not pass the secret as an argument |
-| `no usable LAN address` | The machine has no non-loopback IPv4 | Connect a network; for a lab, use a loopback profile deliberately |
-| `gateway-key-required` fails | Magpie is loopback-only or the gateway port is wrong | Enable Settings → Share on local network; fix `--ports`; restart the plugin host |
-| `ACL` fails | The generated config or the running core does not match | Do not edit the generated TOML; `stop` then `start`; read `checks` detail |
-| `share setup` says no complete price | A native model has no effective price | Set a complete price in Magpie; rerun `share setup`; do not hand out a key for an unpriced model |
-| `connect` says `unverified`/`identity-changed` | First sight or a changed self-signed key | Review the full fingerprint and quote; accept explicitly with `--trust --fingerprint … --quote …`. If the acceptance itself returns `unverified` once, the directory refresh is asynchronous: wait/`catalog refresh` and retry the same command; do not bypass the check |
-| `remote test` fails / `degraded` | The peer is offline, the mapped address moved or the key is wrong | `remote list`, `remote test <id>`, `remote recover`; check P's `checks`; do not reuse its key elsewhere |
-| `401` on a provider probe | Wrong/revoked key, or key not yet issued | Re-run `share handover` on P; `remote update-key` on C; check P's `consumers` |
-| `429` | P's native cap is spent | P: `topup` or a new key; C: no local override exists |
-| Page has old data | Status is a generated snapshot, not a live fetch | Press **Reload snapshot**; `pid`/`generatedAt` show freshness; use `ohmyaihub status`/`checks` |
-| CLI cannot connect to the API | The page save/restart is still in progress, or the host is off | Wait a few seconds, open the page or restart Magpie, then retry |
-
-For deeper checks see [operations](OPERATIONS.md), especially the accounting and wallet sections.
-
-## 6. Advanced testnet credit (two chains)
-
-**Do not use real funds.** This section is for BSC testnet 97 and Base Sepolia 84532 with mock test
-tokens. The plugin stores no private key; the consumer signs with their own wallet. Mainnet 56/8453
-are registered only as always-disabled records and are refused.
-
-The roles are separate:
-
-| Role | Runs | Holds |
-| --- | --- | --- |
-| **P, provider** | Magpie, the plugin host, the wallet watcher, `wallet wizard`, `wallet status`, `wallet statement` | the receiving address, the ledger and the Gateway Key; no consumer private key |
-| **C, consumer** | their own wallet | the payer key; signs the typed data and sends the exact transfer |
-
-C does **not** run P's wallet wizard and does **not** access P's loopback API. Every exchange below
-is an out-of-band file transfer. The plugin never holds a private key for either side.
-
-### 6.1 P: enable both chains, register a test token, publish receiving addresses
-
-Use RPC endpoints you trust or the public testnet endpoints from the phase-7 evidence. Each chain is
-an equal record; there is no primary or preferred chain.
-
-```sh
-ohmyaihub wallet networks
-ohmyaihub wallet network 97 --rpc https://bsc-testnet-rpc.publicnode.com --enable
-ohmyaihub wallet network 84532 --rpc https://base-sepolia-rpc.publicnode.com --enable
-```
-
-Register a mock token only after the chain answers `decimals()`. The symbol/name must say it is a
-mock or test token; a symbol that pretends to be a real token is refused. No contract address ships
-in the repository:
-
-```sh
-ohmyaihub wallet asset-register \
-  97 0x<test-token> tMOCK6 'Mock Test Dollar' 6 --nanos-per-token 1000000000 --note 'test only'
-ohmyaihub wallet asset-register \
-  84532 0x<test-token> tMOCK18 'Mock Test Dollar' 18 --nanos-per-token 1000000000 --note 'test only'
-ohmyaihub wallet assets
-```
-
-`--nanos-per-token 1000000000` means one whole test token = 1,000,000,000 nano-USD (1 test USD at the
-fixed test rate). Use the precision the token actually reports. If you need a test token, deploy the
-test-only `MockERC20` from `plugin/lab/chain` with Foundry; that is a developer tool, not a product
-token, and its address belongs in your own notes, not in this repository.
-
-P publishes an address P already controls; the plugin holds no private key. This assumes P has already
-issued a Gateway Key to `alice` (§2.4) and C has connected it with `connect`/`remote add` (§3):
-
-```sh
-ohmyaihub wallet receiving provider-p 97 0x<P-address>
-ohmyaihub wallet receiving provider-p 84532 0x<P-address>
-```
-
-The same provider may use a different address on each chain. The address is part of the deposit
-intent at issue time; changing it later does not change an already-issued intent.
-
-### 6.2 P → C, delivery 1: the typed data
-
-P creates the request on P's node. Use the batch form for a copyable document, or the interactive
-form; neither signs or sends anything:
-
-```sh
-ohmyaihub wallet wizard --batch \
-  --consumer alice --provider provider-p --chain 97 \
-  --asset <assetId|symbol> --amount 1 --no-watch
-```
-
-The wizard prints the real EIP-712 typed data, the invoice id, the exact raw amount, the recipient,
-the expiry and a digest. P writes that document to a file (for example `alice-97-typed.json`) and
-sends **that file** to C through a trusted private channel. The request is `awaiting signature`;
-nothing has been paid. The wizard refuses a second pending request for the same consumer unless
-`--force` is passed. For two chains, either complete/cancel the first request before creating the
-second, or use `--force` only because the chain and amount differ and you accept the ambiguity
-warning. A request you do not intend to pay can be cancelled with `wallet cancel <invoiceId>`.
-
-`--batch` never picks a default chain or provider: `--chain` and `--provider` are required when the
-choice is not unique. Run it again for 84532 with the other test asset.
-
-### 6.3 C: sign externally and return delivery 2
-
-C opens the typed data in their own wallet and checks the chain id, token contract, recipient and
-exact amount before signing it with the paying account. C writes a small JSON file containing the
-signature and the payer address (the address that produced it):
-
-```json
-{
-  "signature": "0x<65-byte signature>",
-  "payerAddress": "0x<payer address>"
-}
-```
-
-C sends that file back to P out of band. C does not need P's API, P's plugin state or P's wallet
-wizard. C must not send the transfer before P has recorded the signature; an unsigned transfer is
-`unclaimed` and is never credited.
-
-### 6.4 P: record the signature and give the exact transfer
-
-P records the returned file on P's node:
-
-```sh
-ohmyaihub wallet wizard --batch --consumer alice --invoice <invoiceId> \
-  --signature-file "$HOME/alice-97-signature.json" \
-  --payer 0x<payerAddress>
-```
-
-The wizard verifies the signature and the payer binding, then prints the exact transfer: chain,
-token contract, raw amount, recipient and expiry. P sends those instructions to C. C sends **exactly**
-that amount, token and recipient, from the signing wallet, on the same chain.
-
-If P's cap write fails after the deposit is booked, keep the same deposit and retry the credit path;
-do not create a second deposit. A reorg still freezes the consumer and keeps the deposit for audit.
-A historical `failed` deposit row is not automatically turned back into a credit; it needs a manual
-audit. The plugin never guesses.
-
-### 6.5 P: observe finality and verify credit
-
-```sh
-ohmyaihub wallet scan 97
-ohmyaihub wallet events --chain 97
-ohmyaihub wallet status
-ohmyaihub wallet credit alice
-```
-
-BSC testnet uses 15 confirmations as its stated finality substitute; Base Sepolia waits for the real
-`finalized` tag and can take ~17–24 minutes. A credited event raises the same Gateway Key's cap;
-the next call should be `200`. Run the scan again and confirm zero new credits. A reorg freezes the
-consumer; it never deletes or silently adjusts the balance.
-
-If the event is `unclaimed` or `uncertain`, do not send a second payment to "fix" it. Inspect
-`wallet anomalies`, keep the transaction and the signed document, and resolve it as an operator. The
-plugin never guesses a payer. Historical `failed` rows and `unclaimed` transfers stay visible; they
-are not automatically reversed or credited.
-
-### 6.6 P → C, delivery 3: the unsigned statement
-
-P can produce a statement for the consumer:
-
-```sh
-ohmyaihub wallet statement alice --out "$HOME/alice-statement.json"
-```
-
-`--out` ending in `.json` is written exactly at that path; any other value (or no `--out`) is a
-directory under `<magpie data>/oh-my-aihub/statements/`. The parent directory must exist; the file is
-created exclusively with mode 0600. Use `--force` only for an exact `.json` path you intend to
-replace.
-
-The statement is **unsigned**. Its SHA-256 digest proves only that the file was not edited by hand;
-it is not proof of payment, a signature or an identity claim. P sends the statement file to C out of
-band. C does not need to call P's API.
-
-### 6.7 P: stop the wallet
-
-```sh
-ohmyaihub wallet stop
-ohmyaihub wallet network 97 --disable
-ohmyaihub wallet network 84532 --disable
-```
-
-Disabling a chain stops its watcher; existing ledger deposits and balances stay. Do not delete
-`chain.sqlite` or `ledger.sqlite` while the host is running.
-
-## 7. Where to go next
-
-- [Operations](OPERATIONS.md): daily checks, balance anomalies, stop sharing, revoke, leave the
-  network, backup/restore, troubleshooting.
-- [Architecture](ARCHITECTURE.md): the design decisions and the open blockers.
-- The phase-7 reports: [fresh two-host](validation/2026-10-30-fresh-twohost-wallet.md),
-  [real-Magpie replay](validation/2026-10-30-live-magpie-chain-credit.md) and the
-  [multichain evidence](validation/2026-10-30-phase7-multichain-wallet.md). These are testnet
-  evidence, not a promise of real-money safety.
+# 首次使用：从 Magpie 安装到第一个共享模型
+
+这份指南使用 Magpie 的图形界面和 Oh My AIHub 浏览器控制台。正常安装、配置、申请、审批和连接都不需要终端、Bun 命令、源码目录或 Magpie 数据路径。
+
+当前已在两份全新隔离的 **Magpie 0.1.2171** 环境与 **EasyTier 2.6.4** 上实测安装/更新、控制台入口、配对、真实网络和双方文件授权流程；Magpie 原生 **Test models** 已观察到 200 与额度用尽后的 429，上游是受控模拟模型。浏览器钱包仍在第三阶段开发，本指南的钱包部分是待验收流程，不代表已经完成本轮链上或真实资金验收。
+
+## 1. 准备双方
+
+共享方提供自己 Magpie 的本机模型；使用方把对方注册为自己 Magpie 的 Remote Magpie。一台设备也可以同时做两件事。
+
+共享方先在 Magpie 添加自己的模型服务，确认模型可用并设置完整价格。在 Magpie 设置里开启 **Share on local network（局域网共享）**，使模型网关能够从非回环地址接收经过权限检查的请求。这里只开放模型网关，不能开放 Magpie 管理页面或管理 API。
+
+双方需要相同的私有网络名称、密码，以及一个可达的连接节点地址，例如共享方网络监听地址或你已有的 EasyTier 中继。中继只转发加密网络流量，不保存账户、余额或模型业务。网络密码与 Gateway Key 是不同秘密，不要混用。
+
+## 2. 从 Magpie 安装插件
+
+1. 打开 **Plugins → Discover**。
+2. 如果搜索为空，在底部手动添加入口输入 `github:faithleysath/magpie-oh-my-aihub`。
+3. 确认安装后打开 **Oh My AIHub** 插件页；以后也从 Magpie Plugins 页面更新。
+4. 点击 **打开控制台**。系统默认浏览器会打开只有本机可访问的控制台。
+
+Magpie 自行准备插件需要的 Bun，不需要额外配置 `PATH`。首次建立网络时，插件会下载并校验固定版本的 EasyTier；等待页面显示实际启动结果。
+
+上面的 GitHub 地址是合并后的常规入口。开发阶段带分支后缀的安装地址只用于验证；不要把开发分支地址作为长期安装说明。
+
+## 3. 使用其他浏览器
+
+如果你希望用其他浏览器，或默认浏览器没有打开：
+
+1. 从 Magpie 插件页复制显示的普通 `http://127.0.0.1:端口` 地址，粘贴到目标浏览器。不要复制带一次性票据的完整打开地址。
+2. 点击 **配对此浏览器**，浏览器会显示八位配对码。
+3. 回到 Magpie 的 Oh My AIHub 插件页，点 **刷新状态**。
+4. 找到完全相同的八位码，勾选 **我已核对，浏览器上的八位码与此处完全一致**，再点 **批准此浏览器**。
+5. 保持目标浏览器页面打开，等待配对完成。两分钟内未完成会过期，过期后重新发起并核对新码。
+
+普通地址不会直接登录；批准只对应那一个请求，浏览器还必须持有自己刚刚生成的临时秘密。不要批准别人发来的配对码。
+
+原生插件页保存打开请求、偏好或配对批准，会重启**所有插件共用的宿主**。待批准请求会跨这次重启保留，旧的已登录会话不会保留。普通控制台业务按钮直接调用 Service，不通过这个选项保存机制。远端 Magpie web 无法替你打开本机浏览器；远端使用请看[SSH 高级入口](OPERATIONS.md#通过-ssh-转发使用控制台)。
+
+## 4. 首次配置私有网络
+
+控制台的首次向导按 **检查环境 → 选择能力 → 连接网络 → 安全状态**进行。
+
+- 想共享自己的模型，选 **共享我的 AI**；想使用别人的模型，选 **使用伙伴的 AI**。可以同时选，也可先只连接网络。
+- 双方填写相同网络名称与密码。网络名称使用 2–63 位英文字母、数字、点、横线或下划线；密码至少 8 位。
+- 在 **连接节点**填写已有可达节点。若没有连接节点，至少一方需在 **高级网络设置**开启 **接受其他网络节点连接**，填写这台设备实际可达的 IPv4 监听地址和端口，并把这个地址交给另一方。
+- 默认不需要调整本机管理端口、目录发布端口或目录查询端口。它们不是 Magpie 管理页面的公网入口。
+- 点击 **保存并连接网络**，再 **运行安全检查**。保存完成不等于网络就绪；以真实检查结果和时间为准。
+
+之后进入 **总览**。网络、共享和使用状态分开显示；打开共享开关并不自动授权任何人，也不自动发布目录。网络修改可能短暂重连 EasyTier；不要在正在使用远端模型时随意改网络参数。
+
+## 5. 共享方：选择模型、发布目录
+
+在 **我的共享**中：
+
+1. 点击 **读取本机模型**，确认列表来自这台 Magpie。
+2. 选择允许共享的模型，保存选择。缺少完整价格的模型不能授权；朋友的 Remote Magpie、模型组和自动路由不能拿来转售。
+3. 设置目录显示名称、联系说明等信息，再明确开启目录发布。联系说明不要放网络密码、Gateway Key 或钱包秘密。
+4. 展开 **查看完整目录身份与报价**，把完整身份指纹通过可信私密渠道交给使用方核对。
+
+目录报价是自签名信息。指纹证明“是不是上次那把密钥”，不证明现实身份。页面中的 `priceLocked: false` 表示没有价格锁；报价和当前价格可能变化，批准前还会重新验证。
+
+## 6. 使用方：核对身份并发送申请
+
+在 **发现模型**中：
+
+1. 开启目录发现，刷新并找到伙伴。
+2. 展开 **查看完整身份与报价**，与共享方逐字核对完整身份指纹，不只比较开头几位。身份变化时先联系对方，不要直接接受。
+3. 确认当前报价、价格版本与需要的模型，然后 **核对并接受身份**；身份变化时使用页面的重新核对流程。
+4. 点击 **选择模型并申请**，选择模型并下载生成的连接申请文件，私下交给共享方。
+
+申请文件不含访问密钥。它只提出请求，不自动建立账户、授予额度或产生付款。不要自己拼 JSON，也不要拿旧报价申请反复重试；目录变化时重新核对、生成申请。
+
+## 7. 共享方：手动审批并交付授权
+
+在 **我的共享 → 连接申请**中：
+
+1. 点 **导入伙伴的申请文件**，选择使用方交来的文件。导入只做核对，尚未授权。
+2. 在该申请上点 **核对并审批**，确认申请方、当前完整身份/报价、模型范围。
+3. 选择允许的模型子集，手动填写明确的**正额度**。额度至少 `$0.0001`，必须符合 `$0.0001` 网格；`0` 在 Magpie 原生限额中表示无限额，不能表示暂停。
+4. 勾选确认后 **批准此申请**。初始额度是提供方明确授予的试验信用，不是链上付款凭证。
+5. 在 **已授权的伙伴**找到该伙伴，点 **交付访问授权**，确认后 **显示本次授权文件 → 下载授权文件 → 完成并隐藏**。
+
+授权文件含 Gateway Key，只通过私密渠道交给对应使用方。不要发到群聊、截图、问题单或仓库。浏览器和系统决定下载位置及文件权限，不能保证下载文件为 `0600`。完成交付后清理多余副本；关闭弹窗只清除本页显示，不会删除已经下载或复制的内容。
+
+## 8. 使用方：导入授权并使用原生模型
+
+在 **我的连接**中：
+
+1. 点击 **导入伙伴授权**，选择刚收到的授权文件并确认来源。
+2. 核对预览中的共享方、接受方、模型、正额度、完整身份指纹和当前报价。过期或不匹配的授权不会靠点击确认绕过。
+3. 勾选确认后点 **创建此伙伴连接**。插件会验证密钥和模型，再在本机 Magpie 创建原生 Remote Magpie。
+4. 点击 **检查连接与额度**，再 **读取可用模型**；查看测量时间和原生限额。仅“网络已连接”不代表额度安全。
+5. 回到 Magpie 的模型服务页面，用原生 **Test models**测试，再在自己的应用中选择这些模型。AI 调用继续由 Magpie 处理。
+
+401 表示密钥未被接受；429 表示原生限额拒绝；网络或 RPC 不可用另行显示，不能混为余额归零。缺失的额度是“未知”，0 或负上限是不安全无限额，均不能显示成健康的有限授权。
+
+## 9. 测试网钱包：第三阶段待验收流程
+
+浏览器钱包和账目入口正在开发。下面说明双方职责和文件交接方式；当前按钮与最终验收结果以正在完成的界面及后续报告为准，不把历史链上验证当成本轮钱包已经通过。
+
+1. **共享方**在 **测试网钱包**配置已注册测试网、RPC、mock 测试资产和自己持有的收款地址。BSC 测试网（97）与 Base Sepolia（84532）平等，需要明确选择，没有自动推荐链。
+2. 共享方从已授权的消费者列表选择对象、网络、资产、精确十进制金额和有效期，依次 **创建测试网入账申请 → 预览精确申请内容 → 确认创建一次申请 → 下载入账申请文件**，把文档交给使用方。有待处理请求时恢复或取消已有请求，不盲目创建第二份。
+3. **使用方**先导入并核对入账申请，经本机服务核验后 **下载外部钱包签名数据**，在自己的钱包查看链、代币合约、收款地址、金额、有效期与摘要并签署指定 EIP-712 文档。只签名不会转账。回到控制台点 **把钱包签名整理为交付文件**，填写公开付款地址与钱包给出的 `0x` 开头、65 字节签名，勾选确认后 **核验并生成签名交付文件 → 下载签名交付文件**，私下交回共享方。无需手写 JSON，也不要求钱包直接导出 AIHub 格式；私钥、助记词和 keystore 永远不交给插件或共享方。
+4. **共享方**依次 **导入付款方签名 → 核验签名并读取转账指引 → 下载准确转账指引**；只有付款地址验证通过后，才把指引交给使用方。
+5. 使用方在自己的钱包核对同一条测试链、同一代币合约、收款地址和精确金额后自行操作。插件不广播交易、不代管钱包，也没有内置真实钱包或购买通道。
+6. 共享方在 **测试网钱包**与 **用量与账单**分别检查“链事件最终性 → 账本入账 → Magpie Key 额度读回”。看到交易或区块浏览器回执不等于可调用；暂停的授权也不会因充值自动忽略暂停原因。
+
+如果浏览器装有兼容钱包扩展，核验申请后也可选择 **使用浏览器钱包签名**，完整审阅并勾选确认，再点 **连接钱包并请求签名**。只有点击后才请求账户；网络不一致时需自行在钱包切换，控制台不会自动切链。签名经服务恢复地址验证后，可 **下载签名交付文件**。没有扩展或不支持时继续使用上面的文件/签名整理路径。这是可选能力，目前仅有注入钱包模拟测试，实际实验使用文件流程，不代表通用钱包兼容。
+
+外部钱包需要支持指定 EIP-712 数据的审阅、签署与签名结果提取；AIHub 会把公开付款地址和签名整理成交付文件，不要求钱包导出 AIHub 格式。当前不承诺任意钱包均可直接导入签名数据，具体真实钱包兼容性仍待验收。网络显示同名代币不代表同一资产，身份是“链 + 合约”。本轮如采用本地模拟 RPC/外部模拟签名器，它们只证明文件与系统集成，**不是新的公链转账**。真实资金、主网、买卖、兑换与跨链桥均未开放。
+
+## 10. 更新、重连与继续阅读
+
+更新插件或重启 Magpie 后，从原生插件页重新打开或配对。浏览器刷新可恢复同一存活宿主中的有效会话；重启后旧会话失效。操作返回结果不明时先刷新、查现有申请/连接/账目，不重复点击创建或签发。
+
+日常状态、撤销、暂停和故障处理看[日常操作](OPERATIONS.md)。维护者需要备份、恢复或脚本时看[高级 CLI 参考](ADVANCED-CLI.md)。价格/计费历史测量基线仍为 Magpie 0.1.2038，当前 0.1.2171 图形与原生调用通过不等于全部计费语义重测，详见[架构与证据](ARCHITECTURE.md)。
