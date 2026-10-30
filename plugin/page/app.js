@@ -130,15 +130,22 @@ function renderStatus(s) {
     body.append(
       h,
       table(
-        ["consumer", "models", "cap", "used", "left", "calls", "state"],
+        ["consumer", "models", "cap", "used", "left", "ledger balance", "calls", "state"],
         s.consumers.map((c) => [
           c.consumerId,
           c.models.join(", "),
           fmtUsd(c.capUsd),
           fmtUsd(c.usedUsd ?? 0),
           fmtUsd(c.leftUsd ?? 0),
+          fmtUsd(c.ledger?.balanceUsd ?? c.capUsd - (c.usedUsd ?? 0)),
           c.calls ?? 0,
-          c.revokedAt ? "revoked" : c.spent ? "spent" : "open",
+          c.paused
+            ? `paused: ${c.paused.reason}${c.paused.enforced ? "" : " (NOT enforced)"}`
+            : c.revokedAt
+              ? "revoked"
+              : c.spent
+                ? "spent"
+                : "open",
         ]),
       ),
     );

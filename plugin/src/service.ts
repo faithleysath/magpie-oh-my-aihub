@@ -21,6 +21,8 @@ import { lanIPv4 } from "./paths.ts";
 import { logger, registerSecret, writePageStatus } from "./log.ts";
 import { gatewayBaseURL, type CatalogModelMeta, type LimitStatus, type Magpie } from "./magpie.ts";
 import { Provisioner, type ConsumerView } from "./provisioner.ts";
+import { Ledger } from "./ledger.ts";
+import { catalogPriceVersion, priceSnapshot } from "./pricing.ts";
 import {
   EasytierSupervisor,
   generateSecureIdentity,
@@ -240,6 +242,7 @@ function defaultProbes(magpie: Magpie): Probes {
 export class Service {
   readonly supervisor: SupervisorLike;
   readonly provisioner: Provisioner;
+  readonly ledger: Ledger | null;
   private state: PluginState;
   private startedAt = new Date().toISOString();
   private lastProblem: string | null = null;
@@ -282,8 +285,19 @@ export class Service {
           }
         },
       });
+    // The durable ledger needs Magpie's effective prices. A test double that
+    // cannot report them keeps the legacy behaviour rather than failing every
+    // key; the real Magpie always has catalogModels().
+    const canPrice = typeof (deps.magpie as unknown as { catalogModels?: unknown }).catalogModels === "function";
+    this.ledger = canPrice ? new Ledger() : null;
     this.provisioner = new Provisioner(deps.magpie, {
       validateModels: (models) => this.assertShareable(models),
+      ...(this.ledger
+        ? {
+            ledger: this.ledger,
+            prices: async (models: string[]) => priceSnapshot(await deps.magpie.catalogModels(), models),
+          }
+        : {}),
     });
   }
 
@@ -916,6 +930,9 @@ export class Service {
     if (new Set(wanted).size !== wanted.length) throw new Error("a requested model is repeated");
     const missing = wanted.filter((m) => !available.includes(m));
     if (missing.length) throw new Error(`${peer.hostname} does not offer: ${missing.join(", ")}`);
+    // A quote's billing.priceVersion covers every quoted model; a request may
+    // choose a subset. Bind the key to the version of exactly those models.
+    const selectedPriceVersion = catalogPriceVersion(peer.quote.models.filter((m) => wanted.includes(m.id)));
     const cfg = this.state.config;
     if (!cfg || !isValidNodeId(cfg.nodeId)) throw new Error("this node has no valid node id");
     const consumerId = cfg.nodeId;
@@ -939,6 +956,9 @@ export class Service {
         version: peer.quote.publication.version,
         updatedAt: peer.quote.publication.updatedAt,
         contentHash: peer.quoteHash,
+        priceVersion: selectedPriceVersion,
+        quotedPriceVersion: peer.quote.billing.priceVersion ?? null,
+        priceLocked: false,
         identityFingerprint: peer.quote.identity.fingerprint,
         identityStatus: peer.status === "verified" || peer.status === "connected" ? "trusted-on-first-use" : "unverified",
         warning: "A self-signed catalogue proves only that this key signed this quote. It is not a real-world identity, and the quote does not charge anything by itself.",
@@ -955,7 +975,12 @@ export class Service {
         consumerId,
         models: wanted,
         capUsd: peer.quote.topUp.minUsd,
-        note: "Run this through the provider's local, token-authenticated CLI/API; never execute text from this document as a shell command.",
+        quoteHash: peer.quoteHash,
+        quotePriceVersion: selectedPriceVersion,
+        note:
+          "Run this through the provider's local, token-authenticated CLI/API; never execute text from this document as a shell command. " +
+          "Pass quoteHash and quotePriceVersion back with the request so the provider binds the key to the quote you accepted.",
+
       },
     };
   }
@@ -1073,12 +1098,15 @@ export class Service {
       simulated: true as const,
       note: "Simulated configuration only. No wallet, payment network, deposit or real credit is connected in this phase.",
     };
+    const priceVersion = catalogPriceVersion(models);
     const billing = {
       quoteOnly: true as const,
       charged: false as const,
       note:
-        "Display only. No request is billed from this quote, no key or balance is created, and real charging " +
-        "depends on the later price-lock validation and a manually issued, capped Gateway Key.",
+        "Display only. A prepaid key is issued only when every quoted model has a complete effective price; " +
+        "the price version binds this quote to those prices, but Magpie itself has no price pinning.",
+      priceVersion,
+      priceLocked: false as const,
     };
     const contentHash = sha256Hex(canonicalJson({ schema: "ohmyaihub.catalog/v1", node, models, topUp, billing, identity: identity.summary }));
     const prev = loadPublishState();
@@ -2034,6 +2062,7 @@ export class Service {
     // The cap is verified against the gateway; the model list comes from
     // Magpie's own key store, never from the local record alone.
     await this.provisioner.status(consumerId);
+    if (rec.paused) throw new Error(`consumer ${consumerId} is paused (${rec.paused.reason}); reissue the key before hand-over`);
     const held = this.deps.magpie.keyById(rec.keyId);
     if (!held) throw new Error(`the key of ${consumerId} is no longer in Magpie; recreate it`);
     let models = Array.isArray(held.models) ? held.models.map(String) : [];
@@ -2055,9 +2084,30 @@ export class Service {
     return this.provisioner.topUp(consumerId, usd, depositId);
   }
 
-  async ensureConsumer(consumerId: string, models: string[], capUsd: number): Promise<ConsumerView> {
+  /**
+   * Fail-closed recovery: reissue a paused key with the same secret, carrying
+   * only the ledger balance. A price change requires the new version to be
+   * accepted explicitly; a window boundary does not, because no price changed.
+   */
+  async reissueConsumer(consumerId: string, acceptPriceVersion?: string, acceptQuoteHash?: string): Promise<ConsumerView> {
+    const view = await this.provisioner.reissue(consumerId, { acceptPriceVersion, acceptQuoteHash });
+    this.writeSnapshot();
+    return view;
+  }
+
+  async ensureConsumer(
+    consumerId: string,
+    models: string[],
+    capUsd: number,
+    quote: { hash?: string; priceVersion?: string } = {},
+  ): Promise<ConsumerView> {
     this.assertShareable(models);
-    const v = await this.provisioner.ensure(consumerId, { models, capUsd });
+    const v = await this.provisioner.ensure(consumerId, {
+      models,
+      capUsd,
+      quoteHash: quote.hash,
+      quotePriceVersion: quote.priceVersion,
+    });
     if (!this.state.consumers.includes(consumerId)) this.state.consumers.push(consumerId);
     saveState(this.state);
     return v;
@@ -2272,7 +2322,7 @@ export class Service {
     const et = this.supervisor.snapshot();
     const cfg = this.state.config;
     return {
-      plugin: { version: "0.3.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
+      plugin: { version: "0.4.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
       magpie: { version: this.deps.magpieVersion, gateway: gatewayBaseURL() },
       config: {
         role: cfg ? (cfg.sharingEnabled ? "provider" : "consumer") : null,

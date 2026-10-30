@@ -8,6 +8,7 @@ import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, Supervis
 import type { CatalogModelMeta, ProviderRecord } from "../src/magpie.ts";
 import { loadCatalogTrust, loadOrCreateCatalogIdentity, signCatalog, verifySignedCatalog, type CatalogIdentity, type CatalogModel, type CatalogQuoteBody, type SignedCatalog } from "../src/catalog.ts";
 import { getProviderKey } from "../src/state.ts";
+import { priceSnapshot } from "../src/pricing.ts";
 
 // Service-level catalogue tests: a fake Magpie, a fake supervisor, a fake
 // read-only HTTP server and an in-memory peer. No overlay, no real Magpie and
@@ -359,6 +360,8 @@ describe("catalogue publication", () => {
     expect(quote.models[1].pricing).toBeNull();
     expect(quote.models.some((m) => m.id.startsWith("peer-b/"))).toBe(false);
     expect(quote.identity.fingerprint).toHaveLength(64);
+    expect(quote.billing.priceLocked).toBe(false);
+    expect(quote.billing.priceVersion).toBeNull(); // alpha/b has no price
     expect(verifySignedCatalog(quote).quote.node.mappedCidr).toBe(s.config()!.mappedCidr ?? "");
     const text = JSON.stringify(quote);
     expect(text).not.toContain("catalog-lab-secret");
@@ -390,6 +393,7 @@ describe("catalogue publication", () => {
     const v2 = s.catalogStatus().quote!.version;
     expect(v2).toBe(v1 + 1);
     expect(s.localCatalog()!.models.map((m) => m.id)).toEqual(["alpha/a"]);
+    expect(s.localCatalog()!.billing.priceVersion).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test("publishing without sharing is refused", async () => {
@@ -428,6 +432,10 @@ describe("peer discovery", () => {
     expect(request.provider).toMatchObject({ mappedCidr: "10.66.1.3/32", gatewayPort: 3425 });
     expect(request.providerCommand).toBeUndefined();
     expect(request.approval).toMatchObject({ action: "consumers add", consumerId: s.config()!.nodeId, models: ["alpha/b"], capUsd: 1 });
+    expect((request.quote as { priceVersion?: string }).priceVersion).toMatch(/^[0-9a-f]{64}$/);
+    expect((request.approval as { quotePriceVersion?: string }).quotePriceVersion).toBe(
+      (request.quote as { priceVersion?: string }).priceVersion,
+    );
     expect(() => s.catalogRequest("bbbbbbbb", ["alpha/b; touch /tmp/pwn"])).toThrow(/safe provider\/model/);
 
     // C disappears from EasyTier's peer list: its last quote is kept, marked offline.
@@ -640,5 +648,23 @@ describe("existing guard cadence (documented, not a 15s claim for keys)", () => 
     const result = await s.guardSharedKeys();
     expect(result.narrowed).toContain("alice");
     expect(magpie.keys.get(keyId)!.models).toEqual(["alpha/a"]);
+  });
+});
+
+describe("ledger integration through the service", () => {
+  test("a quoted key keeps its price version and a top-up uses the ledger", async () => {
+    const s = await service();
+    const version = priceSnapshot(magpie.metas, ["alpha/a"])!.version;
+    const v = await s.ensureConsumer("alice", ["alpha/a"], 1, {
+      hash: "a".repeat(64),
+      priceVersion: version,
+    });
+    expect(v.priceVersion).toBe(version);
+    expect(v.acceptedQuoteHash).toBe("a".repeat(64));
+    expect(v.ledger?.balanceUsd).toBe(1);
+    const after = await s.topUp("alice", 1, "svc-dep");
+    expect(after.capUsd).toBe(2);
+    expect(after.creditedUsd).toBe(1);
+    expect(after.ledger?.balanceUsd).toBe(2);
   });
 });

@@ -336,8 +336,12 @@ export class Magpie {
    * Creates a key and returns it with its secret. The CLI prints the secret; the
    * id comes from Magpie's store, matched by the unique name this plugin picks.
    */
-  async addKey(name: string): Promise<KeyRecord> {
-    const out = await this.serial(() => runOk([this.bin, "gateway-key", "add", name], { timeoutMs: 30_000 }));
+  async addKey(name: string, ownSecret?: string): Promise<KeyRecord> {
+    const args = [this.bin, "gateway-key", "add", name];
+    // Re-issuing with the same secret keeps the consumer's client configuration:
+    // the old key is removed first, then this one takes over its credential.
+    if (ownSecret) args.push("--key", ownSecret);
+    const out = await this.serial(() => runOk(args, { timeoutMs: 30_000 }));
     const secret = out
       .split("\n")
       .map((l) => l.trim())

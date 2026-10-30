@@ -182,8 +182,10 @@ guard; see the identity note below).
 bun bin/ohmyaihub.ts --data ~/.config/magpie consumers add alice deepseek/deepseek-flash 1
 # the key to hand to the consumer (never printed in logs)
 bun bin/ohmyaihub.ts --data ~/.config/magpie secret alice
-# add credit: raises the SAME key's cumulative cap, keeps its usage
-bun bin/ohmyaihub.ts --data ~/.config/magpie topup alice 1
+# add credit: recomputes cap = native used + ledger balance, keeps the window
+bun bin/ohmyaihub.ts --data ~/.config/magpie topup alice 1 --deposit-id mock-2026-10-30-1
+# fail-closed recovery after a price change or window boundary
+bun bin/ohmyaihub.ts --data ~/.config/magpie consumers reissue alice --accept-price-version <sha256>
 # stop a consumer
 bun bin/ohmyaihub.ts --data ~/.config/magpie revoke alice
 ```
@@ -194,6 +196,10 @@ What the plugin enforces on every key (the architecture's non-negotiables):
   makes a replayed top-up a no-op,
 - a cap recorded as pending before Magpie is written, so a crash between the write and the local
   commit is reconciled from what the gateway actually holds,
+- phase 6: an immutable SQLite ledger (`oh-my-aihub/ledger.sqlite`, integer nano-USD) is the
+  balance of record; a top-up is `native used + ledger balance`, never `old cap + amount`; a price
+  mismatch, window boundary or native/ledger drift pauses the key and `consumers reissue` carries
+  only the ledger balance (same secret for a plugin-owned key);
 - a key whose whitelist or cap cannot be applied is **deleted**, never handed over,
 - a hand-over runs the share guard first, then re-reads the key from Magpie: a key revoked during
   the check is never delivered, an empty (all-models) whitelist is repaired first, and the returned
@@ -290,7 +296,8 @@ All under `<magpie data>/oh-my-aihub/`, mode 0600:
 | --- | --- |
 | `state.json` | versioned plugin state: config (both capabilities, node id, instance id, network, export, share policy), consumer ids, provider records, orphan forwards |
 | `provider-keys.json` | the Gateway Key of each remote provider, by connection id (`keyRef` points here) |
-| `consumers.json` | provider-owned consumer keys: whitelist, cap, deposits, pending intent |
+| `consumers.json` | provider-owned consumer keys: whitelist, cap, deposits, pending intent, pause |
+| `ledger.sqlite` | immutable prepaid ledger: deposits, windows, settled usage snapshots, events |
 | `easytier/` | the verified binaries, the generated `current.toml`, the supervisor's pid state |
 | `api-token`, `api-port` | loopback API credentials |
 | `plugin.log` | redacted log |
@@ -357,8 +364,10 @@ macOS for every pull request that touches `plugin/`.
 - A shared key cannot name a routing group, even a purely native one: Magpie's group membership is
   not part of the key read-back, so it cannot be proven native.
 - Model pricing is Magpie's estimate at its current prices; changing a shared model's price
-  recomputes past charges. Do not change prices while credit is outstanding (blocker for the wallet
-  phase).
+  recomputes past charges, and the running admission sums may stay at the old price until restart.
+  Do not change prices while credit is outstanding. The plugin's ledger preserves the USD balance
+  and pauses after detection, but this is **not a real-time price lock**; real funds remain blocked
+  (see `docs/validation/2026-10-30-phase6-pricing-window.md`).
 - Windows is untested; Linux EasyTier is tested, Linux Magpie is not (its release binary needs a
   desktop stack; the official container works). The phase-4 lab ran on macOS with three isolated
   Magpie instances, not three physical machines.

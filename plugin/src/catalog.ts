@@ -19,6 +19,7 @@ import { existsSync } from "node:fs";
 import { statePath } from "./paths.ts";
 import { logger, registerSecret } from "./log.ts";
 import { readJsonWithBackup, writeJsonAtomic } from "./store.ts";
+import { catalogPriceVersion } from "./pricing.ts";
 
 export const CATALOG_SCHEMA = "ohmyaihub.catalog/v1";
 /** The one path the catalogue server answers. Anything else is a 404. */
@@ -102,6 +103,14 @@ export interface CatalogQuoteBody {
     quoteOnly: true;
     charged: false;
     note: string;
+    /**
+     * SHA-256 of the quoted model -> price document. A reader recomputes it;
+     * it binds the signature to the prices it shows. Null/absent means at
+     * least one model has no complete price, so the quote cannot back a key.
+     */
+    priceVersion?: string | null;
+    /** Always false: Magpie offers no price pinning, so this is not a lock. */
+    priceLocked?: false;
   };
   identity: CatalogIdentitySummary;
 }
@@ -510,10 +519,25 @@ export function validateCatalogQuote(value: unknown): CatalogQuoteBody {
   const topUpNote = stringOf(topUp.note, "topUp.note", 1, MAX_NOTE);
 
   const billing = objectOf(doc.billing, "billing");
-  assertKeys(billing, ["quoteOnly", "charged", "note"], "billing");
+  assertKeys(billing, ["quoteOnly", "charged", "note", "priceVersion", "priceLocked"], "billing");
   if (billing.quoteOnly !== true) throw new Error("billing.quoteOnly must be true");
   if (billing.charged !== false) throw new Error("billing.charged must be false");
   const billingNote = stringOf(billing.note, "billing.note", 1, MAX_NOTE);
+  let priceVersion: string | null | undefined;
+  if (billing.priceVersion !== undefined) {
+    if (billing.priceVersion === null) {
+      priceVersion = null;
+    } else {
+      priceVersion = stringOf(billing.priceVersion, "billing.priceVersion", 64, 64, /^[0-9a-f]{64}$/);
+      const expected = catalogPriceVersion(models);
+      if (expected !== priceVersion) {
+        throw new Error("billing.priceVersion does not match the quoted model prices");
+      }
+    }
+  }
+  if (billing.priceLocked !== undefined && billing.priceLocked !== false) {
+    throw new Error("billing.priceLocked must be false: Magpie offers no price pinning");
+  }
 
   const identity = validateIdentity(doc.identity);
   return {
@@ -522,7 +546,13 @@ export function validateCatalogQuote(value: unknown): CatalogQuoteBody {
     publication: { status: "published", version, updatedAt, publishedAt, note: pubNote },
     models,
     topUp: { minUsd, simulated: true, note: topUpNote },
-    billing: { quoteOnly: true, charged: false, note: billingNote },
+    billing: {
+      quoteOnly: true,
+      charged: false,
+      note: billingNote,
+      ...(priceVersion !== undefined ? { priceVersion } : {}),
+      ...(billing.priceLocked !== undefined ? { priceLocked: false as const } : {}),
+    },
     identity,
   };
 }

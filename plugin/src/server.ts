@@ -213,11 +213,22 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
         await svc.start();
         return json({ ok: true, running: svc.supervisor.snapshot().running });
       case "/consumers/add": {
-        const { consumerId, models, capUsd } = body as { consumerId?: string; models?: string[]; capUsd?: number };
+        const { consumerId, models, capUsd, quoteHash, quotePriceVersion } = body as {
+          consumerId?: string;
+          models?: string[];
+          capUsd?: number;
+          quoteHash?: string;
+          quotePriceVersion?: string;
+        };
         if (!consumerId || !Array.isArray(models) || typeof capUsd !== "number") {
           return json({ error: "consumerId, models and capUsd are required" }, 400);
         }
-        return json(await svc.ensureConsumer(consumerId, models, capUsd));
+        return json(
+          await svc.ensureConsumer(consumerId, models, capUsd, {
+            hash: typeof quoteHash === "string" ? quoteHash : undefined,
+            priceVersion: typeof quotePriceVersion === "string" ? quotePriceVersion : undefined,
+          }),
+        );
       }
       case "/consumers/models": {
         const { consumerId, models } = body as { consumerId?: string; models?: string[] };
@@ -235,6 +246,21 @@ async function handle(req: Request, svc: Service, token: string): Promise<Respon
         const { consumerId, usd, depositId } = body as { consumerId?: string; usd?: number; depositId?: string };
         if (!consumerId || typeof usd !== "number") return json({ error: "consumerId and usd are required" }, 400);
         return json(await svc.topUp(consumerId, usd, depositId));
+      }
+      case "/consumers/reissue": {
+        const { consumerId, acceptPriceVersion, acceptQuoteHash } = body as {
+          consumerId?: string;
+          acceptPriceVersion?: string;
+          acceptQuoteHash?: string;
+        };
+        if (!consumerId) return json({ error: "consumerId is required" }, 400);
+        return json(
+          await svc.reissueConsumer(
+            consumerId,
+            typeof acceptPriceVersion === "string" ? acceptPriceVersion : undefined,
+            typeof acceptQuoteHash === "string" ? acceptQuoteHash : undefined,
+          ),
+        );
       }
       case "/secret": {
         const { consumerId } = body as { consumerId?: string };
