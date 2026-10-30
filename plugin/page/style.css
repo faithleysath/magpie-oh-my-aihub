@@ -1,214 +1,27 @@
-/* Oh My AIHub page styles. Magpie's bridge already prepends a :where() base
- * sheet (font, colours, tables, buttons), so only layout and the few marks this
- * page adds live here. Everything reads through --magpie-* tokens. */
-
-body {
-  max-width: 72rem;
-}
-
-header .sub {
-  max-width: 60rem;
-}
-
-nav.toc {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: 12px 0 18px;
-  padding: 8px 10px;
-  border: 1px solid var(--magpie-line, ButtonBorder);
-  border-radius: 8px;
-  background: var(--magpie-card, Canvas);
-  font-size: 12px;
-}
-
-nav.toc a {
-  text-decoration: none;
-}
-
-section {
-  margin: 0 0 28px;
-  padding: 0 0 4px;
-  border-bottom: 1px solid var(--magpie-line, ButtonBorder);
-}
-
-h3 {
-  margin: 14px 0 6px;
-  font-size: 13px;
-}
-
-table th {
-  white-space: nowrap;
-  vertical-align: top;
-}
-
-table td {
-  vertical-align: top;
-}
-
-table tr.warn-row td:last-child {
-  color: var(--magpie-warn, #b4690e);
-}
-
-.tag {
-  display: inline-block;
-  padding: 0 5px;
-  border-radius: 4px;
-  border: 1px solid currentColor;
-  font-size: 10px;
-  line-height: 16px;
-  vertical-align: 1px;
-  white-space: nowrap;
-  opacity: 0.85;
-}
-
-.tag.local {
-  color: #2f6f4f;
-}
-
-.tag.remote {
-  color: #1f5d8a;
-}
-
-.tag.unknown {
-  color: #8a5a1f;
-}
-
-.tag.missing {
-  color: #8a2f2f;
-}
-
-.at {
-  color: var(--magpie-muted, GrayText);
-  font-size: 11px;
-}
-
-.note {
-  color: var(--magpie-muted, GrayText);
-  font-size: 11px;
-  margin-top: 2px;
-}
-
-.note.bad {
-  color: #8a2f2f;
-}
-
-.ok {
-  color: #2f6f4f;
-  font-weight: 500;
-}
-
-.bad {
-  color: #8a2f2f;
-  font-weight: 500;
-}
-
-code.fp {
-  font-size: 11px;
-  word-break: break-all;
-}
-
-pre.cmd {
-  position: relative;
-  cursor: pointer;
-  margin: 6px 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-pre.cmd:hover,
-pre.cmd:focus {
-  border-color: var(--magpie-accent, Highlight);
-}
-
-pre.cmd.copied::after,
-pre.cmd[data-note]::after {
-  content: attr(data-note);
-  position: absolute;
-  top: 4px;
-  right: 8px;
-  font-size: 10px;
-  color: var(--magpie-muted, GrayText);
-}
-
-pre.logs {
-  max-height: 260px;
-  overflow: auto;
-  font-size: 11px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.cmds {
-  margin: 6px 0 0;
-}
-
-.banner {
-  margin: 10px 0;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--magpie-line, ButtonBorder);
-  background: var(--magpie-card, Canvas);
-}
-
-.banner strong {
-  font-weight: 600;
-}
-
-.banner.ok {
-  border-color: #2f6f4f;
-}
-
-.banner.warn {
-  border-color: #b4690e;
-}
-
-.banner.bad {
-  border-color: #8a2f2f;
-}
-
-fieldset {
-  margin: 0 0 14px;
-  padding: 8px 12px 12px;
-  border: 1px solid var(--magpie-line, ButtonBorder);
-  border-radius: 8px;
-}
-
-legend {
-  padding: 0 4px;
-  font-size: 12px;
-  color: var(--magpie-muted, GrayText);
-}
-
-label.row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 0;
-}
-
-label.row input:not([type="checkbox"]) {
-  flex: 1 1 22rem;
-  min-width: 12rem;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-/* advanced rows are hidden unless the page preference asks for them */
-body:not(.advanced) .advanced-only {
-  display: none;
-}
-
-ul.links {
-  padding-left: 18px;
-}
-
-ul.links li {
-  margin: 6px 0;
-}
+:root { color-scheme: light dark; font-family: var(--magpie-font, system-ui, sans-serif); color: var(--magpie-fg, #20242c); background: var(--magpie-bg, #f5f6f8); }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 28px 20px; line-height: 1.65; }
+main { max-width: 800px; margin: 0 auto; }
+header { padding: 10px 0 20px; }
+h1 { font-size: 30px; letter-spacing: -.04em; margin: 0 0 12px; }
+h2 { font-size: 18px; margin: 0 0 10px; }
+p { margin: 10px 0; }
+.eyebrow { color: var(--magpie-accent, #4d56bc); font-size: 12px; letter-spacing: .12em; }
+.sub { font-size: 16px; }
+section, details { padding: 22px; margin: 0 0 18px; border: 1px solid var(--magpie-line, #dce0e8); background: var(--magpie-card, #fff); border-radius: 14px; }
+.muted { color: var(--magpie-muted, #646c79); font-size: 13px; }
+.actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 18px 0 10px; }
+button { padding: 9px 16px; font: inherit; border-radius: 8px; border: 1px solid var(--magpie-line, #c9cfda); cursor: pointer; background: var(--magpie-card, #fff); color: inherit; }
+#open { background: var(--magpie-accent, #4d56bc); color: #fff; border-color: transparent; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid var(--magpie-accent, #4d56bc); outline-offset: 3px; }
+.row { display: flex; gap: 10px; align-items: center; }
+input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--magpie-accent, #4d56bc); }
+a { color: var(--magpie-accent, #4d56bc); }
+summary { cursor: pointer; }
+#console-origin { user-select: text; overflow-wrap: anywhere; font-size: 16px; }
+.pairing-request { border-top: 1px solid var(--magpie-line, #dce0e8); padding: 16px 0; }
+.pairing-code { display: block; font: 600 28px/1.5 ui-monospace, monospace; letter-spacing: .12em; margin: 8px 0; }
+.pairing-request button { margin-top: 12px; }
+@media (prefers-color-scheme: dark) { :root { color: var(--magpie-fg, #e3e6ed); background: var(--magpie-bg, #16181e); } section, details, button { background: var(--magpie-card, #22252d); border-color: var(--magpie-line, #383e4c); } .muted { color: var(--magpie-muted, #a0a8b8); } }
+@media (max-width: 480px) { body { padding: 16px 10px; } section, details { padding: 18px; } }

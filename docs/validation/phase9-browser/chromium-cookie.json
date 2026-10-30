@@ -1,0 +1,18 @@
+[
+  {
+    "secureCookie": false,
+    "exchange": 200,
+    "state": 200,
+    "jsCookieVisible": false,
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+    "secureContext": true
+  },
+  {
+    "secureCookie": true,
+    "exchange": 200,
+    "state": 200,
+    "jsCookieVisible": false,
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+    "secureContext": true
+  }
+]

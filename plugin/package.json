@@ -1,6 +1,6 @@
 {
   "name": "@oh-my-aihub/magpie-plugin",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Magpie plugin: EasyTier no-TUN supervisor and Gateway Key provisioner for private AI sharing",
   "type": "module",
   "main": "src/index.ts",
@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",
+    "playwright": "1.64.1",
     "typescript": "^5.9.0"
   },
   "magpie": {
@@ -26,6 +27,7 @@
   "files": [
     "bin/",
     "src/",
+    "console/",
     "page/index.html",
     "page/app.js",
     "page/settings.js",

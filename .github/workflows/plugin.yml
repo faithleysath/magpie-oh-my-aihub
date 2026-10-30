@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "plugin/**"
+      - "package.json"
+      - "docs/validation/lab/phase9/**"
       - "docs/validation/lab/phase7/**"
       - "docs/validation/lab/phase8/**"
       - ".github/workflows/plugin.yml"
@@ -11,6 +13,8 @@ on:
     branches: [main]
     paths:
       - "plugin/**"
+      - "package.json"
+      - "docs/validation/lab/phase9/**"
       - "docs/validation/lab/phase7/**"
       - "docs/validation/lab/phase8/**"
   workflow_dispatch:

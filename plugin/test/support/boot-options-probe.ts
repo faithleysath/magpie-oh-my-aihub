@@ -16,10 +16,21 @@ mock.module(join(src, "paths.ts"), () => ({
   statePath: (...parts: string[]) => join(stateDir(), ...parts),
   pluginRoot: () => join(process.cwd(), "package"),
 }));
+mock.module(join(src, "easytier.ts"), () => ({ ownsProcess: () => false }));
 mock.module(join(src, "magpie.ts"), () => ({
   Magpie: class { version() { return "fixture"; } },
 }));
-mock.module(join(src, "lock.ts"), () => ({ acquireHostLock: () => ({ release() {} }) }));
+mock.module(join(src, "lock.ts"), () => ({ waitForHostLock: async () => ({ release() {} }) }));
+mock.module(join(src, "console-launch.ts"), () => ({
+  publishUnavailableLauncher() {}, readOwnPluginOptions: () => undefined, readConsolePort: () => undefined, saveConsolePort() {},
+  startConsoleLauncher: () => ({ stop() {} }),
+}));
+mock.module(join(src, "console-server.ts"), () => ({
+  startConsoleServer: () => ({ port: 12346, origin: "http://127.0.0.1:12346", issueTicket: () => "unused-fixture", pendingPairings: () => [], approvePairing: () => false, stop() {} }),
+}));
+mock.module(join(src, "console-api.ts"), () => ({
+  CONSOLE_ACTIONS: ["configure", "checks"], consoleState: async () => ({}), consoleAction: async () => ({}),
+}));
 mock.module(join(src, "server.ts"), () => ({ startApi: () => ({ port: 12345, stop() {} }) }));
 mock.module(join(src, "service.ts"), () => ({
   Service: class {

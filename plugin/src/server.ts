@@ -696,7 +696,7 @@ const CONFIGURE_FIELDS = [
 
 type ConfigureInput = Parameters<Service["configure"]>[0];
 
-function configureInput(body: Record<string, unknown>): ConfigureInput | string {
+export function configureInput(body: Record<string, unknown>): ConfigureInput | string {
   const unknown = unknownFields(body, CONFIGURE_FIELDS);
   if (unknown) return unknown;
   const out: Record<string, unknown> = {};
