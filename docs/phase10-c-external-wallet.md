@@ -315,3 +315,5 @@ cd plugin && bun install --frozen-lockfile && bun run typecheck
 ```
 
 全量测试前必须使用 hermetic network guard，阻止旧测试访问生产 `127.0.0.1:3425` 或公共 RPC。本分支不把该 guard 打进 PR；本次在临时 detached worktree `60d0d04`（`fix/phase10-hermetic-tests`）上复制本模块后运行 `bun test --max-concurrency=1 ./test ./console ../docs/validation/lab/phase9/wallet-fixture`，得到 **799 pass / 0 fail / 6248 assertions（54 files）**，并记录 guard 生效。并行默认运行曾与其他代理占用的固定测试端口 `127.0.0.1:13650` 冲突并出现非产品失败；串行运行在该端口被释放/不影响后通过。任务文本中的 `f63b644e` 是 P0-clock 代理 ID，不是提交 SHA；本机对应的 guard 提交为 `60d0d04`，两者差异已在报告中标注。
+
+CI 说明：本分支在 `207589d` 后显式 stack 已批准的 P0-clock 修复 `889973f`（cherry-pick 为 `ae920d8`），只用于清除 main 上既有的 5 个固定测试时钟失败；没有把未审的 C-registry/C-wallet 模块带进来。
