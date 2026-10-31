@@ -7,10 +7,17 @@ import { maskSensitiveText } from "./page-snapshot.ts";
 import { ConsolePairingJournal, PairingCapacityError, PairingUnavailableError } from "./console-pairing.ts";
 import type { PendingPairing } from "./console-pairing.ts";
 
+export interface ConsoleActionContext {
+  /** The authenticated browser session that invoked this action. */
+  sessionId: string;
+  /** False after logout, idle/absolute expiry or server stop. */
+  isActive: () => boolean;
+}
+
 export interface ConsoleServerOptions {
   port?: number;
   state: () => Promise<unknown>;
-  action: (name: string, input: Record<string, unknown>) => Promise<unknown>;
+  action: (name: string, input: Record<string, unknown>, context: ConsoleActionContext) => Promise<unknown>;
   allowedActions: readonly string[];
   /** One response owner per UUID; only fingerprint tombstones are retained. */
   sensitiveActions?: readonly string[];
@@ -269,7 +276,10 @@ export function createConsoleHandler(
   async function perform(session: Session, name: string, input: Record<string, unknown>): Promise<Result> {
     try {
       // Deferred invocation lets the operation cache claim the UUID before any callback runs.
-      const result = await options.action(name, input);
+      const result = await options.action(name, input, {
+        sessionId: session.id,
+        isActive: () => active(session),
+      });
       const text = JSON.stringify({ result });
       if (Buffer.byteLength(text) > RESULT_LIMIT) throw new Error("result too large");
       // A completion cannot resurrect a logged-out or expired session.
