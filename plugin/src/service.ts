@@ -923,6 +923,7 @@ export class Service {
 
   async start(): Promise<void> {
     const cfg = this.state.config;
+    let coreReady = true;
     if (cfg) {
       // A legacy document may carry Secure Mode without a keypair (the field was
       // optional); generate and persist one instead of refusing to start.
@@ -943,8 +944,19 @@ export class Service {
         // with a state that was never proven.
         await this.supervisor.stop().catch(() => {});
         this.lastProblem = String(e);
+        coreReady = false;
         logger.error(`supervisor did not start: ${String(e)}`);
       }
+    }
+    // A core that is not running or whose listeners cannot be attributed is not
+    // a usable node: do not start the catalogue, guard, provider reconciliation,
+    // accounting or wallet loops on top of it. The state is written as failed
+    // and a later explicit start (after fixing the port/ACL) can retry.
+    if (!coreReady) {
+      this.stopCatalogServer();
+      this.writeSnapshot();
+      logger.error("startup aborted: the overlay core is not proven; background services were not started");
+      return;
     }
     // A core that just started has no leftover forwards: the generated config
     // is the whole set. Anything recorded as orphan is gone with it.
