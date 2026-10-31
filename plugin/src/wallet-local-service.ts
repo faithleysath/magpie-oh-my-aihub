@@ -136,6 +136,13 @@ export class WalletLocalService {
   private vaultInstance: WalletVault | null = null;
   private readonly now: () => number;
   private readonly grants = new Map<string, RevealGrant>();
+  /**
+   * Monotonic adapter lifecycle generation. Any session end, dispose, lock or
+   * new vault-session action invalidates an unlock/create/backup/reveal that was
+   * already inside KDF. JavaScript has no cancellation, so the completion path
+   * compares this after awaiting and locks instead of publishing a late state.
+   */
+  private lifecycleEpoch = 0;
 
   constructor(options: WalletLocalServiceOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -167,6 +174,7 @@ export class WalletLocalService {
    * browser sessions; that is the deliberate local-security tradeoff.
    */
   endSession(_sessionId: string): void {
+    this.lifecycleEpoch += 1;
     this.grants.clear();
     this.vaultInstance?.lock();
     void this.vault.then((vault) => vault.lock(), () => { /* handled open rejection */ });
@@ -174,6 +182,7 @@ export class WalletLocalService {
 
   /** Console/Service stop: lock and clear without constructing a new adapter. */
   dispose(): void {
+    this.lifecycleEpoch += 1;
     this.grants.clear();
     this.vaultInstance?.dispose();
     void this.vault.then((vault) => vault.dispose(), () => { /* handled open rejection */ });
@@ -216,6 +225,14 @@ export class WalletLocalService {
     }
   }
 
+  private async ensureLifecycle(epoch: number, context: WalletLocalContext, vault: WalletVault): Promise<void> {
+    if (epoch !== this.lifecycleEpoch || !contextActive(context)) {
+      vault.lock();
+      this.grants.clear();
+      throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
+    }
+  }
+
   private requireContext(context: WalletLocalContext | undefined): WalletLocalContext {
     if (!context || !UUID_HEX.test(context.sessionId) || !contextActive(context)) {
       throw new WalletLocalError("wallet-session-required", "需要当前已认证的本地浏览器会话");
@@ -225,6 +242,7 @@ export class WalletLocalService {
 
   private async create(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {
     fields(input, ["password", "strength"]);
+    const epoch = ++this.lifecycleEpoch;
     this.grants.clear();
     const password = passwordInput(input.password);
     const strength = input.strength ?? 128;
@@ -235,11 +253,7 @@ export class WalletLocalService {
     const result = await vault.create({ password, strength: strength as 128 | 160 | 192 | 224 | 256 });
     // The transport also checks this, but a non-transport caller must not get a
     // late mnemonic after its server-owned session ended during KDF.
-    if (!contextActive(context)) {
-      vault.lock();
-      this.grants.clear();
-      throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
-    }
+    await this.ensureLifecycle(epoch, context, vault);
     // The response contains the one-time mnemonic and is a sensitive action at
     // the transport; this method does not retain it.
     return {
@@ -252,6 +266,7 @@ export class WalletLocalService {
 
   private async import(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {
     fields(input, ["mnemonic", "password", "replace", "currentPassword"]);
+    const epoch = ++this.lifecycleEpoch;
     this.grants.clear();
     const mnemonic = textInput(input.mnemonic, MAX_MNEMONIC_CHARS, "助记词");
     const password = passwordInput(input.password);
@@ -267,11 +282,13 @@ export class WalletLocalService {
       ...(replace === undefined ? {} : { replace }),
       ...(currentPassword === undefined ? {} : { currentPassword }),
     });
+    await this.ensureLifecycle(epoch, context, vault);
     return { wallet: snapshot };
   }
 
   private async restore(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {
     fields(input, ["encryptedBackup", "password", "replace", "currentPassword"]);
+    const epoch = ++this.lifecycleEpoch;
     this.grants.clear();
     const keystore = backupInput(input.encryptedBackup);
     const password = passwordInput(input.password);
@@ -287,29 +304,31 @@ export class WalletLocalService {
       ...(replace === undefined ? {} : { replace }),
       ...(currentPassword === undefined ? {} : { currentPassword }),
     });
+    await this.ensureLifecycle(epoch, context, vault);
     return { wallet: snapshot };
   }
 
   private async backup(context: WalletLocalContext): Promise<unknown> {
+    const epoch = this.lifecycleEpoch;
     const vault = await this.vault;
     const result = await vault.exportEncryptedBackup();
-    if (!contextActive(context)) {
-      vault.lock();
-      this.grants.clear();
-      throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
-    }
+    await this.ensureLifecycle(epoch, context, vault);
     return { ...result };
   }
 
   private async unlock(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {
     fields(input, ["password"]);
+    const epoch = ++this.lifecycleEpoch;
     this.grants.clear();
     const password = passwordInput(input.password);
-    const snapshot = await (await this.vault).unlock(password);
+    const vault = await this.vault;
+    const snapshot = await vault.unlock(password);
+    await this.ensureLifecycle(epoch, context, vault);
     return { wallet: snapshot };
   }
 
   private async lock(context: WalletLocalContext): Promise<unknown> {
+    this.lifecycleEpoch += 1;
     const vault = await this.vault;
     vault.lock();
     this.grants.clear();
@@ -373,6 +392,7 @@ export class WalletLocalService {
     // duplicate cannot reuse the grant. Never retain a response.
     grant.used = true;
     this.grants.delete(authorizationId);
+    const epoch = this.lifecycleEpoch;
     const vault = await this.vault;
     const snapshot = vault.snapshot();
     if (
@@ -393,12 +413,8 @@ export class WalletLocalService {
       ? await vault.exportMnemonic({ password, capability })
       : await vault.exportPrivateKey({ password, capability });
     // Defense in depth for future non-transport callers: never return plaintext
-    // after the server-owned session ended during KDF.
-    if (!contextActive(context)) {
-      vault.lock();
-      this.grants.clear();
-      throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
-    }
+    // after the server-owned session ended or lifecycle changed during KDF.
+    await this.ensureLifecycle(epoch, context, vault);
     return { ...result };
   }
 }

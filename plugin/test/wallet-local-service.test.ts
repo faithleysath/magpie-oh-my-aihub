@@ -164,6 +164,53 @@ describe("WalletLocalService lifecycle and reveal", () => {
     expect((await service.action("wallet-vault-status", {}, ctx) as any).wallet.status).toBe("locked");
   });
 
+  test("pending unlock cannot resurrect after endSession/dispose or an inactive context", async () => {
+    for (const mode of ["end", "inactive", "dispose"] as const) {
+      const service = new WalletLocalService({ path: tempPath() });
+      const ctx: WalletLocalContext = { sessionId: "e".repeat(64), isActive: () => true };
+      await service.action("wallet-vault-import", { mnemonic: VECTOR, password: PASSWORD }, ctx);
+      const pending = service.action("wallet-vault-unlock", { password: PASSWORD }, ctx);
+      if (mode === "end") service.endSession(ctx.sessionId);
+      if (mode === "inactive") (ctx as { isActive?: () => boolean }).isActive = () => false;
+      if (mode === "dispose") service.dispose();
+      await expect(pending).rejects.toMatchObject({ code: "wallet-session-required" });
+      expect((await service.status()).wallet.status).toBe("locked");
+    }
+  });
+
+  test("endSession during create/backup/reveal never returns a late secret", async () => {
+    // create: KDF must not publish a mnemonic after session end.
+    const creating = new WalletLocalService({ path: tempPath() });
+    const ctx = context("f".repeat(64));
+    const createPending = creating.action("wallet-vault-create", { password: PASSWORD }, ctx);
+    creating.endSession(ctx.sessionId);
+    await expect(createPending).rejects.toMatchObject({ code: "wallet-session-required" });
+    expect((await creating.status()).wallet.status).toBe("locked");
+
+    // backup: return no ciphertext after session end.
+    const backing = new WalletLocalService({ path: tempPath() });
+    const backupCtx = context("1".repeat(64));
+    await backing.action("wallet-vault-import", { mnemonic: VECTOR, password: PASSWORD }, backupCtx);
+    await backing.action("wallet-vault-unlock", { password: PASSWORD }, backupCtx);
+    const backupPending = backing.action("wallet-vault-backup", {}, backupCtx);
+    backing.endSession(backupCtx.sessionId);
+    await expect(backupPending).rejects.toBeInstanceOf(WalletLocalError);
+    expect((await backing.status()).wallet.status).toBe("locked");
+
+    // reveal: KDF must not publish plaintext after session end.
+    const revealing = new WalletLocalService({ path: tempPath() });
+    const revealCtx = context("2".repeat(64));
+    await revealing.action("wallet-vault-import", { mnemonic: VECTOR, password: PASSWORD }, revealCtx);
+    await revealing.action("wallet-vault-unlock", { password: PASSWORD }, revealCtx);
+    const grant = await revealing.action("wallet-vault-reveal-authorize", {
+      kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
+    }, revealCtx) as { authorizationId: string };
+    const revealPending = revealing.action("wallet-vault-reveal-mnemonic", { authorizationId: grant.authorizationId, password: PASSWORD }, revealCtx);
+    revealing.endSession(revealCtx.sessionId);
+    await expect(revealPending).rejects.toBeInstanceOf(WalletLocalError);
+    expect((await revealing.status()).wallet.status).toBe("locked");
+  });
+
   test("restore limit is UTF-8 bytes, not UTF-16 code units", async () => {
     const service = new WalletLocalService({ path: tempPath() });
     const ctx = context();
