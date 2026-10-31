@@ -274,15 +274,26 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         // Catalog trust alone is not enough, and no port is ever user-entered.
         const presenceEntry = presence.get(peer.nodeId) || null;
         const presenceFresh = Boolean(presenceEntry) && (!presenceEntry.expiresAt || Date.parse(presenceEntry.expiresAt) > Date.now());
-        const controlReady = Boolean(presenceEntry && presenceEntry.verified === true && presenceFresh && presenceEntry.capability?.control === true);
+        const security = presenceEntry ? presenceSecurity(presenceEntry, peer) : { signature: "unknown", tofu: "pending" };
+        const endpoint = record(presenceEntry?.endpoint);
+        const endpointTrusted = Boolean(endpoint.host) && Number.isInteger(endpoint.controlPort) && endpoint.controlPort >= 1 && endpoint.controlPort <= 65535;
+        const controlReady = Boolean(presenceEntry) && security.signature === "valid" && endpointTrusted && presenceFresh && presenceEntry.capability?.control === true;
         const providesModels = presenceEntry ? presenceEntry.capability?.providesModels !== false : false;
+        const online = peer.online !== false;
         const trusted = ["verified", "connected"].includes(peer.status) && peer.online;
-        const allowed = trusted && controlReady && providesModels;
-        const request = button("申请使用（无文件）", () => requestUsage(peer));
+        const allowed = controlReady && providesModels && online;
+        const needsIdentity = Boolean(presenceEntry) && security.tofu !== "accepted";
+        const request = button(needsIdentity ? "核对身份并申请使用" : "申请使用（无文件）", () => requestUsage(peer));
         request.disabled = !allowed;
         actions.append(request);
-        if (!controlReady) actions.append(paragraph("此伙伴还没有可用的签名控制通道；无文件申请暂不可用，可使用下方高级应急文件流程。"));
+        if (!presenceEntry) actions.append(paragraph("此伙伴还没有可用的签名控制通道；无文件申请暂不可用，可使用下方高级应急文件流程。"));
+        else if (security.signature === "invalid") actions.append(paragraph("此伙伴的签名无效，不能发起申请。"));
+        else if (security.signature !== "valid") actions.append(paragraph("此伙伴的签名状态未知；确认签名前不会发送申请。"));
+        else if (!endpointTrusted) actions.append(paragraph("此伙伴的控制端点不可信或未报告；无文件申请暂不可用。"));
+        else if (!presenceFresh) actions.append(paragraph("此伙伴的签名控制通道已过期；等待新的签名 presence 后再申请。"));
+        else if (presenceEntry.capability?.control !== true) actions.append(paragraph("此伙伴没有开放控制通道；无文件申请暂不可用。"));
         else if (!providesModels) actions.append(paragraph("此伙伴可请求，但不提供模型；无文件申请需要伙伴先分享模型。"));
+        else if (needsIdentity) actions.append(paragraph("首次连接或身份已变化：可以先核对完整指纹，服务确认后再发送申请。"));
         if (presenceEntry) {
           actions.append(details("控制通道与能力（只读）", [
             ["控制端点", presenceEntry.endpoint?.host ? `${presenceEntry.endpoint.host}${presenceEntry.endpoint.controlPort ? `:${presenceEntry.endpoint.controlPort}` : ""}` : "未报告"],
@@ -532,6 +543,25 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     return value && Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "时间未知";
   };
   function p2pOf() { return record(state?.status?.p2p); }
+  /**
+   * Signature validity and TOFU acceptance are different questions. A valid
+   * signature only proves the presence document is authentic; TOFU pending or
+   * changed still needs an explicit human (and service-confirmed) acceptance
+   * before any business request.
+   */
+  function presenceSecurity(presence, peer) {
+    const rawSignature = presence?.signature ?? presence?.signatureStatus;
+    const signature = ["valid", "invalid", "unknown"].includes(rawSignature)
+      ? rawSignature
+      : presence?.verified === true ? "valid" : "unknown";
+    const rawTofu = presence?.tofu ?? presence?.tofuStatus;
+    let tofu = ["accepted", "pending", "changed"].includes(rawTofu) ? rawTofu : null;
+    if (!tofu) {
+      const status = peer?.status;
+      tofu = status === "verified" || status === "connected" ? "accepted" : status === "identity-changed" ? "changed" : "pending";
+    }
+    return { signature, tofu };
+  }
   function listenerText(listener) {
     if (!listener || typeof listener.state !== "string") return "控制通道未读取";
     const where = listener.state === "ready"
@@ -541,80 +571,160 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
   function requestUsage(peer) {
     const acceptance = peerAcceptance(peer);
+    const presenceEntry = items(p2pOf().presence).find((row) => row.nodeId === peer.nodeId) || null;
+    const security = presenceSecurity(presenceEntry, peer);
+    const needsIdentity = security.tofu !== "accepted";
     openDialog("申请使用伙伴的模型", (root) => {
+      if (security.signature !== "valid") {
+        root.append(el("p", "此伙伴的签名无效或未验证，不能发送申请。", "inline-warning"));
+        return;
+      }
       root.append(paragraph("请求通过覆盖网直接发送；不需要下载或导入文件，也不需要手工交付密钥。"));
       const identify = el("p", "完整身份指纹（请逐字核对）：");
       identify.append(el("code", acceptance.fingerprint, "fingerprint"));
       root.append(identify, details("身份与报价", [["伙伴", peer.quote?.node?.displayName || peer.hostname || "伙伴"], ["报价指纹", acceptance.quoteHash], ["价格版本", peer.quote?.publication?.version], ["价格未锁定", "是（priceLocked: false）"]]));
+      if (needsIdentity) root.append(el("p", P2P_TOFU_LABELS[security.tofu] || "首次连接，需要核对身份", "inline-warning"));
       const getModels = modelChoices(root, items(peer.quote.models).map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" })), []);
+      const accept = needsIdentity ? checkbox(`我核对并接受此完整身份指纹：${acceptance.fingerprint}`) : null;
       const agree = checkbox("我已核对完整身份指纹与报价，并发送一次使用申请");
-      const submit = button("发送使用申请", () => {
+      const submit = button(needsIdentity ? "核对身份并发送申请" : "发送使用申请", async () => {
         const chosen = getModels();
+        if (security.signature !== "valid") { dialogError.textContent = "签名无效或未验证，不能发送申请。"; dialogError.hidden = false; return; }
         if (!agree.input.checked || !chosen.length) { dialogError.textContent = "请选择至少一个有完整价格的模型，并核对身份与报价。"; dialogError.hidden = false; return; }
-        void run("p2p-request", { nodeId: peer.nodeId, fingerprint: acceptance.fingerprint, quoteHash: acceptance.quoteHash, models: chosen }, () => closeDialog());
+        if (accept && !accept.input.checked) { dialogError.textContent = "请先核对并接受此完整身份指纹。"; dialogError.hidden = false; return; }
+        // The service must confirm the identity before any business request; a
+        // failed confirmation leaves the request unsent so it can be retried.
+        if (needsIdentity) {
+          const trusted = await run("trust-peer", { nodeId: peer.nodeId, fingerprint: acceptance.fingerprint });
+          if (!trusted) { dialogError.textContent = "身份确认未完成；申请没有发送，可以重试。"; dialogError.hidden = false; return; }
+        }
+        await run("p2p-request", { nodeId: peer.nodeId, fingerprint: acceptance.fingerprint, quoteHash: acceptance.quoteHash, models: chosen }, () => closeDialog());
       }, true);
       submit.disabled = true;
       agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      if (accept) root.append(accept.label);
       root.append(agree.label, submit);
     });
   }
   function approveP2p(request) {
+    const current = items(state.status.catalog?.quote?.models).filter((model) => items(request.models).includes(model.id));
+    const requested = items(request.models).filter((id) => current.some((model) => model.id === id));
+    const selected = new Set(requested);
+    let preview = null;
+    let previewing = false;
+    let previewGeneration = 0;
     openDialog("核对并批准使用请求", (root) => {
       root.append(paragraph("一次确认会绑定这次请求、对方完整身份指纹、当前报价、选中模型的价格版本与批准代次。批准后密钥通过加密会话自动交付，不需要再发文件或复制密钥。"));
       const identify = el("p", "对方完整身份指纹（请逐字核对）：");
       identify.append(el("code", request.consumerFingerprint, "fingerprint"));
-      root.append(identify);
-      root.append(details("请求身份与绑定", [
+      root.append(identify, details("请求身份与绑定", [
         ["伙伴节点", request.consumerNodeId],
         ["伙伴名称", request.consumerHostname || "未提供"],
         ["报价指纹", request.quoteHash],
-        ["选中模型价格版本", request.priceVersion],
         ["批准代次", request.generation === null || request.generation === undefined ? "首次批准" : String(request.generation)],
         ["到期", when(request.expiresAt)],
       ]));
       if (request.detail) root.append(el("p", request.detail, "inline-warning"));
       if (request.tofu && request.tofu !== "accepted") root.append(el("p", P2P_TOFU_LABELS[request.tofu] || request.tofu, "inline-warning"));
-      // The client cannot compute a subset price version, so this unit approves
-      // exactly the requested set (or rejects). Subset approval needs a real
-      // selected-version field from the service; it is not invented here.
-      const current = items(state.status.catalog?.quote?.models).filter((model) => items(request.models).includes(model.id));
-      const modelRows = el("div");
-      for (const id of items(request.models)) {
-        const model = current.find((row) => row.id === id);
-        const row = el("div", null, "choice-row");
-        row.append(el("strong", model?.displayName || id), paragraph(model ? priceText(model.pricing) : "当前报价里没有这个模型，不能批准；请拒绝或让伙伴重新申请。"));
-        modelRows.append(row);
+      if (current.length !== items(request.models).length) {
+        root.append(el("p", "当前报价缺少请求中的模型，不能批准；请拒绝或让伙伴重新申请。", "inline-warning"));
       }
-      root.append(paragraph("将批准这些模型（本次不提供子集选择）："), modelRows);
-      if (current.length !== items(request.models).length) root.append(el("p", "有模型不在当前报价里；此请求不能批准。", "inline-warning"));
+      root.append(paragraph("选择要批准的模型（默认全部请求模型）。客户端不计算价格版本，选中后由服务返回当前报价的 selected version。"));
+      const choices = [];
+      for (const model of current) {
+        const choice = checkbox(model.displayName || model.id, selected.has(model.id));
+        choice.input.addEventListener("change", () => {
+          if (choice.input.checked) selected.add(model.id); else selected.delete(model.id);
+          invalidatePreview();
+          updateApprove();
+        });
+        const row = el("div", null, "choice-row");
+        row.append(choice.label, paragraph(priceText(model.pricing)));
+        root.append(row);
+        choices.push(choice);
+      }
+      const previewButton = button("预览选中报价", () => { void refreshPreview(); });
+      const previewBox = el("div", null, "workflow-list");
+      root.append(previewButton, previewBox);
       const cap = field("本次授权的正额度（USD）", "number", typeof request.capUsd === "number" && request.capUsd > 0 ? String(request.capUsd) : "");
       cap.input.min = "0.0001"; cap.input.max = "1000000"; cap.input.step = "0.0001"; cap.input.required = true;
       cap.label.append(el("small", "额度必须是 $0.0001 的整数倍；0 在 Magpie 中表示不限制，不能当作暂停。"));
       const accept = request.tofu === "accepted" ? null : checkbox(`我核对并接受此完整身份指纹：${request.consumerFingerprint}`);
       const agree = checkbox("我确认批准这次请求，并接受当前报价、模型与额度");
       const submit = button("确认批准", () => {
+        const chosen = [...selected];
+        if (!preview || !sameSet(preview.models, chosen)) { dialogError.textContent = "请先预览当前选择，再批准。"; dialogError.hidden = false; return; }
         if (current.length !== items(request.models).length) { dialogError.textContent = "当前报价缺少请求中的模型，不能批准。"; dialogError.hidden = false; return; }
         if (!agree.input.checked || !validCap(cap.input.value)) { dialogError.textContent = "请填写正额度，并明确确认批准。"; dialogError.hidden = false; return; }
         if (accept && !accept.input.checked) { dialogError.textContent = "请先核对并接受对方的完整身份指纹。"; dialogError.hidden = false; return; }
         const input = {
           requestId: request.requestId,
           consumerFingerprint: request.consumerFingerprint,
-          quoteHash: request.quoteHash,
-          priceVersion: request.priceVersion,
+          quoteHash: preview.quoteHash,
+          priceVersion: preview.priceVersion,
           generation: request.generation === undefined ? null : request.generation,
-          models: items(request.models),
+          models: chosen,
           capUsd: Number(cap.input.value),
         };
         // acceptFingerprint is only the human first-trust/identity-change marker;
         // the binding fields above are always sent, including when TOFU accepted.
         if (accept) input.acceptFingerprint = request.consumerFingerprint;
-        void run("p2p-approve", input, () => closeDialog());
+        void (async () => {
+          const result = await run("p2p-approve", input, () => closeDialog());
+          // A stale quote/generation means the human must review again; the UI
+          // never retries the write on its own.
+          if (!result && dialog.open) invalidatePreview();
+        })();
       }, true);
-      submit.disabled = true;
-      agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      function sameSet(left, right) { return left.length === right.length && [...left].sort().every((id, index) => id === [...right].sort()[index]); }
+      function invalidatePreview() {
+        preview = null;
+        previewBox.replaceChildren(paragraph("选择已变化，请重新预览当前报价。"));
+      }
+      function updateApprove() {
+        submit.disabled = !agree.input.checked || previewing || !preview || selected.size === 0 || !sameSet(preview.models, [...selected]);
+        previewButton.disabled = previewing || selected.size === 0;
+      }
+      function renderPreview() {
+        previewBox.replaceChildren();
+        if (!preview) return;
+        for (const model of preview.models) {
+          const pricing = items(preview.pricing).find((row) => row.id === model)?.pricing;
+          const row = el("div", null, "choice-row");
+          row.append(el("strong", model), paragraph(pricing ? priceText(pricing) : "当前报价未提供价格"));
+          previewBox.append(row);
+        }
+        previewBox.append(details("选中报价的技术绑定", [["选中价格版本", preview.priceVersion], ["报价指纹", preview.quoteHash], ["模型数", String(preview.models.length)]]));
+      }
+      async function refreshPreview() {
+        if (!selected.size) { dialogError.textContent = "请至少选择一个模型。"; dialogError.hidden = false; return; }
+        const generation = ++previewGeneration;
+        previewing = true;
+        preview = null;
+        previewBox.replaceChildren(paragraph("正在读取选中模型的当前报价…"));
+        updateApprove();
+        try {
+          const result = await client.action("p2p-quote-preview", { requestId: request.requestId, models: [...selected] });
+          if (generation !== previewGeneration || !dialog.open) return;
+          preview = { quoteHash: result.quoteHash, priceVersion: result.priceVersion, models: items(result.models), pricing: items(result.pricing) };
+          renderPreview();
+        } catch (error) {
+          if (generation !== previewGeneration || !dialog.open) return;
+          preview = null;
+          dialogError.textContent = error.status === 409 ? "报价已变化，请重新预览后再决定。" : error.message;
+          dialogError.hidden = false;
+          previewBox.replaceChildren(paragraph(error.status === 409 ? "报价已变化；请重新预览。" : "读取选中报价失败；请重试预览。"));
+        } finally {
+          if (generation === previewGeneration) { previewing = false; updateApprove(); }
+        }
+      }
+      agree.input.addEventListener("change", updateApprove);
+      if (accept) accept.input.addEventListener("change", updateApprove);
       root.append(cap.label);
       if (accept) root.append(accept.label);
       root.append(agree.label, submit);
+      updateApprove();
+      void refreshPreview();
     });
   }
   function rejectP2p(request) {

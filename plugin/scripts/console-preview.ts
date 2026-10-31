@@ -118,7 +118,7 @@ function configuredState(): any {
         listener: { state: "ready", host: "127.0.0.1", port: 41999, reachability: "loopback", verified: true, detail: null },
         inboundRequests: [{
           requestId: "req-inbound-1", consumerNodeId: "c".repeat(16), consumerHostname: "partner-new",
-          consumerFingerprint: "e".repeat(64), models: ["deepseek/deepseek-chat"],
+          consumerFingerprint: "e".repeat(64), models: ["deepseek/deepseek-chat", "qwen/qwen3-235b"],
           quoteHash: "9".repeat(64), priceVersion: "2".repeat(64), capUsd: 0.5,
           expiresAt: new Date(Date.now() + 3600_000).toISOString(), tofu: "pending", state: "pending",
           receivedAt: new Date().toISOString(), detail: null,
@@ -152,12 +152,14 @@ function configuredState(): any {
             nodeId: "a".repeat(16), hostname: "partner-harbor", fingerprint: "f".repeat(64),
             endpoint: { host: "127.0.0.1", mappedCidr: "10.126.126.2", controlPort: 41999 },
             capability: { control: true, sharing: "enabled", providesModels: true },
+            signature: "valid", tofu: "accepted",
             expiresAt: new Date(Date.now() + 120_000).toISOString(), verified: true,
           },
           {
             nodeId: "c".repeat(16), hostname: "partner-new", fingerprint: "e".repeat(64),
             endpoint: { host: "127.0.0.1", mappedCidr: "10.126.126.3", controlPort: 42000 },
             capability: { control: true, sharing: "enabled", providesModels: true },
+            signature: "valid", tofu: "pending",
             expiresAt: new Date(Date.now() + 120_000).toISOString(), verified: true,
           },
         ],
@@ -276,6 +278,16 @@ const server = Bun.serve({
       if (name === "network-refresh" || name === "catalog-refresh" || name === "checks") return json({ result: current });
       if (name === "share-candidates") return json({ result: candidates });
       if (name === "catalog-settings" || name === "share-models" || name === "share-toggle" || name === "catalog-publish") return json({ result: current });
+      if (name === "p2p-quote-preview") {
+        const request = current.status.p2p.inboundRequests.find((row: any) => row.requestId === input.requestId);
+        const models = (Array.isArray(input.models) ? input.models as string[] : []).filter((id) => request?.models.includes(id));
+        const quoteModels = current.status.catalog.quote.models;
+        const pricing = models.map((id) => ({ id, pricing: quoteModels.find((row: any) => row.id === id)?.pricing ?? null }));
+        return json({ result: { requestId: input.requestId, quoteHash: request?.quoteHash ?? "", priceVersion: request?.priceVersion ?? "", models, pricing } });
+      }
+      if (name === "p2p-request" || name === "p2p-approve" || name === "p2p-reject" || name === "p2p-revoke" || name === "p2p-recover") {
+        return json({ result: name === "p2p-request" ? { requestId: "req-fixture", state: "pending" } : { state: "ok" } });
+      }
       return json({ error: "action_not_allowed" }, 404);
     }
     if (url.pathname === "/ui/logout") return json({ ok: true });
