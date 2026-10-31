@@ -474,7 +474,7 @@ describe("C9 hard gates: mainnet send/credit/auto-recharge", () => {
   });
 
   test("a ledger source that claims a mainnet is refused even if a caller reaches the ledger directly", () => {
-    for (const source of ["chain:56", "chain:8453", "chain:56:tx", "mainnet:8453"]) {
+    for (const source of ["chain:56", "chain:8453", "chain:56:tx", "chain:56/tx", "mainnet:8453"]) {
       expect(() => assertCreditSourceNotMainnet(source)).toThrow(/mainnet/);
     }
     for (const source of ["chain:97", "chain:84532", "simulated", "operator"]) {
