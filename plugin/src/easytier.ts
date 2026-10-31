@@ -56,6 +56,8 @@ export interface CoreProcess {
   startedAt: string;
   configPath: string;
   rpcPort: number;
+  /** OS process start marker (ps lstart); detects PID reuse and external restarts */
+  processStart?: string | null;
   adopted?: boolean;
 }
 
@@ -454,6 +456,8 @@ export interface SupervisorOptions {
     rpcListeners?: (port: number) => Promise<string[]>;
     /** OS socket-owner probe; production uses lsof/ss, tests may inject */
     socketOwner?: SocketOwnershipProbe;
+    /** OS process start marker; production reads ps, tests may inject */
+    processStart?: (pid: number) => Promise<string | null>;
     nodeIdentity?: (stdout: string) => boolean;
   };
 }
@@ -472,6 +476,8 @@ export class EasytierSupervisor {
   /** the ownership probe used by waitForRpc and every refresh */
   private ownership: SocketOwnershipProbe;
   private rpcTimeoutMs: number;
+  /** start marker of the supervised process, never taken from stale state alone */
+  private processStart: string | null = null;
   private cfg: EasytierConfig | null = null;
   private restarts = 0;
   private stopping = false;
@@ -497,6 +503,7 @@ export class EasytierSupervisor {
       nodeInfo: opts.probe?.nodeInfo ?? (() => this.nodeInfo()),
       rpcListeners: opts.probe?.rpcListeners ?? ((port: number) => rpcListeners(port)),
       socketOwner: opts.probe?.socketOwner ?? new OsSocketOwnership(),
+      processStart: opts.probe?.processStart ?? ((pid: number) => this.readProcessStart(pid)),
       nodeIdentity: opts.probe?.nodeIdentity ?? ((stdout: string) => this.matchesOurInstance(stdout)),
     };
   }
@@ -507,7 +514,7 @@ export class EasytierSupervisor {
 
   private persist(): void {
     const data: Persisted = {
-      process: this.state.running && this.state.pid ? { pid: this.state.pid, startedAt: this.state.startedAt ?? "", configPath: this.configPath(), rpcPort: this.state.rpcPort ?? 0 } : null,
+      process: this.state.running && this.state.pid ? { pid: this.state.pid, startedAt: this.state.startedAt ?? "", configPath: this.configPath(), rpcPort: this.state.rpcPort ?? 0, processStart: this.processStart } : null,
       config: this.cfg,
       restarts: this.restarts,
     };
@@ -583,11 +590,26 @@ export class EasytierSupervisor {
 
     const persisted = this.loadPersisted();
     if (persisted?.process && this.adoptable(persisted.process.pid) && persisted.process.configPath === this.configPath()) {
+      const currentStart = await this.probe.processStart(persisted.process.pid);
+      if (!currentStart) {
+        throw new Error(
+          `refusing to adopt pid ${persisted.process.pid}: its OS start marker cannot be read (fail closed)`,
+        );
+      }
+      // A legacy record without a marker is accepted only because the live pid
+      // was just verified by ownsProcess(configPath); the marker is captured now.
+      if (persisted.process.processStart && persisted.process.processStart !== currentStart) {
+        throw new Error(
+          `refusing to adopt pid ${persisted.process.pid}: the OS start marker changed ` +
+            `(recorded ${JSON.stringify(persisted.process.processStart)}, now ${JSON.stringify(currentStart)})`,
+        );
+      }
       logger.info(`adopting running easytier-core pid ${persisted.process.pid}`);
       this.state.pid = persisted.process.pid;
       this.state.startedAt = persisted.process.startedAt || new Date().toISOString();
       this.state.running = true;
       this.state.rpcPort = cfg.rpcPort;
+      this.processStart = currentStart;
       this.startMonitor();
       await this.refresh();
       return this.snapshot();
@@ -606,6 +628,14 @@ export class EasytierSupervisor {
     this.proc = proc;
     this.startupPending = true;
     this.lastStartAt = Date.now();
+    this.processStart = await this.probe.processStart(proc.pid);
+    if (!this.processStart) {
+      this.state.lastError =
+        "cannot read the OS process start marker; refusing to query an unverified RPC portal (fail closed)";
+      this.startupPending = false;
+      await this.stop();
+      throw new Error(this.state.lastError);
+    }
     this.state.pid = proc.pid;
     this.state.running = true;
     this.state.startedAt = new Date().toISOString();
@@ -742,6 +772,7 @@ export class EasytierSupervisor {
       }
     }
     this.proc = null;
+    this.processStart = null;
     this.state.running = false;
     this.state.pid = null;
     this.persist();
@@ -794,8 +825,8 @@ export class EasytierSupervisor {
         return false;
       }
       if (owner.pids.includes(ourPid)) {
-        const r = await this.cli(["-o", "json", "node"], port, 3000);
-        if (r.code === 0 && (!this.proc || this.proc.exitCode === null)) {
+        const r = await this.cli(["-o", "json", "node"], port, 3000).catch(() => null);
+        if (r && r.code === 0 && (!this.proc || this.proc.exitCode === null)) {
           if (this.probe.nodeIdentity(r.stdout)) return true;
           this.state.lastError = "the RPC portal answered with a different instance id; refusing to use it";
           return false;
@@ -806,10 +837,60 @@ export class EasytierSupervisor {
     return false;
   }
 
+  private async readProcessStart(pid: number): Promise<string | null> {
+    if (process.platform === "win32") return null;
+    const r = await run(["ps", "-o", "lstart=", "-p", String(pid)], { timeoutMs: 3000 });
+    if (r.code !== 0) return null;
+    const text = r.stdout.trim().replace(/\s+/g, " ");
+    return text || null;
+  }
+
+  /**
+   * Every CLI call is a read of an unauthenticated RPC portal. Before running
+   * it, the live Bun child handle (or a re-verified adopted pid) must still be
+   * alive, its OS start marker must match the one captured at spawn/adoption
+   * (detects PID reuse), and the RPC listener must belong to that same pid.
+   * A missing probe fails closed; a stale `state.pid` alone is never enough.
+   */
+  private async assertCliOwner(rpc: number): Promise<number> {
+    const child = this.proc;
+    if (child && child.exitCode !== null) {
+      throw new Error(`refusing to query the RPC portal: easytier-core exited (code ${child.exitCode})`);
+    }
+    const expected = child?.pid ?? (this.state.running ? this.state.pid : null);
+    if (!expected) throw new Error("refusing to query the RPC portal without a live supervised process");
+    if (!child && !ownsProcess(expected, this.configPath())) {
+      throw new Error(`refusing to query the RPC portal: pid ${expected} no longer runs our easytier-core`);
+    }
+    if (!this.processStart) {
+      throw new Error("refusing to query the RPC portal: no OS process start marker was captured");
+    }
+    const current = await this.probe.processStart(expected);
+    if (!current || current !== this.processStart) {
+      throw new Error(
+        `refusing to query the RPC portal: pid ${expected} start marker changed or cannot be read ` +
+          `(captured ${JSON.stringify(this.processStart)}, now ${JSON.stringify(current)})`,
+      );
+    }
+    const owner = await this.ownership.listenerPids(rpc);
+    if (!owner.supported) {
+      throw new Error(
+        `refusing to query the RPC portal: the listener owner cannot be proven (${owner.detail ?? "no probe"})`,
+      );
+    }
+    if (!owner.pids.includes(expected)) {
+      throw new Error(
+        `refusing to query the RPC portal on ${rpc}: owned by pid ${owner.pids.join(",") || "nobody"}, not ${expected}`,
+      );
+    }
+    return expected;
+  }
+
   private async cli(args: string[], port?: number, timeoutMs = 10_000) {
     if (!this.bin) throw new Error("EasyTier binaries are not ready");
     const rpc = port ?? this.state.rpcPort;
     if (!rpc) throw new Error("no RPC port");
+    await this.assertCliOwner(rpc);
     return run([this.bin.cli, "-p", `127.0.0.1:${rpc}`, ...args], { timeoutMs });
   }
 
