@@ -83,6 +83,19 @@ function otherIdentity(): CatalogIdentity {
   };
 }
 
+test("the signed endpoint host follows the mapped export, not a stale bind host", async () => {
+  const { service, presence } = fakeService();
+  const cfg = (service.config as unknown as () => Record<string, unknown>)();
+  Object.assign(cfg, { sharingEnabled: true, mappedCidr: "10.66.7.8/32", proxyCidr: "192.0.2.10/32" });
+  const app = await startControlApp(service, { host: "127.0.0.1", port: 35630 });
+  apps.push(app!);
+  const doc = presence()!() as Record<string, unknown>;
+  const verified = verifyPresence(doc, new Date(), { expectedMappedCidr: "10.66.7.8/32" });
+  expect(verified.endpoint.host).toBe("10.66.7.8");
+  expect(verified.endpoint.mappedCidr).toBe("10.66.7.8/32");
+  await app!.stop();
+});
+
 function neighbourPresence(identity: CatalogIdentity, over: Partial<PresenceBody> = {}): PresenceBody {
   return {
     schema: PRESENCE_SCHEMA,

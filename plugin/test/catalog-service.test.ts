@@ -833,6 +833,19 @@ describe("a core stopped by a failed safety check is degraded and recoverable", 
   });
 });
 
+describe("sharing notifies the control plane", () => {
+  test("the one explicit share re-syncs the P2P endpoint publication", async () => {
+    const s = await service({ sharing: false, catalog: false });
+    s.setControlActive(true);
+    await s.ensureControlPort();
+    let synced = 0;
+    s.setTopologyListener(async () => { synced += 1; });
+    await s.shareNativeModels({ models: ["beta/c"], confirm: true });
+    expect(s.config()!.sharingEnabled).toBe(true);
+    expect(synced).toBeGreaterThan(0);
+  });
+});
+
 describe("control-only publication for a node that shares no models", () => {
   test("exports exactly the presence and control ports, never the gateway", async () => {
     const s = await service({ sharing: false, catalog: false });

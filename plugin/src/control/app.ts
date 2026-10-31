@@ -303,7 +303,11 @@ export class ControlApp {
         fingerprint: this.identity.summary.fingerprint,
         publicKey: this.identity.summary.publicKey,
       },
-      endpoint: { host: this.publishedHost, mappedCidr: cfg.mappedCidr, controlPort: this.port, ready: true },
+      // The endpoint host must be the address the peer can actually dial. When
+      // an export exists that is the mapped address (the verifier requires it
+      // to equal mappedCidr); a direct LAN endpoint is only for an unexported
+      // test fixture.
+      endpoint: { host: cfg.mappedCidr ? mappedHost(cfg.mappedCidr) : this.publishedHost, mappedCidr: cfg.mappedCidr, controlPort: this.port, ready: true },
       capability: { control: true, sharing: cfg.sharingEnabled ? "enabled" : "disabled", providesModels: Boolean(cfg.sharingEnabled) },
       issuedAt: new Date(now.getTime() - 10_000).toISOString(),
       expiresAt: new Date(now.getTime() + 120_000).toISOString(),

@@ -421,9 +421,11 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       top.append(badge(statusNames[peer.status] || "尚未验证", peer.status === "verified" || peer.status === "connected" ? "good" : "warn"));
       const catalogFact = peer.catalog === "withdrawn"
         ? "已撤下目录"
-        : peer.catalog === "published" && peer.quote
-          ? `${items(peer.quote.models).length} 个模型`
-          : "目录未读取";
+        : peer.catalog === "none"
+          ? "未共享模型"
+          : peer.catalog === "published" && peer.quote
+            ? `${items(peer.quote.models).length} 个模型`
+            : "目录未读取";
       const networkFact = peer.online === true ? "网络在线" : peer.online === false ? "网络离线" : "在线状态未确认";
       card.append(top, paragraph(`${catalogFact} · ${networkFact} · ${peer.quote?.node?.contact || "未提供联系方式"}`));
       const acceptance = peerAcceptance(peer);

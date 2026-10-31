@@ -351,7 +351,7 @@ export interface CatalogPeerView extends DirectoryPeer {
    * peer that stops sharing keeps its network row but can no longer serve a
    * quote, so it must not be presented as an applicable online offer.
    */
-  catalog: "published" | "withdrawn" | "conflict" | "unknown";
+  catalog: "published" | "withdrawn" | "none" | "conflict" | "unknown";
   /** the cached quote was read inside CATALOG_QUOTE_TTL_MS and may be applied */
   quoteFresh: boolean;
   /** when the quote may no longer be applied; null without a quote */
@@ -374,6 +374,9 @@ export function catalogQuoteUsability(peer: CatalogPeerView, now = Date.now()): 
   if (peer.online !== true) return { usable: false, detail: "is offline; refresh the directory when it returns" };
   if (peer.catalog === "withdrawn" || peer.status === "no-catalog") {
     return { usable: false, detail: "is online as a neighbour but has withdrawn its catalogue (sharing stopped or the mapping is gone); refresh the directory" };
+  }
+  if (peer.catalog === "none") {
+    return { usable: false, detail: "has not shared any models; there is no catalogue to request" };
   }
   if (peer.catalog !== "published" || !peer.quote || !peer.quoteHash) {
     return { usable: false, detail: "has no catalogue quote to request; refresh the directory" };
@@ -1726,6 +1729,9 @@ export class Service {
         throw new Error("the catalogue server is not running or no signed quote was published");
       }
       logger.info(`sharing ${selected.length} native model(s); the catalogue is published`);
+      // The control plane publishes a presence whose endpoint follows the new
+      // export; without this the signed presence would still name the old host.
+      this.notifyTopology();
       return this.status();
     } catch (e) {
       const why = (e as Error)?.message ?? String(e);
@@ -2385,6 +2391,9 @@ export class Service {
   /** Starts or stops the presence-only listener used by control-only nodes. */
   private async applyPresenceOnly(): Promise<void> {
     const cfg = this.state.config;
+    // Serve the signed presence ourselves whenever the catalogue server is not
+    // doing it: a node may share models with its catalogue unpublished, and a
+    // node that shares nothing must still be discoverable for the control plane.
     const wanted = Boolean(cfg && this.controlActive && cfg.controlEnabled && !this.catalogPublishing());
     if (!wanted) {
       this.stopPresenceServer();
@@ -3018,7 +3027,13 @@ export class Service {
           quoteHash: withdrawn ? null : earlier?.quoteHash ?? null,
           fetchedAt: withdrawn ? null : earlier?.fetchedAt ?? null,
           connectedProviderId: connected?.id ?? null,
-          catalog: entry.conflict ? "conflict" : withdrawn ? "withdrawn" : entry.mappedCidr ? "published" : "unknown",
+          catalog: entry.conflict
+            ? "conflict"
+            : withdrawn
+              ? (earlier?.quote || earlier?.lastQuoteAt ? "withdrawn" : "none")
+              : earlier?.quote
+                ? "published"
+                : "unknown",
           quoteFresh: withdrawn ? false : quoteFresh,
           quoteExpiresAt:
             withdrawn || !earlier?.fetchedAt
