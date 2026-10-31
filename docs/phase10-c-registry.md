@@ -1,6 +1,6 @@
 # Phase 10 C1 — 主网只读注册表、收款网络选择与硬门禁
 
-> 状态：**独立审查 fixes 已应用，待 re-review/合并**。本文只报告本单元（C1 registry + C2 选择 + C3 资产四元组 + C9 主网硬门禁）的实际结果，不代表 C 整体、UI 或真实资金验收。
+> 状态：**复审实际资金边界 fixes 已应用，待 re-review/合并**。本文只报告本单元（C1 registry + C2 选择 + C3 资产四元组 + C9 主网硬门禁）的实际结果，不代表 C 整体、UI 或真实资金验收。
 >
 > **真实资金：NO-GO。** 本单元没有发送、授信、自动充值、签名或广播路径；没有任何真实资产被移动。
 >
@@ -554,3 +554,17 @@ bun test --preload /tmp/phase10-prep/guard.ts \
 - `plugin/bin/wallet-wizard.ts`、`plugin/scripts/chain-lab.ts`：构造完整记录字段（行为不变）。
 
 PR：draft，未合并。审查重点：§3.5 多入口、§3.6 迁移、§4 契约、§5.2 已知时钟失败是否与本改动无关。
+
+## 10. 复审 actual-money fixes（target `871976a`）
+
+针对 `/tmp/oma-research/C-REGISTRY-REREVIEW-20461b1.md` 的 B1–B5，按最小改完成：
+
+- **actual money chain/asset**：`Ledger.depositIntent` 的 chain 必须属于 `[97,84532]`；assetId 必须是 `eip155:<chain>:0x<contract>` 且 chain 与 chainId 相同，否则不记账。`Provisioner.applyChainDeposit`/`setCap` 在 Magpie cap 写入前重复 allowlist/asset/chain 检查；`chain:1` 与跨链 asset 均不产生 cap。
+- **运行期 FundsClass**：`KnownFundsClass` 白名单；`fundsClass:"bogus"` 拒绝；DB `funds_class` 未知读为 `unknown`（审计态），不 throw。
+- **reconcile 精确比对**：class/chain/asset/amount 任一不一致即 `uncertain`、暂停 native grant、保留 pending，不增加 `creditedUsd`；同源 manual/simulated 才可恢复。
+- **旧 31337 lab**：v1/v2 文档中 `31337 enabled` 加载成功但自动 credit 关闭，`notes` 标 `simulation-import-required`；`creditableNetworks` 不含它，显式 `simulationRegistry` 才能本地恢复。chain 1/unknown 仍拒绝。
+- **legacy unknown source**：`depositsFor`/`deposit` 可读，`fundsClass="unknown"`；历史 `balance` 保留，新增 `unreviewedNanos`/`creditableAvailableNanos` 分离（`unreviewedUsd`/`creditableAvailableUsd` 投影）。unknown 会暂停授信且 topUp/apply/reissue 不发新 cap；`reviewDepositProvenance()` 提供本地显式审计恢复，只改 provenance，不改 amount/source/status。
+
+本地测试：`354 pass / 0 fail / 1896 expect / 18 files`（旧简化 guard，仅 `:3425`/non-loopback；不等于 PR17 精确 guard）。CI run `41162643704`（head `871976a`）双平台 pass；这是提交者 CI，不是独立审查通过。
+
+仍未完成/不宣称：send/sign/autoRecharge 无生产调用点（UNKNOWN）；无主网事件入账路径（UNKNOWN）；真实资金 **NO-GO**。B-service 的 `revokeEnforced` 独立方法边界已协调，未复制其未审代码。
