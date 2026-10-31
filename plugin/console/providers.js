@@ -346,7 +346,10 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   const contact = field("联系说明"); contact.input.maxLength = 200;
   const minimum = field("建议申请额度（USD）", "number"); minimum.input.min = "0.0001"; minimum.input.step = "0.0001";
   const pubFields = el("div", null, "form-grid"); pubFields.append(displayName.label, contact.label, minimum.label);
-  publication.append(pubFields, paragraph("这些字段会出现在伙伴看到的目录里；不含密钥、余额或账目。"));
+  const pubSave = el("button", "保存展示信息", "button secondary"); pubSave.type = "button";
+  pubSave.addEventListener("click", () => { if (state) void run("catalog-settings", catalogueOptions(), () => { publicationDirty = false; }); });
+  const pubActions = el("div", null, "workflow-actions"); pubActions.append(pubSave);
+  publication.append(pubFields, paragraph("这些字段只改目录展示文案，不会分享模型或发布目录；分享仍要点“分享这些模型”。"), pubActions);
   for (const input of [displayName.input, contact.input, minimum.input]) input.addEventListener("input", () => { publicationDirty = true; });
   const ownIdentity = el("div", null, "card workflow-section");
   ownIdentity.append(toolbar("我的目录身份"), paragraph("让伙伴在其“发现”页面展开身份信息，与你通过可信渠道逐字核对完整指纹。以下均为公开目录信息。"));
@@ -391,6 +394,14 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     if (minimum.input.value) input.minTopUpUsd = Number(minimum.input.value);
     return input;
   }
+  /**
+   * An older plugin would need several separate writes (models, sharing, publish)
+   * with different defaults and no rollback. Sharing must be all-or-nothing, so
+   * the UI refuses instead of leaving a half-published catalogue.
+   */
+  function outdated(action) {
+    return Object.assign(new Error(`当前插件版本不提供「${action}」，无法保证一次完成。为避免只公开一部分模型或留下不一致的共享状态，本页没有做任何修改；请更新 Magpie 中的 Oh My AIHub 插件后重试。`), { status: 404 });
+  }
   function confirmShare() {
     const chosen = selectableModels(candidates?.models, [...selectedModels]);
     if (!chosen.length) { notice("请至少勾选一个有完整价格的本机模型。", "warn"); return; }
@@ -408,19 +419,11 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     if (working || !state) return;
     working = true; setBusy(true); notice("正在核对并分享所选模型…");
     try {
-      const options = catalogueOptions();
-      if (Object.keys(options).length) {
-        try { await client.action("catalog-settings", options); }
-        catch (error) { if (error.status !== 404) throw error; }
-      }
       try {
         await client.action("share-native-models", { models, confirm: true });
       } catch (error) {
-        if (error.status !== 404) throw error;
-        // Older backend: the same three writes are visible one by one instead.
-        await client.action("share-models", { models });
-        await client.action("share-toggle", { enabled: true });
-        await client.action("catalog-publish", { enabled: true });
+        if (error.status === 404) throw outdated("share-native-models");
+        throw error;
       }
       modelDirty = false;
       closeDialog();
@@ -447,15 +450,15 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         try {
           try { await client.action("stop-sharing", { confirm: true }); }
           catch (error) {
-            if (error.status !== 404) throw error;
-            await client.action("share-toggle", { enabled: false });
-            await client.action("catalog-publish", { enabled: false });
+            if (error.status === 404) throw outdated("stop-sharing");
+            throw error;
           }
           closeDialog();
           await refreshState();
           notice("已停止共享并撤下目录。", "good");
         } catch (error) {
           const message = error.status === 0 ? "连接中断，停止结果暂时不明。请刷新状态确认。" : error.message;
+          notice(message, "warn");
           dialogError.textContent = message; dialogError.hidden = false;
         } finally { working = false; if (state) setBusy(false); }
       }, true);

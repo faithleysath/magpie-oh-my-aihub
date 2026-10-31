@@ -11,7 +11,7 @@
 
 **VERIFIED（源码 + 单测）**：控制台已从 7 项导航改为用户要求的 5 页（首页 / 发现 / 我的共享 / 钱包 / 网络），首次连接只有 3 个字段和一个主操作，分享是一次明确的“分享这些模型”，钱包资产与提供者信用分开显示，端口/检查/RPC/观察器全部收进只读诊断。
 **REPRODUCED（mock + ego-lite）**：19 张截图（五页 × 浅/深 @1440、五页浅色 @390、分享确认弹窗、首次连接 @1440/@390、焦点），正文 16px、控件与导航 44px、无横向滚动、减动效生效、焦点可见。
-**UNKNOWN**：本轮**没有**在真实 Magpie 0.1.2289 + EasyTier 2.6.4 上跑新 UI。`join-network` / `share-native-models` / `stop-sharing` / `network-refresh` 四个动作由 A-service 实现；本分支用 404 退化路径保证旧后端可用，真实联调要等 A-service 合入后再验。
+**UNKNOWN**：本轮**没有**在真实 Magpie 0.1.2289 + EasyTier 2.6.4 上跑新 UI。`join-network` / `share-native-models` / `stop-sharing` / `network-refresh` 四个动作由 A-service 实现；缺少这些动作时 UI **fail-closed**（提示更新插件，不写旧动作），真实联调要等 A-service 合入后再验。
 
 ---
 
@@ -19,7 +19,7 @@
 
 | 页 | 内容 | 明确的“不要” |
 | --- | --- | --- |
-| 首页 | 网络连接 / 可用模型 / 我的共享 / 钱包 / 待办（5 块） | 无英雄卡、无统计卡、无图表、无能力徽标堆叠、无端口/ACL/检查明细 |
+| 首页 | 网络连接 / 可用模型 / 我的共享 / 钱包 / 待办（5 行，单张卡片内的列表） | 无英雄卡、无统计卡、无图表、无能力徽标堆叠、无端口/ACL/检查明细；“可用模型”只统计已授权伙伴服务，本机可分享数量不出现在首页 |
 | 发现 | Tab：伙伴目录 / 我的连接（原生 Remote Magpie） | 不再有独立“我的连接”导航项 |
 | 我的共享 | 自动检测本机模型 → 勾选 → **一次**“分享这些模型”确认；“停止共享”单独；目录身份、申请、已授权伙伴 | 无角色开关、无“保存模型范围/保存目录说明/发布目录”多步保存 |
 | 钱包 | 网络、资产与提供者信用（平铺只读）→ 入账申请 → 使用方付款；“高级恢复 · 账本与离线账单” | 无网络卡套卡、无每网络 5 按钮、不在主视图放 RPC/观察器/扫描/注册代币 |
@@ -54,6 +54,7 @@
 - 提交文案明确“保存只表示配置已写入；是否在线看下方实际结果”，不会把保存当在线。
 - 成功后首次会跳到首页；网络页始终能用 `刷新网络状态` 触发一次显式读取。
 
+**fail-closed**：`join-network` 返回 404（旧后端）时**不做任何写入**，直接提示“本页没有修改任何设置；请更新 Magpie 中的 Oh My AIHub 插件后重试”。旧 `configure` 的默认角色/端口/监听与三字段语义不等价，因此不自动降级。
 **REPRODUCED（mock）**：空提交被 `reportValidity` 拦下（`network-name`、`network-secret` 为 invalid），无请求发出；填好后提交返回 `{result: state}`，页面显示“配置已写入…”，`network-readiness` 变为“已连接”。
 **UNKNOWN**：真实 `join-network` 的端到端行为（端口自动分配、监听自动生成、失败回滚展示）。UI 只消费 `status.network`，不自行推导。
 
@@ -64,10 +65,10 @@
 ### 4.1 一次分享（不自动公开）
 
 1. 进入共享页自动调用只读 `share-candidates`（**不分享**），列出本机模型、价格与“价格完整/缺少价格”。
-2. 用户勾选后点 `分享这些模型` → 弹窗列出**确切模型清单**并声明“会开启共享并把这份清单发布到网络目录” → 勾选确认 → 一个事务动作。
-3. 动作优先 `share-native-models {models, confirm:true}`；404（旧后端）时退化为 `share-models` → `share-toggle` → `catalog-publish`，失败会提示“结果不明，先刷新”。
-4. `停止共享` 单独一个确认；`stop-sharing` 404 时退化为两个旧动作。
-5. 目录展示名/联系方式/建议额度收进一个折叠块，随同分享一起保存，不再有第二个保存按钮。
+2. 用户勾选后点 `分享这些模型` → 弹窗列出**确切模型清单**并声明“会开启共享并把这份清单发布到网络目录” → 勾选确认 → 一个事务动作 `share-native-models {models, confirm:true}`。
+3. **不做多步降级**：`share-native-models` 返回 404 时只提示“请更新 Magpie 中的 Oh My AIHub 插件”，不写 `share-models` / `share-toggle` / `catalog-publish`，避免部分公开或 ACL 与目录不一致。
+4. `停止共享` 单独一个确认；`stop-sharing` 404 同样 fail-closed，不写旧开关。
+5. 目录展示名/联系方式/建议额度收进折叠块，**单独**“保存展示信息”（只改文案，不分享、不发布）；分享时不再附带这次写入，避免“分享失败但展示信息已改”的半写状态。
 
 **VERIFIED（单测）**：未选模型时点击只提示“请至少勾选…”，不发请求；确认弹窗需要显式勾选才启用提交。
 **REPRODUCED（mock）**：确认分享后 `notice` = “已分享所选模型；目录发布状态以下方真实状态为准。”，弹窗关闭。
@@ -82,9 +83,10 @@
 
 ### 4.3 钱包
 
-- 顶部：钱包证据时间 + “已读取/未初始化/不可读”，未知不按 0。
-- `网络、资产与提供者信用`：每个网络一行（链上已入账 / 收款地址 / 资产），平铺无嵌套卡；**资产 ≠ 信用**，说明写明“链上入账是资产记录，伙伴账目余额是提供者信用”。
-- 未扫描过的链显示 **尚未查询**，不显示 `$0.0000`。
+- 首屏只有一句“测试网环境；本应用不持有私钥，不执行转账”，没有免责声明墙、证据徽标或缓存时间。
+- `钱包概览`：**资产余额 = 尚未查询**（本阶段没有余额读取，不打印 0）；`最近入账（累计，非余额）`单独标金额与时间；`测试网络`列网络与资产；`提供者信用（按伙伴）`逐伙伴显示，不做统一池。
+- 证据徽标、`viewAt/evidenceAt`、chainId、观察器状态、RPC、扫描、测试代币、审计异常全部在 `网络 → 诊断 → 钱包与链诊断`。
+- 未初始化/不可读时给出下一步（初始化 / 刷新），不伪装成完整钱包。
 - `共享方 · 发起与追踪入账申请`：主操作 `创建测试网入账申请`（原有 5 字段流程不变）。
 - `使用方 · 用自己的外部钱包付款`：`导入并核对入账申请`。
 - `高级恢复 · 账本与离线账单`：原有账单伙伴选择、消费记录、离线账单导入全部保留；文案标注“这是既有会计路径，不是 Phase 10 的无文件目标”。
@@ -103,13 +105,14 @@ UI 只依赖这些字段/动作：
 | --- | --- |
 | 网络状态/邻居/端口 | `status.network`（`state/summary/evidence/core/thisNode/neighbors[]/ports[]/catalog`）；缺失时退化读 `status.easytier` + `status.config` |
 | 分享 | `share-candidates`（只读）、`share-native-models {models, confirm:true}`、`stop-sharing {confirm:true}` |
-| 连接 | `join-network {networkName, networkSecret, initialNode}`；404 → `configure {networkName, networkSecret, peers}` |
+| 连接 | `join-network {networkName, networkSecret, initialNode}`；404 → 提示更新插件，**不写** `configure` |
 | 刷新 | `network-refresh {}`；404 → 仅重新轮询 |
 | 目录发布状态 | 优先 `status.catalog.publishing`，退化 `status.config.catalog.enabled` |
 
 **空值纪律**：`latencyMs === null` 不显示、`online === null` 不显示在线/离线、`lossRatePct === null` 不显示 0、端口 `state !== "stable"` 时追加状态词、`catalog.modelCount === null` 显示“未知”。
-**退化规则**：只有 HTTP 404（动作不存在，什么都没执行）才允许换旧动作；400/500/0 一律显示真实错误并提示刷新，不自动重试。
+**404 规则**：只识别“动作不存在”，一律提示更新插件；不换旧动作、不做多步写入。400/500/0 显示真实错误并提示刷新，不自动重试。
 **已确认（A-service v2）**：`configured=true` 时 `networkSecret` 可省略/空串，保留已存密钥；`initialNode` 省略 = 保持当前节点。响应统一 `{result: consoleState}`；分享成功后 `status.catalog.publishing === true` 且 `status.catalog.quote.modelCount` 存在。
+**无多步降级（主审要求）**：任何 404 只提示“更新插件”，不自动写旧动作。`configure` 的默认角色/端口/监听与三字段不等价，`share-models`+`share-toggle`+`catalog-publish` 也不是一个事务；两者都不作为兼容路径。
 **端口字段**：`ports[].reachability`（`loopback/overlay/lan/unknown`）与 `purpose` 枚举（`overlay-listen/easytier-rpc/catalog/catalog-socks/gateway/forward/console/api/control`）只用作只读展示，`gateway` 恒为 `unknown`（Magpie 自己持有该监听）。
 **不宣称端口已验证**：UI 原样显示后端 `state`（稳定/已迁移/冲突/未验证/失败/未知）与 `verifiedAt`，并写明“地址或端口被占用不等于由本插件验证”；没有 `editable: true`，也没有把 `stable` 升级成“已验证”。A-service 的 PR #22 仍在独立审查（端口 ownership 存疑），本分支不依赖它、不把它的端口管理当作已验收。
 
@@ -135,7 +138,7 @@ bun test ./test/console-api.test.ts ./test/console-security.test.ts \
 
 **REPRODUCED（2026-10-31，Bun 1.4.3）**
 
-- `bun test ./console`：**66 pass / 0 fail**（4 个文件、542 断言）。新增 `shell.test.js` 覆盖：5 项导航、首页 5 块、三字段、端口只读、每页 ≤1 primary、主题持久化边界、会话文案区分、`join-network` 只发三字段、`status.network` 空值纪律、单次分享、钱包诊断拆分。
+- `bun test ./console`：**71 pass / 0 fail**（4 个文件、569 断言）。新增 `shell.test.js` 覆盖：5 项导航、首页 5 块、三字段、端口只读、每页 ≤1 primary、主题持久化边界、会话文案区分、`join-network` 只发三字段、`status.network` 空值纪律、单次分享、钱包诊断拆分。
 - 四个 console TS 用例：**55 pass / 3 fail**，失败均为既有时钟固定导致“请求已过期”（P0-3 已知基线问题），与本轮前端改动无关；本轮**未**运行会探测生产 Magpie/RPC 的 `phase8-prompt-journey`、`service` 等重型用例。
 
 ---

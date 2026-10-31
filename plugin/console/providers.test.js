@@ -221,6 +221,46 @@ describe("real mounted workflow handlers", () => {
     } finally { r.cleanup(); }
   });
 
+  test("sharing fails closed instead of writing several legacy actions", async () => {
+    const r = runtime(baseState(), async (name) => {
+      if (name === "share-native-models") throw Object.assign(new Error("missing"), { status: 404 });
+      return {};
+    });
+    try {
+      await find(r.roots["sharing-panel"], "button", "分享这些模型").click(); await flush();
+      const agree = all(r.dialog, "input")[0]; agree.checked = true; await agree.emit("change");
+      await find(r.dialog, "button", "确认分享").click(); await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["share-native-models"]);
+      expect(r.notices.at(-1)[0]).toContain("更新 Magpie");
+      expect(r.notices.at(-1)[0]).toContain("没有做任何修改");
+    } finally { r.cleanup(); }
+  });
+
+  test("stopping sharing fails closed without legacy toggles", async () => {
+    const r = runtime(baseState(), async (name) => {
+      if (name === "stop-sharing") throw Object.assign(new Error("missing"), { status: 404 });
+      return {};
+    });
+    try {
+      await find(r.roots["sharing-panel"], "button", "停止共享").click(); await flush();
+      const agree = all(r.dialog, "input")[0]; agree.checked = true; await agree.emit("change");
+      await find(r.dialog, "button", "确认停止").click(); await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["stop-sharing"]);
+      expect(r.notices.at(-1)[0]).toContain("更新 Magpie");
+    } finally { r.cleanup(); }
+  });
+
+  test("catalogue metadata saves on its own and never publishes", async () => {
+    const r = runtime();
+    try {
+      const sharing = r.roots["sharing-panel"];
+      await find(sharing, "button", "保存展示信息").click(); await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["catalog-settings"]);
+      expect(r.calls[0].input.displayName).toBeNull();
+      expect(r.calls.some((call) => ["share-models", "share-toggle", "catalog-publish"].includes(call.name))).toBeFalse();
+    } finally { r.cleanup(); }
+  });
+
   test("approval refuses zero cap and requires selected model plus human confirmation", async () => {
     const state = baseState();
     state.workflows.requests = [{ id: "request-id", status: "pending", eligible: true, reasons: [], document: { consumer: { nodeId: "consumer-id", hostname: "申请者" }, provider: { nodeId: "provider-id" }, models: [model.id], quote: { identityFingerprint: fingerprint, contentHash: quoteHash } }, currentQuote: { identityFingerprint: fingerprint, contentHash: quoteHash } }];

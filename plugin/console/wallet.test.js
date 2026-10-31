@@ -88,7 +88,7 @@ test("verified timeline step without timestamp stays verified and missing eviden
     const signature = all(root, "li").find((node) => node.className === "timeline-done");
     expect(signature.textContent).toContain("付款方签名已验证未记录核验时间");
     expect(signature.textContent).not.toContain("尚未验证");
-    expect(root.textContent).toContain("最近主动核验：尚未验证");
+    expect(r.roots["wallet-diagnostics"].textContent).toContain("最近主动核验：尚未验证");
     await all(r.roots["wallet-diagnostics"], "button").find((node) => node.textContent === "注册测试代币").click();
     expect(r.dialog.textContent).toContain("1 USD = 1,000,000,000 nanoUSD");
     expect(r.calls).toHaveLength(0);
@@ -345,13 +345,34 @@ test("wallet page is a flat read-only overview; chain tools live in network diag
   expect(source).toContain('document.getElementById("wallet-diagnostics")');
   expect(source).toContain("RPC、观察器、扫描、测试代币、对账与审计都在这里");
   expect(source).toContain("这是既有会计路径，不是 Phase 10 的无文件目标。");
-  // Rows are flat, never a card inside a card.
-  expect(source).toContain('"wallet-network-row"');
+  // The overview is a flat fact list, never a card inside a card.
+  expect(source).toContain('fact("资产余额"');
+  expect(source).toContain('"尚未查询"');
   expect(source).not.toContain('"wallet-network-card"');
-  // An unread chain must never be rendered as a zero balance.
-  expect(source).toContain('!chain.lastScanAt && !(chain.totals?.credited > 0) ? "尚未查询"');
+  expect(source).not.toContain('"wallet-network-row"');
+  // A balance is never rendered unless it was actually read.
+  expect(source).toContain('fact("资产余额", available ? "尚未查询" : "尚未读取")');
+  expect(source).toContain('fact("最近入账（累计，非余额）"');
   // Offline statement import belongs to the recovery disclosure, not the everyday path.
   const guide = source.slice(source.indexOf("使用方 · 用自己的外部钱包付款"), source.indexOf("钱包与链诊断"));
   expect(guide).not.toContain('button("导入共享方账单"');
   expect(source).toContain('button("导入共享方账单"');
+});
+
+test("wallet first screen stays functional, not a monitoring panel", () => {
+  const r = runtime();
+  try {
+    const wallet = r.roots["wallet-panel"];
+    // The page heading owns the single environment note; no disclaimer wall here.
+    expect(wallet.textContent).not.toContain("测试网环境");
+    expect(wallet.textContent).not.toContain("钱包配置已读取");
+    expect(wallet.textContent).not.toContain("最近主动核验");
+    expect(wallet.textContent).not.toContain("本地视图");
+    // No current balance is claimed, and chain ids stay in diagnostics.
+    expect(wallet.textContent).toContain("资产余额");
+    expect(wallet.textContent).toContain("尚未查询");
+    expect(wallet.textContent).not.toContain("chainId 97");
+    expect(wallet.textContent).not.toContain("观察运行中");
+    expect(r.roots["wallet-diagnostics"].textContent).toContain("最近主动核验");
+  } finally { r.cleanup(); }
 });
