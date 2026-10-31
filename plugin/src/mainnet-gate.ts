@@ -114,7 +114,7 @@ export function assertNoMainnetAutoRecharge(input: { chainId: number; operation?
  */
 export function creditSourceChainId(source: unknown): number | null {
   if (typeof source !== "string") return null;
-  const match = /^(?:chain|mainnet):(\d+)(?:$|[:_#-])/.exec(source);
+  const match = /^(?:chain|mainnet):(\d+)(?=\D|$)/.exec(source);
   if (!match) return null;
   const chainId = Number(match[1]);
   return Number.isSafeInteger(chainId) ? chainId : null;
