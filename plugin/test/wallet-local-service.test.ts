@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConsoleInputError, createConsoleHandler, type ConsoleHandler, type ConsoleServerOptions } from "../src/console-server.ts";
@@ -100,7 +100,9 @@ describe("WalletLocalService lifecycle and reveal", () => {
       kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
     }, a) as { authorizationId: string };
     service.endSession(a.sessionId);
+    expect((await service.action("wallet-vault-status", {}, a) as any).wallet.status).toBe("locked");
     expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: staleGrant.authorizationId, password: PASSWORD }, a))).toBe("wallet-reveal-invalid");
+    await service.action("wallet-vault-unlock", { password: PASSWORD }, a);
     const lockGrant = await service.action("wallet-vault-reveal-authorize", {
       kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
     }, a) as { authorizationId: string };
@@ -110,6 +112,19 @@ describe("WalletLocalService lifecycle and reveal", () => {
     }, a)).rejects.toMatchObject({ code: "wallet-unlock-required" });
     await service.action("wallet-vault-unlock", { password: PASSWORD }, a);
     expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: lockGrant.authorizationId, password: PASSWORD }, a))).toBe("wallet-reveal-invalid");
+
+    const sameMsGrant = await service.action("wallet-vault-reveal-authorize", {
+      kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
+    }, a) as { authorizationId: string };
+    await service.action("wallet-vault-unlock", { password: PASSWORD }, a);
+    expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: sameMsGrant.authorizationId, password: PASSWORD }, a))).toBe("wallet-reveal-invalid");
+
+    const disposeGrant = await service.action("wallet-vault-reveal-authorize", {
+      kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
+    }, a) as { authorizationId: string };
+    service.dispose();
+    expect((await service.action("wallet-vault-status", {}, a) as any).wallet.status).toBe("locked");
+    expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: disposeGrant.authorizationId, password: PASSWORD }, a))).toBe("wallet-reveal-invalid");
   });
 
   test("wrong password locks the vault and burns the grant; inactive session and TTL reject", async () => {
@@ -139,6 +154,24 @@ describe("WalletLocalService lifecycle and reveal", () => {
     expect(await codeOf(service.action("wallet-vault-unlock", { password: PASSWORD }, inactive))).toBe("wallet-session-required");
   });
 
+  test("adapter re-checks server-owned session after KDF and never returns a late secret", async () => {
+    const service = new WalletLocalService({ path: tempPath() });
+    let active = true;
+    const ctx: WalletLocalContext = { sessionId: "d".repeat(64), isActive: () => active };
+    const create = service.action("wallet-vault-create", { password: PASSWORD }, ctx);
+    active = false;
+    await expect(create).rejects.toMatchObject({ code: "wallet-session-required" });
+    expect((await service.action("wallet-vault-status", {}, ctx) as any).wallet.status).toBe("locked");
+  });
+
+  test("restore limit is UTF-8 bytes, not UTF-16 code units", async () => {
+    const service = new WalletLocalService({ path: tempPath() });
+    const ctx = context();
+    await expect(
+      service.action("wallet-vault-restore", { encryptedBackup: "😀".repeat(9_000), password: PASSWORD }, ctx),
+    ).rejects.toMatchObject({ code: "wallet-invalid-input" });
+  });
+
   test("input whitelist and safe error messages do not echo secrets", async () => {
     const service = new WalletLocalService({ path: tempPath() });
     const ctx = context();
@@ -165,6 +198,68 @@ describe("WalletLocalService lifecycle and reveal", () => {
       expect((error as Error).message).not.toContain(VECTOR);
     }
   });
+});
+
+function badKeystoreCase(kind: "0644" | "corrupt" | "symlink"): { cwd: string; path: string } {
+  const cwd = mkdtempSync(join(tmpdir(), "oma-wallet-bad-"));
+  dirs.push(cwd);
+  const dir = join(cwd, "oh-my-aihub", "wallet");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const path = join(dir, "keystore.json");
+  if (kind === "symlink") {
+    const target = join(dir, "target.json");
+    writeFileSync(target, JSON.stringify({ version: 3 }), { mode: 0o600 });
+    symlinkSync(target, path);
+  } else {
+    writeFileSync(path, kind === "corrupt" ? "{\"version\":3}" : JSON.stringify({ version: 3 }), { mode: kind === "0644" ? 0o644 : 0o600 });
+  }
+  return { cwd, path };
+}
+
+describe("B1 real subprocess: session end never constructs a bad adapter", () => {
+  for (const kind of ["0644", "corrupt", "symlink"] as const) {
+    test(`${kind} keystore + session end/logout stays alive`, () => {
+      const bad = badKeystoreCase(kind);
+      const servicePath = join(import.meta.dir, "..", "src", "wallet-local-service.ts");
+      const serverPath = join(import.meta.dir, "..", "src", "console-server.ts");
+      const assets = assetsDir;
+      const script = `
+        import { WalletLocalService, endWalletLocalSession } from ${JSON.stringify(servicePath)};
+        import { createConsoleHandler } from ${JSON.stringify(serverPath)};
+        const bad = new WalletLocalService({ path: ${JSON.stringify(bad.path)} });
+        bad.endSession("${"a".repeat(64)}");
+        await new Promise((r) => setTimeout(r, 20));
+        const fake = {};
+        const h = createConsoleHandler({
+          assetsDir: ${JSON.stringify(assets)},
+          state: async () => ({}),
+          action: async () => ({}),
+          allowedActions: [],
+          onSessionEnd: (id) => endWalletLocalSession(fake, id),
+        }, 39999);
+        const issued = h.issueTicket();
+        const ticket = new URLSearchParams(new URL(issued).hash.slice(1)).get("ticket");
+        const headers = { host: "127.0.0.1:" + h.port, "content-type": "application/json", "X-Ohmyaihub-Request": "1", origin: h.origin, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" };
+        const session = await h.handle(new Request(h.origin + "/ui/session", { method: "POST", headers, body: JSON.stringify({ ticket }) }));
+        const cookie = session.headers.get("set-cookie").split(";")[0];
+        const csrf = (await session.json()).csrf;
+        const logout = await h.handle(new Request(h.origin + "/ui/logout", { method: "POST", headers: { ...headers, cookie, "X-Ohmyaihub-CSRF": csrf }, body: "{}" }));
+        console.log("logout", logout.status, "end-session-ok");
+      `;
+      const result = Bun.spawnSync([process.execPath, "-e", script], {
+        cwd: bad.cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 10_000,
+      });
+      const stdout = result.stdout.toString();
+      const stderr = result.stderr.toString();
+      expect(result.exitCode, stderr).toBe(0);
+      expect(stdout).toContain("logout 200");
+      expect(stdout).toContain("end-session-ok");
+      expect(stderr).not.toContain("WalletVaultError");
+    });
+  }
 });
 
 // Real console transport: authenticate, CSRF, sensitive UUID tombstones and session binding.

@@ -21,7 +21,7 @@ import { startConsoleServer, type ConsoleServer } from "./console-server.ts";
 import { CONSOLE_ACTIONS, consoleAction, consoleState } from "./console-api.ts";
 import { readConsolePort, saveConsolePort, readOwnPluginOptions, startConsoleLauncher, publishUnavailableLauncher } from "./console-launch.ts";
 import { Service } from "./service.ts";
-import { WALLET_VAULT_SENSITIVE_ACTIONS, walletLocalService } from "./wallet-local-service.ts";
+import { WALLET_VAULT_SENSITIVE_ACTIONS, disposeWalletLocalService, endWalletLocalSession } from "./wallet-local-service.ts";
 import { startApi } from "./server.ts";
 import {
   decideOptions,
@@ -78,6 +78,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     const shutdown = () => {
       stopped = true;
       launcher?.stop(); consoleServer?.stop(); api?.stop();
+      if (service) disposeWalletLocalService(service);
       const pid = service?.supervisor.snapshot().pid;
       const configPath = statePath("easytier", "current.toml");
       if (pid && ownsProcess(pid, configPath)) {
@@ -200,7 +201,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         sensitiveActions: ["key-reveal", ...WALLET_VAULT_SENSITIVE_ACTIONS],
         staticModules: ["/session.js", "/providers.js", "/wallet.js"],
         pairingFile: statePath("console-pairing.json"),
-        onSessionEnd: (sessionId: string) => walletLocalService(service!).endSession(sessionId),
+        onSessionEnd: (sessionId: string) => endWalletLocalSession(service!, sessionId),
       };
       consoleServer = startConsoleServer(consoleOptions);
       saveConsolePort(consoleServer.port);

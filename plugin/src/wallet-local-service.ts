@@ -118,8 +118,19 @@ export async function walletLocalAction(
   return walletLocalService(service).action(name, input, context);
 }
 
+/** Session end only uses an already-created owner; never constructs a vault. */
+export function endWalletLocalSession(service: Service, sessionId: string): void {
+  owners.get(service)?.endSession(sessionId);
+}
+
+/** Service/console stop only disposes an existing owner; never constructs one. */
+export function disposeWalletLocalService(service: Service): void {
+  owners.get(service)?.dispose();
+}
+
 export class WalletLocalService {
   private readonly vault: Promise<WalletVault>;
+  private vaultInstance: WalletVault | null = null;
   private readonly now: () => number;
   private readonly grants = new Map<string, RevealGrant>();
 
@@ -134,17 +145,35 @@ export class WalletLocalService {
       // exposes it from UI/env/config.
       chainPolicy: createStaticChainPolicy({ 97: "testnet", 84532: "testnet" }),
     });
+    // A rejected open must stay observable to status/action(), but it must not
+    // become an unhandled rejection when a session-end hook touches an owner or
+    // when the process stops before the first status/action.
+    void this.vault.then(
+      (vault) => { this.vaultInstance = vault; },
+      () => { /* status/action still await and map the rejection */ },
+    );
   }
 
   async status(): Promise<{ wallet: WalletSnapshot }> {
     return { wallet: (await this.vault).snapshot() };
   }
 
-  /** Console session retirement: grants cannot outlive the browser session. */
-  endSession(sessionId: string): void {
-    for (const [id, grant] of this.grants) {
-      if (grant.consoleSessionId === sessionId) this.grants.delete(id);
-    }
+  /**
+   * Any console session end conservatively locks the one local vault and clears
+   * every reveal grant. One browser logging out locks the local wallet for all
+   * browser sessions; that is the deliberate local-security tradeoff.
+   */
+  endSession(_sessionId: string): void {
+    this.grants.clear();
+    this.vaultInstance?.lock();
+    void this.vault.then((vault) => vault.lock(), () => { /* handled open rejection */ });
+  }
+
+  /** Console/Service stop: lock and clear without constructing a new adapter. */
+  dispose(): void {
+    this.grants.clear();
+    this.vaultInstance?.dispose();
+    void this.vault.then((vault) => vault.dispose(), () => { /* handled open rejection */ });
   }
 
   async action(name: string, input: Record<string, unknown>, context?: WalletLocalContext): Promise<unknown> {
@@ -193,6 +222,7 @@ export class WalletLocalService {
 
   private async create(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {
     fields(input, ["password", "strength"]);
+    this.grants.clear();
     const password = passwordInput(input.password);
     const strength = input.strength ?? 128;
     if (![128, 160, 192, 224, 256].includes(strength as number)) {
@@ -200,6 +230,13 @@ export class WalletLocalService {
     }
     const vault = await this.vault;
     const result = await vault.create({ password, strength: strength as 128 | 160 | 192 | 224 | 256 });
+    // The transport also checks this, but a non-transport caller must not get a
+    // late mnemonic after its server-owned session ended during KDF.
+    if (!context.isActive()) {
+      vault.lock();
+      this.grants.clear();
+      throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
+    }
     // The response contains the one-time mnemonic and is a sensitive action at
     // the transport; this method does not retain it.
     return {
@@ -212,6 +249,7 @@ export class WalletLocalService {
 
   private async import(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {
     fields(input, ["mnemonic", "password", "replace", "currentPassword"]);
+    this.grants.clear();
     const mnemonic = textInput(input.mnemonic, MAX_MNEMONIC_CHARS, "助记词");
     const password = passwordInput(input.password);
     const replace = optionalBoolean(input.replace, "replace");
@@ -231,7 +269,8 @@ export class WalletLocalService {
 
   private async restore(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {
     fields(input, ["encryptedBackup", "password", "replace", "currentPassword"]);
-    const keystore = textInput(input.encryptedBackup, MAX_BACKUP_BYTES, "加密备份");
+    this.grants.clear();
+    const keystore = backupInput(input.encryptedBackup);
     const password = passwordInput(input.password);
     const replace = optionalBoolean(input.replace, "replace");
     const currentPassword = input.currentPassword === undefined ? undefined : passwordInput(input.currentPassword);
@@ -250,11 +289,18 @@ export class WalletLocalService {
 
   private async backup(context: WalletLocalContext): Promise<unknown> {
     const vault = await this.vault;
-    return { ...(await vault.exportEncryptedBackup()) };
+    const result = await vault.exportEncryptedBackup();
+    if (!context.isActive()) {
+      vault.lock();
+      this.grants.clear();
+      throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
+    }
+    return { ...result };
   }
 
   private async unlock(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {
     fields(input, ["password"]);
+    this.grants.clear();
     const password = passwordInput(input.password);
     const snapshot = await (await this.vault).unlock(password);
     return { wallet: snapshot };
@@ -343,6 +389,13 @@ export class WalletLocalService {
     const result = kind === "mnemonic"
       ? await vault.exportMnemonic({ password, capability })
       : await vault.exportPrivateKey({ password, capability });
+    // Defense in depth for future non-transport callers: never return plaintext
+    // after the server-owned session ended during KDF.
+    if (!context.isActive()) {
+      vault.lock();
+      this.grants.clear();
+      throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
+    }
     return { ...result };
   }
 }
@@ -367,6 +420,18 @@ function textInput(value: unknown, max: number, label: string): string {
 function passwordInput(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value, "utf8") > MAX_PASSWORD_BYTES) {
     throw new WalletLocalError("wallet-invalid-input", "钱包密码格式无效");
+  }
+  return value;
+}
+
+function backupInput(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > MAX_BACKUP_BYTES ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new WalletLocalError("wallet-invalid-input", "加密备份格式无效或超过 32 KiB");
   }
   return value;
 }
