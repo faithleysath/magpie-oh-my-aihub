@@ -18,7 +18,15 @@ import type { ConsumerRecord } from "../provisioner.ts";
 
 export class ControlServiceRefusal extends Error {
   constructor(
-    readonly code: "malformed" | "untrusted_peer" | "quote_mismatch" | "conflict" | "expired" | "internal",
+    readonly code:
+      | "malformed"
+      | "untrusted_peer"
+      | "quote_mismatch"
+      | "conflict"
+      | "expired"
+      | "policy"
+      | "no_shared_models"
+      | "internal",
     message: string,
   ) {
     super(message);
@@ -128,6 +136,8 @@ export interface ControlImportInput {
   approval: ControlInboundApproval;
   /** the identity B-core verified for the session/authorization */
   providerFingerprint: string;
+  /** Optional per-approval Remote id; defaults to the legacy per-provider id. */
+  providerId?: string;
 }
 
 function sameSet(a: string[], b: string[]): boolean {
@@ -310,8 +320,8 @@ export async function takeAuthorization(service: Service, input: ControlTakeAuth
   };
 }
 
-function providerIdFor(providerNodeId: string): string {
-  return `p2p-${sha256Hex(providerNodeId).slice(0, 16)}`;
+function providerIdFor(providerNodeId: string, approvalId?: string | null): string {
+  return `p2p-${sha256Hex(approvalId ? `${providerNodeId}:${approvalId}` : providerNodeId).slice(0, 16)}`;
 }
 
 function assertAuthorization(document: ControlAuthorizationDocument, approval: ControlInboundApproval, providerFingerprint: string): void {
@@ -351,7 +361,7 @@ function assertAuthorization(document: ControlAuthorizationDocument, approval: C
 export async function importAuthorization(service: Service, input: ControlImportInput): Promise<{ models: string[]; capUsd: number; providerId: string }> {
   assertAuthorization(input.document, input.approval, input.providerFingerprint);
   const document = input.document;
-  const providerId = providerIdFor(document.provider.nodeId);
+  const providerId = input.providerId ?? providerIdFor(document.provider.nodeId);
   let registered = false;
   try {
     const view = await service.addProvider({

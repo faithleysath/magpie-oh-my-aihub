@@ -1607,6 +1607,86 @@ export class Provisioner {
   }
 
   /**
+   * Revokes a key for the control plane and reports how far the stop actually
+   * went. Resolving with `revoked: true` means the old secret is no longer
+   * accepted (removed, or rotated so the old secret is 401). A minimum cap is
+   * recorded but is never treated as a hard stop. If neither removal nor
+   * rotation works, the record is left active and `revoked: false` is returned;
+   * the caller must surface action-needed and must not send a "revoked" notice.
+   */
+  async revokeEnforced(consumerId: string): Promise<{
+    revoked: boolean;
+    enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain";
+    detail: string | null;
+  }> {
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec) throw new Error(`no consumer ${consumerId}`);
+      if (rec.revokedAt) return { revoked: true, enforcement: "keyRevoked", detail: null };
+
+      let enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain" = "safetyUncertain";
+      let detail: string | null = null;
+      let rotatedSecret: string | null = null;
+      if (this.magpie.keyById(rec.keyId)) {
+        try {
+          await this.magpie.removeKey(rec.keyId);
+          if (!this.magpie.keyById(rec.keyId)) enforcement = "keyRevoked";
+          else detail = "remove returned but Magpie still lists the key";
+        } catch (e) {
+          detail = `remove: ${String((e as Error)?.message ?? e)}`;
+          try {
+            const rotated = await this.magpie.rotateKey(rec.keyId);
+            if (rotated && rotated !== rec.secret) {
+              rotatedSecret = rotated;
+              enforcement = "secretRotated";
+            } else if (!rotated) {
+              detail = `${detail}; rotate: no new secret`;
+            }
+          } catch (rotateError) {
+            detail = `${detail}; rotate: ${String((rotateError as Error)?.message ?? rotateError)}`;
+          }
+        }
+        if (enforcement === "safetyUncertain") {
+          try {
+            await this.magpie.setCostLimit(rec.keyId, rec.window, 0.0001);
+            const status = await this.magpie.limitStatus(rotatedSecret ?? rec.secret);
+            if (Math.abs((status.limit?.costLimit ?? 0) - 0.0001) < 1e-9) {
+              enforcement = "capRestricted";
+              detail = `${detail ? `${detail}; ` : ""}a $0.0001 cap still admits calls`;
+            }
+          } catch (capError) {
+            detail = `${detail ? `${detail}; ` : ""}cap: ${String((capError as Error)?.message ?? capError)}`;
+          }
+        }
+      } else {
+        enforcement = "keyRevoked";
+      }
+
+      if (enforcement === "keyRevoked" || enforcement === "secretRotated") {
+        rec.revokedAt = new Date().toISOString();
+        // The old secret is 401. The rotated secret is deliberately not stored:
+        // nobody needs it and it must never be handed out again.
+        rec.secret = "";
+        rec.pending = null;
+        rec.paused = null;
+        if (this.ledger) {
+          const w = this.ledger.openWindowFor(rec.consumerId);
+          if (w) this.ledger.closeWindow(w.id, "revoked");
+          this.ledger.revokeAccount(rec.consumerId, "revoked");
+        }
+        this.persist();
+        logger.info(`revoked gateway key ${rec.keyName} (${rec.keyId}) enforcement=${enforcement}`);
+        return { revoked: true, enforcement, detail };
+      }
+
+      // The old key may still work. Keep the record active so a later explicit
+      // revoke/reissue can retry; do not claim a stop that was not measured.
+      logger.error(`could not enforce revocation of ${rec.keyName} (${rec.keyId}): ${detail ?? "unknown"}`);
+      return { revoked: false, enforcement, detail };
+    });
+  }
+
+  /**
    * Replaces a consumer's whitelist (used when a shared model stopped being
    * shareable). Refuses an empty list: a key without models would be unlimited
    * in Magpie's eyes, so the caller must revoke instead.
