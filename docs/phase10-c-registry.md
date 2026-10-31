@@ -402,7 +402,7 @@ const asset = registry.requireReadableAsset(assetId);
 - network: `chainId, displayName, networkType, support, receivable, enabled, blockExplorer, finality, endpoints`
 - asset: `assetId, chainId, symbol, name, decimals, contractAddress, enabled, credit, testnetOnly, issuerType, nanosPerToken, priceVersion`
 
-UI 应使用 `support/receivable/enabled/credit` 而不是自己推断；`priceVersion` 以 `not-creditable:` 开头表示不可估值。
+UI 应使用 `support/receivable/enabled/credit` 而不是自己推断；`priceVersion` 以 `not-creditable:` 开头表示不可估值。页面快照（`page-snapshot.ts`）也投影 `support/receivable` 与 `credit/testnetOnly/issuerType`，旧页面忽略新字段，后续 UI 直接消费这些字段即可。
 
 ---
 
