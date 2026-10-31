@@ -98,6 +98,8 @@ export interface VerifyPresenceOptions {
   allowLoopback?: boolean;
   /** tests only: allow a non-mapped private LAN endpoint */
   allowPrivateLan?: boolean;
+  /** tests only: allow any non-overlay endpoint */
+  allowNonOverlay?: boolean;
 }
 
 export function verifyPresence(raw: unknown, now = new Date(), opts: VerifyPresenceOptions = {}): PresenceBody {
@@ -133,8 +135,9 @@ export function verifyPresence(raw: unknown, now = new Date(), opts: VerifyPrese
   if ((loopback || linkLocal || unspecified) && !opts.allowLoopback) {
     throw new Error("presence endpoint host is loopback/link-local/unspecified");
   }
-  if (mappedCidr === null && privateLan && !opts.allowPrivateLan) {
-    throw new Error("presence endpoint host is a non-mapped private LAN address");
+  if (mappedCidr === null && !opts.allowNonOverlay) {
+    if (privateLan && !opts.allowPrivateLan) throw new Error("presence endpoint host is a non-mapped private LAN address");
+    if (!privateLan && !loopback && !opts.allowPrivateLan) throw new Error("presence endpoint host is not a mapped overlay endpoint");
   }
   if (mappedCidr !== null && host !== mappedCidr.replace(/\/32$/, "")) {
     throw new Error("presence endpoint host does not match its signed mappedCidr");

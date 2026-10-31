@@ -154,6 +154,7 @@ export class ControlApp {
   private readonly targets = new Set<string>();
   private readonly seenPresence = new Map<string, PresenceBody>();
   private readonly controlForwards = new Map<string, { localPort: number; dst: string }>();
+  private readonly retiredForwards = new Set<number>();
   private publishedHost = "127.0.0.1";
   private readonly allowLanDirect: boolean;
   private constructor(
@@ -261,6 +262,14 @@ export class ControlApp {
     if (!forward) return;
     await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
     this.controlForwards.delete(nodeId);
+    // EasyTier 2.6.4 can leave a removed forward listener alive until a
+    // supervised restart. Never treat map deletion as proof of closure.
+    try {
+      const free = await new SocketBinder().isFree("127.0.0.1", forward.localPort);
+      if (!free) this.retiredForwards.add(forward.localPort);
+    } catch {
+      this.retiredForwards.add(forward.localPort);
+    }
   }
 
   registerPeer(nodeId: string, endpoint: Endpoint, target?: P2pHelloTarget): void {
@@ -475,7 +484,16 @@ export class ControlApp {
     for (const nodeId of this.targets) {
       try {
         const cached = this.endpoints.get(nodeId);
-        if (!cached?.expiresAt || Date.parse(cached.expiresAt) - this.now().getTime() <= 60_000) {
+        const peer = this.service.catalogStatus().peers.find((p) => p.nodeId === nodeId);
+        const changed =
+          !cached ||
+          !peer ||
+          !peer.identity?.fingerprint ||
+          peer.identity.fingerprint !== cached.fingerprint ||
+          peer.mappedCidr !== cached.mappedCidr ||
+          peer.quoteHash !== cached.quoteHash ||
+          peer.status === "identity-changed";
+        if (changed || !cached.expiresAt || Date.parse(cached.expiresAt) - this.now().getTime() <= 60_000) {
           await this.discover(nodeId);
         }
         const target = this.peers.get(nodeId);
@@ -506,7 +524,9 @@ export class ControlApp {
         port: this.port,
         reachability: this.host === "127.0.0.1" || this.host === "localhost" ? "loopback" : "lan",
         verified: true,
-        detail: null,
+        detail: this.retiredForwards.size
+          ? `${this.retiredForwards.size} stale control forward(s) require a supervised core restart`
+          : null,
       },
       inboundRequests: inbound.map((r) => ({
         requestId: r.requestHash,
@@ -602,7 +622,11 @@ export class ControlApp {
     for (const forward of this.controlForwards.values()) {
       void this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
     }
+    for (const localPort of this.retiredForwards) {
+      void this.service.supervisor.removePortForward(`127.0.0.1:${localPort}`).catch(() => {});
+    }
     this.controlForwards.clear();
+    this.retiredForwards.clear();
     this.server.stop();
     this.node.close();
     active = null;
