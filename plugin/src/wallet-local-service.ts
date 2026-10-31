@@ -42,7 +42,10 @@ export const WALLET_VAULT_SENSITIVE_ACTIONS = [
 
 export interface WalletLocalContext {
   sessionId: string;
-  isActive: () => boolean;
+  /** Canonical server-owned check used by the payment contract. */
+  assertActive?: () => boolean;
+  /** Compatibility alias for the vault adapter/tests. */
+  isActive?: () => boolean;
 }
 
 export interface WalletLocalServiceOptions {
@@ -214,7 +217,7 @@ export class WalletLocalService {
   }
 
   private requireContext(context: WalletLocalContext | undefined): WalletLocalContext {
-    if (!context || !UUID_HEX.test(context.sessionId) || typeof context.isActive !== "function" || !context.isActive()) {
+    if (!context || !UUID_HEX.test(context.sessionId) || !contextActive(context)) {
       throw new WalletLocalError("wallet-session-required", "需要当前已认证的本地浏览器会话");
     }
     return context;
@@ -232,7 +235,7 @@ export class WalletLocalService {
     const result = await vault.create({ password, strength: strength as 128 | 160 | 192 | 224 | 256 });
     // The transport also checks this, but a non-transport caller must not get a
     // late mnemonic after its server-owned session ended during KDF.
-    if (!context.isActive()) {
+    if (!contextActive(context)) {
       vault.lock();
       this.grants.clear();
       throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
@@ -290,7 +293,7 @@ export class WalletLocalService {
   private async backup(context: WalletLocalContext): Promise<unknown> {
     const vault = await this.vault;
     const result = await vault.exportEncryptedBackup();
-    if (!context.isActive()) {
+    if (!contextActive(context)) {
       vault.lock();
       this.grants.clear();
       throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
@@ -391,13 +394,18 @@ export class WalletLocalService {
       : await vault.exportPrivateKey({ password, capability });
     // Defense in depth for future non-transport callers: never return plaintext
     // after the server-owned session ended during KDF.
-    if (!context.isActive()) {
+    if (!contextActive(context)) {
       vault.lock();
       this.grants.clear();
       throw new WalletLocalError("wallet-session-required", "当前本地浏览器会话已结束");
     }
     return { ...result };
   }
+}
+
+function contextActive(context: WalletLocalContext): boolean {
+  if (typeof context.assertActive === "function") return context.assertActive();
+  return typeof context.isActive === "function" && context.isActive();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

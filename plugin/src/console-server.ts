@@ -8,9 +8,11 @@ import { ConsolePairingJournal, PairingCapacityError, PairingUnavailableError } 
 import type { PendingPairing } from "./console-pairing.ts";
 
 export interface ConsoleActionContext {
-  /** The authenticated browser session that invoked this action. */
+  /** The authenticated browser session that invoked this action; never client-supplied. */
   sessionId: string;
-  /** False after logout, idle/absolute expiry or server stop. */
+  /** False after logout, idle/absolute expiry or server stop. Canonical payment contract name. */
+  assertActive: () => boolean;
+  /** Compatibility alias for the same server-owned check. */
   isActive: () => boolean;
 }
 
@@ -281,6 +283,7 @@ export function createConsoleHandler(
       // Deferred invocation lets the operation cache claim the UUID before any callback runs.
       const result = await options.action(name, input, {
         sessionId: session.id,
+        assertActive: () => active(session),
         isActive: () => active(session),
       });
       const text = JSON.stringify({ result });
