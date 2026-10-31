@@ -267,13 +267,13 @@ bun install --frozen-lockfile
 | 命令 | 结果 | 说明 |
 | --- | --- | --- |
 | `bun run typecheck` | PASS | `tsc --noEmit` 无输出 |
-| `bun test test/wallet-vault.test.ts` | **53 pass / 0 fail / 288 expect** | 纯模块，临时目录，无网络 |
+| `bun test test/wallet-vault.test.ts` | **54 pass / 0 fail / 296 expect** | 纯模块，临时目录，无网络 |
 | `bun run secret-scan` | PASS | 工作树无凭据模式 |
 | `bun install --frozen-lockfile` | PASS（no changes） | lock 可复现 |
 | `npm audit --omit=dev`（公共 registry） | 0 known vulnerabilities | 不是完整供应链审计 |
-| GitHub Actions `plugin` run `41162084059`（commit `7079027`，本模块 55 个测试） | Linux 795 pass / **5 fail**；macOS 794 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 55 个测试全部 pass |
+| GitHub Actions `plugin` run `41163078489`（commit `ac7dd5b`，本模块 56 个测试） | Linux 796 pass / **5 fail**；macOS 795 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 56 个测试全部 pass |
 
-**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `7079027` 上跑全量，Linux 795 pass / 5 fail、macOS 794 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
+**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `ac7dd5b` 上跑全量，Linux 796 pass / 5 fail、macOS 795 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
 
 ### 覆盖矩阵
 
@@ -306,6 +306,8 @@ bun install --frozen-lockfile
 | 模拟链 EIP-1559 付款签名、不广播 | `signs a bounded EIP-1559...` | REPRODUCED |
 | permit exact-intent 绑定/次数/锁定拒绝 | `a permit is bound...` / `a typed-data permit is bound...` / `signing while locked...` | REPRODUCED |
 | permit 最坏成本 `value+gasLimit*maxFeePerGas`、value-only 上限拒绝、多用途累计 | `payment permits are capped...` | REPRODUCED |
+| calldata 大小写统一、hash/sign 回读一致、不因大小写假失败消耗 permit | `payment calldata is normalized...` | REPRODUCED |
+| assetId 必须是完整 `eip155:<purposechain>:0x<40hex>`，不完整/错链拒绝；无 asset 字段不强制 | `a DepositIntent message.chainId/assetId...` | REPRODUCED |
 | F0 宽 policy 下 chain 1/10/42161/137/324/59144/43114/999999 拒绝；97/84532/隔离 31337 正控 | `F0 signing-chain allowlist` | REPRODUCED |
 | F1 DepositIntent domain 97 + message.chainId 56/8453/1 或 asset 链不一致拒绝；preview signable false | `a DepositIntent message.chainId/assetId...` | REPRODUCED |
 | 自动充值 policy 形状拒绝主网/长 TTL/坏上限 | `auto-recharge policy shape...` | REPRODUCED |
