@@ -8,6 +8,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  OsSocketOwnership,
+  parseLsofPids,
+  parseSsPids,
   PORT_EVIDENCE_LIMIT,
   PORT_MIGRATION_LIMIT,
   SocketBinder,
@@ -251,5 +254,68 @@ describe("the real binder", () => {
     expect(await binder.isFree("127.0.0.1", held!.port)).toBe(false);
     await held!.release();
     expect(await binder.isFree("127.0.0.1", held!.port)).toBe(true);
+  });
+});
+
+
+describe("socket-owner probe parsing and fallback", () => {
+  const ssLine = 'LISTEN 0 4096 127.0.0.1:3425 0.0.0.0:* users:(("easytier-core",pid=4242,fd=9))';
+  const lsofOutput = "p4242\ncmagpie\np4243\ncbun\n";
+
+  test("ss and lsof parsers accept their real line shapes", () => {
+    expect(parseSsPids(ssLine)).toEqual([4242]);
+    expect(parseSsPids("LISTEN 0 4096 127.0.0.1:3425 0.0.0.0:*")).toEqual([]);
+    expect(parseLsofPids(lsofOutput)).toEqual([4242, 4243]);
+    expect(parseLsofPids("")).toEqual([]);
+  });
+
+  test("ss rows without a PID fall back to lsof", async () => {
+    const calls: string[][] = [];
+    const probe = new OsSocketOwnership(async (cmd) => {
+      calls.push(cmd);
+      if (cmd[0] === "ss") return { code: 0, stdout: ssLine.replace(/users:\(.*\)/, ""), stderr: "" };
+      return { code: 0, stdout: lsofOutput, stderr: "" };
+    }, "linux");
+    const found = await probe.listenerPids(3425);
+    expect(found).toMatchObject({ supported: true, pids: [4242, 4243] });
+    expect(calls.map((c) => c[0])).toEqual(["ss", "lsof"]);
+  });
+
+  test("ss unavailable falls back to lsof", async () => {
+    const runner = async (cmd: string[]) =>
+      cmd[0] === "ss"
+        ? { code: 127, stdout: "", stderr: "ss: command not found" }
+        : { code: 0, stdout: lsofOutput, stderr: "" };
+    const probe = new OsSocketOwnership(runner, "linux");
+    expect(await probe.listenerPids(3425)).toMatchObject({ supported: true, pids: [4242, 4243] });
+  });
+
+  test("no listener is a real empty answer, while a missing tool is unavailable", async () => {
+    const noListener = new OsSocketOwnership(async () => ({ code: 1, stdout: "", stderr: "" }), "darwin");
+    expect(await noListener.listenerPids(3425)).toMatchObject({ supported: true, pids: [] });
+    const missing = new OsSocketOwnership(async () => ({ code: -1, stdout: "", stderr: "spawn lsof ENOENT" }), "darwin");
+    expect(await missing.listenerPids(3425)).toMatchObject({ supported: false, pids: [] });
+    const outputButNoPid = new OsSocketOwnership(async () => ({ code: 0, stdout: "x\n", stderr: "" }), "darwin");
+    expect(await outputButNoPid.listenerPids(3425)).toMatchObject({ supported: false, pids: [] });
+  });
+
+  test.skipIf(process.platform === "win32")("the real probe attributes a live loopback listener", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") });
+    try {
+      const found = await new OsSocketOwnership().listenerPids(server.port!);
+      expect(found.supported).toBe(true);
+      expect(found.pids).toContain(process.pid);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("the real probe reports no listener on a released port", async () => {
+    const binder = new SocketBinder();
+    const held = await binder.reserve("127.0.0.1", 0);
+    const port = held!.port;
+    await held!.release();
+    const found = await new OsSocketOwnership().listenerPids(port);
+    expect(found).toMatchObject({ supported: true, pids: [] });
   });
 });

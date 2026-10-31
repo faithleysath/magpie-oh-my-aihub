@@ -296,7 +296,15 @@ export interface SocketOwnershipProbe {
   listenerPids(port: number): Promise<SocketOwnership>;
 }
 
-async function runCommand(cmd: string[], timeoutMs = 5000): Promise<{ code: number; stdout: string }> {
+export interface SocketCommandResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+export type SocketCommandRunner = (cmd: string[], timeoutMs?: number) => Promise<SocketCommandResult>;
+
+async function runCommand(cmd: string[], timeoutMs = 5000): Promise<SocketCommandResult> {
   try {
     const proc = Bun.spawn({ cmd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const timer = setTimeout(() => {
@@ -307,12 +315,29 @@ async function runCommand(cmd: string[], timeoutMs = 5000): Promise<{ code: numb
       }
     }, timeoutMs);
     const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
     const code = await proc.exited;
     clearTimeout(timer);
-    return { code, stdout };
-  } catch {
-    return { code: -1, stdout: "" };
+    return { code, stdout, stderr };
+  } catch (e) {
+    return { code: -1, stdout: "", stderr: (e as Error)?.message ?? "spawn failed" };
   }
+}
+
+/** `ss -lntpH "sport = :<port>"` reports `users:((...,pid=123,...))`. */
+export function parseSsPids(stdout: string): number[] {
+  return [...new Set([...stdout.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1])).filter((n) => n > 0))];
+}
+
+/** `lsof ... -Fpc` prints `p<pid>` and `c<command>` lines. */
+export function parseLsofPids(stdout: string): number[] {
+  return [...new Set([...stdout.matchAll(/^p(\d+)$/gm)].map((m) => Number(m[1])).filter((n) => n > 0))];
+}
+
+/** A shell says "not found"/127, not a valid empty answer. */
+export function looksLikeMissingTool(stderr: string, code: number): boolean {
+  if (code === 127) return true;
+  return /(command not found|not found|no such file or directory|executable file not found)/i.test(stderr);
 }
 
 /**
@@ -324,32 +349,62 @@ async function runCommand(cmd: string[], timeoutMs = 5000): Promise<{ code: numb
  * the caller must treat that as unknown, never as "stable".
  */
 export class OsSocketOwnership implements SocketOwnershipProbe {
+  constructor(
+    private readonly runner: SocketCommandRunner = runCommand,
+    private readonly platform: NodeJS.Platform = process.platform,
+  ) {}
+
   async listenerPids(port: number): Promise<SocketOwnership> {
-    if (process.platform === "linux") {
-      const ss = await runCommand(["ss", "-lntpH", `sport = :${port}`]);
+    if (this.platform === "linux") {
+      const ss = await this.runner(["ss", "-lntpH", `sport = :${port}`]);
       if (ss.code === 0) {
-        const pids = [...ss.stdout.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1]));
-        return { supported: true, pids: [...new Set(pids)], detail: null };
+        const pids = parseSsPids(ss.stdout);
+        if (pids.length) return { supported: true, pids, detail: null };
+        // No rows at all is a real "nobody listens"; rows without `pid=` mean
+        // ss could not show the process (permissions) - try lsof before failing.
+        if (!ss.stdout.trim()) return { supported: true, pids: [], detail: null };
+        const lsof = await this.lsof(port);
+        if (lsof.supported) return lsof;
+        return {
+          supported: false,
+          pids: [],
+          detail: `ss showed a listener but no PID and lsof is unavailable (${lsof.detail ?? "no detail"})`,
+        };
       }
-      return this.lsof(port);
+      // ss missing or rejected the filter: lsof is the supported fallback.
+      const lsof = await this.lsof(port);
+      if (lsof.supported) return lsof;
+      return {
+        supported: false,
+        pids: [],
+        detail: `ss failed (${ss.stderr.trim() || `exit ${ss.code}`}) and lsof is unavailable`,
+      };
     }
-    if (process.platform === "darwin") return this.lsof(port);
+    if (this.platform === "darwin") return this.lsof(port);
     return {
       supported: false,
       pids: [],
-      detail: `no socket-owner probe is implemented for ${process.platform}; a listener cannot be attributed to a process`,
+      detail: `no socket-owner probe is implemented for ${this.platform}; a listener cannot be attributed to a process`,
     };
   }
 
   private async lsof(port: number): Promise<SocketOwnership> {
-    const r = await runCommand(["lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"]);
-    if (r.code !== 0 && !r.stdout.trim()) {
-      // lsof exits 1 when nothing matches; distinguish "not installed" by the
-      // empty output plus a shell-level failure.
-      return { supported: false, pids: [], detail: "lsof is unavailable; the listener owner cannot be proven" };
+    const r = await this.runner(["lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"]);
+    const pids = parseLsofPids(r.stdout);
+    if (pids.length) return { supported: true, pids, detail: null };
+    if (!r.stdout.trim()) {
+      // lsof exits 1 when nothing matches; that is a valid "no listener", not a
+      // missing tool. Only a spawn failure / command-not-found is unavailable.
+      if (r.code === -1 || looksLikeMissingTool(r.stderr, r.code)) {
+        return { supported: false, pids: [], detail: "lsof is unavailable; the listener owner cannot be proven" };
+      }
+      return { supported: true, pids: [], detail: null };
     }
-    const pids = [...r.stdout.matchAll(/^p(\d+)$/gm)].map((m) => Number(m[1]));
-    return { supported: true, pids: [...new Set(pids)], detail: null };
+    return {
+      supported: false,
+      pids: [],
+      detail: "lsof produced output without a PID (permission?); the listener owner cannot be proven",
+    };
   }
 }
 
