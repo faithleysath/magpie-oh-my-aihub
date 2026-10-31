@@ -388,6 +388,7 @@ describe("C2 receiving-network selection is explicit and independent", () => {
     expect(() => p.setSelected("provider-a", 97, true)).toThrow(/internal test network/);
     expect(() => p.setSelected("provider-a", 84532, true)).toThrow(/internal test network/);
     expect(() => p.setSelected("provider-a", 1, true)).toThrow(/not registered/);
+    expect(() => p.setSelected("__proto__", 56, true)).toThrow(/reserved/);
   });
 
   test("an unreadable or inconsistent selection file is an error, not an empty/default set", () => {
