@@ -8,7 +8,7 @@
 > 工作树：`/Users/laysath/.paseo/worktrees/1z728cdk/c-registry`
 > 分支：`feature/phase10-c-mainnet-registry`
 > 本单元原始 head：`5ef4430`（base `main` `8ce5c57`；CI run `41158999333` 仅 5 个已知时钟失败）。
-> 当前 head 已显式 stack 到 PR15 clock fix `889973f55ca3a72da99ae0091e50ecd5ea428207`（base branch `fix/phase10-validation-clock`），CI run `41159282548` 双平台 **pass**。原 head 保留在 `archive/phase10-c-registry-5ef4430`。
+> 已显式 stack 到 PR15 clock fix `889973f55ca3a72da99ae0091e50ecd5ea428207`（base branch `fix/phase10-validation-clock`）。stack 后 CI run `41159282548` 双平台 **pass**；原始 head 的 5 个已知 clock 失败记录见 run `41158999333`，原 head 保留在 `archive/phase10-c-registry-5ef4430`。最终 head/CI 以 PR #21 与 `/tmp/oma-research/C-REGISTRY-REVIEW-HANDOFF.md` 为准。
 > 本单元代码 commit：`efc554f`（hard gate）、`70f28ee`（v2 registry）、`30ea31c`（selection/read-only/ledger guards）；本文档随后单独 commit
 > 平台：macOS 26.6.2 (Darwin 25.6.0, arm64)；Bun 1.4.3；TypeScript 5.9.3
 > 版本上下文：Magpie 0.1.2289 + EasyTier 2.6.4（本单元不启动宿主，不接触用户安装/数据）
