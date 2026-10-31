@@ -95,6 +95,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   let generation = 0;
   let lateCreate = false;
   let secretFinish = null;
+  let activeCreateSeed = null;
 
   function report(message, tone = "warn") { try { notice(message, tone); } catch { /* notice is advisory */ } }
   function fail(message) { dialogError.textContent = message; dialogError.hidden = false; }
@@ -102,6 +103,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   function closeDialog({ bump = true } = {}) {
     const finish = secretFinish;
     secretFinish = null;
+    activeCreateSeed = null;
     secret = null; secretKind = null; secretVisible = false;
     if (dialogBody) dialogBody.replaceChildren();
     if (dialogError) { dialogError.textContent = ""; dialogError.hidden = true; }
@@ -125,9 +127,17 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     if (!createSnapshot && (!wallet || wallet.status !== "unlocked" || wallet.addressVerified !== true)) return false;
     if (createSnapshot && (!createSnapshot || typeof createSnapshot !== "object")) return false;
     closeDialog({ bump: false });
-    if (createSnapshot) secretFinish = () => {
-      if (!disposed && service === "available" && getState()?.configured) applyWallet(createSnapshot);
-    };
+    if (createSnapshot) {
+      activeCreateSeed = {
+        address: createSnapshot.address ?? null,
+        status: createSnapshot.status,
+        addressVerified: createSnapshot.addressVerified === true,
+        unlockExpiresAt: createSnapshot.unlockExpiresAt ?? null,
+      };
+      secretFinish = () => {
+        if (!disposed && service === "available" && getState()?.configured) applyWallet(createSnapshot);
+      };
+    }
     secret = value; secretKind = kind; secretVisible = false;
     dialogTitle.textContent = kind === "mnemonic" ? "恢复助记词 · 仅显示一次" : kind === "private-key" ? "私钥 · 仅显示一次" : "加密备份";
     dialogError.hidden = true;
@@ -172,7 +182,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     }
   }
 
-  function applyWallet(next, renderNow = true) {
+  function applyWallet(next, renderNow = true, { fromStatePoll = false } = {}) {
     if (!next || typeof next !== "object") return;
     lateCreate = false;
     const wasTrusted = wallet?.status === "unlocked" && wallet.addressVerified === true;
@@ -181,7 +191,14 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     wallet = { version: next.version, address: next.address ?? null, addressVerified: next.addressVerified === true, status: next.status, unlockExpiresAt: next.unlockExpiresAt ?? null };
     const invalid = wallet.status !== "unlocked" || wallet.addressVerified !== true;
     const sessionChanged = previousAddress !== wallet.address || previousExpiry !== wallet.unlockExpiresAt;
-    if ((invalid && (wasTrusted || secret !== null || dialog.open)) || (sessionChanged && previousAddress !== null && (secret !== null || dialog.open))) {
+    const sameCreateSeedPoll = fromStatePoll && activeCreateSeed !== null && secret !== null && secretKind === "mnemonic" && dialog.open
+      && activeCreateSeed.status === "locked" && activeCreateSeed.addressVerified === false && activeCreateSeed.unlockExpiresAt === null
+      && wallet.status === "locked" && wallet.addressVerified === false && wallet.unlockExpiresAt === null
+      && (activeCreateSeed.address ?? null) === (wallet.address ?? null);
+    if (!sameCreateSeedPoll && ((invalid && (wasTrusted || secret !== null || dialog.open)) || (sessionChanged && previousAddress !== null && (secret !== null || dialog.open)))) {
+      // A different snapshot, explicit lock/unlock, or lifecycle close must not
+      // let the old create snapshot be applied by the close callback.
+      secretFinish = null;
       generation++;
       closeDialog({ bump: false });
       clearInputs();
@@ -401,7 +418,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     if (disposed) return;
     if (next?.walletVault?.wallet) {
       service = "available"; loaded = true;
-      applyWallet(next.walletVault.wallet, false);
+      applyWallet(next.walletVault.wallet, false, { fromStatePoll: true });
     }
     if (disposed) return;
     localRoot.replaceChildren();

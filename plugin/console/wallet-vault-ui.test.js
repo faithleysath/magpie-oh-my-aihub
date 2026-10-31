@@ -151,6 +151,11 @@ describe("local wallet UI", () => {
       fillPasswordDialog(ui.dialog); const agree = checkAgree(ui.dialog); await agree.emit("change");
       await find(ui.dialog, "button", "创建钱包").click(); await flush();
       expect(ui.dialog.textContent).toContain("恢复助记词");
+      // First/multiple normal state polls may carry the same locked create snapshot.
+      ui.mounted.render({ walletVault: { wallet: locked } });
+      ui.mounted.render({ walletVault: { wallet: locked } }); await flush();
+      expect(ui.dialog.open).toBeTrue();
+      expect(ui.dialog.textContent).toContain("恢复助记词");
       const pre = all(ui.dialog, "pre")[0];
       expect(pre.textContent).toBe("");
       await find(ui.dialog, "button", "显示内容").click();
@@ -161,6 +166,22 @@ describe("local wallet UI", () => {
       expect(ui.root.textContent).toContain("已锁定");
       expect(ui.root.textContent).toContain("未验证地址");
       expect(find(ui.root, "button", "导出恢复助记词")).toBeUndefined();
+    } finally { ui.restore(); }
+  });
+
+  test("a different address/expiry in a state poll closes the create seed screen", async () => {
+    const other = { ...locked, address: "0x" + "2".repeat(40), unlockExpiresAt: "2099-01-01T00:00:00.000Z" };
+    const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: absent }), "wallet-vault-create": async () => ({ wallet: locked, mnemonic: "different address secret", warning: "once" }) } });
+    try {
+      await ui.show();
+      await find(ui.root, "button", "创建钱包").click(); await flush();
+      fillPasswordDialog(ui.dialog); const agree = checkAgree(ui.dialog); await agree.emit("change");
+      await find(ui.dialog, "button", "创建钱包").click(); await flush();
+      expect(ui.dialog.open).toBeTrue();
+      ui.mounted.render({ walletVault: { wallet: other } }); await flush();
+      expect(ui.dialog.open).toBeFalse();
+      expect(ui.dialog.textContent).not.toContain("different address secret");
+      expect(ui.root.textContent).toContain("未验证地址");
     } finally { ui.restore(); }
   });
 
