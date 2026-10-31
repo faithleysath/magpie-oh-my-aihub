@@ -154,9 +154,10 @@ export class ControlApp {
   private readonly targets = new Set<string>();
   private readonly seenPresence = new Map<string, PresenceBody>();
   private readonly controlForwards = new Map<string, { localPort: number; dst: string }>();
-  private readonly retiredForwards = new Set<number>();
+  private readonly retiredForwards = new Map<number, string>();
   private publishedHost = "127.0.0.1";
   private previousPublishedPorts: number[] | null = null;
+  private stopped = false;
   private readonly allowLanDirect: boolean;
   private constructor(
     readonly service: Service,
@@ -281,17 +282,18 @@ export class ControlApp {
     const forward = this.controlForwards.get(nodeId);
     if (!forward) return;
     this.controlForwards.delete(nodeId);
-    const retire = (this.service as { retireControlForward?: (bind: string, dst: string) => Promise<{ closed: boolean }> }).retireControlForward;
+    const retire = (this.service as { retireControlForward?: (bind: string, dst: string, owned?: string[]) => Promise<{ closed: boolean }> }).retireControlForward;
+    const owned = [...forward ? [] : [], ...[...this.controlForwards.values()].map((f) => `127.0.0.1:${f.localPort}`), ...[...this.retiredForwards.keys()].map((p) => `127.0.0.1:${p}`)];
     if (typeof retire === "function") {
-      const result = await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst);
-      if (!result.closed) this.retiredForwards.add(forward.localPort);
+      const result = await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst, owned);
+      if (!result.closed) this.retiredForwards.set(forward.localPort, forward.dst);
       return;
     }
     await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
     try {
-      if (!(await new SocketBinder().isFree("127.0.0.1", forward.localPort))) this.retiredForwards.add(forward.localPort);
+      if (!(await new SocketBinder().isFree("127.0.0.1", forward.localPort))) this.retiredForwards.set(forward.localPort, forward.dst);
     } catch {
-      this.retiredForwards.add(forward.localPort);
+      this.retiredForwards.set(forward.localPort, forward.dst);
     }
   }
 
@@ -639,19 +641,22 @@ export class ControlApp {
   }
 
   async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = null;
     this.service.setControlPresence(null);
     this.server.stop();
     const forwards = [...this.controlForwards.values()];
-    const retired = [...this.retiredForwards];
+    const retired = [...this.retiredForwards.entries()];
+    const owned = [...forwards.map((f) => `127.0.0.1:${f.localPort}`), ...retired.map(([p]) => `127.0.0.1:${p}`)];
     this.controlForwards.clear();
     this.retiredForwards.clear();
     let degraded: string | null = null;
-    const retire = (this.service as { retireControlForward?: (bind: string, dst: string) => Promise<{ closed: boolean }> }).retireControlForward;
+    const retire = (this.service as { retireControlForward?: (bind: string, dst: string, owned?: string[]) => Promise<{ closed: boolean }> }).retireControlForward;
     for (const forward of forwards) {
       if (typeof retire === "function") {
-        const result = await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst).catch(() => ({ closed: false }));
+        const result = await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst, owned).catch(() => ({ closed: false }));
         if (!result.closed) degraded = "a control forward is still listening after stop";
       } else {
         await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
@@ -662,9 +667,9 @@ export class ControlApp {
         }
       }
     }
-    for (const localPort of retired) {
+    for (const [localPort, dst] of retired) {
       if (typeof retire === "function") {
-        const result = await retire.call(this.service, `127.0.0.1:${localPort}`, "retired").catch(() => ({ closed: false }));
+        const result = await retire.call(this.service, `127.0.0.1:${localPort}`, dst, owned).catch(() => ({ closed: false }));
         if (!result.closed) degraded = "a retired control forward is still listening after stop";
       } else {
         await this.service.supervisor.removePortForward(`127.0.0.1:${localPort}`).catch(() => {});
