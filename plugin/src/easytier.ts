@@ -373,6 +373,11 @@ export interface SupervisorState {
   mappedCidr: string | null;
   publishedPorts: number[];
   peers: Peer[];
+  /** EasyTier's route table (never a second discovery mechanism) */
+  routes?: RouteRow[];
+  /** when the peer/route reads last succeeded; null = no evidence yet */
+  peersAt?: string | null;
+  routesAt?: string | null;
   secureMode: boolean;
   socks5Port: number | null;
   aclOk: boolean;
@@ -398,6 +403,9 @@ const emptyState = (): SupervisorState => ({
   mappedCidr: null,
   publishedPorts: [],
   peers: [],
+  routes: [],
+  peersAt: null,
+  routesAt: null,
   secureMode: false,
   socks5Port: null,
   aclOk: false,
@@ -881,8 +889,15 @@ export class EasytierSupervisor {
 
       try {
         this.state.peers = await this.peers();
+        this.state.peersAt = new Date().toISOString();
       } catch (e) {
         logger.warn(`peer list unavailable: ${String(e)}`);
+      }
+      try {
+        this.state.routes = await this.routes();
+        this.state.routesAt = new Date().toISOString();
+      } catch (e) {
+        logger.warn(`route table unavailable: ${String(e)}`);
       }
       this.state.lanIp = safeLanIp();
       this.state.rpcPort = this.state.rpcPort ?? this.cfg?.rpcPort ?? null;
