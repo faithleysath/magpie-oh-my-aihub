@@ -536,6 +536,10 @@ export class ControlApp {
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = null;
     this.service.setControlPresence(null);
+    for (const forward of this.controlForwards.values()) {
+      void this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
+    }
+    this.controlForwards.clear();
     this.server.stop();
     this.node.close();
     active = null;
