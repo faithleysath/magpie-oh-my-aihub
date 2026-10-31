@@ -4425,6 +4425,9 @@ export class Service {
     if (rec?.forwardPending) {
       known.add(rec.forwardPending.from);
       known.add(rec.forwardPending.to);
+      // A recovery whose old registration could not be removed is neutralized
+      // at :1 by the plugin; it is still ours and may be retried/removed.
+      if (port === 1) return port;
     }
     return known.has(port) ? port : "foreign";
   }
