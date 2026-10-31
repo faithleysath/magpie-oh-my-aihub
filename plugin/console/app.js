@@ -418,14 +418,20 @@ function renderNetwork(state) {
     { purpose: "catalog", label: "目录发布端口", host: "127.0.0.1", port: object(c.catalog).port ?? null, editable: false, state: object(c.catalog).port ? "stable" : "unverified" },
     { purpose: "catalog-socks", label: "目录查询端口", host: "127.0.0.1", port: object(c.catalog).socksPort ?? null, editable: false, state: object(c.catalog).socksPort ? "stable" : "unverified" },
   ];
+  const REACHABILITY = { loopback: "本机回环", overlay: "覆盖网", lan: "局域网", unknown: "范围未知" };
+  const PORT_STATE = { stable: "地址稳定", migrated: "已迁移", conflict: "冲突", unverified: "未验证", failed: "失败", unknown: "未知" };
   const portList = $("network-ports");
   portList.replaceChildren();
   for (const port of ports) {
     const div = document.createElement("div");
     const dt = document.createElement("dt"); dt.textContent = port.label || port.purpose;
-    const where = port.host ? `${port.host}${port.port ? `:${port.port}` : ""}` : "未启用";
+    const where = port.host ? `${port.host}${port.port ? `:${port.port}` : ""}` : "未报告";
     const dd = document.createElement("dd");
-    dd.textContent = `${where}${port.state && port.state !== "stable" ? ` · ${port.state}` : ""}`;
+    const scope = port.reachability && port.reachability !== "unknown" ? ` · ${REACHABILITY[port.reachability] || port.reachability}` : "";
+    // The word comes from the read-only projection: never upgraded to "verified" by the UI.
+    const stateWord = port.state ? ` · ${PORT_STATE[port.state] || port.state}` : "";
+    const readAt = port.verifiedAt ? ` · 读取 ${time(port.verifiedAt)}` : "";
+    dd.textContent = `${where}${scope}${stateWord}${readAt}`;
     dd.setAttribute("aria-readonly", "true");
     div.append(dt, dd);
     portList.append(div);
