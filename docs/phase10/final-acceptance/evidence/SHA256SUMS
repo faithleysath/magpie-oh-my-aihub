@@ -16,10 +16,11 @@ b8589f8f60e04199fd59ed7c6339721850da1231e87310b55adff4ee5c25d549  ./lab2-cleanup
 1c891ff1c271789ffe6b79ad80a78543714b0b4da76f681bfe3671588cc03787  ./narrow-light-home.png
 b177c22d4a60cad3af29ab5bb097765ce17b7fd7c2f0ed8a148bd912f047a6c5  ./p2p-calls.json
 ed5a892713ac13a2cdc5847dcaa143318c4e0ab59aef2c2dce6440840171327a  ./payment/consumer-preview-and-send.json
+40152e7a6ddff2713f1a00df0873193dbbfe2aa62a8df2cdcaf4eac18a63c92d  ./payment/credit-log.txt
 17807255f5f9581464f48956589a8bfbab24e781469558f9f3a28b49c4cd5a76  ./payment/isolated-anvil-deploy-receipt.json
 91e037d7a883cb6038bafeb18466fbfab6dce80b8489c6daff0ecbd11c6ee952  ./payment/isolated-anvil-deployment.json
 e1fd841ee8514891a4102adee59fb0a0aac085eaa00c54450709e9adbd0d6825  ./payment/isolated-anvil-fund-transfer.json
-bee683faccb8a75d631827cdc1368bb3b499c11073421570eaefead130721a43  ./payment/payment-journey.json
+9c96032dcdf52352c5280bb6102633b47a6032212635555e788373c48fd6677b  ./payment/payment-journey.json
 d5281bbc2418a2a9e917264f59a4e33294700c6ddddfa14bd86fa2cc8358f5e7  ./reactivation.json
 ab8a179f41d5268082ccd428a9776d3f4375eec7a56e375567701bde01b5a4e7  ./runtime-restart-loop.log
 1838ccbdb6169c9f55f72b962387f5eae7aa3f5c47a85835efce01ac68e5091c  ./stability-5min-run2.txt

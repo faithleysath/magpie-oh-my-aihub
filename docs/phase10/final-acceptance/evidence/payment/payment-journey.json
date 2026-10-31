@@ -150,6 +150,18 @@
   "duplicateAfterProviderRestart": {
     "chainDepositCount": 1,
     "creditedEvents": 1,
-    "capUsd": 0.05
-  }
+    "capAfterRestartUsd": 1.55,
+    "evidence": "single ledger deposit + one credited chain event after a provider host restart; cap line in creditLog"
+  },
+  "creditLog": [
+    "2026/10/31 23:28:52 plugin: [oh-my-aihub] 2026-10-31T15:28:52.300Z INFO chain deposit chain:84532:0x5fbdb2315678afecb367f032d93f642f64180aa3:0x185f0d451063f26b72c628288a69470e1bb708d867b83c7f87121a0ecbedf336:0 of 1.5 test USD for 6e046c20: cap 1.55, used 0",
+    "2026/10/31 23:28:52 plugin: [oh-my-aihub] 2026-10-31T15:28:52.300Z INFO chain 84532: 1500000 of tUSDC from 0x77633c5943ea37bc6030c09a2798d4f643d52480 credited as 1500000000 nanos to 6e046c20 (chain:84532:0x5fbdb2315678afecb367f032d93f642f64180aa3:0x185f0d451063f26b72c628288a69470e1bb708d867b83c7f871"
+  ],
+  "creditTime": {
+    "capUsd": 1.55,
+    "creditedUsd": 1.5,
+    "usedUsd": 0,
+    "source": "provider plugin log at the credit; the consumer record was later revoked during the separate re-approval test"
+  },
+  "providerConsumersNote": "This array is the record after the later re-approval/revocation test, not the credit-time record. The credit-time cap/used values are in creditTime and creditLog."
 }
