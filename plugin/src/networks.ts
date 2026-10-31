@@ -606,6 +606,11 @@ export class NetworkRegistry {
     return this.nets.filter((n) => n.receivable).map((n) => ({ ...n, rpcEndpoints: [...n.rpcEndpoints] }));
   }
 
+  /** Product read-only networks. This is the mainnet balance surface. */
+  readOnlyNetworks(): NetworkRecord[] {
+    return this.nets.filter((n) => n.support === "read-only").map((n) => ({ ...n, rpcEndpoints: [...n.rpcEndpoints] }));
+  }
+
   /** Networks whose metadata/balance may be read without implying credit. */
   readableNetworks(): NetworkRecord[] {
     return this.nets

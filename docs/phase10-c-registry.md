@@ -211,6 +211,7 @@ interface AssetRecord {
 - 查询前先 `eth_chainId` 与注册表 chainId 比对；不匹配直接拒绝（BSC 节点不能回答 Base）。
 - ERC-20：必须已注册；`decimals()` 与 `symbol()` 与记录一致才返回余额；未知合约（含 BSC USDC）直接拒绝。
 - 原生币：`eth_getBalance`；不产生 USD 估值。
+- 该 reader 只服务 `support="read-only"` 的产品网络（56/8453）；测试网仍走既有测试网钱包/watcher 路径，不会被这个只读 API 当成产品余额。
 - 没有 `eth_getLogs`、没有 watcher、没有 ledger、没有签名/发送方法。
 
 ### 3.5 硬门禁入口（本单元实际覆盖）
@@ -416,7 +417,7 @@ bun run typecheck                      # PASS (tsc --noEmit)
 bun run secret-scan                    # PASS: no credentials in the working tree
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts
-# 56 pass / 0 fail（282 expect）
+# 56 pass / 0 fail（284 expect）
 
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts \

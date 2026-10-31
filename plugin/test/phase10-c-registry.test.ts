@@ -594,6 +594,16 @@ describe("read-only mainnet balances", () => {
     const reader = new ReadOnlyChainReader({ registry: r, fetchImpl: rpc.fetch });
     await expect(reader.balance({ chainId: 97, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6" })).rejects.toThrow(/disabled/);
     expect(rpc.calls).toBe(0);
+
+    const enabledTestnet = productRegistry();
+    const testnetRpc = new FakeReadOnlyRpc({ chainId: 97 });
+    await expect(
+      new ReadOnlyChainReader({ registry: enabledTestnet, fetchImpl: testnetRpc.fetch }).balance({
+        chainId: 97,
+        address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+      }),
+    ).rejects.toThrow(/read-only product networks only/);
+    expect(testnetRpc.calls).toBe(0);
     expect(encodeBalanceOf("0x3d80C477021E3FA568e91C73bAEC8E806518D9a6")).toBe(
       "0x70a082310000000000000000000000003d80c477021e3fa568e91c73baec8e806518d9a6",
     );
