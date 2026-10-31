@@ -1622,7 +1622,7 @@ export class Provisioner {
       const targetKey = named ?? (rec?.keyId ? this.magpie.keyById(rec.keyId) : undefined);
       const cost = targetKey?.limit?.cost;
       return {
-        nativeKeyIds: keys.map((k) => String(k.id)).slice(0, 500),
+        nativeKeyIds: keys.map((k) => String(k.id)).slice(0, 100),
         target: targetKey
           ? {
               keyId: String(targetKey.id),
