@@ -22,6 +22,8 @@
 | 计费/峰谷价 | 0.1.2289 的 `peak` 先 **fail-closed 拒绝**；后续单独实现，不再让用户选 |
 | 本地门禁 | typecheck / boot-check / secret-scan 通过；`bun run test` 740 pass / 5 fail（固定时钟，P0-3） |
 | 参考研究 | 审查代理 `6a326f2b-2249-4123-8f35-1fe35926e107`：`/tmp/oma-research/REFERENCE-REVIEW.md` |
+| PR14 | `#14` draft；主审文档范围审查通过，作为实现前置；**内容仅计划，无 GO**；不合并 |
+| 实现代理模型 | `pi/magpie/group/deepseek-v4.1-flash`（max） |
 | 真实资金 | NO-GO；D 本阶段只出 NO-GO 清单，不执行真实资金 |
 | 主网发送/授信 | **硬禁止**（C 不实现） |
 
@@ -32,24 +34,30 @@
 | 主调度 | 父代理 | 分派、验收、合并决策 | 不把未证结论写成 DONE |
 | 文档/集成 | 本代理（INTEGRATION） | 入口/流程/矩阵/文档；**只有本代理改主开发分支 `docs/phase10`** | 不主写应用代码；不建子代理 |
 | 设计/Console 审查 | `6a326f2b-2249-4123-8f35-1fe35926e107` | 参考研究、A/B 真实浏览器审查 | 不改应用代码 |
-| A-ui | 待分派（独立 worktree） | 5 页 IA、首页 5 块、贴纸风、只读端口/邻居 | 不改 B/C 代码；不自动分享/信任 |
-| A-service | 待分派（独立 worktree） | 三字段配置、自动检测模型、一次“分享这些模型”、状态投影 | 不改 UI 视觉；不自动分享 |
-| B-core | 待分派（独立 worktree） | 所有节点控制服务、请求/审批/E2E/注册/ACK 状态机 | 文件不能代替目标；不自动批准 |
-| C-registry | 待分派（独立 worktree） | 56/8453 只读平权、四元组资产、钱包/扩展/自动充值策略 | 主网发送/授信；真实资金 |
+| A-ui | `ccb08749-badc-4512-9604-e93ce7bd76b9` | 5 页 IA、首页 5 块、贴纸风、只读端口/邻居 | 不改 B/C 代码；不自动分享/信任 |
+| A-service | `c51de818-13dd-4df6-ba68-2e48155eeb63` | 三字段配置、自动检测模型、一次“分享这些模型”、状态投影 | 不改 UI 视觉；不自动分享 |
+| B-core | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | 所有节点控制服务、请求/审批/E2E/注册/ACK 状态机 | 文件不能代替目标；不自动批准 |
+| C-registry | `0c94d106-6442-470f-8f14-374c38ea20f7` | 56/8453 只读平权、四元组资产、注册表 | 主网发送/授信；真实资金 |
+| C-wallet | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | 隔离测试创建/恢复/加密存储/短解锁/敏感导出/EIP712 模拟签名 | 尚未 UI 集成；不接生产资金；不声称生产级安全 |
 | D 审查 | 独立审查代理（待分派） | 真实资金 NO-GO 清单 | 不改代码；不兼任 C 实现；不执行真实资金 |
-| P0 | 待分派（可与 A/B 并行） | 0.1.2289 隔离、peak fail-closed、时钟、最小重测 | 不改用户安装 |
+| P0-clock | `f63b644e-40df-4174-afd4-c4f43da87927` | 测试时钟、`bun run test` 全绿 | 不改用户安装 |
+| P0-peak | `187ccdcb-8f0b-40f3-8276-939334de4412` | `peak` fail-closed | 不实现峰谷价 |
 
 > 本代理是子代理：**不创建任何子代理**。
 
 ## 2. 工作流与 worktree（主调度分配）
 
-| 工作流 | 独立 worktree（待主审填） | 负责代理 | 分支/PR（待记录） | 状态 | 集成条件 |
+| 工作流 | 独立 worktree | 负责代理 | 分支 / PR | 状态 | 集成条件 |
 | --- | --- | --- | --- | --- | --- |
-| A-ui | `TBD` | TBD | `TBD` | TODO | 主审明确 commit + R2 审查 |
-| A-service | `TBD` | TBD | `TBD` | TODO | 主审明确 commit + P0 |
-| B-core | `TBD` | TBD | `TBD` | TODO | 主审明确 commit + 安全评审 |
-| C-registry | `TBD` | TBD | `TBD` | TODO | 主审明确 commit + D 前置 |
-| P0 | `TBD` | TBD | `TBD` | TODO | 证据齐全 |
+| A-ui | `/Users/laysath/.paseo/worktrees/1z728cdk/a-ui` | `ccb08749-badc-4512-9604-e93ce7bd76b9` | `feature/phase10-a-console` / draft PR 待记录 | DOING | 主审明确 commit + R2 审查 |
+| A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | `feature/phase10-a-network` / draft PR 待记录 | DOING | 主审明确 commit + P0 |
+| B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | `feature/phase10-b-protocol` / draft PR 待记录 | DOING | 主审明确 commit + 安全评审 |
+| C-registry | `/Users/laysath/.paseo/worktrees/1z728cdk/c-registry` | `0c94d106-6442-470f-8f14-374c38ea20f7` | `feature/phase10-c-mainnet-registry` / draft PR 待记录 | DOING | 主审明确 commit + D 前置 |
+| C-wallet | `/Users/laysath/.paseo/worktrees/1z728cdk/c-wallet` | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | `feature/phase10-c-wallet-vault` / draft PR 待记录 | DOING | 主审明确 commit + 安全评审 |
+| P0-clock | 独立 worktree（路径待补） | `f63b644e-40df-4174-afd4-c4f43da87927` | 小 draft PR 在做 | DOING | P0-3 证据 |
+| P0-peak | 独立 worktree（路径待补） | `187ccdcb-8f0b-40f3-8276-939334de4412` | 小 draft PR 在做 | DOING | P0-2 证据 |
+
+> C-wallet 只做隔离测试核心（创建/恢复/加密存储/短解锁/敏感导出/EIP712 模拟签名）；**尚未 UI 集成，也不代表生产资金认可**。
 
 **集成规则**
 
@@ -57,6 +65,7 @@
 2. 实现代理在各自独立 worktree/分支；**不主动 cherry-pick 尚未审查的实现**。
 3. 只按主审明确给出的 commit 做集成；每次集成更新本表（代理、branch、PR、commit、证据）。
 4. 文档分支的 draft PR 只含 docs；实现 PR 另开，不合并且不混入。
+5. 本轮只登记分派与 worktree；**不集成任何待审实现 commit**。
 
 ## 3. 任务矩阵
 
@@ -65,8 +74,8 @@
 | ID | 单元 | 负责 | 状态 | 依赖 | 验收/证据 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
 | P0-1 | 0.1.2289 + EasyTier 2.6.4 隔离副本 | P0 | TODO | — | 版本/哈希/平台；隔离 data dir；不改 `/Applications` | 已决定，不再选版本 |
-| P0-2 | `peak` fail-closed | P0 + C | TODO | P0-1 | 含不支持价格 → 拒绝发布/签发；负向测试 | 后续再实现峰谷价 |
-| P0-3 | 测试时钟 | P0 | TODO | — | `bun run test` 全绿；可注入时钟 | 不改产品语义 |
+| P0-2 | `peak` fail-closed | P0-peak `187ccdcb…` + C | DOING | P0-1 | 含不支持价格 → 拒绝发布/签发；负向测试 | 后续再实现峰谷价 |
+| P0-3 | 测试时钟 | P0-clock `f63b644e…` | DOING | — | `bun run test` 全绿；可注入时钟 | 不改产品语义 |
 | P0-4 | 最小重测 401/429/limit/top-up/restart | P0 | TODO | P0-1 | 脱敏日志 + 命令 | 0.1.2289 实际结果 |
 | P0-5 | 证据/CI/pin | P0 | TODO | P0-2..4 | 双平台 CI + 文档 | 不合并是调度约束 |
 
@@ -106,12 +115,12 @@
 | C1 | 56/8453 只读网络平权 | C-registry | TODO | P0 | 注册表/UI；无 primary；不扫描/入账/发送 | 主网发送/授信 |
 | C2 | 收款网络默认空选 | C-registry | TODO | C1 | 默认无链/资产；必须明确选 | 不自动选链 |
 | C3 | 严格资产四元组 | C-registry | TODO | C1 | `chainId+tokenContract+decimals+issuerType`；拒绝符号推断 | 任意代币 |
-| C4 | 内置钱包：隔离模拟创建/恢复/锁定 | C-registry | TODO | P0 | 隔离记录；明确非生产级 | 真实资产/生产级声明 |
-| C5 | 敏感导出/助记词 | C-registry | TODO | C4 | 警告 + **重新验证钱包密码**；不落日志/快照 | 明文泄漏/绕过密码 |
-| C6 | 外置钱包/多扩展明确选择 | C-registry | TODO | P0 | 多扩展夹具；用户明确选一个 | 自动挑/自动切链 |
-| C7 | P2P 付款/签名 | C-registry | TODO | C2,C3 | 测试网/模拟；直接签名；普通钱包无签名文件 | 主网广播/签名文件路径 |
-| C8 | 自动充值策略（上限/暂停/条件） | C-registry | TODO | C4..C7 | 策略 + 负向测试；可模拟/测试执行 | 主网执行 |
-| C9 | 主网硬禁止 | C-registry | TODO | C1..C8 | 负向测试：send/credit/cap 全拒绝 | 任何例外 |
+| C4 | 内置钱包：隔离模拟创建/恢复/加密存储/短解锁 | C-wallet | DOING | P0 | 隔离测试记录；明确非生产级 | 真实资产/生产级声明/UI 集成 |
+| C5 | 敏感导出/助记词 | C-wallet | DOING | C4 | 警告 + **重新验证钱包密码**；不落日志/快照 | 明文泄漏/绕过密码 |
+| C6 | 外置钱包/多扩展明确选择 | C-wallet | TODO | P0 | 多扩展夹具；用户明确选一个 | 自动挑/自动切链 |
+| C7 | P2P 付款/签名 | C-wallet | DOING | C2,C3 | 测试网/模拟；直接签名；普通钱包无签名文件 | 主网广播/签名文件路径 |
+| C8 | 自动充值策略（上限/暂停/条件） | C-wallet | TODO | C4..C7 | 策略 + 负向测试；可模拟/测试执行 | 主网执行 |
+| C9 | 主网硬禁止 | C-registry + C-wallet | TODO | C1..C8 | 负向测试：send/credit/cap 全拒绝 | 任何例外 |
 | C10 | 真实资金 | — | NO-GO | — | — | 禁止 |
 
 ### D — 真实资金独立审查
@@ -152,7 +161,8 @@
 | 2026-10-31 | 峰谷价缺口 | `peak` 进入原生计价；插件未处理 → P0-2 fail-closed | `internal/catalog/peak.go`、`internal/usage/usage.go`、`plugin/src/pricing.ts` | VERIFIED（源码）/ UNKNOWN（运行时） |
 | 2026-10-31 | 本地测试 | 740 pass / 5 fail；固定时钟 | `bun run test` | REPRODUCED |
 | 2026-10-31 | 初始 VALIDATION 前置 | A/B 可开始；C 不接真实资金 | INVENTORY §14 | VERIFIED |
-| 2026-10-31 | 文档 draft PR | #14，draft，仅 3 个 docs 文件 | `gh pr view 14` | VERIFIED |
+| 2026-10-31 | 文档 draft PR | #14，draft，仅 3 个 docs 文件；主审文档范围审查通过，作为实现前置；**计划无 GO** | `gh pr view 14` | VERIFIED |
+| 2026-10-31 | 实现分派登记 | A-ui/A-service/B-core/C-registry/C-wallet + P0-clock/P0-peak 独立 worktree | 本节 §2 | VERIFIED（登记）|
 | 待补 | P0-1..5 | — | — | TODO |
 | 待补 | R1 截图/问题清单 | — | — | TODO |
 
