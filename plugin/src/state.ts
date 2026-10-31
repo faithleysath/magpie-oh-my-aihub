@@ -493,6 +493,13 @@ function inferBoolean(cfg: LegacyConfig, name: "sharingEnabled" | "consumingEnab
 function normalizeConfig(raw: LegacyConfig, wiring: LegacyWiring | null): PluginConfig {
   const sharingEnabled = inferBoolean(raw, "sharingEnabled");
   const consumingEnabled = inferBoolean(raw, "consumingEnabled") || Boolean(wiring);
+  // A persisted node id is the identity used for the overlay hostname, Key
+  // names and the self-connect guard. An unknown/legacy-looking value is never
+  // silently reused: fail closed instead of issuing keys under a mismatched
+  // identity.
+  if (raw.nodeId !== undefined && !/^[0-9a-f]{8,64}$/.test(raw.nodeId)) {
+    throw new Error("the stored nodeId is not a valid overlay identity; refusing to start with it");
+  }
   return {
     sharingEnabled,
     consumingEnabled,

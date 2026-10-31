@@ -75,6 +75,27 @@ describe("no-file request → approval → sealed delivery → ACK", () => {
     expect(lab.calls.approve).toBe(1);
   });
 
+  test("a stale-session 410 drops the closed session and re-sends the same request on a fresh hello", async () => {
+    lab = P2pLab.create();
+    const stale = await lab.establish();
+    lab.faults.staleFrameOnce = true;
+    const { requestHash } = await lab.sendRequest(stale);
+    // The 410 is not a delivery verdict: the row stays pending, the dead session
+    // is gone, and no second request/key was created.
+    expect(lab.A.hasLiveSession({ nodeId: lab.target().nodeId, fingerprint: lab.target().fingerprint })).toBe(false);
+    const fresh = await lab.establish();
+    expect(fresh).not.toBe(stale);
+    // The row keeps its bounded retry backoff; it is not a new message.
+    lab.advance(10_000);
+    await lab.A.tick();
+    const request = (await lab.B.listRequests()).find((r) => r.requestHash === requestHash);
+    expect(request).toBeDefined();
+    expect((await lab.A.listRequests()).filter((r) => r.requestHash === requestHash)).toHaveLength(1);
+    // No second request row or key was manufactured by the retry.
+    expect((await lab.A.listRequests()).filter((r) => r.requestHash === requestHash)).toHaveLength(1);
+    expect(lab.storeA.outboxPendingCount()).toBe(0);
+  });
+
   test("approval is idempotent for the same decision and refuses a different one", async () => {
     lab = P2pLab.create();
     const sessionId = await lab.establish();

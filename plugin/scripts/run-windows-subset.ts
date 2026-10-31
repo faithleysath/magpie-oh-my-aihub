@@ -9,6 +9,8 @@
  */
 import { appendFileSync, writeFileSync } from "node:fs";
 
+// The measured curated subset floor. test/provisioner.test.ts hangs before its
+// first test on the Windows runner and is a documented platform gap, not a pass.
 const MIN_EXECUTED = 360;
 const ASSERTIONS = /(\d+)\s+expect\(\)\s+calls/;
 const lineCount = (word: string): number => {

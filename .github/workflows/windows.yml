@@ -91,7 +91,8 @@ jobs:
             "console/wallet.test.js"
           )
           # The runner asserts a real summary from bun's console output:
-          # >=380 executed, 0 failures, and only the four reviewed POSIX-only
+          # >=360 executed (the measured curated subset; test/provisioner.test.ts is a documented
+          # Windows gap, not silently skipped), 0 failures, and only the four reviewed POSIX-only
           # skips (Bun 1.4.3 on win32 does not emit the JUnit file).
           bun run scripts/run-windows-subset.ts -- $files
 

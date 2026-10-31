@@ -34,6 +34,7 @@ import type { ChainDepositEvent } from "./chainstore.ts";
 import {
   EasytierSupervisor,
   generateSecureIdentity,
+  overlayHostname,
   type EasytierConfig,
   type ForwardSpec,
   type Peer,
@@ -3574,8 +3575,13 @@ export class Service {
       if (/announces .* from/.test(String((e as Error).message))) throw e;
       return null;
     });
-    if (owner && configHostname(cfg) && owner.hostname === configHostname(cfg)) {
-      throw new Error(`that mapped address is this node itself (${owner.hostname}); refusing to connect to myself`);
+    const ownVirtual = (cfg.virtualIpv4 ?? "").replace(/\/\d+$/, "");
+    const ownerIsSelf = Boolean(owner) && (
+      (configHostname(cfg) && owner!.hostname === configHostname(cfg)) ||
+      (ownVirtual !== "" && owner!.ipv4.replace(/\/\d+$/, "") === ownVirtual)
+    );
+    if (ownerIsSelf) {
+      throw new Error(`that mapped address is this node itself (${owner!.hostname || owner!.ipv4}); refusing to connect to myself`);
     }
 
     const prev = existing ? { ...existing } : null;
@@ -5265,7 +5271,9 @@ function describeRole(cfg: PluginConfig): string {
 }
 
 function configHostname(cfg: PluginConfig): string {
-  return `ohmyaihub-${cfg.nodeId}`;
+  // One identity function for ET hostname, catalogue presence, self-connect
+  // checks and diagnostics. Do not re-derive the name anywhere else.
+  return overlayHostname(cfg);
 }
 
 function normalizeShareModels(models: string[]): string[] {

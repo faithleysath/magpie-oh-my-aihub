@@ -618,15 +618,28 @@ export class EasytierSupervisor {
             `(recorded ${JSON.stringify(persisted.process.processStart)}, now ${JSON.stringify(currentStart)})`,
         );
       }
-      logger.info(`adopting running easytier-core pid ${persisted.process.pid}`);
-      this.state.pid = persisted.process.pid;
-      this.state.startedAt = persisted.process.startedAt || new Date().toISOString();
-      this.state.running = true;
-      this.state.rpcPort = cfg.rpcPort;
-      this.processStart = currentStart;
-      this.startMonitor();
-      await this.refresh();
-      return this.snapshot();
+      // A running core that still carries a different hostname is not the
+      // identity the current state/config names. Do not adopt it silently: stop
+      // this owned core and start it again from the freshly rendered TOML so the
+      // ET hostname, catalogue identity and self-connect guard agree.
+      const observedHost = await this.probe.nodeInfo()
+        .then((info) => extractToml(info.config, "hostname"))
+        .catch(() => null);
+      if (observedHost && observedHost !== overlayHostname(cfg)) {
+        logger.warn(`running core reports hostname ${observedHost}, not ${overlayHostname(cfg)}; restarting with the canonical identity`);
+        await this.stop();
+        this.stopping = false;
+      } else {
+        logger.info(`adopting running easytier-core pid ${persisted.process.pid}`);
+        this.state.pid = persisted.process.pid;
+        this.state.startedAt = persisted.process.startedAt || new Date().toISOString();
+        this.state.running = true;
+        this.state.rpcPort = cfg.rpcPort;
+        this.processStart = currentStart;
+        this.startMonitor();
+        await this.refresh();
+        return this.snapshot();
+      }
     }
 
     const version = (await run([this.bin.core, "--version"], { timeoutMs: 10_000 })).stdout.trim();

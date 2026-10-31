@@ -616,9 +616,11 @@ export class Ledger {
         null,
         null,
       );
+    // A reactivation opens a window under a NEW key; the account row must name
+    // that key too, or an audit would pair the new window with the dead key.
     this.db
-      .query("UPDATE accounts SET status='active',window_id=?,price_version=?,reason=NULL,updated_at=? WHERE consumer_id=?")
-      .run(id, input.price.version, at, input.consumerId);
+      .query("UPDATE accounts SET status='active',key_id=?,key_name=?,window_id=?,price_version=?,reason=NULL,updated_at=? WHERE consumer_id=?")
+      .run(input.keyId, input.keyName, id, input.price.version, at, input.consumerId);
     return this.window(id)!;
   }
 
