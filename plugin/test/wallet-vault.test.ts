@@ -323,10 +323,11 @@ describe("lock, TTL, restart and password change", () => {
     expect(unlocked.status).toBe("unlocked");
     expect(unlocked.unlockExpiresAt).toBe(new Date(time.now() + 1_000).toISOString());
 
+    const prepared = vault.preparePayment(paymentInput());
     const permit = vault.createSigningPermit({
       kind: "payment",
       purpose: "payment",
-      chainId: 31337,
+      prepared,
       maxPerPaymentWei: 2_000_000_000_000_000n,
       maxTotalWei: 2_000_000_000_000_000n,
       maxUses: 1,
@@ -648,7 +649,7 @@ describe("EIP-712 preview and scoped signing", () => {
 
     const permit = vault.createSigningPermit({
       kind: "typed-data",
-      purpose: PAYMENT_PURPOSE.id,
+      prepared,
       maxUses: 1,
     });
     const signed = vault.signTypedData({ prepared, permit });
@@ -662,6 +663,22 @@ describe("EIP-712 preview and scoped signing", () => {
     expect(() => vault.signTypedData({ prepared, permit })).toThrow(
       expect.objectContaining({ code: "signing-permit-exhausted" }),
     );
+  });
+
+  test("a typed-data permit is bound to the exact digest, not just the purpose", async () => {
+    const { vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    const first = vault.prepareTypedData({ purpose: PAYMENT_PURPOSE.id, typedData: paymentTypedData({ amount: 1_000_000n }) });
+    const second = vault.prepareTypedData({ purpose: PAYMENT_PURPOSE.id, typedData: paymentTypedData({ amount: 2_000_000n }) });
+    expect(first.digest).not.toBe(second.digest);
+    const permit = vault.createSigningPermit({ kind: "typed-data", prepared: first });
+    expect(() => vault.signTypedData({ prepared: second, permit })).toThrow(
+      expect.objectContaining({ code: "signing-permit-invalid" }),
+    );
+    expect(permit.remainingUses).toBe(1);
+    expect(vault.signTypedData({ prepared: first, permit }).digest).toBe(first.digest);
+    expect(permit.remainingUses).toBe(0);
   });
 
   test("mainnet domains are preview-only and can never be prepared/signed", async () => {
@@ -715,7 +732,7 @@ describe("EIP-712 preview and scoped signing", () => {
     const permit = vault.createSigningPermit({
       kind: "payment",
       purpose: "payment",
-      chainId: 31337,
+      prepared,
       maxPerPaymentWei: 1_000_000_000_000_000n,
       maxTotalWei: 1_000_000_000_000_000n,
     });
@@ -732,7 +749,8 @@ describe("EIP-712 preview and scoped signing", () => {
     const second = await openVault();
     await second.vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await second.vault.unlock(PASSWORD);
-    const permit = second.vault.createSigningPermit({ kind: "typed-data", purpose: PAYMENT_PURPOSE.id });
+    const secondPrepared = second.vault.prepareTypedData({ purpose: PAYMENT_PURPOSE.id, typedData: paymentTypedData() });
+    const permit = second.vault.createSigningPermit({ kind: "typed-data", prepared: secondPrepared });
     expect(() => second.vault.signTypedData({ prepared, permit })).toThrow(
       expect.objectContaining({ code: "prepared-invalid" }),
     );
@@ -743,7 +761,7 @@ describe("EIP-712 preview and scoped signing", () => {
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await vault.unlock(PASSWORD);
     const prepared = vault.prepareTypedData({ purpose: PAYMENT_PURPOSE.id, typedData: paymentTypedData() });
-    const permit = vault.createSigningPermit({ kind: "typed-data", purpose: PAYMENT_PURPOSE.id });
+    const permit = vault.createSigningPermit({ kind: "typed-data", prepared });
     const forged = Object.freeze({ ...prepared, digest: `0x${"00".repeat(32)}` });
     expect(() => vault.signTypedData({ prepared: forged, permit })).toThrow(
       expect.objectContaining({ code: "prepared-invalid" }),
@@ -772,7 +790,7 @@ describe("simulated/testnet payment signing", () => {
     const permit = vault.createSigningPermit({
       kind: "payment",
       purpose: "payment",
-      chainId: 31337,
+      prepared,
       maxPerPaymentWei: 1_000_000_000_000_000n,
       maxTotalWei: 2_000_000_000_000_000n,
       maxUses: 2,
@@ -823,28 +841,35 @@ describe("simulated/testnet payment signing", () => {
     }
   });
 
-  test("value limits and permit kind are enforced, and a failed limit does not consume a use", async () => {
+  test("a permit is bound to the exact payment intent, value and kind", async () => {
     const { vault } = await openVault();
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await vault.unlock(PASSWORD);
+    const prepared = vault.preparePayment(paymentInput());
     const permit = vault.createSigningPermit({
       kind: "payment",
       purpose: "payment",
-      chainId: 31337,
+      prepared,
       maxPerPaymentWei: 1_000_000_000_000_000n,
       maxTotalWei: 1_000_000_000_000_000n,
       maxUses: 1,
     });
-    const tooLarge = vault.preparePayment(paymentInput({ valueWei: 1_000_000_000_000_001n }));
-    await expect(vault.signPayment({ prepared: tooLarge, permit })).rejects.toMatchObject({
-      code: "signing-permit-limit",
+    const changedValue = vault.preparePayment(paymentInput({ valueWei: 1_000_000_000_000_001n }));
+    await expect(vault.signPayment({ prepared: changedValue, permit })).rejects.toMatchObject({
+      code: "signing-permit-invalid",
     });
     expect(permit.remainingUses).toBe(1);
-    const allowed = await vault.signPayment({ prepared: vault.preparePayment(paymentInput()), permit });
+    const changedRecipient = vault.preparePayment(paymentInput({ to: "0x3333333333333333333333333333333333333333" }));
+    await expect(vault.signPayment({ prepared: changedRecipient, permit })).rejects.toMatchObject({
+      code: "signing-permit-invalid",
+    });
+    expect(permit.remainingUses).toBe(1);
+    const allowed = await vault.signPayment({ prepared, permit });
     expect(allowed.valueWei).toBe("1000000000000000");
     expect(permit.remainingUses).toBe(0);
 
-    const typedPermit = vault.createSigningPermit({ kind: "typed-data", purpose: PAYMENT_PURPOSE.id });
+    const typedPrepared = vault.prepareTypedData({ purpose: PAYMENT_PURPOSE.id, typedData: paymentTypedData() });
+    const typedPermit = vault.createSigningPermit({ kind: "typed-data", prepared: typedPrepared });
     await expect(
       vault.signPayment({ prepared: vault.preparePayment(paymentInput()), permit: typedPermit }),
     ).rejects.toMatchObject({ code: "signing-permit-invalid" });
@@ -854,15 +879,16 @@ describe("simulated/testnet payment signing", () => {
     const { vault } = await openVault();
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await vault.unlock(PASSWORD);
+    const prepared = vault.preparePayment(paymentInput({ valueWei: 5n }));
     const permit = vault.createSigningPermit({
       kind: "payment",
       purpose: "auto-recharge",
-      chainId: 31337,
+      prepared,
       maxPerPaymentWei: 5n,
       maxTotalWei: 5n,
       maxUses: 1,
     });
-    const signed = await vault.signPayment({ prepared: vault.preparePayment(paymentInput({ valueWei: 5n })), permit });
+    const signed = await vault.signPayment({ prepared, permit });
     expect(signed.purpose).toBe("auto-recharge");
     expect(permit.remainingUses).toBe(0);
   });
@@ -891,7 +917,7 @@ describe("simulated/testnet payment signing", () => {
     const permit = vault.createSigningPermit({
       kind: "payment",
       purpose: "payment",
-      chainId: 31337,
+      prepared,
       maxPerPaymentWei: 2_000_000_000_000_000n,
       maxTotalWei: 2_000_000_000_000_000n,
     });
@@ -972,15 +998,15 @@ describe("concurrency and failure cleanup", () => {
     const { vault } = await openVault();
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await vault.unlock(PASSWORD);
+    const prepared = vault.preparePayment(paymentInput());
     const permit = vault.createSigningPermit({
       kind: "payment",
       purpose: "payment",
-      chainId: 31337,
+      prepared,
       maxPerPaymentWei: 2_000_000_000_000_000n,
       maxTotalWei: 2_000_000_000_000_000n,
       maxUses: 1,
     });
-    const prepared = vault.preparePayment(paymentInput());
     const results = await Promise.allSettled([
       vault.signPayment({ prepared, permit }),
       vault.signPayment({ prepared, permit }),

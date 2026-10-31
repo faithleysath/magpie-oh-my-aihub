@@ -320,18 +320,29 @@ function exportCapabilityRecord(value: SensitiveExportCapability): CapabilityRec
 export type SigningPermitKind = "typed-data" | "payment";
 export type PaymentPurpose = "payment" | "auto-recharge";
 
-export interface SigningPermitInput {
-  kind: SigningPermitKind;
-  /** For typed-data this is a configured purpose id; for payment use payment labels. */
-  purpose: string;
-  /** Required for payment; ignored/rejected for typed-data. */
-  chainId?: number;
-  maxUses?: number;
-  ttlMs?: number;
-  /** Payment only: the largest single value and the total across this permit. */
-  maxPerPaymentWei?: bigint;
-  maxTotalWei?: bigint;
-}
+/**
+ * A permit binds the exact prepared intent (typed-data digest or a payment
+ * intent hash), not just a chain and a purpose. This is what stops a P2P caller
+ * from swapping the recipient, calldata, value or typed-data document after
+ * the local user confirmed one preview.
+ */
+export type SigningPermitInput =
+  | {
+      kind: "typed-data";
+      prepared: PreparedTypedData;
+      maxUses?: number;
+      ttlMs?: number;
+    }
+  | {
+      kind: "payment";
+      purpose: PaymentPurpose;
+      prepared: PreparedPayment;
+      maxUses?: number;
+      ttlMs?: number;
+      /** Optional defense-in-depth limits; they may not be below the prepared value. */
+      maxPerPaymentWei?: bigint;
+      maxTotalWei?: bigint;
+    };
 
 interface PermitRecord {
   vaultId: string;
@@ -339,6 +350,7 @@ interface PermitRecord {
   kind: SigningPermitKind;
   purpose: string;
   chainId: number;
+  bindingHash: string;
   expiresAt: number;
   maxUses: number;
   used: number;
@@ -839,14 +851,12 @@ export class WalletVault {
     }
 
     if (input.kind === "typed-data") {
-      const purpose = this.options.purposes.get(input.purpose);
-      if (!purpose) fail("signing-purpose-invalid", `unknown signing purpose: ${safePurpose(input.purpose)}`);
-      if (input.chainId !== undefined && input.chainId !== purpose.chainId) {
-        fail("signing-permit-invalid", "permit chain does not match its typed-data purpose");
+      const record = preparedTypedDataRecords.get(input.prepared);
+      if (!record || record.vaultId !== this.vaultId) {
+        fail("signing-permit-invalid", "typed-data permit needs a prepared document from this vault");
       }
-      if (input.maxPerPaymentWei !== undefined || input.maxTotalWei !== undefined) {
-        fail("signing-permit-invalid", "typed-data permits do not carry payment limits");
-      }
+      const purpose = this.options.purposes.get(record.purpose.id);
+      if (!purpose) fail("signing-purpose-invalid", "the signing purpose is no longer configured");
       assertSignableChain(purpose.chainId, this.options.chainPolicy);
       return mintSigningPermit({
         vaultId: this.vaultId,
@@ -854,6 +864,7 @@ export class WalletVault {
         kind: "typed-data",
         purpose: purpose.id,
         chainId: purpose.chainId,
+        bindingHash: record.digest,
         expiresAt: this.options.now() + ttlMs,
         maxUses,
         used: 0,
@@ -867,22 +878,27 @@ export class WalletVault {
     if (input.purpose !== "payment" && input.purpose !== "auto-recharge") {
       fail("signing-permit-invalid", "payment permits use the payment or auto-recharge label");
     }
-    if (!Number.isSafeInteger(input.chainId) || (input.chainId ?? 0) < 1) {
-      fail("signing-permit-invalid", "payment permit needs a chain id");
+    const record = preparedPaymentRecords.get(input.prepared);
+    if (!record || record.vaultId !== this.vaultId) {
+      fail("signing-permit-invalid", "payment permit needs a prepared payment from this vault");
     }
-    assertSignableChain(input.chainId!, this.options.chainPolicy);
-    const maxPer = input.maxPerPaymentWei;
-    const maxTotal = input.maxTotalWei;
+    assertSignableChain(record.transaction.chainId, this.options.chainPolicy);
+    const value = record.transaction.value;
+    const maxPer = input.maxPerPaymentWei ?? value;
+    const maxTotal = input.maxTotalWei ?? value * BigInt(maxUses);
     if (typeof maxPer !== "bigint" || typeof maxTotal !== "bigint" || maxPer <= 0n || maxTotal <= 0n) {
       fail("signing-permit-invalid", "payment permit needs positive per-payment and total limits");
     }
+    if (maxPer < value) fail("signing-permit-limit", "per-payment limit is below the prepared payment");
+    if (maxTotal < value) fail("signing-permit-limit", "total limit is below the prepared payment");
     if (maxPer > maxTotal) fail("signing-permit-invalid", "per-payment limit exceeds total limit");
     return mintSigningPermit({
       vaultId: this.vaultId,
       sessionId: this.session!.id,
       kind: "payment",
       purpose: input.purpose,
-      chainId: input.chainId!,
+      chainId: record.transaction.chainId,
+      bindingHash: paymentIntentHash(record.prepared),
       expiresAt: this.options.now() + ttlMs,
       maxUses,
       used: 0,
@@ -914,7 +930,7 @@ export class WalletVault {
     if (record.digest !== typedDataDigest(normalizePurposeTypedData(purpose, record.typedData))) {
       fail("prepared-invalid", "prepared typed data no longer matches its purpose");
     }
-    this.consumeSigningPermit(input.permit, "typed-data", purpose.id, purpose.chainId, null);
+    this.consumeSigningPermit(input.permit, "typed-data", purpose.id, purpose.chainId, null, record.digest);
     const signature = session.wallet.signingKey.sign(record.digest).serialized;
     return Object.freeze({
       signature,
@@ -1008,6 +1024,7 @@ export class WalletVault {
       null,
       record.transaction.chainId,
       record.transaction.value,
+      paymentIntentHash(record.prepared),
     ) as PaymentPurpose;
     const rawTransaction = await session.wallet.signTransaction(record.transaction);
     this.expireSessionIfNeeded();
@@ -1083,6 +1100,7 @@ export class WalletVault {
     expectedPurpose: string | null,
     chainId: number,
     valueWei: bigint | null,
+    bindingHash: string,
   ): string {
     const session = this.assertSession();
     const record = signingPermitRecord(permit);
@@ -1094,6 +1112,9 @@ export class WalletVault {
       fail("signing-permit-invalid", "signing permit purpose does not match");
     }
     if (record.chainId !== chainId) fail("signing-permit-invalid", "signing permit chain does not match");
+    if (record.bindingHash !== bindingHash) {
+      fail("signing-permit-invalid", "signing permit is bound to a different intent");
+    }
     if (this.options.now() >= record.expiresAt) fail("signing-permit-expired", "signing permit expired");
     if (record.used >= record.maxUses) fail("signing-permit-exhausted", "signing permit has no uses left");
     if (valueWei === null) {
@@ -1771,6 +1792,22 @@ function normalizePurposeTypedData(
     message: input.message,
   }) as WalletTypedData;
   return { typedData, verifyingContract: generic.verifyingContract, chainId: purpose.chainId };
+}
+
+function paymentIntentHash(prepared: PreparedPayment): string {
+  return keccak256(
+    new TextEncoder().encode(
+      [
+        "oma-payment-v1",
+        String(prepared.chainId),
+        prepared.from.toLowerCase(),
+        prepared.to.toLowerCase(),
+        prepared.valueWei,
+        String(prepared.nonce),
+        prepared.data.toLowerCase(),
+      ].join("|"),
+    ),
+  );
 }
 
 function typedDataDigest(input: { typedData: WalletTypedData; chainId: number | null }): string {
