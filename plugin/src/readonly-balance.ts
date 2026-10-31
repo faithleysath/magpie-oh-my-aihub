@@ -145,9 +145,9 @@ export class ReadOnlyChainReader {
     this.clientFactory = deps.clientFactory ?? ((opts) => new EvmClient(opts));
   }
 
-  /** Product/mainnet plus any enabled testnet that has endpoints. No RPC is made. */
+  /** The read-only product networks (BSC/Base). No RPC is made. */
   networks(): ReadOnlyChainSummary[] {
-    return this.registry.readableNetworks().map((n) => ({
+    return this.registry.readOnlyNetworks().map((n) => ({
       chainId: n.chainId,
       displayName: n.displayName,
       networkType: n.networkType,
@@ -177,6 +177,9 @@ export class ReadOnlyChainReader {
   async balance(input: ReadOnlyBalanceInput): Promise<ReadOnlyBalance> {
     const address = assertAddress(input.address);
     const net = this.registry.requireReadableNetwork(input.chainId);
+    if (net.support !== "read-only") {
+      throw new Error(`chain ${net.chainId} is a testnet/credit network; this reader is for read-only product networks only`);
+    }
     const asset: AssetRecord | null = input.assetId ? this.registry.requireReadableAsset(input.assetId) : null;
     if (asset && asset.chainId !== net.chainId) {
       throw new Error(`asset ${asset.assetId} belongs to chain ${asset.chainId}, not ${net.chainId}`);
