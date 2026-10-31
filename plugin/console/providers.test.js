@@ -126,6 +126,62 @@ describe("real mounted workflow handlers", () => {
     }
   });
 
+  test("the share action follows selection, filtering and busy state", async () => {
+    const state = baseState();
+    state.shareCandidates = { models: [model, { ...model, id: "native/second", displayName: "第二个模型" }] };
+    const r = runtime(state);
+    try {
+      const sharing = r.roots["sharing-panel"];
+      const save = find(sharing, "button", "分享这些模型");
+      const boxes = () => all(sharing, "input").filter((node) => node.type === "checkbox");
+      expect(save.disabled).toBeFalse();
+      for (const box of boxes()) { box.checked = false; await box.emit("change"); }
+      expect(save.disabled).toBeTrue();
+      boxes()[0].checked = true; await boxes()[0].emit("change");
+      expect(save.disabled).toBeFalse();
+      boxes()[1].checked = true; await boxes()[1].emit("change");
+      expect(save.disabled).toBeFalse();
+
+      const search = all(sharing, "input").find((node) => node.type === "search");
+      search.value = "second"; await search.emit("input");
+      expect(save.disabled).toBeFalse();
+      expect(boxes().filter((box) => box.checked)).toHaveLength(1);
+      search.value = ""; await search.emit("input");
+      expect(boxes().filter((box) => box.checked)).toHaveLength(2);
+      expect(save.disabled).toBeFalse();
+    } finally { r.cleanup(); }
+  });
+
+  test("a running share action blocks a second confirmation", async () => {
+    const state = baseState();
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const r = runtime(state, () => pending);
+    try {
+      const sharing = r.roots["sharing-panel"];
+      void find(sharing, "button", "重新检测").click();
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      find(sharing, "button", "分享这些模型").click();
+      await flush();
+      expect(r.dialog.open).toBeFalse();
+      release({});
+      await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["share-candidates"]);
+    } finally { r.cleanup(); }
+  });
+
+  test("the stop action is hidden unless the node is sharing", async () => {
+    const state = baseState();
+    state.status.config.sharingEnabled = false;
+    const r = runtime(state);
+    try {
+      expect(find(r.roots["sharing-panel"], "button", "停止共享").hidden).toBeTrue();
+      const sharingState = baseState();
+      r.render(sharingState);
+      expect(find(r.roots["sharing-panel"], "button", "停止共享").hidden).toBeFalse();
+    } finally { r.cleanup(); }
+  });
+
   test("several peers never put more than one primary action on the catalogue screen", async () => {
     const state = baseState();
     state.status.catalog.peers = [structuredClone(peer), { ...structuredClone(peer), nodeId: "b".repeat(16), hostname: "伙伴乙", quote: { ...structuredClone(peer.quote), node: { displayName: "伙伴乙" } } }];

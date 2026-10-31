@@ -94,6 +94,9 @@
 }
 
 * { box-sizing: border-box; }
+/* A component display rule must never defeat the hidden attribute: a hidden
+   control is not displayed and cannot take focus. */
+[hidden] { display: none !important; }
 
 html { height: 100%; }
 
