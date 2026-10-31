@@ -234,8 +234,16 @@ export class ControlApp {
       const current = service.config();
       if (current && !current.publishedPorts.includes(port)) {
         app.previousPublishedPorts = [...current.publishedPorts];
-        await service.configure({ publishedPorts: [...new Set([...current.publishedPorts, port])] });
-        app.publishPresence();
+        try {
+          await service.configure({ publishedPorts: [...new Set([...current.publishedPorts, port])] });
+          app.publishPresence();
+        } catch (error) {
+          server.stop();
+          service.setControlPresence(null);
+          node.close();
+          if (typeof service.configure === "function") await service.configure({ publishedPorts: app.previousPublishedPorts }).catch(() => {});
+          throw error;
+        }
       }
     }
     app.ticker = setInterval(() => {
@@ -630,36 +638,51 @@ export class ControlApp {
     };
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = null;
-    // Order: withdraw presence/control first, close its listener, then remove
-    // only this app's owned forwards. Retired listeners that 2.6.4 leaves alive
-    // are tracked/retried; a supervised restart is attempted by Service.
     this.service.setControlPresence(null);
     this.server.stop();
-    const forwards = [...this.controlForwards.entries()];
+    const forwards = [...this.controlForwards.values()];
     const retired = [...this.retiredForwards];
     this.controlForwards.clear();
     this.retiredForwards.clear();
-    void (async () => {
-      for (const [, forward] of forwards) {
-        const retire = (this.service as { retireControlForward?: (bind: string, dst: string) => Promise<unknown> }).retireControlForward;
-        if (typeof retire === "function") await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst).catch(() => {});
-        else await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
+    let degraded: string | null = null;
+    const retire = (this.service as { retireControlForward?: (bind: string, dst: string) => Promise<{ closed: boolean }> }).retireControlForward;
+    for (const forward of forwards) {
+      if (typeof retire === "function") {
+        const result = await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst).catch(() => ({ closed: false }));
+        if (!result.closed) degraded = "a control forward is still listening after stop";
+      } else {
+        await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
+        try {
+          if (!(await new SocketBinder().isFree("127.0.0.1", forward.localPort))) degraded = "a control forward is still listening after stop";
+        } catch {
+          degraded = "a control forward could not be probed after stop";
+        }
       }
-      for (const localPort of retired) {
+    }
+    for (const localPort of retired) {
+      if (typeof retire === "function") {
+        const result = await retire.call(this.service, `127.0.0.1:${localPort}`, "retired").catch(() => ({ closed: false }));
+        if (!result.closed) degraded = "a retired control forward is still listening after stop";
+      } else {
         await this.service.supervisor.removePortForward(`127.0.0.1:${localPort}`).catch(() => {});
       }
-      const published = this.previousPublishedPorts;
-      this.previousPublishedPorts = null;
-      if (published && typeof (this.service as { configure?: unknown }).configure === "function") {
-        await this.service.configure({ publishedPorts: published }).catch(() => {});
-      }
-    })();
+    }
     this.node.close();
+    const published = this.previousPublishedPorts;
+    this.previousPublishedPorts = null;
+    if (published && typeof (this.service as { configure?: unknown }).configure === "function") {
+      try {
+        await this.service.configure({ publishedPorts: published });
+      } catch (error) {
+        degraded = `control port ACL restore failed: ${String((error as Error)?.message ?? error)}`;
+      }
+    }
     active = null;
     byService.delete(this.service);
+    if (degraded) throw new Error(degraded);
   }
 }
 

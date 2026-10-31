@@ -101,7 +101,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     orphanWatch.unref?.();
     failedBootCleanup = async () => {
       stopped = true;
-      launcher?.stop(); consoleServer?.stop(); controlApp?.stop(); api?.stop();
+      launcher?.stop(); consoleServer?.stop(); void controlApp?.stop().catch((e) => logger.warn(`P2P control stop: ${String(e)}`)); api?.stop();
       try { if (service) await service.stop(); }
       finally {
         shutdown(); lock?.release(); clearInterval(orphanWatch);

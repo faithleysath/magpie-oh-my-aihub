@@ -454,9 +454,24 @@ describe("forward recovery for an owned Remote", () => {
 });
 
 describe("control forward retirement", () => {
+  test("a removed config entry with a live socket is not reported closed", async () => {
+    const svc = await service();
+    binder.occupy("127.0.0.1", 13620);
+    sup.forwards = [{ protocol: "tcp", bindAddr: "127.0.0.1:13620", dstAddr: "10.66.1.2:41651" }];
+    // 2.6.4 can remove the list entry while the actual listener stays.
+    sup.removePortForward = async () => { sup.forwards = []; };
+    const result = await svc.retireControlForward("127.0.0.1:13620", "10.66.1.2:41651");
+    expect(result.closed).toBe(false);
+    expect(result.orphan).toBe(true);
+    expect(loadState().state.orphanForwards.some((o) => o.localPort === 13620)).toBe(true);
+  });
+
   test("remove that leaves a live listener forces a supervised restart and keeps other forwards", async () => {
     const svc = await service();
     (svc as any).state.providers = [provider("peer2", 13621, "10.66.1.3", KEY2, MODELS, "peer2-host")];
+    binder.occupy("127.0.0.1", 13620);
+    const originalStart = sup.start.bind(sup);
+    sup.start = async (cfg) => { const state = await originalStart(cfg); binder.free("127.0.0.1", 13620); return state; };
     sup.forwards = [
       { protocol: "tcp", bindAddr: "127.0.0.1:13620", dstAddr: "10.66.1.2:41651" },
       { protocol: "tcp", bindAddr: "127.0.0.1:13621", dstAddr: "10.66.1.3:41651" },
