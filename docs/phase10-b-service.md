@@ -249,7 +249,7 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | Enforced revoke remove/rotate/old-secret/both-fail | VERIFIED (unit, fake Magpie) | 9 port tests |
 | PR #19 transport | PASS (reviewed 7bcf7e0, rebased on approved PR #15) | 20 real/unit tests; see PR #19 |
 | PR #20 adapter targeted | PASS (local, rebased branch) | 20 transport + 12 old adapter + 9 new port tests = 41 total |
-| Full `bun run test` on the rebased PR #20 head | UNKNOWN / host contention | Not claimed after rebase; shared host port collisions; PR #19 previously ran 773/0 in a temp PR #15+#17 copy |
+| Full `bun run test` on PR #20 head `c3ce467` | PASS (CI) | run `41160217504` linux+macOS success; includes the approved PR #15 clock base |
 | Real B-core `P2pNode` stacked and compiled | UNKNOWN (not approved) | B-core PR #26 is committed (`fdc7d4c`/`fba73c`) but not approved for stack; the local port mirrors its `P2pBusinessPort` shape and is compile-checked only in a temporary snapshot |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
 | Real EasyTier 2.6.4 two-node hello/frame/TOFU | UNKNOWN | no two-node overlay run |
@@ -257,13 +257,12 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | Control port from A-service | PLANNED | A-service `reservePort`/`verifyOwnedPort`; no fixed 3427/user port |
 | Real funds / mainnet | **NO-GO** | out of scope; no wallet or real asset used |
 
-The earlier 773/0 full-suite run was for the PR #19 transport head in an isolated
-`/tmp` worktree that combined it with the two P0 review branches; the temporary
-worktree and branch were deleted afterwards. It is evidence that transport does not
-regress the hermetic suite, not an approval to integrate P0 or a claim that the guard
-is part of B. The rebased PR #20 full suite has not been rerun successfully in this
-shared host because other agents' test processes collide on the fixed test ports.
-No real two-node pass is claimed. The next gates are: main approval of the exact
+PR #20's CI run `41160217504` is green on linux and macOS for head
+`c3ce467b12e78d23988d615ae964b61149108525`; it is the PR head, not a temporary
+combination. The earlier 773/0 local run was the PR #19 transport combined with the
+two P0 branches in /tmp and is recorded separately. Neither is a claim that the
+hermetic guard is part of B or an approval to integrate P0. No real two-node pass is
+claimed. The next gates are: main approval of the exact
 B-core commit, an explicit stacked assembly, A-service's port API, then an isolated
 Magpie/EasyTier two-node run with sanitised logs. The full test suite must run only
 with the hermetic guard (PR #17 is still temporary evidence, not a dependency).
