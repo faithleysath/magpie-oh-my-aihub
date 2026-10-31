@@ -418,6 +418,7 @@ function walletView(value: unknown, scrub: Scrub): Obj | null {
       credit: bool(a.credit) ?? false,
       testnetOnly: bool(a.testnetOnly) ?? false,
       issuerType: str(a.issuerType),
+      pricingKind: str(a.pricingKind),
       nanosPerToken: str(a.nanosPerToken),
       priceVersion: str(a.priceVersion),
       onchainDecimals: h ? num(h.onchainDecimals) : null,

@@ -400,7 +400,7 @@ const asset = registry.requireReadableAsset(assetId);
 `Wallet.statusLocal().registry` 已包含：
 
 - network: `chainId, displayName, networkType, support, receivable, enabled, blockExplorer, finality, endpoints`
-- asset: `assetId, chainId, symbol, name, decimals, contractAddress, enabled, credit, testnetOnly, issuerType, nanosPerToken, priceVersion`
+- asset: `assetId, chainId, symbol, name, decimals, contractAddress, enabled, credit, testnetOnly, issuerType, pricingKind, nanosPerToken, priceVersion`
 
 UI 应使用 `support/receivable/enabled/credit` 而不是自己推断；`priceVersion` 以 `not-creditable:` 开头表示不可估值。页面快照（`page-snapshot.ts`）也投影 `support/receivable` 与 `credit/testnetOnly/issuerType`，旧页面忽略新字段，后续 UI 直接消费这些字段即可。
 
@@ -419,12 +419,12 @@ assets:   [{ assetId, chainId, contractAddress, symbol, decimals, issuerType, te
 | --- | --- | --- |
 | `enabled` | 增加 `support`、`receivable` | `enabled` 只是 watcher/credit 开关；主网永远 false，不能用它判断展示或可收款 |
 | `networkType` | 不能单独判主网；增加硬 chainId 检查 | 56/8453 即使被伪造成 testnet 也必须拒绝发送 |
-| `testnetOnly` | 增加 `credit`、`pricing.kind` | v1 资产可能缺字段；发送必须是 `credit && kind==="fixed-test-rate"` |
+| `testnetOnly` | 增加 `credit`、`pricingKind`（状态投影） | v1 资产可能缺字段；发送必须是 `credit && pricingKind==="fixed-test-rate"` |
 | `issuerType` | 发送要求 `mock`，主网只允许 `native-issuer`/`bridged` | 主网 mock/未知发行方不能进入授信 |
 | `allowMainnetRead` | 只影响展示；send/credit/auto-recharge 永远拒绝 | 可读 ≠ 可授信 |
 | `assetId` | 必须与 `chainId`/`contractAddress` 一致，decimals 用 registry 值 | 不用 symbol 推断资产 |
 
-发送/签名前置条件（C-external 必须全部满足）：`networkType==="testnet"`、`enabled===true`、`support==="credit"`、`asset.testnetOnly===true`、`asset.credit===true`、`asset.pricing.kind==="fixed-test-rate"`、`asset.issuerType==="mock"`、`asset.chainId===network.chainId`。主网 send/sign 由 `assertNoMainnetSend` 拒绝，不看 env/config/`allowMainnetRead`。
+发送/签名前置条件（C-external 必须全部满足）：`networkType==="testnet"`、`enabled===true`、`support==="credit"`、`asset.testnetOnly===true`、`asset.credit===true`、`asset.pricingKind==="fixed-test-rate"`、`asset.issuerType==="mock"`、`asset.chainId===network.chainId`。主网 send/sign 由 `assertNoMainnetSend` 拒绝，不看 env/config/`allowMainnetRead`。
 
 ---
 
