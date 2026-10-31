@@ -36,6 +36,7 @@ interface Endpoint {
   /** Host header the provider's listener expects (mapped address for overlay forwards). */
   hostHeader?: string;
   mappedCidr: string | null;
+  expiresAt?: string;
   quoteHash: string | null;
   fingerprint: string;
 }
@@ -92,6 +93,7 @@ function fetchJson(url: string, body: unknown, headers: Record<string, string>, 
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
+    redirect: "error",
     signal: signal ?? AbortSignal.timeout(10_000),
   }).then(async (res) => {
     const textBody = await res.text();
@@ -114,12 +116,16 @@ export function createHttpTransport(endpoints: Map<string, Endpoint>): P2pTransp
       const ep = endpointOf(target);
       return fetchJson(`http://${ep.host}:${ep.port}/p2p/v1/hello`, hello, { host: hostHeader(ep) });
     },
+    canPush(peer) {
+      return endpoints.has(peer.nodeId);
+    },
     async frame(session, frame) {
       const ep = endpointOf(session.peer);
       const res = await fetch(`http://${ep.host}:${ep.port}/p2p/v1/frame?session=${session.sessionId}`, {
         method: "POST",
         headers: { host: hostHeader(ep), "content-type": "application/octet-stream" },
         body: new Uint8Array(frame),
+        redirect: "error",
         signal: AbortSignal.timeout(10_000),
       });
       if (res.status !== 204) throw new Error(`control frame HTTP ${res.status}`);
@@ -209,7 +215,7 @@ export class ControlApp {
         acceptHello: (hello) => node.acceptHello(hello).then((r) => r.serverHello),
         handleFrame: (sessionId, frame) => node.handleFrame(sessionId, frame),
         acceptPoll: async (hello) => {
-          const r = await node.acceptHello(hello);
+          const r = await node.acceptHello(hello, { rejectReplay: true });
           const frames = await node.pullFrames(r.sessionId);
           return { serverHello: r.serverHello, frames: frames.map((f) => f.toString("base64")) };
         },
@@ -258,12 +264,18 @@ export class ControlApp {
 
   /** Fetch + verify a peer's signed presence and remember its exact control endpoint. */
   async discover(nodeId: string): Promise<Endpoint> {
-    const existing = this.endpoints.get(nodeId);
-    if (existing) return existing;
     const cfg = this.service.config();
     const peer = this.service.catalogStatus().peers.find((p) => p.nodeId === nodeId);
     if (!cfg || !peer || !peer.mappedCidr || !peer.catalogPort) throw new Error(`no signed catalogue entry for ${nodeId}`);
     if (!peer.identity?.fingerprint || !peer.quoteHash) throw new Error(`peer ${nodeId} has no accepted identity/quote`);
+    const existing = this.endpoints.get(nodeId);
+    if (existing && (peer.status === "identity-changed" || existing.fingerprint !== peer.identity.fingerprint)) {
+      this.endpoints.delete(nodeId);
+    } else if (existing?.expiresAt && Date.parse(existing.expiresAt) - this.now().getTime() > 60_000) {
+      return existing;
+    } else if (existing) {
+      this.endpoints.delete(nodeId);
+    }
     const res = await socksHttpGet({
       socksPort: cfg.catalog.socksPort,
       host: mappedHost(peer.mappedCidr),
@@ -272,7 +284,7 @@ export class ControlApp {
       timeoutMs: 5000,
     });
     if (res.status !== 200) throw new Error(`presence HTTP ${res.status}`);
-    const presence = verifyPresence(JSON.parse(res.body), this.now());
+    const presence = verifyPresence(JSON.parse(res.body), this.now(), { expectedMappedCidr: peer.mappedCidr });
     if (presence.node.nodeId !== peer.nodeId || presence.node.fingerprint !== peer.identity.fingerprint) {
       throw new Error("presence identity differs from the signed catalogue identity");
     }
@@ -313,6 +325,7 @@ export class ControlApp {
         mappedCidr: mapped,
         quoteHash: peer.quoteHash,
         fingerprint: presence.node.fingerprint,
+        expiresAt: presence.expiresAt,
       };
     } else if (this.allowLanDirect) {
       endpoint = {
@@ -321,6 +334,7 @@ export class ControlApp {
         mappedCidr: null,
         quoteHash: peer.quoteHash,
         fingerprint: presence.node.fingerprint,
+        expiresAt: presence.expiresAt,
       };
     } else {
       throw new Error("the provider published no mapped endpoint; LAN fallback is disabled");
@@ -377,8 +391,30 @@ export class ControlApp {
     return { requestId: result.requestHash, state: "pending" };
   }
 
+  /** Read-only selected-model quote preview; no key, no approval, no trust change. */
+  async quotePreview(input: ControlActionInput): Promise<Record<string, unknown>> {
+    const requestHash = text(input.requestId, "requestId", 64);
+    const models = modelsOf(input.models);
+    const request = (await this.node.listRequests()).find((r) => r.requestHash === requestHash);
+    if (!request) throw new Error("request not found");
+    if (models.some((m) => !request.models.includes(m))) throw new Error("preview models must be a subset of the request");
+    const quote = this.service.catalogStatus().quote;
+    if (!quote || quote.contentHash !== request.quoteHash) throw new Error("the request quote is stale");
+    const selected = quote.models.filter((m) => models.includes(m.id));
+    const priceVersion = catalogPriceVersion(selected);
+    if (!priceVersion) throw new Error("the selected models have no complete price");
+    return {
+      requestId: requestHash,
+      quoteHash: quote.contentHash,
+      priceVersion,
+      models,
+      pricing: selected.map((m) => ({ id: m.id, pricing: m.pricing })),
+    };
+  }
+
   async approve(input: ControlActionInput): Promise<P2pApprovalView> {
     const requestHash = text(input.requestId, "requestId", 64);
+    if (!Object.prototype.hasOwnProperty.call(input, "generation")) throw new Error("generation is required");
     const models = modelsOf(input.models);
     const capUsd = capOf(input.capUsd);
     const request = (await this.node.listRequests()).find((r) => r.requestHash === requestHash);
@@ -387,12 +423,15 @@ export class ControlApp {
     const quoteHash = text(input.quoteHash, "quoteHash", 64);
     const priceVersion = text(input.priceVersion, "priceVersion", 64);
     if (fingerprint !== request.consumer.fingerprint || quoteHash !== request.quoteHash) throw new Error("request identity/quote is stale");
-    if (priceVersion !== request.priceVersion) throw new Error("selected price version is stale");
+    if (models.some((m) => !request.models.includes(m))) throw new Error("approved models must be a subset of the request");
+    const quote = this.service.catalogStatus().quote;
+    const selectedVersion = quote ? catalogPriceVersion(quote.models.filter((m) => models.includes(m.id))) : null;
+    if (!quote || quote.contentHash !== request.quoteHash || !selectedVersion || priceVersion !== selectedVersion) {
+      throw new Error("selected price version is stale");
+    }
     const activeApproval = request.approvalId ? await this.node.approvalView(request.approvalId) : null;
     const currentGeneration = activeApproval?.generation ?? null;
-    if (input.generation !== undefined && input.generation !== null) {
-      if (!Number.isInteger(input.generation) || input.generation !== currentGeneration) throw new Error("request generation is stale");
-    }
+    if (input.generation !== currentGeneration) throw new Error("request generation is stale");
     let acceptConsumer = false;
     if (request.trust !== "accepted") {
       const expected = text(input.acceptFingerprint, "acceptFingerprint", 64);
@@ -514,15 +553,24 @@ export class ControlApp {
         readbackAt: p.lastConnectedAt,
         detail: p.detail,
       })),
-      presence: [...this.seenPresence.values()].map((p) => ({
-        nodeId: p.node.nodeId,
-        hostname: p.node.hostname,
-        fingerprint: p.node.fingerprint,
-        endpoint: { host: p.endpoint.host, mappedCidr: p.endpoint.mappedCidr, controlPort: p.endpoint.controlPort },
-        capability: p.capability,
-        expiresAt: p.expiresAt,
-        verified: true,
-      })),
+      presence: [...this.seenPresence.values()].map((p) => {
+        const catalogPeer = this.service.catalogStatus().peers.find((x) => x.nodeId === p.node.nodeId);
+        const tofu =
+          catalogPeer?.status === "verified" || catalogPeer?.status === "connected" ? "accepted"
+          : catalogPeer?.status === "identity-changed" ? "changed"
+          : catalogPeer ? "pending" : "unknown";
+        return {
+          nodeId: p.node.nodeId,
+          hostname: p.node.hostname,
+          fingerprint: p.node.fingerprint,
+          endpoint: { host: p.endpoint.host, mappedCidr: p.endpoint.mappedCidr, controlPort: p.endpoint.controlPort },
+          capability: p.capability,
+          expiresAt: p.expiresAt,
+          signature: "valid",
+          tofu,
+          verified: true,
+        };
+      }),
       counts: {
         pendingInbound: inbound.filter((r) => r.approvalState === null || r.approvalState === "approving").length,
         awaitingApproval: inbound.filter((r) => r.state === "awaiting-approval" || r.state === "awaiting-trust").length,

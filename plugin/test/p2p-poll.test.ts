@@ -14,7 +14,8 @@ describe("authenticated pull/poll", () => {
     expect(approval.state).not.toBe("rejected");
     // No provider push occurred; the consumer pulls a fresh authenticated hello.
     expect(lab.calls.register).toBe(0);
-    lab.advance(10_000); // bounded retry backoff after the failed push
+    // canPush is false for the provider, so approve left the rows pending
+    // instead of exhausting them to dead.
     const results = await lab.A.poll(lab.target());
     expect(results.length).toBeGreaterThanOrEqual(2); // approved + delivery
     expect(lab.calls.recordApproval).toBe(1);
@@ -25,5 +26,8 @@ describe("authenticated pull/poll", () => {
     expect(consumer?.keyId).toBe(KEY_ID);
     expect(lab.calls.recordAck).toBe(1);
     expect((await lab.B.approvalView(approval.approvalId))?.ackState).toBe("acked");
+    // A captured poll hello cannot be replayed to drain a fresh outbox.
+    const captured = lab.pollHellos.at(-1);
+    await expect(lab.B.acceptHello(captured, { rejectReplay: true })).rejects.toThrow(/replay/);
   });
 });

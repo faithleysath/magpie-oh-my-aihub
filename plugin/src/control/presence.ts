@@ -91,7 +91,14 @@ export function signPresence(body: PresenceBody, identity: CatalogIdentity): Sig
   return { ...unsigned, signature: sign(null, bytes, privateKey).toString("base64") };
 }
 
-export function verifyPresence(raw: unknown, now = new Date()): PresenceBody {
+export interface VerifyPresenceOptions {
+  /** when known, the endpoint host must be exactly this catalogue mapped host */
+  expectedMappedCidr?: string | null;
+  /** tests only: allow a loopback endpoint */
+  allowLoopback?: boolean;
+}
+
+export function verifyPresence(raw: unknown, now = new Date(), opts: VerifyPresenceOptions = {}): PresenceBody {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("presence must be an object");
   const doc = raw as Record<string, unknown>;
   exactKeys(doc, ["schema", "node", "endpoint", "capability", "issuedAt", "expiresAt", "signature"], "presence");
@@ -109,10 +116,30 @@ export function verifyPresence(raw: unknown, now = new Date()): PresenceBody {
   const endpoint = doc.endpoint as Record<string, unknown> | undefined;
   if (!endpoint || typeof endpoint !== "object" || Array.isArray(endpoint)) throw new Error("presence.endpoint is missing");
   exactKeys(endpoint, ["host", "mappedCidr", "controlPort", "ready"], "presence.endpoint");
-  const host = assertText(endpoint.host, 64, "presence.endpoint.host");
-  if (/[\s/\\@]/.test(host)) throw new Error("presence endpoint host is invalid");
   const mappedCidr = endpoint.mappedCidr === null ? null : assertText(endpoint.mappedCidr, 18, "presence.endpoint.mappedCidr");
   if (mappedCidr !== null && !/^10\.66\.\d{1,3}\.\d{1,3}\/32$/.test(mappedCidr)) throw new Error("presence mappedCidr is invalid");
+  const host = assertText(endpoint.host, 64, "presence.endpoint.host");
+  if (/[\s/\\@]/.test(host)) throw new Error("presence endpoint host is invalid");
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!v4) throw new Error("presence endpoint host must be an IPv4 address");
+  const octets = v4.slice(1).map(Number);
+  if (octets.some((n) => n < 0 || n > 255)) throw new Error("presence endpoint host is invalid");
+  const loopback = octets[0] === 127;
+  const linkLocal = octets[0] === 169 && octets[1] === 254;
+  const unspecified = octets.every((n) => n === 0);
+  if ((loopback || linkLocal || unspecified) && !opts.allowLoopback) {
+    throw new Error("presence endpoint host is loopback/link-local/unspecified");
+  }
+  if (mappedCidr !== null && host !== mappedCidr.replace(/\/32$/, "")) {
+    throw new Error("presence endpoint host does not match its signed mappedCidr");
+  }
+  if (opts.expectedMappedCidr && host !== opts.expectedMappedCidr.replace(/\/32$/, "")) {
+    throw new Error("presence endpoint host does not match the signed catalogue mapped address");
+  }
+  if (mappedCidr !== null && !/^10\.66\.\d{1,3}\.\d{1,3}\/32$/.test(mappedCidr)) throw new Error("presence mappedCidr is invalid");
+  if (opts.expectedMappedCidr && mappedCidr !== opts.expectedMappedCidr) {
+    throw new Error("presence mappedCidr does not match the signed catalogue");
+  }
   const controlPort = endpoint.controlPort;
   if (typeof controlPort !== "number" || !Number.isInteger(controlPort) || controlPort < 1 || controlPort > 65535) {
     throw new Error("presence controlPort is invalid");

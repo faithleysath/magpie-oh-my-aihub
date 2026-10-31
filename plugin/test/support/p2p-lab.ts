@@ -85,6 +85,7 @@ export class P2pLab {
   readonly importedApprovals: string[] = [];
   readonly approveInputs: Array<{ approvalId: string; generation: number }> = [];
   readonly sentFrames: Array<{ sessionId: string; from: "A" | "B"; frame: Buffer }> = [];
+  readonly pollHellos: unknown[] = [];
   readonly registeredSessions: Array<{ approvalId: string; providerNodeId: string; providerFingerprint: string }> = [];
 
   private constructor() {
@@ -134,6 +135,7 @@ export class P2pLab {
         const result = await targetNode.acceptHello(hello);
         return result.serverHello;
       },
+      canPush: (peer) => !(self === "B" && this.faults.disableProviderPush),
       frame: async (session, frame) => {
         this.sentFrames.push({ sessionId: session.sessionId, from: self, frame: Buffer.from(frame) });
         if (self === "B" && this.faults.disableProviderPush) throw new Error("provider push disabled for poll test");
@@ -141,6 +143,7 @@ export class P2pLab {
         await targetNode.handleFrame(session.sessionId, frame);
       },
       poll: async (target, hello) => {
+        this.pollHellos.push(hello);
         const targetNode = self === "A" ? this.B : this.A;
         const result = await targetNode.acceptHello(hello);
         const frames = await targetNode.pullFrames(result.sessionId);

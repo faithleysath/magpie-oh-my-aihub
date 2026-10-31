@@ -14,7 +14,7 @@ export const CONSOLE_ACTIONS = [
   "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer", "connection-request",
   "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
-  "p2p-request", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
+  "p2p-request", "p2p-quote-preview", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
   ...WALLET_CONSOLE_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
@@ -81,6 +81,9 @@ export async function consoleAction(service: Service, name: string, input: Recor
         case "p2p-request":
           fields(input, ["nodeId", "fingerprint", "quoteHash", "models"]);
           return clean(await p2p(() => app.request(input)));
+        case "p2p-quote-preview":
+          fields(input, ["requestId", "models"]);
+          return clean(await p2p(() => app.quotePreview(input)));
         case "p2p-approve":
           fields(input, ["requestId", "consumerFingerprint", "quoteHash", "priceVersion", "generation", "models", "capUsd", "acceptFingerprint"]);
           return clean(await p2p(() => app.approve(input)));

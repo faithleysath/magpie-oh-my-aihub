@@ -46,7 +46,7 @@ describe("control app lifecycle", () => {
     const fn = presence();
     expect(typeof fn).toBe("function");
     const doc = fn!() as Record<string, unknown>;
-    const verified = verifyPresence(doc, new Date());
+    const verified = verifyPresence(doc, new Date(), { allowLoopback: true });
     expect(verified.node.nodeId).toBe("abcd1234");
     expect(verified.endpoint.controlPort).toBe(app!.port);
     expect(verified.capability.providesModels).toBe(false);
