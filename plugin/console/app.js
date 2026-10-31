@@ -135,9 +135,18 @@ function setBusy(value) {
   if ($("save")) $("save").setAttribute("aria-busy", String(value));
 }
 
-function navigate(page) {
+function selectTab(tab) {
+  for (const [otherTab, otherPanel] of [["tab-catalog", "discovery-panel"], ["tab-connections", "connections-panel"]]) {
+    const selected = otherTab === tab;
+    $(otherTab)?.setAttribute("aria-selected", String(selected));
+    show(otherPanel, selected);
+  }
+}
+
+function navigate(page, tab = null) {
   if (!PAGES[page] || !authenticated) return;
   currentPage = page;
+  if (page === "discovery" && tab) selectTab(tab === "connections" ? "tab-connections" : "tab-catalog");
   for (const panel of ALL_PANELS) show(panel, PAGES[page].sections.includes(panel));
   for (const name of Object.keys(PAGES)) {
     const button = $("nav-" + name);
@@ -300,6 +309,12 @@ function todos(state) {
   if (!c.sharingEnabled && state.configured) items.push({ text: "还没有分享任何本机模型", goto: "sharing" });
   const unverified = list(object(s.catalog).peers).filter((peer) => ["unverified", "identity-changed", "first-seen"].includes(peer?.status));
   if (unverified.length) items.push({ text: `${unverified.length} 个伙伴身份待核对`, goto: "discovery" });
+  const p2p = object(s.p2p);
+  const counts = object(p2p.counts);
+  if (typeof counts.pendingInbound === "number" && counts.pendingInbound > 0) items.push({ text: `${counts.pendingInbound} 个无文件使用请求待批准`, goto: "sharing" });
+  if (typeof counts.awaitingApproval === "number" && counts.awaitingApproval > 0) items.push({ text: `${counts.awaitingApproval} 个使用申请等待批准`, goto: "discovery", tab: "connections" });
+  if (typeof counts.actionNeeded === "number" && counts.actionNeeded > 0) items.push({ text: `${counts.actionNeeded} 个无文件连接需要处理`, goto: "discovery", tab: "connections" });
+  if (object(p2p.listener).state === "failed") items.push({ text: "P2P 控制通道失败，无文件申请无法收发", goto: "network" });
   const operations = list(object(state.wallet).intentOperations).filter((operation) => ["pending", "reserved", "unknown"].includes(operation?.status || operation?.state));
   if (operations.length) items.push({ text: `${operations.length} 个入账申请状态待核对`, goto: "wallet" });
   if (object(s.accounting).uncertain) items.push({ text: `计费检查存在不确定性：${object(s.accounting).uncertainReason || "暂时无法验证"}`, goto: "wallet" });
@@ -362,7 +377,7 @@ function renderHome(state) {
     button.type = "button";
     button.className = "text-button";
     button.textContent = "去处理 →";
-    button.addEventListener("click", () => navigate(entry.goto));
+    button.addEventListener("click", () => navigate(entry.goto, entry.tab));
     li.append(label, button);
     listNode.append(li);
   }
@@ -471,6 +486,28 @@ function renderNetwork(state) {
   }
 
   const checksAt = evidence.readAt || s.checksAt;
+  const listenerList = $("p2p-listener");
+  if (listenerList) {
+    const p2p = object(s.p2p);
+    const listener = object(p2p.listener);
+    listenerList.replaceChildren();
+    const rows = Object.keys(listener).length
+      ? [
+        ["状态", `${listener.state || "unknown"}${listener.verified === true ? " · 已验证" : listener.verified === false ? " · 未验证" : ""}`],
+        ["地址", listener.host ? `${listener.host}${listener.port ? `:${listener.port}` : ""}` : "未报告"],
+        ["可达范围", listener.reachability || "未知"],
+        ["说明", listener.detail || "无"],
+      ]
+      : [["状态", "尚未读取"]];
+    for (const [label, value] of rows) {
+      const div = document.createElement("div");
+      const dt = document.createElement("dt"); dt.textContent = label;
+      const dd = document.createElement("dd"); dd.textContent = value; dd.setAttribute("aria-readonly", "true");
+      div.append(dt, dd);
+      listenerList.append(div);
+    }
+  }
+
   setText("checks-time", checksAt ? `最近读取：${time(checksAt)}` : "尚未运行主动检查");
   renderChecks("checks-list", list(s.checks));
 }
@@ -665,11 +702,7 @@ $("retry")?.addEventListener("click", connect);
 
 for (const [tab, panel] of [["tab-catalog", "discovery-panel"], ["tab-connections", "connections-panel"]]) {
   $(tab)?.addEventListener("click", () => {
-    for (const [otherTab, otherPanel] of [["tab-catalog", "discovery-panel"], ["tab-connections", "connections-panel"]]) {
-      const selected = otherTab === tab;
-      $(otherTab).setAttribute("aria-selected", String(selected));
-      show(otherPanel, selected);
-    }
+    selectTab(tab);
     $(panel)?.focus?.({ preventScroll: true });
   });
 }

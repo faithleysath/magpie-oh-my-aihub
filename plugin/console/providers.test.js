@@ -133,8 +133,8 @@ describe("real mounted workflow handlers", () => {
     try {
       const primaries = all(r.roots["discovery-panel"], "button").filter((node) => String(node.className).split(" ").includes("primary"));
       expect(primaries).toHaveLength(0);
-      // The single primary lives inside the request dialog.
-      await find(r.roots["discovery-panel"], "button", "选择模型并申请").click(); await flush();
+      // The single primary lives inside the zero-file request dialog.
+      await find(r.roots["discovery-panel"], "button", "申请使用（无文件）").click(); await flush();
       const dialogPrimaries = all(r.dialog, "button").filter((node) => String(node.className).split(" ").includes("primary"));
       expect(dialogPrimaries).toHaveLength(1);
     } finally { r.cleanup(); }
@@ -314,7 +314,7 @@ describe("real mounted workflow handlers", () => {
     const requestDocument = { schema: "ohmyaihub.connection-request/v1", models: [model.id] };
     const r = runtime(state, async () => requestDocument);
     try {
-      await find(r.roots["discovery-panel"], "button", "选择模型并申请").click();
+      await find(r.roots["discovery-panel"], "button", "选择模型并生成文件").click();
       const choices = all(r.dialog, "input").filter((node) => node.type === "checkbox");
       choices.forEach((node) => { node.checked = true; });
       await find(r.dialog, "button", "生成连接申请").click(); await flush();
@@ -403,4 +403,143 @@ test("all shipped workflow DOM avoids HTML injection, remote resources and brows
   expect(html).toContain("data-1p-ignore data-bwignore");
   expect(html).toContain("已保存的密码不会回显");
   expect(html).toContain("不会写入浏览器存储");
+});
+
+describe("zero-file P2P UI (assembly draft contract, mocked state)", () => {
+  const fp = "e".repeat(64);
+  const inbound = (over = {}) => ({
+    requestId: "req-1", consumerNodeId: "c".repeat(16), consumerHostname: "伙伴乙",
+    consumerFingerprint: fp, models: [model.id], quoteHash, priceVersion: "f".repeat(64),
+    capUsd: 0.5, expiresAt: "2099-01-01T00:00:00.000Z", tofu: "pending", state: "pending",
+    receivedAt: "2026-10-31T00:00:00.000Z", detail: null, ...over,
+  });
+  const withP2p = (over = {}) => {
+    const state = baseState();
+    state.status.p2p = {
+      schema: "ohmyaihub/p2p-state/1", enabled: true,
+      listener: { state: "ready", host: "127.0.0.1", port: 41999, reachability: "loopback", verified: true, detail: null },
+      inboundRequests: [inbound()], outboundRequests: [], approvals: [], connections: [],
+      counts: { pendingInbound: 1, awaitingApproval: 0, connected: 0, actionNeeded: 0 },
+      ...over,
+    };
+    return state;
+  };
+  const checkboxes = (root) => all(root, "input").filter((node) => node.type === "checkbox");
+
+  test("approving a first-contact request binds the full fingerprint in one action", async () => {
+    const r = runtime(withP2p());
+    try {
+      const panel = r.roots["sharing-panel"];
+      expect(panel.textContent).toContain(fp);
+      await find(panel, "button", "核对并批准").click(); await flush();
+      expect(r.dialog.textContent).toContain("首次连接，需要核对身份");
+      const boxes = checkboxes(r.dialog);
+      const cap = all(r.dialog, "input").find((node) => node.type === "number");
+      boxes[0].checked = true; await boxes[0].emit("change");
+      boxes[1].checked = true; await boxes[1].emit("change");
+      boxes[2].checked = true; await boxes[2].emit("change");
+      cap.value = "0.0005";
+      await find(r.dialog, "button", "确认批准").click(); await flush();
+      expect(r.calls).toEqual([{ name: "p2p-approve", input: { requestId: "req-1", models: [model.id], capUsd: 0.0005, acceptFingerprint: fp } }]);
+    } finally { r.cleanup(); }
+  });
+
+  test("an already accepted identity does not resend the fingerprint", async () => {
+    const r = runtime(withP2p({ inboundRequests: [inbound({ tofu: "accepted" })] }));
+    try {
+      await find(r.roots["sharing-panel"], "button", "核对并批准").click(); await flush();
+      const boxes = checkboxes(r.dialog);
+      boxes[0].checked = true; await boxes[0].emit("change");
+      boxes[1].checked = true; await boxes[1].emit("change");
+      all(r.dialog, "input").find((node) => node.type === "number").value = "1";
+      await find(r.dialog, "button", "确认批准").click(); await flush();
+      expect(r.calls).toEqual([{ name: "p2p-approve", input: { requestId: "req-1", models: [model.id], capUsd: 1 } }]);
+    } finally { r.cleanup(); }
+  });
+
+  test("rejecting a request never asks for a key and sends one rejection", async () => {
+    const r = runtime(withP2p());
+    try {
+      await find(r.roots["sharing-panel"], "button", "拒绝").click(); await flush();
+      await find(r.dialog, "button", "确认拒绝").click(); await flush();
+      expect(r.calls).toEqual([{ name: "p2p-reject", input: { requestId: "req-1" } }]);
+    } finally { r.cleanup(); }
+  });
+
+  test("a consumer request from discovery sends one zero-file request with exact identity", async () => {
+    const state = withP2p();
+    state.status.p2p.inboundRequests = [];
+    const r = runtime(state);
+    try {
+      await find(r.roots["discovery-panel"], "button", "申请使用（无文件）").click(); await flush();
+      const box = checkboxes(r.dialog)[0];
+      box.checked = true; await box.emit("change");
+      const agree = checkboxes(r.dialog)[1];
+      agree.checked = true; await agree.emit("change");
+      await find(r.dialog, "button", "发送使用申请").click(); await flush();
+      expect(r.calls).toEqual([{ name: "p2p-request", input: { nodeId: peer.nodeId, fingerprint, quoteHash, models: [model.id] } }]);
+    } finally { r.cleanup(); }
+  });
+
+  test("uncertain approvals offer bounded recovery and a revoke without auto retry", async () => {
+    const approval = {
+      approvalId: "ap-1", requestId: "req-1", consumerNodeId: "c".repeat(16), consumerFingerprint: fp,
+      providerNodeId: "p".repeat(16), providerFingerprint: "a".repeat(64), models: [model.id], capUsd: 1,
+      quoteHash, priceVersion: "f".repeat(64), generation: 1, keyId: "key-opaque", state: "uncertain",
+      delivery: { state: "uncertain", lastError: "timeout" }, createdAt: "2026-10-31T00:00:00.000Z",
+      approvedAt: "2026-10-31T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z", detail: null,
+    };
+    const r = runtime(withP2p({ inboundRequests: [], approvals: [approval], counts: { pendingInbound: 0, awaitingApproval: 0, connected: 0, actionNeeded: 1 } }));
+    try {
+      const panel = r.roots["sharing-panel"];
+      expect(panel.textContent).toContain("不会自动重发或创建第二个密钥");
+      await find(panel, "button", "技术恢复（只读优先）").click(); await flush();
+      const agree = checkboxes(r.dialog)[0]; agree.checked = true; await agree.emit("change");
+      await find(r.dialog, "button", "技术恢复（只读优先）").click(); await flush();
+      expect(r.calls).toEqual([{ name: "p2p-recover", input: { approvalId: "ap-1" } }]);
+      await find(panel, "button", "撤销此授权").click(); await flush();
+      const revokeAgree = checkboxes(r.dialog)[0]; revokeAgree.checked = true; await revokeAgree.emit("change");
+      await find(r.dialog, "button", "撤销此授权").click(); await flush();
+      expect(r.calls[1]).toEqual({ name: "p2p-revoke", input: { approvalId: "ap-1" } });
+    } finally { r.cleanup(); }
+  });
+
+  test("outbound and connection states are projected without a second authorization", async () => {
+    const state = withP2p({
+      inboundRequests: [], approvals: [],
+      outboundRequests: [{
+        requestId: "req-9", providerNodeId: peer.nodeId, providerHostname: "伙伴甲", providerFingerprint: fingerprint,
+        models: [model.id], quoteHash, priceVersion: "f".repeat(64), state: "connected",
+        ack: { state: "registered", models: [model.id], capUsd: 1, at: "2026-10-31T00:00:00.000Z" },
+        createdAt: "2026-10-31T00:00:00.000Z", updatedAt: "2026-10-31T00:00:00.000Z", detail: null,
+      }],
+      connections: [{ providerNodeId: peer.nodeId, providerHostname: "伙伴甲", providerId: "provider-1", state: "connected", models: [model.id], capUsd: 1, readbackAt: "2026-10-31T00:00:00.000Z", detail: null }],
+      counts: { pendingInbound: 0, awaitingApproval: 0, connected: 1, actionNeeded: 0 },
+    });
+    const r = runtime(state);
+    try {
+      const panel = r.roots["connections-panel"];
+      expect(panel.textContent).toContain("已连接");
+      expect(panel.textContent).toContain("已注册 1 个");
+      expect(panel.textContent).not.toContain("Gateway Key");
+      expect(panel.textContent).not.toContain("复制密钥");
+      expect(r.calls).toHaveLength(0);
+    } finally { r.cleanup(); }
+  });
+
+  test("a missing zero-file action fails closed without the legacy file fallback", async () => {
+    const r = runtime(withP2p(), async (name) => {
+      if (name === "p2p-approve") throw Object.assign(new Error("missing"), { status: 404 });
+      return {};
+    });
+    try {
+      await find(r.roots["sharing-panel"], "button", "核对并批准").click(); await flush();
+      const boxes = checkboxes(r.dialog);
+      boxes.forEach((box) => { box.checked = true; });
+      all(r.dialog, "input").find((node) => node.type === "number").value = "1";
+      await find(r.dialog, "button", "确认批准").click(); await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["p2p-approve"]);
+      expect(r.notices.at(-1)[0]).not.toContain("操作已完成");
+    } finally { r.cleanup(); }
+  });
 });

@@ -55,6 +55,13 @@ export function parseTransportDocument(text) {
 }
 const statusNames = { connected: "已连接", verified: "身份已接受", unverified: "身份待确认", "identity-changed": "身份已变化", stale: "报价已过期", unreachable: "暂时无法连接", "no-catalog": "未发布目录", conflict: "地址冲突", offline: "离线", self: "本机", pending: "待审批", approved: "已批准", rejected: "已拒绝", paused: "已暂停", auth: "授权失效", error: "需要处理", unknown: "尚未验证" };
 
+// Zero-file P2P states (B assembly contract, draft). Labels only; no secrets.
+const P2P_INBOUND_LABELS = { pending: "待批准", "waiting-tofu": "需要核对身份", approved: "已批准", rejected: "已拒绝", expired: "已过期" };
+const P2P_OUTBOUND_LABELS = { pending: "等待批准", "awaiting-approval": "等待批准", approved: "正在交付", delivering: "正在交付", connected: "已连接", "action-needed": "需要处理", rejected: "已拒绝", expired: "已过期", revoked: "已撤销" };
+const P2P_DELIVERY_LABELS = { none: "未交付", queued: "排队中", delivering: "正在交付", delivered: "已交付", uncertain: "结果未知", revoked: "已撤销" };
+const P2P_CONNECTION_LABELS = { connected: "已连接", registering: "正在注册", "action-needed": "需要处理", disconnected: "已离线", revoked: "已撤销" };
+const P2P_TOFU_LABELS = { accepted: "身份已核对", pending: "首次连接，需要核对身份", changed: "身份已变化，必须重新核对" };
+
 export function mountProviders({ client, getState, onState, notice, setBusy, refreshState }) {
   const el = (tag, text, className) => {
     const node = document.createElement(tag);
@@ -264,11 +271,18 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       if (peer.quote && peer.nodeId) {
         // One screen may show several peers, so the per-card request action is a
         // contextual secondary action; the only primary on the page is the tab row.
-        const request = button("选择模型并申请", () => requestConnection(peer));
-        const connect = button("已有密钥，连接此伙伴", () => connectPeer(peer));
         const allowed = ["verified", "connected"].includes(peer.status) && peer.online;
-        request.disabled = !allowed; connect.disabled = !allowed;
-        actions.append(request, connect);
+        const request = button("申请使用（无文件）", () => requestUsage(peer));
+        request.disabled = !allowed;
+        actions.append(request);
+        const legacy = el("details", null, "workflow-details");
+        legacy.append(el("summary", "高级应急：旧版文件流程"));
+        const fileRequest = button("选择模型并生成文件", () => requestConnection(peer));
+        const connect = button("已有密钥，连接此伙伴", () => connectPeer(peer));
+        fileRequest.disabled = !allowed; connect.disabled = !allowed;
+        const legacyActions = el("div", null, "workflow-actions"); legacyActions.append(fileRequest, connect);
+        legacy.append(paragraph("旧版需要下载/导入 JSON 或手工交付密钥；仅在没有可用的无文件连接时使用。"), legacyActions);
+        card.append(legacy);
       }
       card.append(actions); discoveryList.append(card);
     }
@@ -373,13 +387,23 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     }));
     identityContent.append(actions);
   }
+  // Zero-file requests and approvals (B assembly draft contract).
+  const p2pRequestsCard = el("div", null, "card workflow-section");
+  p2pRequestsCard.append(toolbar("来自网络的使用请求"));
+  const p2pInboundList = el("div", null, "workflow-list"); p2pRequestsCard.append(p2pInboundList);
+  const p2pApprovalsCard = el("div", null, "card workflow-section");
+  p2pApprovalsCard.append(toolbar("网络授权与交付"));
+  const p2pApprovalsList = el("div", null, "workflow-list"); p2pApprovalsCard.append(p2pApprovalsList);
   const requestCard = el("div", null, "card workflow-section"); requestCard.append(toolbar("连接申请"));
   const importRequest = button("导入伙伴的申请文件", () => importDocument("request"));
   requestCard.append(paragraph("导入仅用于核对；每份申请都需要你明确选择额度和模型，再手动批准。"), importRequest);
   const requestsList = el("div", null, "workflow-list"); requestCard.append(requestsList);
   const consumersCard = el("div", null, "card workflow-section"); consumersCard.append(toolbar("已授权的伙伴"));
   const consumersList = el("div", null, "workflow-list"); consumersCard.append(consumersList);
-  roots.sharing.append(shareIntro, publication, ownIdentity, requestCard, consumersCard);
+  const legacyRequests = el("details", null, "advanced-recovery");
+  legacyRequests.append(el("summary", "高级应急：旧版申请文件"));
+  legacyRequests.append(requestCard);
+  roots.sharing.append(p2pRequestsCard, p2pApprovalsCard, shareIntro, publication, ownIdentity, legacyRequests, consumersCard);
   function policySelection(models) {
     const policy = state?.status.config.share?.models;
     return items(models).filter((model) => model.completePrice && (Array.isArray(policy) ? policy.some((rule) => rule === "*" || rule === model.id || (rule.endsWith("/*") && model.id.startsWith(rule.slice(0, -1)))) : model.allowedByPolicy)).map((model) => model.id);
@@ -485,6 +509,164 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     }
     modelSave.disabled = items(candidates.models).every((model) => !model.completePrice) || !selectedModels.size;
   }
+  // ---- zero-file P2P (B assembly draft contract) ----
+  const when = (value) => {
+    const date = new Date(value);
+    return value && Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "时间未知";
+  };
+  function p2pOf() { return record(state?.status?.p2p); }
+  function listenerText(listener) {
+    if (!listener || typeof listener.state !== "string") return "控制通道未读取";
+    const where = listener.state === "ready"
+      ? `${listener.reachability === "overlay" ? "覆盖网" : listener.reachability === "lan" ? "局域网（非覆盖网专属）" : "本机"}${listener.verified ? " · 已验证" : " · 未验证"}`
+      : "不可用";
+    return where;
+  }
+  function requestUsage(peer) {
+    const acceptance = peerAcceptance(peer);
+    openDialog("申请使用伙伴的模型", (root) => {
+      root.append(paragraph("请求通过覆盖网直接发送；不需要下载或导入文件，也不需要手工交付密钥。"));
+      const identify = el("p", "完整身份指纹（请逐字核对）：");
+      identify.append(el("code", acceptance.fingerprint, "fingerprint"));
+      root.append(identify, details("身份与报价", [["伙伴", peer.quote?.node?.displayName || peer.hostname || "伙伴"], ["报价指纹", acceptance.quoteHash], ["价格版本", peer.quote?.publication?.version], ["价格未锁定", "是（priceLocked: false）"]]));
+      const getModels = modelChoices(root, items(peer.quote.models).map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" })), []);
+      const agree = checkbox("我已核对完整身份指纹与报价，并发送一次使用申请");
+      const submit = button("发送使用申请", () => {
+        const chosen = getModels();
+        if (!agree.input.checked || !chosen.length) { dialogError.textContent = "请选择至少一个有完整价格的模型，并核对身份与报价。"; dialogError.hidden = false; return; }
+        void run("p2p-request", { nodeId: peer.nodeId, fingerprint: acceptance.fingerprint, quoteHash: acceptance.quoteHash, models: chosen }, () => closeDialog());
+      }, true);
+      submit.disabled = true;
+      agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      root.append(agree.label, submit);
+    });
+  }
+  function approveP2p(request) {
+    openDialog("核对并批准使用请求", (root) => {
+      root.append(paragraph("一次确认会绑定这次请求、身份、当前报价与模型、以及正额度。批准后密钥通过加密会话自动交付，不需要再发文件或复制密钥。"));
+      const identify = el("p", "对方完整身份指纹（请逐字核对）：");
+      identify.append(el("code", request.consumerFingerprint, "fingerprint"));
+      root.append(identify, details("请求身份与报价", [["伙伴节点", request.consumerNodeId], ["伙伴名称", request.consumerHostname || "未提供"], ["报价指纹", request.quoteHash], ["价格版本", request.priceVersion], ["到期", when(request.expiresAt)], ["请求的模型", items(request.models).join("、") || "未提供"]]));
+      if (request.detail) root.append(el("p", request.detail, "inline-warning"));
+      if (request.tofu && request.tofu !== "accepted") root.append(el("p", P2P_TOFU_LABELS[request.tofu] || request.tofu, "inline-warning"));
+      const current = items(state.status.catalog?.quote?.models).filter((model) => items(request.models).includes(model.id));
+      const getModels = modelChoices(root, current.map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" })), items(request.models));
+      if (!current.length) root.append(el("p", "当前报价里没有这次请求的模型；请先更新目录或拒绝此请求。", "inline-warning"));
+      const cap = field("本次授权的正额度（USD）", "number", typeof request.capUsd === "number" && request.capUsd > 0 ? String(request.capUsd) : "");
+      cap.input.min = "0.0001"; cap.input.max = "1000000"; cap.input.step = "0.0001"; cap.input.required = true;
+      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍；0 在 Magpie 中表示不限制，不能当作暂停。"));
+      const accept = request.tofu === "accepted" ? null : checkbox(`我核对并接受此完整身份指纹：${request.consumerFingerprint}`);
+      const agree = checkbox("我确认批准这次请求，并接受当前报价、模型与额度");
+      const submit = button("确认批准", () => {
+        const chosen = getModels();
+        if (!agree.input.checked || !validCap(cap.input.value) || !chosen.length) { dialogError.textContent = "请选择至少一个当前可授权模型、填写正额度，并明确确认批准。"; dialogError.hidden = false; return; }
+        if (accept && !accept.input.checked) { dialogError.textContent = "请先核对并接受对方的完整身份指纹。"; dialogError.hidden = false; return; }
+        const input = { requestId: request.requestId, models: chosen, capUsd: Number(cap.input.value) };
+        if (accept) input.acceptFingerprint = request.consumerFingerprint;
+        void run("p2p-approve", input, () => closeDialog());
+      }, true);
+      submit.disabled = true;
+      agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      root.append(cap.label);
+      if (accept) root.append(accept.label);
+      root.append(agree.label, submit);
+    });
+  }
+  function rejectP2p(request) {
+    openDialog("拒绝这次使用请求", (root) => {
+      root.append(paragraph("拒绝不会创建密钥，也不会影响其他伙伴。"));
+      root.append(details("请求身份", [["伙伴节点", request.consumerNodeId], ["完整身份指纹", request.consumerFingerprint], ["请求的模型", items(request.models).join("、") || "未提供"]]));
+      const note = field("拒绝说明（可选）"); note.input.maxLength = 300;
+      const submit = button("确认拒绝", () => void run("p2p-reject", { requestId: request.requestId, ...(note.input.value.trim() ? { note: note.input.value.trim() } : {}) }, () => closeDialog()), true);
+      root.append(note.label, submit);
+    });
+  }
+  function recoverP2p(approvalId) {
+    confirmAction("技术恢复（只读优先）", "只做有界的恢复与核对，不会创建第二个密钥，也不会自动重试普通写操作。", "p2p-recover", approvalId ? { approvalId } : {}, "我确认执行一次有界恢复");
+  }
+  function renderP2pInbound() {
+    p2pInboundList.replaceChildren();
+    const rows = items(p2pOf().inboundRequests);
+    if (!rows.length) { p2pInboundList.append(empty("还没有收到使用请求", "伙伴在“发现”里直接申请后，会在这里出现；不需要文件、端口或密钥。")); return; }
+    for (const request of rows) {
+      const actionable = ["pending", "waiting-tofu"].includes(request.state);
+      const row = el("article", null, "workflow-row");
+      const top = toolbar(request.consumerHostname || request.consumerNodeId || "伙伴");
+      top.append(badge(P2P_INBOUND_LABELS[request.state] || request.state || "需要处理", actionable ? (request.tofu === "changed" ? "warn" : "info") : "neutral"));
+      row.append(top, paragraph(`${items(request.models).length} 个模型 · 建议额度 ${request.capUsd === null || request.capUsd === undefined ? "未提供" : money(request.capUsd)} · 到期 ${when(request.expiresAt)}`));
+      row.append(details("完整身份与报价", [["伙伴节点", request.consumerNodeId], ["完整身份指纹", request.consumerFingerprint], ["报价指纹", request.quoteHash], ["价格版本", request.priceVersion], ["身份状态", P2P_TOFU_LABELS[request.tofu] || request.tofu || "未提供"], ["收到时间", when(request.receivedAt)]]));
+      if (request.tofu && request.tofu !== "accepted") row.append(el("p", P2P_TOFU_LABELS[request.tofu] || request.tofu, "inline-warning"));
+      if (request.detail) row.append(el("p", request.detail, "inline-warning"));
+      if (actionable) {
+        const actions = el("div", null, "workflow-actions");
+        actions.append(button("核对并批准", () => approveP2p(request)), button("拒绝", () => rejectP2p(request)));
+        row.append(actions);
+      }
+      p2pInboundList.append(row);
+    }
+  }
+  const P2P_APPROVAL_LABELS = { pending: "待交付", approved: "已批准", delivering: "正在交付", delivered: "已交付", revoked: "已撤销", rejected: "已拒绝", expired: "已过期", uncertain: "结果未知" };
+  function renderP2pApprovals() {
+    p2pApprovalsList.replaceChildren();
+    const rows = items(p2pOf().approvals);
+    if (!rows.length) { p2pApprovalsList.append(empty("还没有网络授权", "批准一次无文件请求后，这里显示交付状态、模型与额度。")); return; }
+    for (const approval of rows) {
+      const needsAction = ["uncertain", "action-needed"].includes(approval.state) || ["uncertain"].includes(approval.delivery?.state);
+      const row = el("article", null, "workflow-row");
+      const top = toolbar(approval.consumerNodeId || "伙伴");
+      top.append(badge(P2P_APPROVAL_LABELS[approval.state] || approval.state || "需要处理", needsAction ? "warn" : "neutral"));
+      row.append(top, paragraph(`${items(approval.models).length} 个模型 · 额度上限 ${capLabel(approval.capUsd)} · 交付 ${P2P_DELIVERY_LABELS[approval.delivery?.state] || approval.delivery?.state || "未提供"}`));
+      row.append(details("授权、交付与身份", [["伙伴节点", approval.consumerNodeId], ["伙伴身份指纹", approval.consumerFingerprint], ["本机节点", approval.providerNodeId], ["本机身份指纹", approval.providerFingerprint], ["报价指纹", approval.quoteHash], ["价格版本", approval.priceVersion], ["代次", approval.generation], ["密钥引用（不透明）", approval.keyId], ["批准时间", when(approval.approvedAt)], ["到期", when(approval.expiresAt)], ["最近错误", approval.delivery?.lastError]]));
+      if (approval.detail) row.append(el("p", approval.detail, "inline-warning"));
+      if (needsAction) {
+        row.append(el("p", "交付结果未知或需要人工处理；不会自动重发或创建第二个密钥。", "inline-warning"));
+        const tech = el("div", null, "workflow-actions");
+        tech.append(button("技术恢复（只读优先）", () => recoverP2p(approval.approvalId)));
+        row.append(tech);
+      }
+      if (!["revoked", "rejected", "expired"].includes(approval.state)) {
+        const actions = el("div", null, "workflow-actions");
+        actions.append(button("撤销此授权", () => confirmAction("撤销此授权", "会先撤销本机原生密钥；只有确认密钥已失效才会显示已撤销，否则会保持“需要处理”。账目保留。", "p2p-revoke", { approvalId: approval.approvalId }, "我确认撤销此网络授权")));
+        row.append(actions);
+      }
+      p2pApprovalsList.append(row);
+    }
+  }
+  function renderP2pConnections() {
+    p2pConnectionsList.replaceChildren();
+    const p2p = p2pOf();
+    const listener = record(p2p.listener);
+    const summary = el("article", null, "workflow-row");
+    summary.append(toolbar("控制通道"), paragraph(`${P2P_CONNECTION_LABELS[listener.state] || listener.state || "未读取"} · ${listenerText(listener)}${listener.port ? ` · 端口 ${listener.port}` : ""}`));
+    if (listener.detail) summary.append(el("p", listener.detail, "inline-warning"));
+    p2pConnectionsList.append(summary);
+    const outbound = items(p2p.outboundRequests);
+    if (!outbound.length) p2pConnectionsList.append(empty("还没有发出使用申请", "在“发现”里选择伙伴并申请使用；批准后会自动连接，不需要文件。"));
+    for (const request of outbound) {
+      const row = el("article", null, "workflow-row");
+      const top = toolbar(request.providerHostname || request.providerNodeId || "伙伴");
+      top.append(badge(P2P_OUTBOUND_LABELS[request.state] || request.state || "需要处理", request.state === "connected" ? "good" : request.state === "action-needed" ? "warn" : "info"));
+      const ack = record(request.ack);
+      row.append(top, paragraph(`${items(request.models).length} 个模型 · ${ack.state === "registered" ? `已注册 ${items(ack.models).length} 个 · 额度 ${capLabel(ack.capUsd)}` : ack.state === "failed" ? "注册失败" : "等待注册回读"}`));
+      row.append(details("申请身份与报价", [["伙伴节点", request.providerNodeId], ["完整身份指纹", request.providerFingerprint], ["报价指纹", request.quoteHash], ["价格版本", request.priceVersion], ["申请时间", when(request.createdAt)], ["更新时间", when(request.updatedAt)], ["最近说明", request.detail]]));
+      if (request.state === "action-needed") {
+        row.append(el("p", "需要人工处理；不会自动重发申请或创建第二个密钥。", "inline-warning"));
+        const tech = el("div", null, "workflow-actions");
+        tech.append(button("技术恢复（只读优先）", () => recoverP2p(null)));
+        row.append(tech);
+      }
+      p2pConnectionsList.append(row);
+    }
+    for (const connection of items(p2p.connections)) {
+      const row = el("article", null, "workflow-row");
+      const top = toolbar(connection.providerHostname || connection.providerNodeId || "伙伴");
+      top.append(badge(P2P_CONNECTION_LABELS[connection.state] || connection.state || "需要处理", connection.state === "connected" ? "good" : "warn"));
+      row.append(top, paragraph(`${items(connection.models).length} 个模型 · 额度 ${capLabel(connection.capUsd)} · 回读 ${when(connection.readbackAt)}`));
+      row.append(details("连接与回读", [["伙伴节点", connection.providerNodeId], ["原生 Remote id", connection.providerId], ["最近说明", connection.detail]]));
+      p2pConnectionsList.append(row);
+    }
+  }
+
   function importDocument(kind) {
     openDialog(kind === "request" ? "导入连接申请" : "导入伙伴授权", (root) => {
       root.append(paragraph(kind === "request" ? "选择伙伴从 AIHub 导出的申请文件，导入后先核对内容，再手动审批。" : "选择共享方交付的授权文件。文件包含访问密钥，本应用只在本机发送给服务验证；请妥善保存与传递。"));
@@ -634,11 +816,18 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
 
   // Native Remote Magpie connections, key replacement and removal.
+  const p2pConnectionsCard = el("div", null, "card workflow-section");
+  p2pConnectionsCard.append(toolbar("无文件连接状态"));
+  const p2pConnectionsList = el("div", null, "workflow-list"); p2pConnectionsCard.append(p2pConnectionsList);
   const connectionsIntro = el("div", null, "card workflow-section");
   const connectionsTop = toolbar("已连接的伙伴");
-  connectionsTop.append(button("导入伙伴授权", () => importDocument("authorization"), true));
-  connectionsIntro.append(connectionsTop, paragraph("授权验证通过后，伙伴模型会注册为本机 Magpie 的原生远程服务。每个共享方的身份、密钥、模型与额度保持独立。"));
-  const connectionsList = el("div", null, "workflow-card-grid"); roots.connections.append(connectionsIntro, connectionsList);
+  connectionsIntro.append(connectionsTop, paragraph("伙伴模型注册为本机 Magpie 的原生远程服务后显示在这里。每个共享方的身份、模型与额度保持独立。"));
+  const legacyImport = el("details", null, "advanced-recovery");
+  legacyImport.append(el("summary", "高级应急：导入伙伴授权文件"));
+  const legacyImportButton = button("导入伙伴授权", () => importDocument("authorization"));
+  legacyImport.append(paragraph("只有伙伴无法使用无文件交付时才使用；文件里含访问密钥，不在普通流程里出现。"), legacyImportButton);
+  connectionsIntro.append(legacyImport);
+  const connectionsList = el("div", null, "workflow-card-grid"); roots.connections.append(p2pConnectionsCard, connectionsIntro, connectionsList);
   function renderConnections() {
     connectionsList.replaceChildren();
     const providers = items(state?.status.providers);
@@ -695,12 +884,15 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       selectedModels = new Set(policySelection(candidates.models));
       renderModels();
     }
-    for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections]]) {
+    for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections], ["p2pInbound", next.status.p2p?.inboundRequests, renderP2pInbound], ["p2pApprovals", next.status.p2p?.approvals, renderP2pApprovals], ["p2pConnections", next.status.p2p, renderP2pConnections]]) {
       const digest = JSON.stringify(value ?? null);
       if (caches.get(key) !== digest) { caches.set(key, digest); update(); }
     }
   }
   renderModels();
+  renderP2pInbound();
+  renderP2pApprovals();
+  renderP2pConnections();
   return {
     render,
     clearSecrets() {
