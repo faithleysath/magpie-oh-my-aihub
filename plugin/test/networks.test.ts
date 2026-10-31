@@ -9,6 +9,7 @@ import {
   isAssetId,
   loadRegistry,
   NetworkRegistry,
+  simulationRegistry,
   NETWORK_REGISTRY_VERSION,
   RESERVED_MAINNETS,
   type RegistryDocument,
@@ -108,8 +109,8 @@ describe("registry membership", () => {
     ).toThrow(/mainnet/);
   });
 
-  test("a third EVM chain is added by data alone", () => {
-    const r = new NetworkRegistry(withThirdChain());
+  test("a third EVM chain is added by data alone only through the explicit local-simulation constructor", () => {
+    const r = simulationRegistry(withThirdChain(), [31337]);
     expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([97, 84532, 31337]);
     // The same code path works for it: register an asset, enable, disable.
     const a = r.registerTestAsset({
@@ -169,7 +170,7 @@ describe("finality is per chain, not global", () => {
   });
 
   test("a third chain brings its own policy rather than inheriting one", () => {
-    const r = new NetworkRegistry(withThirdChain());
+    const r = simulationRegistry(withThirdChain(), [31337]);
     expect(r.network(31337)!.finality.confirmations).toBe(1);
     expect(r.network(31337)!.finality.rationale).toContain("local");
   });

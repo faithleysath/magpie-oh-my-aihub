@@ -29,6 +29,12 @@ export {
   type NetworkCapability,
 } from "./mainnet-gate.ts";
 
+export {
+  CREDIT_CHAIN_ALLOWLIST,
+  LOCAL_SIMULATION_CHAIN_IDS,
+  simulationRegistry,
+} from "./networks.ts";
+
 export type {
   AssetEvidence,
   AssetIssuerType,

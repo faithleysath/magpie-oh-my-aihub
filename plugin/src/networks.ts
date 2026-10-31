@@ -185,6 +185,22 @@ export interface AssetPricing {
 
 export const NETWORK_REGISTRY_VERSION = 2;
 
+/**
+ * The only real chains this build may credit. A `networkType:"testnet"` label
+ * is metadata, not permission: chain 1 relabelled as a testnet is still chain 1.
+ * Local forks/simulations must opt in explicitly through
+ * `simulationChainIds`, and only for the small local-lab set below.
+ */
+export const CREDIT_CHAIN_ALLOWLIST = [97, 84532] as const;
+
+/** Local EVM ids that a test/fork registry may opt into; never real mainnets. */
+export const LOCAL_SIMULATION_CHAIN_IDS = [1337, 31337, 31338] as const;
+
+export interface NetworkRegistryOptions {
+  /** test/fork only; production loadRegistry/defaultRegistry never pass this */
+  simulationChainIds?: readonly number[];
+}
+
 /** ISO date of the measurements behind `DEFAULT_NETWORKS`. */
 export const MEASURED_AT = "2026-10-30";
 
@@ -405,6 +421,19 @@ export function registryPath(): string {
   return statePath("networks.json");
 }
 
+function assertRpcEndpoint(endpoint: string, chainId: number, readOnly: boolean): void {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error(`chain ${chainId}: ${endpoint} is not a URL`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`chain ${chainId}: ${endpoint} must be http or https`);
+  if (readOnly && url.protocol !== "https:") throw new Error(`chain ${chainId}: ${endpoint} must use https for a mainnet/read-only network`);
+  if (url.username || url.password) throw new Error(`chain ${chainId}: ${endpoint} must not contain credentials`);
+  if (url.hash) throw new Error(`chain ${chainId}: ${endpoint} must not contain a fragment`);
+}
+
 function assertEvidenceDate(checkedAt: string, label: string): void {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(checkedAt)) throw new Error(`${label} needs a YYYY-MM-DD checkedAt date`);
 }
@@ -479,12 +508,24 @@ export class NetworkRegistry {
   private nets: NetworkRecord[];
   private assets: AssetRecord[];
   private readonly save: ((doc: RegistryDocument) => void) | null;
+  private readonly simulationChainIds: Set<number>;
 
-  constructor(doc: RegistryDocument, save?: (doc: RegistryDocument) => void) {
+  constructor(doc: RegistryDocument, save?: (doc: RegistryDocument) => void, options: NetworkRegistryOptions = {}) {
+    const simulations = options.simulationChainIds ?? [];
+    const bad = simulations.filter((id) => !(LOCAL_SIMULATION_CHAIN_IDS as readonly number[]).includes(id));
+    if (bad.length > 0) {
+      throw new Error(`simulation chain ids must be local lab ids (${LOCAL_SIMULATION_CHAIN_IDS.join(", ")}), got ${bad.join(", ")}`);
+    }
+    this.simulationChainIds = new Set(simulations);
     this.nets = doc.networks.map(normalizeNetwork);
     this.assets = doc.assets.map(normalizeAsset);
     this.save = save ?? null;
     this.validate();
+  }
+
+  /** Production credit is allowlisted; only an explicit local test registry may add a fork. */
+  private creditChainAllowed(chainId: number): boolean {
+    return (CREDIT_CHAIN_ALLOWLIST as readonly number[]).includes(chainId) || this.simulationChainIds.has(chainId);
   }
 
   private validate(): void {
@@ -502,6 +543,7 @@ export class NetworkRegistry {
         throw new Error(`chain ${n.chainId} uses a confirmations policy with no confirmations`);
       }
       if (!Number.isInteger(n.maxBlockRange) || n.maxBlockRange <= 0) throw new Error(`chain ${n.chainId} needs a positive maxBlockRange`);
+      for (const endpoint of n.rpcEndpoints) assertRpcEndpoint(endpoint, n.chainId, n.support === "read-only" || n.networkType === "mainnet");
 
       // The hard chain-id rule. It is checked before the type/support labels so a
       // document that relabels 56/8453 as a testnet cannot reach the watcher.
@@ -529,6 +571,11 @@ export class NetworkRegistry {
       }
       if (n.enabled && n.support !== "credit") {
         throw new Error(`chain ${n.chainId} is enabled without the credit support level`);
+      }
+      if (n.enabled && !this.creditChainAllowed(n.chainId)) {
+        throw new Error(
+          `chain ${n.chainId} is not on the credit allowlist (${CREDIT_CHAIN_ALLOWLIST.join(", ")}); a testnet label or a local edit is not enough`,
+        );
       }
       if (n.receivable && n.support !== "read-only") {
         throw new Error(`chain ${n.chainId} is creditable; only a read-only product network may be selected for receiving`);
@@ -597,7 +644,7 @@ export class NetworkRegistry {
   /** Only networks that may credit; a mainnet is never in this set. */
   creditableNetworks(): NetworkRecord[] {
     return this.nets
-      .filter((n) => n.enabled && n.support === "credit" && n.networkType === "testnet" && !isMainnetChainId(n.chainId))
+      .filter((n) => n.enabled && n.support === "credit" && n.networkType === "testnet" && this.creditChainAllowed(n.chainId) && !isMainnetChainId(n.chainId))
       .map((n) => ({ ...n, rpcEndpoints: [...n.rpcEndpoints] }));
   }
 
@@ -635,6 +682,9 @@ export class NetworkRegistry {
       throw new Error(`chain ${chainId} is mainnet/read-only; this build does not watch or credit it`);
     }
     if (!n.enabled) throw new Error(`chain ${chainId} (${n.displayName}) is disabled`);
+    if (!this.creditChainAllowed(chainId)) {
+      throw new Error(`chain ${chainId} is not on the credit allowlist (${CREDIT_CHAIN_ALLOWLIST.join(", ")}); refusing to watch or credit it`);
+    }
     if (n.rpcEndpoints.length === 0) throw new Error(`chain ${chainId} has no RPC endpoint`);
     return n;
   }
@@ -672,6 +722,9 @@ export class NetworkRegistry {
     if (enabled && isMainnetChainId(chainId)) throw new Error(`chain ${chainId} is a real mainnet and cannot be enabled in this phase`);
     if (enabled && n.networkType === "mainnet") throw new Error(`chain ${chainId} is mainnet and cannot be enabled in this phase`);
     if (enabled && n.support !== "credit") throw new Error(`chain ${chainId} is ${n.support} and cannot be enabled for credit`);
+    if (enabled && !this.creditChainAllowed(chainId)) {
+      throw new Error(`chain ${chainId} is not on the credit allowlist (${CREDIT_CHAIN_ALLOWLIST.join(", ")}); enabling it would credit an unknown chain`);
+    }
     if (enabled && n.rpcEndpoints.length === 0) throw new Error(`chain ${chainId} has no RPC endpoint to enable it with`);
     n.enabled = enabled;
     this.validate();
@@ -683,18 +736,7 @@ export class NetworkRegistry {
     const n = this.nets.find((x) => x.chainId === chainId);
     if (!n) throw new Error(`chain ${chainId} is not registered`);
     const clean = endpoints.map((e) => e.trim()).filter(Boolean);
-    for (const e of clean) {
-      let u: URL;
-      try {
-        u = new URL(e);
-      } catch {
-        throw new Error(`${e} is not a URL`);
-      }
-      if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error(`${e} must be http or https`);
-      if ((n.support === "read-only" || n.networkType === "mainnet") && u.protocol !== "https:") {
-        throw new Error(`${e} must use https for a mainnet/read-only network`);
-      }
-    }
+    for (const e of clean) assertRpcEndpoint(e, chainId, n.support === "read-only" || n.networkType === "mainnet");
     if (n.enabled && clean.length === 0) throw new Error(`chain ${chainId} is enabled; it needs at least one endpoint`);
     n.rpcEndpoints = clean;
     this.validate();
@@ -914,4 +956,9 @@ export function defaultRegistry(): NetworkRegistry {
 /** The full seeded registry: two credit testnets plus two read-only mainnets. */
 export function productRegistry(): NetworkRegistry {
   return new NetworkRegistry(seedDocument());
+}
+
+/** Test/fork registry: the only way to opt a local chain into credit. */
+export function simulationRegistry(doc: RegistryDocument, chainIds: readonly number[] = LOCAL_SIMULATION_CHAIN_IDS): NetworkRegistry {
+  return new NetworkRegistry(doc, undefined, { simulationChainIds: chainIds });
 }
