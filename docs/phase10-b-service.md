@@ -223,9 +223,15 @@ second approval layer.
 - corrupt ownership file fails closed before any Remote call;
 - a crash after native add but before final ownership save leaves a pending record;
   the same approval adopts it and a different approval is refused;
-- `reconcileApproval` is read-only: no journal + no consumer is `noSideEffect`, a
-  proven journal/native binding is `keyReady`, and a corrupt/mismatched/missing
-  binding is `unknown` (never `noSideEffect`, so no second key);
+- `reconcileApproval` is read-only. It returns binding evidence
+  (consumerNodeId/requestHash/approvalId/generation/knownKeyId/observedAt/source).
+  `keyReady` needs a matching durable journal + active Provisioner key.
+  `noSideEffect` is allowed only when a durable pending journal exists, the local
+  Provisioner record is absent, **and** Magpie's key-management readback
+  (`keyByName` for the deterministic plugin name) shows no key; a missing journal,
+  a key-management readback error, or a named key without a local record is
+  `unknown`, never `noSideEffect`. This is Magpie management state, not a remote
+  gateway 401 and not the AI gateway;
 - enforced revoke: remove success, rotation fallback, a rotation whose old secret
   is still accepted is not claimed, transport/5xx/bad-JSON readback is unknown, a
   missing local key row with a working secret is not confirmed, wrong key/generation
