@@ -3,6 +3,7 @@
 - 分支：`feature/phase10-c-wallet-ui`
 - worktree：`/Users/laysath/.paseo/worktrees/1z728cdk/c-wallet-ui`
 - 基线：approved PR25 `b1a4838`（明确 base25，不修改冻结的 main/其他 worktree）
+- CI clock：在 UI commits 之后显式 cherry-pick 已批准的 P0-clock `889973f`（commit `5510aa6`），仅用于清除 base25 上既有 5 个固定测试时钟失败；不改 UI 行为。PR base 仍是 `feature/phase10-a-console`。
 - 本地钱包服务契约：`/tmp/oma-research/C-WALLET-LOCAL-ACTION-CONTRACT.md`（PR #38 draft，head `58a92c5b3f479bc066cb752d8976f938764eca48`，未合并、本 UI 不 import 其实现）
 - 外置钱包依赖：approved external 30 行为 `90c32f8` / final docs `ae596c3`；仅复制 `plugin/console/external-wallet.js`（SHA-256 `55e65ab63ef2924ad5f9b198902187f0657524f96c0a46b6679929a338a8f4a2`），未修改冻结分支
 - 结论：**UI + 合成行为测试完成，可审；真实服务/真实扩展未验收，不是 Wallet GO，没有真实资金/付款发送。**
