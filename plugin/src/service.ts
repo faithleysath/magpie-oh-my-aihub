@@ -23,7 +23,7 @@ import { logger, registerSecret, writePageStatus } from "./log.ts";
 import { gatewayBaseURL, type CatalogModelMeta, type LimitStatus, type Magpie } from "./magpie.ts";
 import { Provisioner, type ConsumerView } from "./provisioner.ts";
 import { Ledger, type LedgerDeposit } from "./ledger.ts";
-import { catalogPriceVersion, nanosToUsd, priceSnapshot, usdToNanos } from "./pricing.ts";
+import { catalogPriceVersion, nanosToUsd, priceSnapshot, unsupportedPriceReason, usdToNanos } from "./pricing.ts";
 import { Wallet, type WalletStatus } from "./wallet.ts";
 import type { KeyReadback } from "./walletview.ts";
 import { buildStatement, type ConsumerStatement } from "./walletstatement.ts";
@@ -227,6 +227,8 @@ export interface ShareCandidate {
   pricing: CatalogModel["pricing"];
   completePrice: boolean;
   allowedByPolicy: boolean;
+  /** Why a dynamic price (peak/rate window) cannot back a capped key. */
+  unsupportedPrice?: string | null;
 }
 
 export interface ShareCandidatesView {
@@ -1422,8 +1424,9 @@ export class Service {
         displayName: meta.displayName,
         provider,
         pricing: model.pricing,
-        completePrice: priceSnapshot([meta], [meta.id]) !== null,
+        completePrice: !meta.priceUnsupported && priceSnapshot([meta], [meta.id]) !== null,
         allowedByPolicy: allowedByPolicy(meta.id, cfg.share),
+        unsupportedPrice: meta.priceUnsupported ?? null,
       });
     }
     models.sort((a, b) => a.id.localeCompare(b.id));
@@ -1431,7 +1434,12 @@ export class Service {
     const priceVersion = catalogPriceVersion(selected.map((m) => ({ id: m.id, pricing: m.pricing })));
     const blocking = models
       .filter((m) => m.allowedByPolicy && !m.completePrice)
-      .map((m) => ({ id: m.id, reason: "no complete effective price; a capped key cannot be issued" }));
+      .map((m) => ({
+        id: m.id,
+        reason: m.unsupportedPrice
+          ? `unsupported dynamic price (${m.unsupportedPrice}); a capped key cannot be issued`
+          : "no complete effective price; a capped key cannot be issued",
+      }));
     return {
       policy: [...cfg.share.models],
       models,
@@ -1652,6 +1660,9 @@ export class Service {
     // A quote's billing.priceVersion covers every quoted model; a request may
     // choose a subset. Bind the key to the version of exactly those models.
     const selectedPriceVersion = catalogPriceVersion(peer.quote.models.filter((m) => wanted.includes(m.id)));
+    if (!selectedPriceVersion) {
+      throw new Error(`${peer.hostname} has no complete static price for the selected models (peak/rate-window pricing is unsupported); a capped key cannot be issued`);
+    }
     if (acceptance?.priceVersion !== undefined && acceptance.priceVersion !== selectedPriceVersion) {
       throw new Error(
         `the accepted price version is ${acceptance.priceVersion}, but these models are ${selectedPriceVersion ?? "unpriced"}; ` +
@@ -3598,6 +3609,7 @@ function limitView(status: LimitStatus | null): ProviderLimitView | null {
 }
 
 function priceFrom(p: import("./magpie.ts").ModelPriceRecord, source: "magpie-gateway" | "magpie-settings"): CatalogPrice | null {
+  if (unsupportedPriceReason(p)) return null;
   const input = finitePrice(p.input);
   const output = finitePrice(p.output);
   const cacheRead = finitePrice(p.cache_read);

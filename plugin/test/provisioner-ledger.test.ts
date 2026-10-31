@@ -326,6 +326,16 @@ describe("ledger-backed issuance", () => {
   });
 
 
+  test("a peak price pauses the active key through the existing unpriced path", async () => {
+    const v = await p.ensure("nina-peak", { models: [MODEL], capUsd: 1 });
+    fake.setPrice({ ...BASE, peak: "deepseek" } as never);
+    const paused = await p.status("nina-peak");
+    expect(paused.paused?.reason).toBe("unpriced");
+    expect(paused.paused?.enforced).toBe(true);
+    expect(fake.keys.has(v.keyId)).toBe(false);
+    await expect(p.reissue("nina-peak")).rejects.toThrow(/complete effective price/);
+  });
+
   test("a key deleted outside the plugin pauses instead of looking usable", async () => {
     const v = await p.ensure("peter", { models: [MODEL], capUsd: 1 });
     await fake.removeKey(v.keyId);

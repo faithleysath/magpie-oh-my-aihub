@@ -407,6 +407,23 @@ describe("phase 8 share candidates", () => {
     expect(view.priceLocked).toBe(false);
     expect(view.blocking.map((b) => b.id)).toEqual(["alpha/b"]);
   });
+
+  test("a peak price is a blocking dynamic price, never a complete off-peak price", async () => {
+    const { service, magpie } = await configured();
+    const peak = meta("alpha/peak", { input: 1, output: 2, cache_read: 0, cache_write: 0, peak: "deepseek" });
+    (peak as { priceUnsupported?: string }).priceUnsupported = "peak";
+    magpie.metas = [
+      meta("alpha/a", { input: 1, output: 2, cache_read: 0, cache_write: 0 }),
+      peak,
+    ];
+    const view = await service.shareCandidates();
+    const blocked = view.models.find((m) => m.id === "alpha/peak")!;
+    expect(blocked.completePrice).toBe(false);
+    expect(blocked.unsupportedPrice).toBe("peak");
+    expect(view.blocking.find((b) => b.id === "alpha/peak")!.reason).toMatch(/unsupported dynamic price/);
+    expect(view.models.filter((m) => m.completePrice).map((m) => m.id)).toEqual(["alpha/a"]);
+    expect(view.priceVersion).toMatch(/^[0-9a-f]{64}$/);
+  });
 });
 
 describe("phase 8 targeted remote probe", () => {

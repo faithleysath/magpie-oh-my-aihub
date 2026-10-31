@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { magpieDataDir } from "./paths.ts";
 import { run, runOk } from "./run.ts";
 import { registerSecret } from "./log.ts";
+import { unsupportedPriceReason, type UnsupportedPriceReason } from "./pricing.ts";
 
 export interface KeyLimit {
   period?: string;
@@ -34,6 +35,11 @@ export interface ProviderRecord {
   /** the Gateway Key of a remote Magpie; never logged or returned */
   key?: string;
   models?: string[];
+  /**
+   * Magpie 0.1.2289 time-of-day rates. Present and non-empty means its
+   * /v1/models price is only today's window; this plugin cannot freeze it.
+   */
+  rateWindows?: unknown;
 }
 
 export interface LimitStatus {
@@ -67,6 +73,39 @@ export interface ModelPriceRecord {
   cache_write?: number;
   cache_write_1h?: number;
   tiers?: { above: number; input: number; output: number; cache_read: number; cache_write: number; cache_write_1h?: number }[];
+  /** Magpie 0.1.2289 off-peak marker; present and non-empty is dynamic. */
+  peak?: unknown;
+}
+
+/**
+ * Magpie 0.1.2289 vendors known to bill DeepSeek's models by the hour. The
+ * gateway's /v1/models carries `peak` on their prices; settings.json does not.
+ * When the gateway list cannot be read, fall back to settings only for a vendor
+ * that is not one of these, and otherwise refuse the price rather than guess.
+ * This is deliberately provider-wide: it may over-block a flat model on one of
+ * these vendors, but it never under-charges a peak one.
+ */
+function knownPeakVendor(p: ProviderRecord | undefined): boolean {
+  if (!p) return false;
+  const ids = new Set([p.id, p.preset ?? ""]);
+  for (const id of ["deepseek", "commandcode", "commandcode-plan", "opencode-go"]) {
+    if (ids.has(id)) return true;
+  }
+  for (const raw of [p.chat, p.responses, p.anthropic]) {
+    if (!raw) continue;
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      continue;
+    }
+    const host = url.hostname.toLowerCase();
+    if (host === "api.deepseek.com" || host === "api.commandcode.ai") return true;
+    if (host === "opencode.ai" || host.endsWith(".opencode.ai")) {
+      if (/\/go(?:\/|$)/.test(url.pathname)) return true;
+    }
+  }
+  return false;
 }
 
 /** One model as the catalogue publishes it, before share-policy filtering. */
@@ -82,6 +121,8 @@ export interface CatalogModelMeta {
   reasoningLevels: string[] | null;
   price: ModelPriceRecord | null;
   priceSource: "magpie-gateway" | "magpie-settings" | null;
+  /** Why a price cannot back a capped key; null when it is static. */
+  priceUnsupported?: UnsupportedPriceReason | null;
   capabilitiesSource: "magpie-gateway" | "magpie-settings" | "configured-endpoints";
 }
 
@@ -226,15 +267,17 @@ export class Magpie {
     const gateway = await this.localModelList();
     const settings = this.settings();
     const native = this.nativeProviderIds();
+    const providerRecords = new Map(this.providers().map((p) => [p.id, p]));
     const byId = new Map((gateway ?? []).map((m) => [String(m.id ?? ""), m]));
     const out: CatalogModelMeta[] = [];
     for (const id of ids) {
       const [provider] = id.split("/");
       if (!native.has(provider)) continue;
+      const providerRecord = providerRecords.get(provider);
       const g = byId.get(id) ?? null;
       const endpointNames = g ? endpointsToNames(Array.isArray(g.native_endpoints) ? g.native_endpoints.map(String) : []) : null;
       const settingApis = settingFor(settings.modelAPIs, id);
-      const configured = configuredProtocols(this.providerById(provider));
+      const configured = configuredProtocols(providerRecord);
       const gatewayApis = endpointNames && endpointNames.length > 0
         ? endpointNames
         : settingApis
@@ -258,6 +301,8 @@ export class Magpie {
           : null;
       const magpiePrice = (g as { magpie_price?: ModelPriceRecord } | null)?.magpie_price ?? null;
       const storedPrice = magpiePrice ?? settingFor(settings.modelPrices, id) ?? null;
+      const unsupported = unsupportedPriceReason(storedPrice, providerRecord)
+        ?? (magpiePrice === null && knownPeakVendor(providerRecord) ? "peak" : null);
       const anySetting =
         settingApis !== undefined || images !== null || output !== null || storedPrice !== null ||
         settingFor(settings.modelReasonless, id) !== undefined;
@@ -271,8 +316,9 @@ export class Magpie {
         images,
         modalities: g && g.modalities && typeof g.modalities === "object" ? (g.modalities as { input?: string[]; output?: string[] }) : null,
         reasoningLevels: reasoning,
-        price: storedPrice,
-        priceSource: storedPrice ? (magpiePrice ? "magpie-gateway" : "magpie-settings") : null,
+        price: unsupported ? null : storedPrice,
+        priceSource: unsupported ? null : storedPrice ? (magpiePrice ? "magpie-gateway" : "magpie-settings") : null,
+        priceUnsupported: unsupported,
         capabilitiesSource: g ? "magpie-gateway" : anySetting ? "magpie-settings" : "configured-endpoints",
       });
     }
