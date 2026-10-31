@@ -44,7 +44,7 @@ UI 不包含任意 action/method 透传；action 名称固定。
 
 - 统一 `generation` 令牌：`closeDialog`、Escape/结束、`clearSecrets`、`reset`、离开钱包页、`pagehide`、`dispose`、lock/状态失效都会递增；create/reveal/backup/authorize 在 await 前捕获，await 后若 generation 变或 disposed 就丢弃结果，不重开 dialog、不恢复 secret 引用。
 - 迟到的 create 在 reset/dispose 后 **不应用旧 wallet/verified 状态、不产生 notice**；同一活跃会话关闭 dialog 时只显示“手动刷新状态”提示，不自动重复 create。钱包地址或 unlock expiry 变化时，已有 secret dialog 立即失效。
-- **U9 create-specific locked shape**：server create 可返回 `wallet.status:"locked"` + `addressVerified:false` + 一次性 mnemonic。仅当前活跃 create token 可进入 create-specific 隐藏备份屏；结束后才 apply 该 locked snapshot。普通 mnemonic/private-key export 和 backup 仍必须 unlocked+verified；locked public snapshot 本身不是导出权限。
+- **U9 create-specific locked shape**：server create 可返回 `wallet.status:"locked"` + `addressVerified:false` + 一次性 mnemonic。仅当前活跃 create token 可进入 create-specific 隐藏备份屏；结束后才 apply 该 locked snapshot。正常 state poll 若仍是同 address/locked/addressVerified:false/同 unlockExpiresAt，仅保持备份屏，不 bump/close；不同 address/expiry、显式 lock/unlock、reset/logout/navigate/pagehide/dispose 仍关闭清除。普通 mnemonic/private-key export 和 backup 仍必须 unlocked+verified；locked public snapshot 本身不是导出权限。
 - `openSecretDialog` 自身再次校验 generation/disposed 与 `wallet.status==="unlocked" && addressVerified===true`；`showModal` 失败立即清 secret/DOM。
 - `render(state)` 消费 `state.walletVault.wallet` 投影；服务端锁/TTL/另一 browser 锁到达时，非 unlocked 或 `addressVerified!==true` 立即关闭 dialog、清 secret DOM，地址显示“未验证，不能收款”。
 - 重复 render 只替换本地内容，不重复追加 heading；错误只显示固定安全映射，不反射原始 input/异常文本。
@@ -78,8 +78,8 @@ UI 不包含任意 action/method 透传；action 名称固定。
 
 | 项 | 结果 |
 | --- | --- |
-| `bun test plugin/console/wallet-vault-ui.test.js` | **18 pass / 0 fail / 108 assertions**（mock） |
-| `bun test plugin/console` | **91 pass / 0 fail / 691 assertions** |
+| `bun test plugin/console/wallet-vault-ui.test.js` | **19 pass / 0 fail / 114 assertions**（mock） |
+| `bun test plugin/console` | **92 pass / 0 fail / 697 assertions** |
 | `bun run typecheck` | pass |
 
 覆盖：
@@ -93,7 +93,7 @@ UI 不包含任意 action/method 透传；action 名称固定。
 - EIP-6963 显式选择、未选择/未连接前 0 provider 调用、只名称/initial、无 textarea/mnemonic 输入；
 - legacy 显式选择，不自动调用；
 - pagehide 清除敏感 DOM；
-- deferred create/reveal after close/clear/pagehide/dispose 不重开 dialog；create after reset/dispose 不应用旧 wallet/notice；真实 locked create snapshot 仍显示一次性助记词、结束后 applied locked；state push locked 清 secret 与 trusted；重复 render 无重复 heading；错误不反射输入；
+- deferred create/reveal after close/clear/pagehide/dispose 不重开 dialog；create after reset/dispose 不应用旧 wallet/notice；真实 locked create snapshot 仍显示一次性助记词、同 snapshot 首次/多次 poll 保屏、结束后 applied locked；不同 address/expiry 关闭；public locked 无导出；state push locked 清 secret 与 trusted；重复 render 无重复 heading；错误不反射输入；
 - 上述 mock 只证明 UI 生命周期，不是真实 service 验收。
 - 源码无 localStorage/sessionStorage/indexedDB/cookie/clipboard/download/`eth_sendTransaction`/`wallet-vault-send`/`operationPort`。
 
