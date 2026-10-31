@@ -92,14 +92,18 @@ const localNetwork: NetworkRecord = {
   displayName: "Anvil (local EVM)",
   family: "evm",
   networkType: "testnet",
+  support: "credit",
+  receivable: false,
   rpcEndpoints: [RPC],
   blockExplorer: "",
   nativeSymbol: "ETH",
+  nativeDecimals: 18,
   enabled: true,
   finality: { mode: "confirmations", confirmations: 1, reorgDepth: 1, rationale: "a local dev chain cannot reorganise; one confirmation is the whole rule" },
   scanIntervalSec: 2,
   maxBlockRange: 5000,
   notes: "local lab only",
+  evidence: null,
 };
 
 interface LabResult {
@@ -184,7 +188,11 @@ async function main(): Promise<void> {
   // 2. Registry: a third chain, its asset, a receiving address.
   // The seeded two chains stay registered; the local chain is added alongside
   // them, which is the "a third chain is data, not code" claim in practice.
-  const registry = new NetworkRegistry({ version: NETWORK_REGISTRY_VERSION, networks: [...DEFAULT_NETWORKS, localNetwork], assets: [] });
+  const registry = new NetworkRegistry(
+    { version: NETWORK_REGISTRY_VERSION, networks: [...DEFAULT_NETWORKS, localNetwork], assets: [] },
+    undefined,
+    { simulationChainIds: [LOCAL_CHAIN_ID] },
+  );
   const asset = registry.registerTestAsset({
     chainId: LOCAL_CHAIN_ID,
     contractAddress: token,
