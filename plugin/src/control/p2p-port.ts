@@ -767,10 +767,20 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
         if (record.state === "approved" || record.state === "pending" || record.state === "uncertain") {
           const target = native.target;
           const expectedName = `ohmyaihub-${record.consumerNodeId}`;
+          // keyReady is adoption of an already-consistent local authorization,
+          // not just native metadata. The local Provisioner record must exist,
+          // match the journal quote/models/cap, and name the same native key;
+          // otherwise adopting only metadata would leave ledger/consumer state
+          // inconsistent. Native-only keys stay unknown and require explicit
+          // recovery (or noSideEffect when the durable intent truly has no key).
+          const recovered = recoverApproval(record, service, observedAt);
           const targetMatches =
+            Boolean(consumer) &&
+            Boolean(recovered) &&
             target &&
             native.nativeKeyIds.includes(target.keyId) &&
             target.keyName === expectedName &&
+            target.keyId === recovered!.keyId &&
             (!record.keyId || target.keyId === record.keyId) &&
             target.models.length > 0 &&
             sameSet(target.models, record.models) &&
@@ -793,8 +803,8 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
               keyName: target.keyName,
               models: [...target.models],
               capUsd: record.capUsd,
-              priceVersion: record.priceVersion,
-              expiresAt: record.expiresAt,
+              priceVersion: recovered!.priceVersion,
+              expiresAt: recovered!.expiresAt,
               evidence: {
                 source: "magpie-key-readback",
                 observedAt,
@@ -835,10 +845,9 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
 
     async takeAuthorization(input) {
       return serial(async () => {
-        const record = loadApprovals(approvalStateFile).approvals.find((a) => a.approvalId === input.approvalId);
-        if (!record || record.state !== "approved") {
-          throw new ControlServiceRefusal("conflict", "this approval has no confirmed key binding; refuse a second key hand-over");
-        }
+        const state = loadApprovals(approvalStateFile);
+        const record = state.approvals.find((a) => a.approvalId === input.approvalId);
+        if (!record) throw new ControlServiceRefusal("conflict", "this approval has no persistent key binding; refusing a second key hand-over");
         if (
           record.generation !== input.generation ||
           record.consumerNodeId !== input.consumerNodeId ||
@@ -846,11 +855,50 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           record.requestHash !== input.requestHash ||
           record.quoteHash !== input.quote.contentHash ||
           Math.abs(record.capUsd - input.capUsd) > 1e-9 ||
-          !sameSet(record.models, input.models) ||
-          record.keyId !== input.keyId ||
-          record.keyName !== input.keyName
+          !sameSet(record.models, input.models)
         ) {
           throw new ControlServiceRefusal("conflict", "the approval journal does not match this hand-over; refuse a second key");
+        }
+        if (record.state !== "approved") {
+          // Core may have called reconcileApproval and received keyReady for a
+          // pending/uncertain journal entry. Promote only when the local
+          // Provisioner record and the native key list name the exact same key;
+          // never call ensure here.
+          if (record.state !== "pending" && record.state !== "uncertain") {
+            throw new ControlServiceRefusal("conflict", "this approval is not in a deliverable state");
+          }
+          const recovered = recoverApproval(record, service, now().toISOString());
+          const native = await service.provisioner.nativeKeySnapshot(input.consumerNodeId).catch(() => null);
+          if (
+            !recovered ||
+            !native?.target ||
+            native.target.keyId !== input.keyId ||
+            native.target.keyName !== input.keyName ||
+            !native.nativeKeyIds.includes(input.keyId) ||
+            native.target.models.length === 0 ||
+            !sameSet(native.target.models, input.models) ||
+            (native.target.costLimit !== null && Math.abs(native.target.costLimit - input.capUsd) > 1e-9)
+          ) {
+            throw new ControlServiceRefusal("conflict", "reconcileApproval's key binding is not proven by the native key list; refuse a second key");
+          }
+          const promoted: ApprovalRecord = {
+            ...record,
+            keyId: input.keyId,
+            keyName: input.keyName,
+            models: [...input.models],
+            capUsd: input.capUsd,
+            priceVersion: recovered.priceVersion,
+            expiresAt: record.expiresAt || recovered.expiresAt,
+            state: "approved",
+            error: null,
+            updatedAt: now().toISOString(),
+          };
+          saveApprovals(approvalStateFile, {
+            version: 1,
+            approvals: state.approvals.map((a) => (a.approvalId === record.approvalId ? promoted : a)),
+          });
+        } else if (record.keyId !== input.keyId || record.keyName !== input.keyName) {
+          throw new ControlServiceRefusal("conflict", "the approval journal names another key generation; refuse a second key");
         }
         return takeAuthorizationWithService(service, {
           approvalId: input.approvalId,

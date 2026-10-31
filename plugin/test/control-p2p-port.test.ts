@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { catalogPriceVersion } from "../src/pricing.ts";
+import { statePath } from "../src/paths.ts";
 import { Service } from "../src/service.ts";
 import { FakeMagpie, LAB_MODEL, LAB_PRICE } from "./support/fake-magpie.ts";
 import { ControlServiceRefusal } from "../src/control/service-port.ts";
 import {
   controlRemotes,
   createP2pBusinessPort,
+  lookupControlApproval,
   providerIdFor,
   type P2pAuthorizationDocument,
   type P2pInboundApproval,
@@ -252,6 +254,29 @@ describe("B-core P2pBusinessPort mapping", () => {
     await expect(svc.provisioner.confirmHandover("alice", approved.keyId, "sk-test-wrong-secret")).rejects.toThrow(/changed while/);
     await expect(svc.provisioner.confirmHandover("alice", approved.keyId, auth.key)).resolves.toBeUndefined();
     await expect(svc.provisioner.readHandover("alice", "wrong-key")).rejects.toThrow(/changed while/);
+
+    // Core can reach takeAuthorization after reconcile keyReady; the journal
+    // may still be pending. It must promote the exact native key, not ensure.
+    const approvalFile = statePath("control-approvals.json");
+    const pending = JSON.parse(readFileSync(approvalFile, "utf8"));
+    pending.approvals[0].state = "pending";
+    pending.approvals[0].keyId = null;
+    pending.approvals[0].keyName = null;
+    writeFileSync(approvalFile, JSON.stringify(pending));
+    const afterPending = await port.takeAuthorization({
+      approvalId: APPROVAL,
+      generation: 1,
+      consumerNodeId: "alice",
+      consumerFingerprint: "a".repeat(64),
+      requestHash: HASH,
+      models: approved.models,
+      capUsd: approved.capUsd,
+      quote: { contentHash: HASH, priceVersion: approved.priceVersion, identityFingerprint: FP },
+      keyId: approved.keyId,
+      keyName: approved.keyName,
+    });
+    expect(afterPending.key).toBe(auth.key);
+    expect(lookupControlApproval(APPROVAL, approvalFile)?.state).toBe("approved");
   });
 
   test("reconcileApproval is read-only and recovers only a proven keyReady", async () => {

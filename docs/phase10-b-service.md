@@ -116,7 +116,11 @@ be reported as `lan-reachable`; the diagnostic must not claim overlay-only.
   returned for sealing. `Service.handover` now reads the actual secret through
   `Provisioner.readHandover` under the same per-consumer lock as approve/reissue/
   revoke, and rechecks the exact key generation/native row there; a final
-  `confirmHandover` lock check runs before sealing. Approval still uses the existing
+  `confirmHandover` lock check runs before sealing. If core reached
+  `takeAuthorization` after a read-only `reconcileApproval` `keyReady` while the
+  journal is still `pending`/`uncertain`, the port atomically promotes that exact
+  approval/key/native binding to `approved` and re-verifies the native key list; it
+  never calls `ensure` or creates a second key. Approval still uses the existing
   `Service` serialization; no nested lock is introduced.
 - `importAuthorization` validates the v2 document binding (provider/consumer
   identity, approvalId/requestHash, quote, models, cap, key id/name/hash), then calls
@@ -225,17 +229,23 @@ second approval layer.
   the same approval adopts it and a different approval is refused;
 - `reconcileApproval` is read-only. It returns binding evidence
   (consumerNodeId/requestHash/approvalId/generation/knownKeyId/observedAt/source).
-  `keyReady` requires a matching durable journal + Magpie key-management readback:
+  `keyReady` requires a matching durable journal **and a consistent local
+  Provisioner record** plus Magpie key-management readback:
   `source:"magpie-key-readback"`, `checked:["keys","keyId","models","costLimit"]`,
-  `nativeKeyIds` containing the target, key name `ohmyaihub-<consumer>`, matching
-  models/cap, and evidence observed within 5 minutes. A pending journal plus a
-  matching native key is a keyReady (interrupted approval adoption).
+  `nativeKeyIds` (max 100) containing the target, key name
+  `ohmyaihub-<consumer>`, matching quote/models/cap, and evidence observed within 5
+  minutes. A pending journal plus a matching native key **without** a local
+  Provisioner record is `unknown`: adoption of metadata alone would leave the
+  Provisioner/ledger state inconsistent. A consistent pending journal + local
+  record + native key is a keyReady and is adopted without calling ensure again.
   `noSideEffect` is allowed only when a durable pending journal exists, the local
   Provisioner record is absent, **and** the Magpie key list (`keyList`/`keyByName`,
   not just `provisioner.find`) has no key with the deterministic plugin name; source
   is `provisioner-journal:magpie-readback`, checked `["journal","keys"]`.
   A missing journal, a key-management readback error, a named key without a local
-  record, or stale evidence is `unknown`, never `noSideEffect`. This is Magpie key
+  record, or stale evidence is `unknown`, never `noSideEffect`. Native key ids are
+  capped at 100 to match the core evidence bound; loopback gateway 401 is not a
+  remote 401 proof. This is Magpie key
   management state, not a remote gateway 401 and not the AI gateway;
 - enforced revoke: remove success, rotation fallback, a rotation whose old secret
   is still accepted is not claimed, transport/5xx/bad-JSON readback is unknown, a
