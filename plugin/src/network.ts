@@ -173,6 +173,11 @@ function portView(input: {
 }): NetworkPortView {
   const record: PortEvidence | null =
     input.port === null ? null : (input.ledger?.evidence.find((e) => e.purpose === input.purpose && e.port === input.port) ?? null);
+  // A live failure always wins over persisted / earlier evidence; a persisted
+  // "stable" must never hide that the listener is gone or held by somebody else.
+  const live = input.fallback.state;
+  const liveFailure = live === "failed" || live === "conflict";
+  const state = liveFailure ? live : (record?.state ?? live);
   return {
     purpose: input.purpose,
     label: input.label,
@@ -181,9 +186,9 @@ function portView(input: {
     owner: input.owner,
     editable: false,
     reachability: record?.reachability ?? input.reachability ?? reachabilityOf(input.host),
-    state: record?.state ?? input.fallback.state,
+    state,
     verifiedAt: record?.verifiedAt ?? input.fallback.verifiedAt ?? null,
-    detail: record?.detail ?? input.fallback.detail,
+    detail: liveFailure ? (input.fallback.detail ?? record?.detail ?? null) : (record?.detail ?? input.fallback.detail),
   };
 }
 
@@ -342,7 +347,9 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
         owner: "plugin",
         ledger: input.ledger,
         fallback: {
-          state: input.catalog.server.running ? "stable" : input.catalog.server.error ? "failed" : "unverified",
+          // A successful bind is real, but only the socket-owner proof recorded
+          // by applyCatalog makes it "stable".
+          state: input.catalog.server.error ? "failed" : "unverified",
           detail: input.catalog.server.error,
         },
       }),
@@ -407,7 +414,7 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
         port: input.consolePort,
         owner: "plugin",
         ledger: input.ledger,
-        fallback: { state: "stable", detail: null },
+        fallback: { state: "unverified", detail: "plugin-owned listener; the port is recorded, not probed here" },
       }),
     );
   }
@@ -420,7 +427,7 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
         port: input.apiPort,
         owner: "plugin",
         ledger: input.ledger,
-        fallback: { state: "stable", detail: null },
+        fallback: { state: "unverified", detail: "plugin-owned listener; the port is recorded, not probed here" },
       }),
     );
   }

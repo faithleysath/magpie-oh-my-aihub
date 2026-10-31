@@ -6,6 +6,7 @@ import { Service, type Probes } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta, ProviderRecord } from "../src/magpie.ts";
 import { getProviderKey, loadState, setProviderKey } from "../src/state.ts";
+import { fakePortOwnership } from "./support/fake-ports.ts";
 
 // Phase-8 service journeys: configure rollback, cached readiness/local wallet,
 // native share candidates and a targeted remote probe. No overlay, Magpie or
@@ -198,6 +199,7 @@ async function configured(opts: { consuming?: boolean } = {}): Promise<{ service
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
+    ports: { ownership: fakePortOwnership() },
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 200,
     probes,
@@ -277,6 +279,7 @@ describe("phase 8 configure transaction", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2038",
       supervisor: sup,
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 200,
       probes: { statusWith: async () => true, catalogModels: async () => [] },
@@ -345,6 +348,7 @@ describe("phase 8 cached readiness and local wallet", () => {
       magpieVersion: "magpie 0.1.2038",
       wallet: fakeWallet as never,
       supervisor: new FakeSupervisor(),
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
     });
     services.push(service);
@@ -381,6 +385,7 @@ describe("phase 8 cached readiness and local wallet", () => {
       magpieVersion: "magpie 0.1.2038",
       wallet: fakeWallet as never,
       supervisor: new FakeSupervisor(),
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
     });
     services.push(service);
