@@ -1,0 +1,58 @@
+# Independent secret scanning policy for this repository (gitleaks 8.30.1).
+#
+# The default gitleaks rules are kept. Every entry below is a finding-level
+# line rule. Do NOT add `paths` to a global allowlist: gitleaks then skips the
+# whole file for every rule, which would hide a real secret in the same file.
+# The synthetic self-test (plugin/scripts/gitleaks-selftest.ts) proves that a
+# real-looking sk- key, a private key and a network secret in docs/ or plugin/
+# are still reported, including on other lines of these exact files.
+
+title = "oh-my-aihub"
+minVersion = "8.30.0"
+
+[extend]
+useDefault = true
+
+# Public EVM contract addresses are identifiers, not credentials. The shape is
+# 0x + 40 hex; key material (32 bytes) is 64 hex and cannot match.
+[[allowlists]]
+description = "EVM contract address recorded in token/tokenContract fields"
+condition = "AND"
+rules = ['generic-api-key']
+regexTarget = "line"
+regexes = ['(?i)"?(?:token|token_?contract)"?\s*[:=]\s*"?0x[0-9a-f]{40}"?']
+
+# Evidence manifests record SHA-256 digests of two artefact names. The key and
+# the 64-hex value shape must both match; any other key or line is reported.
+[[allowlists]]
+description = "phase7/phase9 evidence manifest file digests"
+condition = "AND"
+rules = ['generic-api-key']
+regexTarget = "line"
+regexes = ['^\s*"(?:plugin/src/console-api\.ts|auth-responses\.json)"\s*:\s*"[0-9a-f]{64}"\s*,?\s*$']
+
+# One lab script deliberately sends a wrong Gateway Key to prove rejection.
+[[allowlists]]
+description = "phase8 lab journey negative-case key fixture"
+condition = "AND"
+rules = ['generic-api-key']
+regexTarget = "line"
+regexes = ['^\s*const wrong = await http\(`[^`]*`, \{ key: "sk-[A-Za-z0-9._-]{12,}", timeoutMs: \d+ \}\);']
+
+# The phase-0 README documents an obvious placeholder in a local curl example.
+[[allowlists]]
+description = "phase0 README documented curl placeholder"
+condition = "AND"
+rules = ['curl-auth-header']
+regexTarget = "line"
+regexes = ['^\s*Run `curl -H .Authorization: Bearer [A-Za-z0-9._-]{12,64}. http://127\.0\.0\.1:38741/v1/models`']
+
+# Historical (git-history scan only) synthetic fixture for a merge-order test.
+# The current file no longer contains it; the allowlist is limited to the
+# mergeSaved(...) line so any other network secret in this file is reported.
+[[allowlists]]
+description = "historical synthetic network secret in page-settings merge test"
+condition = "AND"
+rules = ['generic-api-key']
+regexTarget = "line"
+regexes = ['mergeSaved\(.*networkSecret:']
