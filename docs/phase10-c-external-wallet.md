@@ -2,7 +2,7 @@
 
 - 分支：`feature/phase10-c-external-wallet`
 - 原基线：`origin/main` = `8ce5c57f565fb1b835021a9b730b61014eb47d5f`（PR13 已合并）
-- 重建基线：已批准的 P0-clock `889973f55ca3a72da99ae0091e50ecd5ea428207`（PR #15，独立待审）；本分支只重放 C commits，不再 cherry-pick clock。旧 head `837bacb` 已保存为 `archive/phase10-c-external-wallet-837bacb` 审计点。
+- 重建基线：已批准的 P0-clock `889973f55ca3a72da99ae0091e50ecd5ea428207`（PR #15，独立待审）；本分支只重放 C commits，不再 cherry-pick clock。旧 head `837bacb` 已保存为 `archive/phase10-c-external-wallet-837bacb`，上一 review target `d533e6f` 保存为 `archive/phase10-c-external-wallet-d533e6f` 审计点。
 - PR #30 base 已改为 `fix/phase10-validation-clock`，因此 GitHub diff 只显示 C 模块相对 approved clock 的 delta；不再把 clock 混入 C review。
 - 模块：`plugin/console/external-wallet.js`（纯浏览器 ESM，无构建步骤、无运行时框架）
 - 测试：`plugin/console/external-wallet.test.js`
@@ -249,8 +249,9 @@ eth_sendTransaction, eth_signTypedData_v4, wallet_switchEthereumChain
 | 服务端安全/静态文件测试 | `bun test plugin/test/console-security.test.ts` | **32 pass / 0 fail / 1967 assertions** | REPRODUCED |
 | TypeScript 类型检查 | `cd plugin && bun run typecheck` | exit 0 | REPRODUCED |
 | 旧 head `837bacb` + 新行为测试 | 同文件复制到旧 head | **42 pass / 8 fail**（证明旧 bool 绕过、无 journal 发送、receipt 文案在旧 head 失败） | REPRODUCED（旧 head，预期失败） |
+| 上一 review target `d533e6f` + 最新测试 | 同文件复制到 d533e6f | **48 pass / 4 fail**（chain 1 伪装、SVG/data 图标、receipt executionStatus 断言失败） | REPRODUCED（旧 target，预期失败） |
 | 旧 head 临时 guard 全量（历史） | `bun test --max-concurrency=1 ./test ./console ../docs/validation/lab/phase9/wallet-fixture`（临时 `60d0d04`） | **799 pass / 0 fail / 6248 assertions**（54 files） | REPRODUCED，仅旧 head 历史；新 head 未按主审要求重跑全量 |
-| CI（GitHub Actions） | run `41160548664`（新 head） | **linux 796 pass / 1 skip / 0 fail；macOS 795 pass / 1 skip / 0 fail** | REPRODUCED（CI，合成 fixture） |
+| CI（GitHub Actions） | run `41161185158`（code head `5875d44`） | **linux 798 pass / 1 skip / 0 fail；macOS 797 pass / 1 skip / 0 fail** | REPRODUCED（CI，合成 fixture） |
 | boot-check | `bun run boot-check` | PASS | REPRODUCED |
 | secret-scan | `bun run secret-scan` | PASS | REPRODUCED |
 | Keccak/EIP-712/recover 与 `plugin/src/{keccak,eip712,secp256k1}.ts` 对照 | 单测内 | 相同 digest、相同恢复地址 | REPRODUCED |
@@ -366,4 +367,4 @@ bun test plugin/test/console-security.test.ts
 cd plugin && bun install --frozen-lockfile && bun run typecheck
 ```
 
-全量测试前必须使用 hermetic network guard，阻止旧测试访问生产 `127.0.0.1:3425` 或公共 RPC。本分支不把该 guard 打进 PR。#17 guard check 路径独立审仍 FAIL/修复中；旧 head 在临时 detached worktree `60d0d04` 的 **799/0/6248（54 files）** 只能作为历史临时结果，不能称为全面 hermetic 验收。按主审要求，新 head 不重复全量，只做定向单测 + CI；CI `41160548664` 为 **linux 796 pass/1 skip/0 fail，macOS 795 pass/1 skip/0 fail**。并行默认全量曾与其他代理占用的固定端口 `127.0.0.1:13650` 冲突并出现非产品失败；该冲突 run 不作为代码结论。任务文本中的 `f63b644e` 是 P0-clock 代理 ID，不是 commit；实际 guard 为 `60d0d04`。
+全量测试前必须使用 hermetic network guard，阻止旧测试访问生产 `127.0.0.1:3425` 或公共 RPC。本分支不把该 guard 打进 PR。#17 guard check 路径独立审仍 FAIL/修复中；旧 head 在临时 detached worktree `60d0d04` 的 **799/0/6248（54 files）** 只能作为历史临时结果，不能称为全面 hermetic 验收。按主审要求，新 head 不重复全量，只做定向单测 + CI；CI `41161185158` 为 **linux 798 pass/1 skip/0 fail，macOS 797 pass/1 skip/0 fail**（后续 docs-only head 会另有同代码 CI）。并行默认全量曾与其他代理占用的固定端口 `127.0.0.1:13650` 冲突并出现非产品失败；该冲突 run 不作为代码结论。任务文本中的 `f63b644e` 是 P0-clock 代理 ID，不是 commit；实际 guard 为 `60d0d04`。
