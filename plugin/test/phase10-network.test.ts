@@ -15,7 +15,7 @@ import type { CatalogModelMeta } from "../src/magpie.ts";
 import { emptyPortLedger, SocketBinder } from "../src/ports.ts";
 import { loadState } from "../src/state.ts";
 import { ConsoleInputError } from "../src/console-server.ts";
-import { FakeBinder } from "./support/fake-ports.ts";
+import { FakeBinder, FakeOwnership } from "./support/fake-ports.ts";
 
 const NATIVE = "alpha";
 const NATIVE_MODEL = "alpha/native-model";
@@ -60,6 +60,8 @@ class FakeSupervisor implements SupervisorLike {
   routeRows: RouteRow[] = [];
   starts = 0;
   failNextStart: string | null = null;
+  /** the core "starts" but exits immediately, as a real bind/ACL failure does */
+  dieNextStart = false;
   version = "easytier-core 2.6.4-8428a89d";
   lastError: string | null = null;
 
@@ -74,6 +76,11 @@ class FakeSupervisor implements SupervisorLike {
     this.forwards = (cfg.portForwards ?? []).map((f: ForwardSpec) => ({ protocol: "tcp", bindAddr: f.bindAddr, dstAddr: f.dstAddr }));
     this.starts += 1;
     this.lastError = null;
+    if (this.dieNextStart) {
+      this.dieNextStart = false;
+      this.cfg = null;
+      this.lastError = "easytier-core exited immediately (simulated)";
+    }
     return this.snapshot();
   }
   async stop(): Promise<void> {
@@ -136,6 +143,7 @@ let services: Service[] = [];
 let magpie: FakeMagpie;
 let sup: FakeSupervisor;
 let binder: FakeBinder;
+let ownership: FakeOwnership;
 let gatewayServer: ReturnType<typeof Bun.serve>;
 
 beforeEach(() => {
@@ -152,6 +160,9 @@ beforeEach(() => {
   magpie = new FakeMagpie();
   sup = new FakeSupervisor();
   binder = new FakeBinder();
+  ownership = new FakeOwnership();
+  // The fake supervisor reports pid 4242 and the plugin owns its own listeners.
+  ownership.defaultPids = [4242, process.pid];
 });
 
 afterAll(() => {
@@ -197,7 +208,7 @@ async function service(opts: Opts = {}): Promise<Service> {
     supervisor: sup,
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 200,
-    ports: { binder, now: () => new Date("2026-10-31T00:00:10.000Z") },
+    ports: { binder, ownership, now: () => new Date("2026-10-31T00:00:10.000Z") },
     probes: {
       catalogModels: async () => catalogModels(),
       statusWith: async () => true,
@@ -283,7 +294,7 @@ describe("join-network: three fields, everything else automatic", () => {
       supervisor: new FakeSupervisor(),
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
-      ports: { binder },
+      ports: { binder, ownership },
       probes: { catalogModels: async () => catalogModels(), statusWith: async () => true },
     });
     services.push(restarted);
@@ -293,6 +304,75 @@ describe("join-network: three fields, everything else automatic", () => {
     expect(again.networkSecret).toBe(first.networkSecret);
     expect(again.secureIdentity).toEqual(first.secureIdentity);
     expect(loadState().state.ports.version).toBe(1);
+  });
+
+  test("a join whose core did not stay up is a failure and rolls back", async () => {
+    const svc = await service({ config: false });
+    sup.dieNextStart = true;
+    await expect(
+      svc.joinNetwork({ networkName: "omp-lab", networkSecret: "omp-lab-secret" }),
+    ).rejects.toThrow(/configure failed/);
+    // A first join with a dead core leaves the node unconfigured, not "joined".
+    expect(svc.config()).toBeNull();
+    expect(svc.networkView().state).toBe("unconfigured");
+  });
+
+  test("a re-join whose core dies falls back to the previous network", async () => {
+    const svc = await service({ config: false });
+    await svc.joinNetwork({ networkName: "original-lab", networkSecret: "omp-lab-secret" });
+    sup.dieNextStart = true;
+    await expect(
+      svc.joinNetwork({ networkName: "second-lab", networkSecret: "omp-lab-secret" }),
+    ).rejects.toThrow(/configure failed/);
+    expect(svc.config()!.networkName).toBe("original-lab");
+    expect(svc.networkView().state).toBe("online");
+  });
+
+  test("an overlay listener port conflict migrates instead of reusing it", async () => {
+    const svc = await service({ config: false });
+    await svc.joinNetwork({ networkName: "omp-lab", networkSecret: "omp-lab-secret" });
+    const before = svc.config()!.listenAddr!;
+    const port = Number(before.split(":").pop());
+    binder.occupy("0.0.0.0", port);
+    const fresh = new Service({
+      magpie: magpie as never,
+      magpieVersion: "magpie 0.1.2289",
+      supervisor: new FakeSupervisor(),
+      lanIp: () => "127.0.0.1",
+      probeTimeoutMs: 100,
+      ports: { binder, ownership },
+      probes: { catalogModels: async () => catalogModels(), statusWith: async () => true },
+    });
+    services.push(fresh);
+    await fresh.start();
+    const after = fresh.config()!.listenAddr!;
+    expect(after).not.toBe(before);
+    expect(after.startsWith("tcp://0.0.0.0:")).toBe(true);
+    const migration = loadState().state.ports.migrations.find((m) => m.purpose === "overlay-listen");
+    expect(migration).toMatchObject({ from: port, to: Number(after.split(":").pop()) });
+  });
+
+  test("a listener held by another pid is a failure, not an online node", async () => {
+    const svc = await service();
+    const rpc = svc.config()!.rpcPort;
+    // Restart with the stored RPC port answered by a foreign process.
+    ownership.pids.set(rpc, [999_999]);
+    const fresh = new Service({
+      magpie: magpie as never,
+      magpieVersion: "magpie 0.1.2289",
+      supervisor: new FakeSupervisor(),
+      lanIp: () => "127.0.0.1",
+      probeTimeoutMs: 100,
+      ports: { binder, ownership },
+      probes: { catalogModels: async () => catalogModels(), statusWith: async () => true },
+    });
+    services.push(fresh);
+    await fresh.start();
+    expect(fresh.problem()).toMatch(/does not own its listeners|held by pid/);
+    const net = fresh.networkView();
+    expect(net.state).toBe("failed");
+    expect(net.core.running).toBe(false);
+    expect(net.core.lastError).toMatch(/does not own its listeners|held by pid/);
   });
 
   test("the console rejects role/port fields and short secrets", async () => {
@@ -331,6 +411,15 @@ describe("share-native-models: one explicit transaction", () => {
     expect(net.network.ports.some((p) => p.purpose === "catalog" && p.editable === false)).toBe(true);
   });
 
+  test("a core that dies after the share restart rolls the whole transaction back", async () => {
+    const svc = await service();
+    sup.dieNextStart = true;
+    await expect(svc.shareNativeModels({ models: [PRICED], confirm: true })).rejects.toThrow(/previous configuration was restored/);
+    expect(svc.config()!.sharingEnabled).toBe(false);
+    expect(svc.config()!.share.models).toEqual(["*"]);
+    expect(svc.statusSnapshotForTest().catalog.publishing).toBe(false);
+  });
+
   test("a failed apply restores the previous configuration and reports it", async () => {
     const svc = await service();
     const before = structuredClone(svc.config()!);
@@ -351,7 +440,7 @@ describe("share-native-models: one explicit transaction", () => {
       supervisor: sup,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
-      ports: { binder, now: () => new Date("2026-10-31T00:00:30.000Z") },
+      ports: { binder, ownership, now: () => new Date("2026-10-31T00:00:30.000Z") },
       probes: {
         catalogModels: async () => catalogModels(),
         statusWith: async () => true,
@@ -434,7 +523,7 @@ describe("network projection: evidence, not assumptions", () => {
       supervisor: sup,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
-      ports: { binder },
+      ports: { binder, ownership },
       probes: { catalogModels: async () => catalogModels() },
     });
     services.push(svc);
@@ -466,7 +555,7 @@ describe("network projection: evidence, not assumptions", () => {
       supervisor: new FakeSupervisor(),
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
-      ports: { binder, now: () => new Date("2026-10-31T00:00:20.000Z") },
+      ports: { binder, ownership, now: () => new Date("2026-10-31T00:00:20.000Z") },
       probes: { catalogModels: async () => catalogModels(), statusWith: async () => true },
     });
     services.push(fresh);

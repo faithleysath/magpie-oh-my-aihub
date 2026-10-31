@@ -104,6 +104,8 @@ export interface NetworkProjectionInput {
   catalog: CatalogStatus;
   providers: ProviderView[];
   gatewayPort: number;
+  /** a service-level start/attribution failure that the supervisor does not carry */
+  serviceProblem?: string | null;
   ledger?: PortLedger;
   consolePort?: number | null;
   apiPort?: number | null;
@@ -212,6 +214,7 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
   else if (cfg && !et.running && peerRead) problems.push("the last peer read predates the core stopping");
   if (cfg && et.running && !routeRead) problems.push("route table has not been read since the core started");
   if (cfg && et.socks5Port !== null && !et.aclOk) problems.push("the runtime safety check has open findings");
+  if (input.serviceProblem) problems.push(input.serviceProblem.slice(0, 300));
 
   const peersByHost = new Map<string, Peer>();
   const selfHosts = new Set<string>();
@@ -426,7 +429,7 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
   const aclOk = Boolean(et.aclOk);
   let state: NetworkState;
   if (!cfg?.nodeId) state = "unconfigured";
-  else if (!running && et.lastError) state = "failed";
+  else if (!running && (et.lastError || input.serviceProblem)) state = "failed";
   else if (!running) state = "offline";
   else if (!peerRead) state = "starting";
   else if (!aclOk || !routeRead) state = "degraded";
@@ -468,8 +471,8 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
       version: et.coreVersion,
       startedAt: et.startedAt,
       restarts: et.restarts,
-      state: running ? "running" : et.lastError ? "failed" : cfg?.nodeId ? "stopped" : "unknown",
-      lastError: et.lastError,
+      state: running ? "running" : et.lastError || input.serviceProblem ? "failed" : cfg?.nodeId ? "stopped" : "unknown",
+      lastError: et.lastError ?? input.serviceProblem ?? null,
       aclOk,
     },
     thisNode: {

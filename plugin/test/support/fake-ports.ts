@@ -4,7 +4,7 @@
 // allocation skips it and that a claim which cannot be proven is reported as a
 // conflict instead of being used.
 
-import type { PortBinder, PortReservation } from "../../src/ports.ts";
+import type { PortBinder, PortReservation, SocketOwnership, SocketOwnershipProbe } from "../../src/ports.ts";
 
 export class FakeBinder implements PortBinder {
   held = new Set<string>();
@@ -38,5 +38,24 @@ export class FakeBinder implements PortBinder {
 
   free(host: string, port: number): void {
     this.busy.delete(FakeBinder.key(host, port));
+  }
+}
+
+/**
+ * Test seam for the OS socket-owner probe. Production uses lsof/ss; a test maps
+ * a port to the PID that should own it (or marks the probe unavailable).
+ */
+export class FakeOwnership implements SocketOwnershipProbe {
+  supported = true;
+  /** port -> listening PIDs; an unmapped port uses `defaultPids` */
+  pids = new Map<number, number[]>();
+  /** PIDs returned for an unmapped port; empty means "nothing listens" */
+  defaultPids: number[] = [];
+
+  async listenerPids(port: number): Promise<SocketOwnership> {
+    if (!this.supported) {
+      return { supported: false, pids: [], detail: "test: no socket-owner probe on this platform" };
+    }
+    return { supported: true, pids: [...(this.pids.get(port) ?? this.defaultPids)], detail: null };
   }
 }

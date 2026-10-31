@@ -277,56 +277,154 @@ export async function claimFreePort(
 export interface PortProof {
   state: PortState;
   detail: string | null;
-  inUse: boolean | null;
+  /** listening PIDs the OS reported, or null when the probe was unavailable */
+  pids: number[] | null;
+  /** whether the OS socket-owner probe ran */
+  ownership: "os" | "unavailable" | "none";
   reported: boolean | null;
 }
 
+/** The OS's answer to "which process listens on this TCP port?". */
+export interface SocketOwnership {
+  supported: boolean;
+  pids: number[];
+  detail: string | null;
+}
+
+export interface SocketOwnershipProbe {
+  /** Never throws: an unavailable probe is `{supported:false}`, i.e. unknown. */
+  listenerPids(port: number): Promise<SocketOwnership>;
+}
+
+async function runCommand(cmd: string[], timeoutMs = 5000): Promise<{ code: number; stdout: string }> {
+  try {
+    const proc = Bun.spawn({ cmd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const timer = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        /* already gone */
+      }
+    }, timeoutMs);
+    const stdout = await new Response(proc.stdout).text();
+    const code = await proc.exited;
+    clearTimeout(timer);
+    return { code, stdout };
+  } catch {
+    return { code: -1, stdout: "" };
+  }
+}
+
 /**
- * Proves that the controlled child (or this plugin) really owns the port.
+ * The real socket-owner probe.
  *
- * `reported` is the child's own claim (EasyTier's node/port-forward output, or
- * the plugin's successful bind). `inUse` is a bind probe run *after* the claim:
+ * Linux: `ss -lntpH` (`users:((...,pid=123,...))`), falling back to lsof.
+ * macOS: `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fpc`.
+ * Anything else (notably Windows without those tools) answers `supported:false`;
+ * the caller must treat that as unknown, never as "stable".
+ */
+export class OsSocketOwnership implements SocketOwnershipProbe {
+  async listenerPids(port: number): Promise<SocketOwnership> {
+    if (process.platform === "linux") {
+      const ss = await runCommand(["ss", "-lntpH", `sport = :${port}`]);
+      if (ss.code === 0) {
+        const pids = [...ss.stdout.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1]));
+        return { supported: true, pids: [...new Set(pids)], detail: null };
+      }
+      return this.lsof(port);
+    }
+    if (process.platform === "darwin") return this.lsof(port);
+    return {
+      supported: false,
+      pids: [],
+      detail: `no socket-owner probe is implemented for ${process.platform}; a listener cannot be attributed to a process`,
+    };
+  }
+
+  private async lsof(port: number): Promise<SocketOwnership> {
+    const r = await runCommand(["lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"]);
+    if (r.code !== 0 && !r.stdout.trim()) {
+      // lsof exits 1 when nothing matches; distinguish "not installed" by the
+      // empty output plus a shell-level failure.
+      return { supported: false, pids: [], detail: "lsof is unavailable; the listener owner cannot be proven" };
+    }
+    const pids = [...r.stdout.matchAll(/^p(\d+)$/gm)].map((m) => Number(m[1]));
+    return { supported: true, pids: [...new Set(pids)], detail: null };
+  }
+}
+
+/**
+ * Proves that the *expected live process* owns the listening socket.
  *
- *   reported &&  inUse  -> stable (the child holds it)
- *   reported && !inUse  -> conflict (something claims the port but nothing listens)
- *   !reported           -> failed (the child did not take the port)
- *   null reported       -> unverified (no evidence, so no green state)
- *
- * A foreign listener that stole a hand-off port makes the child report `false`,
- * so the port is never used for a forward; the caller migrates it.
+ * `reported` is only the child's own claim or the plugin's bind success; it is
+ * never enough. The OS must report a listener, and one of its PIDs must be in
+ * `expectedPids` (the supervised child's live PID, or this plugin's PID for its
+ * own listeners). No probe, no expected PID, a foreign PID or no listener all
+ * fail closed as `unverified`/`conflict`/`failed` — never `stable`.
  */
 export async function verifyOwnedPort(input: {
-  binder: PortBinder;
+  ownership: SocketOwnershipProbe;
   purpose: PortPurpose;
   host: string;
   port: number;
   owner: PortOwner;
   reported: boolean | null;
+  /** the live PIDs allowed to own this port; empty = no proof possible */
+  expectedPids: number[];
   now?: () => Date;
 }): Promise<PortProof> {
-  const now = input.now ?? (() => new Date());
-  if (input.reported === null) {
-    return { state: "unverified", detail: "no listener evidence was read", inUse: null, reported: null };
+  const reported = input.reported;
+  if (reported === null) {
+    return { state: "unverified", detail: "no listener evidence was read", pids: null, ownership: "none", reported: null };
   }
-  if (!input.reported) {
+  if (!reported) {
     return {
       state: "failed",
       detail: `${input.owner} does not hold ${input.host}:${input.port}`,
-      inUse: null,
+      pids: null,
+      ownership: "none",
       reported: false,
     };
   }
-  const free = await input.binder.isFree(input.host, input.port);
-  const inUse = !free;
-  if (!inUse) {
+  const expected = input.expectedPids.filter((p) => Number.isInteger(p) && p > 0);
+  if (expected.length === 0) {
     return {
-      state: "conflict",
-      detail: `${input.owner} reports ${input.host}:${input.port} but nothing holds it; refusing to use it`,
-      inUse: false,
+      state: "unverified",
+      detail: `no live process identity is available for ${input.host}:${input.port}; a configuration claim is not ownership`,
+      pids: null,
+      ownership: "none",
       reported: true,
     };
   }
-  return { state: "stable", detail: null, inUse: true, reported: true };
+  const found = await input.ownership.listenerPids(input.port);
+  if (!found.supported) {
+    return {
+      state: "unverified",
+      detail: found.detail ?? "the OS socket-owner probe is unavailable on this platform; refusing to call the port stable",
+      pids: null,
+      ownership: "unavailable",
+      reported: true,
+    };
+  }
+  if (found.pids.length === 0) {
+    return {
+      state: "failed",
+      detail: `${input.owner} claims ${input.host}:${input.port} but no process listens`,
+      pids: [],
+      ownership: "os",
+      reported: true,
+    };
+  }
+  if (!found.pids.some((pid) => expected.includes(pid))) {
+    return {
+      state: "conflict",
+      detail: `${input.host}:${input.port} is held by pid ${found.pids.join(",")}, not the supervised process (${expected.join(",")}); refusing to use it`,
+      pids: found.pids,
+      ownership: "os",
+      reported: true,
+    };
+  }
+  return { state: "stable", detail: null, pids: found.pids, ownership: "os", reported: true };
 }
 
 /** Builds the portable evidence record from a proof. */
