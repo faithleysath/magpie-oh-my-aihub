@@ -593,6 +593,13 @@ describe("sensitive exports", () => {
         confirmation: "not-a-local-confirmation" as never,
       }),
     ).toThrow(expect.objectContaining({ code: "export-capability-invalid" }));
+    expect(() =>
+      vault.createExportCapability({
+        kind: "backup" as never,
+        purpose: "wallet-recovery",
+        confirmation: "local-user-confirmed",
+      }),
+    ).toThrow(expect.objectContaining({ code: "export-purpose-mismatch" }));
   });
 
   test("the ordinary snapshot contains only public address/status/expiry", async () => {

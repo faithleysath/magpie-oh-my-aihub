@@ -740,7 +740,7 @@ export class WalletVault {
 
   createExportCapability(input: ExportCapabilityInput): SensitiveExportCapability {
     this.assertSession();
-    if (input.confirmation !== "local-user-confirmed") {
+    if (!input || typeof input !== "object" || input.confirmation !== "local-user-confirmed") {
       fail("export-capability-invalid", "a local user confirmation is required");
     }
     const purpose = validateExportPurpose(input.kind, input.purpose);
@@ -849,6 +849,7 @@ export class WalletVault {
 
   createSigningPermit(input: SigningPermitInput): SigningPermit {
     this.assertSession();
+    if (!input || typeof input !== "object") fail("signing-permit-invalid", "signing permit input is required");
     const ttlMs = boundedTtl(input.ttlMs, DEFAULT_SIGNING_PERMIT_TTL_MS, MAX_SIGNING_PERMIT_TTL_MS);
     const maxUses = input.maxUses ?? 1;
     if (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > MAX_SIGNING_PERMIT_USES) {
@@ -1381,7 +1382,10 @@ function validateExportPurpose(kind: SensitiveExportKind, purpose: SensitiveExpo
     mnemonic: ["wallet-recovery", "wallet-migration"],
     "private-key": ["eip155-external-wallet", "wallet-migration"],
   };
-  if (!allowed[kind].includes(purpose)) fail("export-purpose-mismatch", "export purpose is not valid for this kind");
+  const purposes = allowed[kind];
+  if (!purposes || !purposes.includes(purpose)) {
+    fail("export-purpose-mismatch", "export purpose is not valid for this kind");
+  }
   return purpose;
 }
 
