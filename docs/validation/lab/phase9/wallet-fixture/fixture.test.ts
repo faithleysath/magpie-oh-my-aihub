@@ -31,7 +31,7 @@ function documentFor(chainId: 97 | 84532 = 97) {
   const network = DEFAULT_NETWORKS.find((n) => n.chainId === chainId)!;
   const contract = "0x" + "44".repeat(20);
   const decimals = chainId === 97 ? 6 : 18;
-  const asset = { assetId: assetIdOf(chainId, contract), chainId, contractAddress: contract, symbol: "tFIX" + decimals, name: "Local Fixture Mock" + decimals, decimals, enabled: true, testnetOnly: true, pricing: { nanosPerToken: String(10 ** 9), priceVersion: "local-fixture", note: "local test" } } as unknown as AssetRecord;
+  const asset = { assetId: assetIdOf(chainId, contract), chainId, contractAddress: contract, symbol: "tFIX" + decimals, name: "Local Fixture Mock" + decimals, decimals, issuerType: "mock", enabled: true, testnetOnly: true, credit: true, evidence: null, pricing: { nanosPerToken: String(10 ** 9), version: "local-fixture:v1", kind: "fixed-test-rate", note: "local test" } } as unknown as AssetRecord;
   const intent = buildIntent({ request: { providerId: "provider", consumerId: "consumer", chainId, assetId: asset.assetId, recipientAddress: TO, expectedAmountRaw: (10n ** BigInt(decimals)).toString(), ttlSec: 600 }, network, asset, priceVersion: "fixture" });
   const document = { schema: "ohmyaihub.deposit-request/v1", invoiceId: intent.invoiceId, consumerId: intent.consumerId, providerId: intent.providerId, chainId, asset: { assetId: asset.assetId, contractAddress: contract, symbol: asset.symbol, decimals }, amount: { tokens: "1", raw: intent.expectedAmountRaw }, recipientAddress: TO, expiresAt: intent.expiresAt, digest: intentDigest(intent, network, asset), typedData: intentTypedData(intent, network, asset) };
   return { network, asset, intent, document };
