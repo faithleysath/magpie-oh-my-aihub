@@ -3,7 +3,7 @@
 - 分支：`feature/phase10-c-payment-journal`
 - worktree：`/Users/laysath/.paseo/worktrees/1z728cdk/c-payment-journal`
 - base：已批准 P0-17 `49e8c0ff64c8fcaf28da472e664bee482fd5e843`（含 P0-15；`origin/main` = `8ce5c57f565fb1b835021a9b730b61014eb47d5f`）
-- 代码提交：`42589a1ec8b8f940b769a1e410060bf4c08f24e6`（核心）+ `450936ddffd17d23477321a9dd94666af9ddd7a6`（release payload 绑定、迟到哈希、旧证据年龄）；docs commit 在其上；PR head 见 GitHub
+- 代码提交：`42589a1ec8b8f940b769a1e410060bf4c08f24e6`（核心）+ `450936ddffd17d23477321a9dd94666af9ddd7a6`（release payload 绑定、迟到哈希、旧证据年龄）+ `b2ab34bd360a9b60e625ce0dce245e261fda0d41`（`-wal`/`-shm` 0600）；docs commit 在其上；PR head 见 GitHub
 - 依赖的已批准外置模块：PR #30 head `90c32f8cfd1b98e6705c31ca6e91cfef606dc894`（单独隔离模块；本分支不把它的 JS import 进生产代码）
 - 本模块：`plugin/src/payment-operations.ts`；测试：`plugin/test/payment-operations.test.ts`、`plugin/test/support/payment-operation-race-child.ts`
 - 结论：**核心可审、可测试；未接 Service/UI，未发送真实交易，未接账本授信，主网仍 NO-GO。** 本文不把任何模拟结果写成产品 GO。
@@ -245,13 +245,13 @@ bun run typecheck
 bun test ./test/payment-operations.test.ts
 ```
 
-结果（本次代码 `42589a1` + `450936d`）：
+结果（本次代码 `42589a1` + `450936d` + `b2ab34b`）：
 
 ```text
 40 pass
 0 fail
 260 expect() calls
-Ran 38 tests across 1 file. [~1.7s]
+Ran 40 tests across 1 file. [~1.7s]
 ```
 
 覆盖：
@@ -297,7 +297,7 @@ cd plugin
 bun test ./test ./console ../docs/validation/lab/phase9/wallet-fixture
 ```
 
-上次本机全量（新增 `-wal`/`-shm` 0600 测试之前）：**794 pass / 0 fail / 6242 expect / 54 files / 29.26s**（macOS arm64，Bun 1.4.3，SQLite 3.50.6）。按主审要求不重复本机全量，新 head 由 CI 跑全量。此前 CI run `41163057126` @ `450936d`：**linux pass 38s，macOS pass 48s**；新的 sidecar 权限测试会让计数 +1，以新 head CI 为准。
+本机上次全量（新增 `-wal`/`-shm` 0600 测试之前）：**794 pass / 0 fail / 6242 expect / 54 files / 29.26s**（macOS arm64，Bun 1.4.3，SQLite 3.50.6）。按主审要求未重复本机全量。CI run `41163498408` @ `b2ab34b`：**linux 795 pass / 0 fail / 6248 expect / 796 tests；macOS 794 pass / 0 fail / 6245 expect / 795 tests；均 success**（包含本模块 40 个定向测试和 sidecar 权限测试）。
 
 > 全量通过只说明本机 hermetic 测试通过，不等于真实 Magpie/EasyTier、真实扩展或真实链验收。
 
@@ -305,7 +305,7 @@ bun test ./test ./console ../docs/validation/lab/phase9/wallet-fixture
 
 | 项 | 状态 | 说明 |
 | --- | --- | --- |
-| 原子 reserve / 单赢家（真实 SQLite，多实例/多进程） | **VERIFIED** | 37 个定向测试；4 进程 race 1 winner |
+| 原子 reserve / 单赢家（真实 SQLite，多实例/多进程） | **VERIFIED** | 40 个定向测试；4 进程 race 1 winner |
 | `markBroadcasting` CAS + reservationId + exact payload + COMMIT 后返回 | **VERIFIED** | 错误 id/篡改/过期/旧身份均在发送前失败 |
 | crash after mark / reopen / new session 不重发 | **VERIFIED** | `broadcasting` 读回并拒绝 |
 | unknown 终态、4001 先 unknown、证据释放 | **VERIFIED** | 自动化测试 + external 集成探针 |
