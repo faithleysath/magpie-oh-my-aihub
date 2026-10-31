@@ -76,8 +76,8 @@ describe("control HTTP surface", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
     const body = await res.json();
-    expect(body).toEqual({ ok: true, protocol: "ohmyaihub/p2p/v1", listener: "lan-reachable", maxSessionTtlMs: 30 * 60_000 });
-    expect(JSON.stringify(body)).not.toMatch(/fingerprint|nodeId|key|secret|mapped/i);
+    expect(body).toEqual({ ok: true, protocol: "ohmyaihub/p2p/v1" });
+    expect(JSON.stringify(body)).not.toMatch(/fingerprint|nodeId|key|secret|mapped|listener|port/i);
   });
 
   test("exact Host allow-list: wrong port, DNS name, comma, userinfo and missing Host are refused", async () => {

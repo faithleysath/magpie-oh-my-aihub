@@ -362,7 +362,6 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
   const now = options.now ?? (() => Date.now());
   const buckets = new TokenBuckets(now);
   const allowedHosts = options.allowedHosts.map((h) => h.trim()).filter(Boolean);
-  const maxSessionTtlMs = options.maxSessionTtlMs ?? 30 * 60_000;
   let active = 0;
   const activePerPeer = new Map<string, number>();
 
@@ -423,8 +422,6 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
                 JSON.stringify({
                   ok: true,
                   protocol: "ohmyaihub/p2p/v1",
-                  listener: options.listener,
-                  maxSessionTtlMs,
                 }),
                 200,
               ))(),
