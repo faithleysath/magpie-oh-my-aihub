@@ -262,7 +262,9 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const actions = el("div", null, "workflow-actions");
       if (acceptance.fingerprint && peer.nodeId && !["verified", "connected"].includes(peer.status)) actions.append(button(peer.status === "identity-changed" ? "核对新身份" : "核对并接受身份", () => trustPeer(peer)));
       if (peer.quote && peer.nodeId) {
-        const request = button("选择模型并申请", () => requestConnection(peer), true);
+        // One screen may show several peers, so the per-card request action is a
+        // contextual secondary action; the only primary on the page is the tab row.
+        const request = button("选择模型并申请", () => requestConnection(peer));
         const connect = button("已有密钥，连接此伙伴", () => connectPeer(peer));
         const allowed = ["verified", "connected"].includes(peer.status) && peer.online;
         request.disabled = !allowed; connect.disabled = !allowed;
