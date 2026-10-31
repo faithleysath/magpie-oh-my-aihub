@@ -20,6 +20,8 @@
 
 - `plugin/src/wallet-vault.ts`
 - `plugin/test/wallet-vault.test.ts`
+- `plugin/test/wallet-vault-packaging.test.ts`
+- 根 `package.json` 的 `dependencies.ethers@6.17.0`（Magpie GitHub 安装的包根）
 - `plugin/package.json` / `plugin/bun.lock` 中的 `ethers@6.17.0` 及其锁定依赖
 - 本文件
 
@@ -66,6 +68,31 @@
 ## 2. 依赖与来源（实际检索，不凭记忆）
 
 直接依赖只有 **`ethers@6.17.0`（精确 pin，无 `^`）**。
+
+**Manifest/lock 位置（Magpie GitHub 安装路径）：**
+
+| 位置 | 用途 | ethers |
+| --- | --- | --- |
+| 仓库根 `package.json` | **Magpie 从 GitHub 安装的包根**；`bun add github:...` 读这里 | `6.17.0` |
+| `plugin/package.json` | 插件工作区/本地测试包 | `6.17.0` |
+| `plugin/bun.lock` | 插件工作区 lock；CI `bun install --frozen-lockfile` 使用 | 锁定 ethers 6.17.0 与传递依赖 |
+| `<Magpie data>/plugins/package.json` + `plugins/bun.lock` | Magpie 安装时生成的宿主 manifest/lock | 由 bun 从根 package 依赖解析；不是本仓库提交的 lock |
+
+仓库根没有 `bun.lock`；根依赖是精确版本，`ethers` 自己的传递依赖也全部是精确版本。`npm pack` 不包含 `bun.lock` 或 `node_modules`。**Magpie 不是 npm pack 安装**：它用 `bun add --ignore-scripts github:owner/repo` 把仓库根包放进 `plugins/node_modules`，所以根 `package.json` 缺依赖会导致实际宿主拿不到 `ethers`——本地工作树有 `plugin/node_modules` 不能证明宿主可加载。
+
+实际安装验证（不在仓库内留下 `node_modules`）：
+
+```bash
+# 干净 /tmp 目录，模拟 Magpie 的 plugins/ 目录
+mkdir /tmp/oma-plugin-install && cd /tmp/oma-plugin-install
+printf '{"name":"magpie-plugins","private":true}\n' > package.json
+~/.cache/magpie/bun/1.4.4/magpie-bun add --ignore-scripts   'github:faithleysath/magpie-oh-my-aihub#feature/phase10-c-wallet-vault'
+test -f node_modules/ethers/package.json
+test -f node_modules/@oh-my-aihub/magpie-plugin/plugin/src/wallet-vault.ts
+~/.cache/magpie/bun/1.4.4/magpie-bun -e   'const v = await import("./node_modules/@oh-my-aihub/magpie-plugin/plugin/src/wallet-vault.ts"); const e = await import("ethers"); console.log(typeof v.WalletVault, e.version)'
+```
+
+结果：**Bun 1.4.3 与 Magpie 管理的 Bun 1.4.4 都安装了 10 个包**；`node_modules/ethers` 存在，`plugin/src/wallet-vault.ts` 存在，导入输出 `function 6.17.0`。修复前的同一命令只安装根包（1 个包），没有 `ethers`——这是实际发现的打包问题，不是本地 node_modules 推断。`npm pack --dry-run` 的根包包含 `plugin/src/wallet-vault.ts` 与根 `package.json`，不包含 `bun.lock` 或 `node_modules`。
 
 | 项 | 值 |
 | --- | --- |
@@ -201,6 +228,7 @@ bun install --frozen-lockfile
 - `MAINNET_SIGNING_DENIED_CHAIN_IDS = [56, 8453]` 在 `assertSignableChain()` 中硬拒绝；即使注入的 policy 把 56 标成 simulation/testnet，也会拒绝。
 - 其他主网/未知链由注入的 `WalletChainPolicy` 拒绝；默认策略 `DENY_ALL_CHAIN_POLICY` 拒绝一切，避免“没接线就能签”。
 - `preparePayment()` 只允许 policy 分类为 simulation/testnet 的链；主网 56/8453 连准备都拒绝。
+- 核心只构造 **EIP-1559 type 2** 交易；没有 legacy `gasPrice` 路径。BSC testnet 97 的真实节点是否接受 type 2、以及 legacy 兼容性**未测 UNKNOWN**；不能把本模块的模拟测试写成“支持所有链”。
 - `signPayment()` 再次检查 chain policy，并解析回读 raw tx；没有 `send`/`broadcast` API，模块没有 RPC/fetch 代码。
 - `validateAutoRechargePolicy()` 只校验 policy 形状：chain/asset 四元组、per-payment/total 上限、最多 8 次、≤5 分钟、nonce、余额阈值；不读余额、不执行、不自动签名。未来执行器必须逐笔 `preparePayment()`，再用上述 exact-intent `SigningPermit` 签名；permit 不能变成“任意收款人/任意 calldata 的长期授权”。
 
@@ -237,13 +265,13 @@ bun install --frozen-lockfile
 | 命令 | 结果 | 说明 |
 | --- | --- | --- |
 | `bun run typecheck` | PASS | `tsc --noEmit` 无输出 |
-| `bun test test/wallet-vault.test.ts` | **41 pass / 0 fail / 216 expect** | 纯模块，临时目录，无网络 |
+| `bun test test/wallet-vault.test.ts` | **45 pass / 0 fail / 230 expect** | 纯模块，临时目录，无网络 |
 | `bun run secret-scan` | PASS | 工作树无凭据模式 |
 | `bun install --frozen-lockfile` | PASS（no changes） | lock 可复现 |
 | `npm audit --omit=dev`（公共 registry） | 0 known vulnerabilities | 不是完整供应链审计 |
-| GitHub Actions `plugin` run `41158830365`（commit `a3c327a`，模块测试 41 个） | Linux 781 pass / **5 fail**；macOS 780 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 41 个测试全部 pass |
+| GitHub Actions `plugin` run `41160080500`（commit `b972ba3`，本模块 47 个测试） | Linux 786 pass / **5 fail**；macOS 785 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 47 个测试全部 pass |
 
-**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `a3c327a` 上跑全量，Linux 781 pass / 5 fail、macOS 780 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
+**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `b972ba3` 上跑全量，Linux 786 pass / 5 fail、macOS 785 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
 
 ### 覆盖矩阵
 
@@ -256,6 +284,11 @@ bun install --frozen-lockfile
 | 默认 KDF 强参数 | `default KDF...` | REPRODUCED（默认 N=2^17） |
 | 0644 文件 / 符号链接拒绝 | `a 0644 wallet file...` | REPRODUCED |
 | 篡改 ciphertext/MAC/KDF/未知字段 | `tampered ciphertext...` | REPRODUCED |
+| 篡改 x-ethers path/locale/client/gethFilename、mnemonic ciphertext、address、KDF 类型 | `x-ethers metadata...` / `tampered mnemonic...` | REPRODUCED（fail closed） |
+| 真实 `DepositIntent` 11 个 primitive 字段的 digest/sign/verify | `the real DepositIntent schema...` | REPRODUCED（与现有 `src/eip712.ts` digest 对比） |
+| GitHub 根包/工作区 manifest 与 vault 源文件 | `wallet-vault-packaging.test.ts` | REPRODUCED（静态） |
+| 实际 Magpie `bun add github:...#branch`、ethers 解析、vault import | `/tmp` 安装实验（Bun 1.4.3 + Magpie Bun 1.4.4） | REPRODUCED（10 包，`function 6.17.0`） |
+| BSC 97 只构造 type 2，真实节点/legacy 兼容未测 | `chain 97 is only built...` | REPRODUCED（本地）；节点兼容 UNKNOWN |
 | 错密码、锁定、会话过期、重启 | `unlock expires...` | REPRODUCED |
 | 改密码旧密码失效 | `changing the password...` | REPRODUCED |
 | 覆盖保护/旧密码复验 | `create/import/restore will not overwrite...` | REPRODUCED |
@@ -295,10 +328,10 @@ bun install --frozen-lockfile
 - **共享 Bun 宿主可读解密内存**：任何同进程插件/扩展都能在解锁期间读取 HDNodeWallet；capability/facade 不是沙箱。
 - **JS 无法保证内存擦除**：GC、堆快照、swap、core dump、崩溃转储可能保留 key；没有 Keychain/TPM/安全 enclave。
 - **离线暴力破解**：keystore 被复制后，密码强度决定安全；scrypt 只提高成本，不阻止弱密码。
-- **x-ethers mnemonic 完整性**：标准 V3 MAC 认证的是私钥密文/密码，不单独认证 `x-ethers.mnemonicCiphertext`。篡改 mnemonic 密文不会变成“另一个有效钱包”而不被发现：ethers 会用派生地址/私钥与 mnemonic 复核，失败时本模块 fail closed（拒绝导出/解锁）。但这不是一个独立的 mnemonic MAC；不要把“能导出助记词”当成该密文未被篡改的证明。
+- **x-ethers mnemonic 完整性**：标准 V3 MAC 认证的是私钥密文/密码，不单独认证 `x-ethers.mnemonicCiphertext`。本模块在解密后**重新解析 BIP39 phrase、复核 checksum/entropy、按固定 `m/44'/60'/0'/0/0` 重新派生，并比较 address/privateKey 与 keystore 声明**；仅 wordlist 合法不算通过。`x-ethers.path/locale/client/gethFilename` 也做严格校验；篡改 path/locale/client/geth filename 在 `open` 拒绝，篡改 mnemonic ciphertext/address 在 `unlock` fail closed。但这仍不是独立的 mnemonic MAC；不要把“能导出助记词”当成该密文未被篡改的证明。
 - **文件系统/OS**：Windows 权限与目录 fsync 未测；磁盘/SSD 安全擦除、备份软件、Time Machine、云同步可能复制旧密文。
 - **标准互操作**：`x-ethers` 扩展的助记词保留只验证了 ethers；geth/MetaMask/Rabby 等对 x-ethers 的行为 UNKNOWN。仅私钥的 V3 读取是标准，但本 vault 的 `restore()` 要求 x-ethers mnemonic；只接受 scrypt 备份，要求新密码至少 12 字符，PBKDF2/短密码外部备份不能直接 restore。
-- **EIP-712 字段范围**：purpose 签名只支持 primitive 字段（address/bool/string/bytesN/uint/int）；C-external 的 deposit document 若含 nested struct/array，内置路径需要扩展 purpose 或继续走外置钱包路径。`previewTypedData()` 可预览 nested 类型，但 preview 永不签名。
+- **EIP-712 字段范围**：purpose 签名只支持 primitive 字段（address/bool/string/bytesN/uint/int）。**实际 `DepositIntent` 的 11 个字段全是 primitive**（string/uint256/address/uint64），已用真实 `DEPOSIT_TYPES` 做 digest/sign/verify 兼容测试，并支持按链配置 purpose；不需要把普通充值导向手工文件。只有含 nested struct/array 的其他文档才需要扩展 purpose 或继续走 C-external 外置路径；`previewTypedData()` 可预览 nested 类型，但 preview 永不签名。
 - **真实链**：没有真实 testnet RPC、没有广播、没有 Magpie/EasyTier、没有真实资金；所有签名结果只是本地模拟/离线签名。
 - **时序/侧信道**：未做 KDF/签名时序分析；未做故障注入、功耗、冷启动。
 - **依赖审计**：只审查了 ethers 的 keystore/BIP39/scrypt 相关源码；没有完整供应链审计，没有正式第三方审计。
