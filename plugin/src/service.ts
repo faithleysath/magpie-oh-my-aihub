@@ -108,6 +108,7 @@ import {
   type ProviderConnection,
   type ProviderLimitView,
   type ProviderView,
+  type OrphanForward,
   type SharePolicy,
 } from "./state.ts";
 
@@ -983,10 +984,22 @@ export class Service {
       logger.error("startup aborted: the overlay core is not proven; background services were not started");
       return;
     }
-    // A core that just started has no leftover forwards: the generated config
-    // is the whole set. Anything recorded as orphan is gone with it.
+    // A restart normally drops orphan listeners, but 2.6.4 can leave a socket
+    // alive. Keep an orphan unless the OS bind probe proves the port is free.
     if (this.state.orphanForwards.length) {
-      this.state.orphanForwards = [];
+      const kept: OrphanForward[] = [];
+      for (const orphan of this.state.orphanForwards) {
+        let free = false;
+        try {
+          free = await this.binder.isFree("127.0.0.1", orphan.localPort);
+        } catch {
+          free = false;
+        }
+        if (free) continue;
+        kept.push(orphan);
+        logger.error(`control forward 127.0.0.1:${orphan.localPort} is still listening after core start; keeping the orphan record`);
+      }
+      this.state.orphanForwards = kept;
       saveState(this.state);
     }
     // Before serving again, prove every issued key still names only this node's
@@ -3697,6 +3710,113 @@ export class Service {
       saveState(this.state);
       logger.warn(`127.0.0.1:${localPort} could not be closed live (EasyTier 2.6.4); it will be dropped at the next core start`);
     }
+  }
+
+  /**
+   * Retires one control-forward listener. EasyTier 2.6.4 can leave a removed
+   * forward listening until the supervised core restarts, so a map delete is not
+   * proof of closure. This removes only the named bind, records an owned orphan,
+   * and performs the existing supervised restart; other provider forwards and
+   * foreign processes are untouched. Returns the measured result for status.
+   */
+  async retireControlForward(
+    bindAddr: string,
+    dstAddr: string,
+    ownedControlBinds: string[] = [],
+  ): Promise<{ closed: boolean; restarted: boolean; orphan: boolean; detail?: string | null }> {
+    return this.serialize(async () => {
+      const localPort = Number(bindAddr.split(":").pop());
+      if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) throw new Error("invalid control forward bind address");
+      const ownedControl = new Set([bindAddr, ...ownedControlBinds]);
+      const recordOrphan = (pids: number[], detail: string): void => {
+        const existing = this.state.orphanForwards.find((o) => o.localPort === localPort && o.dstAddr === dstAddr);
+        if (existing) {
+          existing.pids = pids;
+          existing.detail = detail;
+          existing.since = new Date().toISOString();
+        } else {
+          this.state.orphanForwards.push({ localPort, dstAddr, since: new Date().toISOString(), pids, detail });
+        }
+        saveState(this.state);
+      };
+      // Preserve forwards owned by other state providers and any manual ET
+      // forward; the restart below rebuilds only plugin state.
+      const before = await this.supervisor.listPortForwards().catch(() => []);
+      const providerBinds = new Set(this.forwardSpecs().map((f) => f.bindAddr));
+      const extras = before.filter((f) => f.bindAddr !== bindAddr && !providerBinds.has(f.bindAddr) && !ownedControl.has(f.bindAddr));
+      const ownedForwards = before.filter((f) => f.bindAddr !== bindAddr && ownedControl.has(f.bindAddr));
+      if (extras.length > 0) {
+        // A manual/foreign forward is not ours to import or silently rebuild.
+        const pids = await this.ownership.listenerPids(localPort).then((r) => r.pids ?? []).catch(() => []);
+        recordOrphan(pids, `control restart refused; other forward(s) present: ${extras.map((f) => f.bindAddr).join(", ")}`.slice(0, 300));
+        logger.error(`refusing a control restart while ${extras.length} non-plugin forward(s) are present: ${extras.map((f) => f.bindAddr).join(", ")}`);
+        return { closed: false, restarted: false, orphan: true };
+      }
+      await this.supervisor.removePortForward(bindAddr).catch(() => {});
+      const probe = async (): Promise<boolean> => {
+        try {
+          return await this.binder.isFree("127.0.0.1", localPort);
+        } catch {
+          return false;
+        }
+      };
+      let free = await probe();
+      if (free) return { closed: true, restarted: false, orphan: false };
+      let pids: number[] = [];
+      try {
+        const found = await this.ownership.listenerPids(localPort);
+        pids = found.pids ?? [];
+      } catch {
+        pids = [];
+      }
+      const corePid = this.supervisor.snapshot().pid;
+      if (!corePid || pids.length === 0 || !pids.includes(corePid)) {
+        // A listener we cannot attribute to the supervised core is not ours to
+        // kill/restart around. Keep the evidence and leave it degraded.
+        recordOrphan(pids, "listener owner is not the supervised core; restart refused");
+        logger.error(`control forward ${bindAddr} remains, but its listener is not owned by the supervised core (pids=${pids.join(",") || "unknown"})`);
+        return { closed: false, restarted: false, orphan: true };
+      }
+      recordOrphan(pids, "2.6.4 remove did not close the listener");
+      let restarted = false;
+      let restoreError: string | null = null;
+      const cfg = this.state.config;
+      if (cfg) {
+        try {
+          await this.applyConfig(cfg);
+          restarted = true;
+        } catch (e) {
+          logger.error(`control forward ${bindAddr} could not be cleared by a supervised restart: ${String(e)}`);
+        }
+      }
+      // Re-add only forwards that existed before and were not part of state;
+      // failures are surfaced, never silently lost.
+      for (const ownedForward of ownedForwards) {
+        try {
+          await this.supervisor.addPortForward(ownedForward.bindAddr, ownedForward.dstAddr);
+        } catch (e) {
+          restoreError = `could not restore control forward ${ownedForward.bindAddr}: ${String((e as Error)?.message ?? e)}`;
+          logger.error(restoreError);
+          const port = Number(ownedForward.bindAddr.split(":").pop());
+          const pids = await this.ownership.listenerPids(port).then((r) => r.pids ?? []).catch(() => []);
+          recordOrphan(pids, restoreError.slice(0, 300));
+        }
+      }
+      for (const extra of extras) {
+        try {
+          await this.supervisor.addPortForward(extra.bindAddr, extra.dstAddr);
+        } catch (e) {
+          logger.error(`could not restore forward ${extra.bindAddr} after control restart: ${String(e)}`);
+        }
+      }
+      free = await probe();
+      const orphan = !free;
+      if (!orphan) {
+        this.state.orphanForwards = this.state.orphanForwards.filter((o) => o.localPort !== localPort || o.dstAddr !== dstAddr);
+        saveState(this.state);
+      }
+      return { closed: !orphan && !restoreError, restarted, orphan: orphan || Boolean(restoreError), detail: restoreError };
+    });
   }
 
   // --- sharing ---------------------------------------------------------------

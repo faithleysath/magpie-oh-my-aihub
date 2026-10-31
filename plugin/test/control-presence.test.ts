@@ -18,7 +18,7 @@ function body(): PresenceBody {
   return {
     schema: PRESENCE_SCHEMA,
     node: { nodeId: "aaaa1111", hostname: "ohmyaihub-aaaa1111", fingerprint: id.summary.fingerprint, publicKey: id.summary.publicKey },
-    endpoint: { host: "192.168.1.10", mappedCidr: "10.66.1.2/32", controlPort: 35210, ready: true },
+    endpoint: { host: "10.66.1.2", mappedCidr: "10.66.1.2/32", controlPort: 35210, ready: true },
     capability: { control: true, sharing: "enabled", providesModels: true },
     issuedAt: "2026-10-31T11:59:30.000Z",
     expiresAt: "2026-10-31T12:01:30.000Z",
@@ -48,6 +48,12 @@ describe("signed control presence", () => {
     ]) {
       expect(() => verifyPresence(bad, now)).toThrow();
     }
+    for (const host of ["127.0.0.1", "169.254.169.254", "192.168.1.1", "10.66.1.3"]) {
+      const forged = signPresence({ ...body(), endpoint: { ...body().endpoint, host } }, id);
+      expect(() => verifyPresence(forged, now, { expectedMappedCidr: "10.66.1.2/32" })).toThrow();
+    }
+    const lan = signPresence({ ...body(), endpoint: { host: "192.168.1.1", mappedCidr: null, controlPort: 35210, ready: true } }, id);
+    expect(() => verifyPresence(lan, now)).toThrow(/private LAN/);
     expect(() => verifyPresence(doc, new Date("2026-10-31T12:05:00.000Z"))).toThrow(/current/);
     const future = signPresence({ ...body(), issuedAt: "2026-10-31T12:00:00.000Z", expiresAt: "2026-10-31T12:01:00.000Z" }, id);
     expect(() => verifyPresence(future, new Date("2026-10-31T11:50:00.000Z"))).toThrow();
