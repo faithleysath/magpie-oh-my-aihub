@@ -97,7 +97,8 @@
 | 平台没有 lsof/ss（如 Windows）或查询失败 | `unverified`（**永不 stable**），核心启动直接 fail-closed |
 
 - **启动前**：存储的 RPC / overlay 监听 / Catalog SOCKS5 端口被占 → 先原子预留新端口、写账本、迁移，再启动。
-- **启动中**：`waitForRpc()` 在**任何** `easytier-cli` 调用之前先做 OS owner 校验；只有“监听 PID = 刚 spawn 的 pid”才允许读 RPC，且读到的 `instance_id` / `network_name` 必须与本节点配置一致。外人抢到同一端口并返回我们完全相同的配置也会被 PID 校验挡住（负向测试见 §5）。
+- **启动中**：`waitForRpc()` 在**任何** `easytier-cli` 调用之前先做 OS owner 校验；只有“监听 PID = 刚 spawn 的 pid”才允许读 RPC，且读到的 `instance_id` / `network_name` 必须与本节点配置一致。外人抢到同一端口并返回我们完全相同的配置也会被 PID 校验挡住（负向测试见 §5）。首次启动失败不会进入崩溃重启循环：`startupPending` 期间不安排重启，错误原样返回。
+- **Forward**：`addPortForward` 之后、**任何带 Gateway Key 的探针之前**，先证明该 loopback 监听的 PID = 受控核心 PID；否则拒绝、记录 `failed`、不发送 Key（连接与 reconcile 都一样）。`connectProvider` 的无 key 401 探针也在 ownership 之后。
 - **持续校验**：每次 `refresh()` 都重新核对 RPC 与 SOCKS5 监听 PID = 本核心 pid；不符/无法查询即记入 `aclProblems`，连续两次 fail-closed 停核心。Service 的 `forwards-owned` 检查同样用 OS PID 验证每个 Forward。
 
 - 迁移前先原子预留新端口，写入 state，记录迁移；随后重写 TOML/ACL/Forward 并受监督重启。迁移用途与目的：
@@ -112,6 +113,8 @@
 **持久化**：`state.json` v4 新增 `ports: {version, migrations[], evidence[]}`（迁移最多 50、证据最多 64；读取时逐项校验，坏数据丢弃而不是信任）。`nodeId/instanceId/secureIdentity/consumer/ledger` 全部保留；v3→v4 迁移沿用现有“先备份再写”的流程。
 
 **失败语义**：验证不通过/迁移失败 → 真实 `failed`/`conflict`/`unverified` 状态；不把“没验证”写成稳定，不把“端口被占”转成“连接别的进程”。`applyConfig()` / `start()` 的 ownership 校验失败会抛出并回滚（或停核心），不再“记日志后继续 online”。
+
+**旧证据不冒充新状态（H1）**：持久账本里的 `stable` 只代表“当时的进程证明过”。Service 构造时把上一进程留下的所有 evidence 改成 `unverified`（detail = not re-proven since this host started），本进程重新验证后才回到 `stable`；`network.ports` 的实时 `failed`/`conflict` 永远优先于账本记录，旧 `stable` 不能遮盖当前失败。console/API 端口只记录、不探测，因此投影为 `unverified`，不再伪造 `stable`。
 
 **平台差异**：Windows 没有 `lsof`/`ss` 时 `verifyOwnedPort` 返回 `unverified`，`waitForRpc` 直接拒绝启动（fail-closed）。这不是“Windows 已支持”，而是明确拒绝把未证明的监听当作自己的；要恢复 Windows 支持必须补原生 socket→PID 查询（未来工作）。
 
@@ -128,11 +131,12 @@
 | 动作 | 请求 | 响应 | 语义 |
 | --- | --- | --- | --- |
 | `join-network` | `{networkName, networkSecret?, initialNode?}` | `{result: consoleState}` | 三字段；角色/端口/监听自动；不分享；编辑可省略密钥 |
-| `share-native-models` | `{models: string[], confirm: true}` | `{result: consoleState}` | 一次明确事务；只收有价原生模型；失败回滚 |
+| `share-native-models` | `{models: string[], confirm: true}` | `{result: consoleState}` | 串行事务；guard 先行；只收有价原生模型；目录/quote 必须成功；失败回滚 |
 | `stop-sharing` | `{confirm: true}` | `{result: consoleState}` | 撤分享 + 目录；保留选择/Key/记录 |
 | `network-refresh` | `{}` | `{result: consoleState}` | 显式刷新 EasyTier + 目录（轮询不含主动探测，≥2s 节流） |
 
 新增只读字段：`status.network`（见 §2.3）；`share-candidates` 追加 `detectedAt`、`source:"magpie-native"`。
+**公共入口收紧**：`share-toggle`、`catalog-publish` 已从 `CONSOLE_ACTIONS` 白名单移除（旧 UI 会 404，CLI/维护者 API 不受影响）；控制台 `share-models` 拒绝任何 `*`；控制台 `configure` 拒绝 wildcard，且不能在没有任何精确选择时打开分享。首次 `join-network` 的允许清单是**空集**，不会自动分享当前或未来模型。
 错误：400 `{error:"invalid_action_input",message}`；500 `{error:"action_outcome_unknown"}`（不自动重试）；404 `action_not_allowed`；409 `idempotency_conflict`。
 
 A-ui 确认过的三点：编辑网络可省略密钥（已实现）；四个动作都返回 `{result: consoleState}`（传输层统一封装）；分享成功后 `status.catalog.publishing===true` 且 `status.catalog.quote.modelCount` 存在（测试已断言）。
@@ -243,7 +247,10 @@ node-c pid=86946 running=true aclOk=true problems=[] rpc 27890 owner=[86946] mat
 - 分享事务：confirm 必需、拒绝非原生/无完整价格、成功只发布选中模型、失败回滚并显示真实失败、停止分享保留选择。
 - 网络投影：直连/中继/未知（真实字段形状）、无 peer 读取时 `online=null`、邻居不当授权、端口只读、网关标为 Magpie 所有。
 - 端口：持久账本校验/容量、原子占用与释放、耗尽范围真实失败、`stable/conflict/failed/unverified`、可达性、真实 socket 持有、RPC 冲突启动前迁移并记账、Catalog bind 冲突迁移并更新 ACL、Forward 失败记录后重试避开、overlay 监听冲突迁移。
-- RPC ownership 负向测试（`phase10-rpc-ownership.test.ts`）：外人持有端口且返回**我们的 instance_id** → 不调用 CLI、启动失败；活着的子进程不拥有端口 → 有界等待后失败、零 CLI；自己拥有但 instance_id 不同 → 拒绝；自己拥有且一致 → 接受；OS owner 查询不可用 → fail-closed。
+- RPC ownership 负向测试（`phase10-rpc-ownership.test.ts`）：外人持有端口且返回**我们的 instance_id** → 不调用 CLI、启动失败；活着的子进程不拥有端口 → 有界等待后失败、零 CLI；自己拥有但 instance_id 不同 → 拒绝；自己拥有且一致 → 接受；OS owner 查询不可用 → fail-closed；首次启动失败只尝试 1 次、不进入重启循环。
+- Forward key 门禁（`phase10-network.test.ts`）：外人监听 forward 端口时 `addProvider` 被拒绝、外部监听收到 **0** 个请求；reconcile 在 owner 变foreign 后不再发送 Key。
+- 共享事务：首次入网空清单、wildcard 不能从控制台重新开启、`share-toggle`/`catalog-publish` 不在白名单、guard 暂停→回滚、目录非端口错误→回滚。
+- 证据新鲜度：持久 `stable` 在重启后变为 `unverified`；实时 `failed` 覆盖旧 `stable`；console/API 不再是伪造 `stable`。
 
 ## 6. 状态矩阵
 
@@ -253,7 +260,10 @@ node-c pid=86946 running=true aclOk=true problems=[] rpc 27890 owner=[86946] mat
 | 一次分享事务（含 ACL/目录/回滚） | **REPRODUCED（模拟 Magpie/EasyTier 子进程接口）** | 注入 probes + 假 supervisor；真实 Magpie 0.1.2289 未跑 |
 | 真实 EasyTier supervisor 状态/版本/peer/route/rtt/直连/中继 | **REPRODUCED** | 3 节点隔离；2.6.4-8428a89d |
 | 自动端口：原子 bind、OS PID 持有证明、账本、RPC/Catalog/overlay 迁移 | **REPRODUCED** | 真实 EasyTier + 真实 lsof；Service 级迁移用注入 binder/ownership；负向用注入 owner |
-| RPC 抢占（返回相同配置）不误用 | **REPRODUCED** | `phase10-rpc-ownership.test.ts`：零 CLI 调用、启动失败 |
+| RPC 抢占（返回相同配置）不误用 | **REPRODUCED** | 独立审脚本 `/tmp/oma-phase10-evidence/repro-fixed/race.ts`：B 0.55s 抛 “exited before its RPC answered”；`phase10-rpc-ownership.test.ts` 零 CLI |
+| Forward 外占时 Gateway Key 不外泄 | **REPRODUCED** | 独立审脚本复跑 `repro-fixed/forward-capture.ts`：REFUSED，外部监听收到 0 请求，Key observed=false |
+| 分享事务：serialize / guard 先行 / 目录失败 | **REPRODUCED** | `share-concurrency` 复跑：仅 1 次 applyConfig 进入；`guard-swallow` 复跑：threw、published=0；本地测试覆盖 |
+| 持久 stable 不遮盖新失败 | **REPRODUCED** | 新测试 + 构造时重标 `unverified`；`network.ports` 实时失败优先 |
 | Windows 原生 socket→PID | **UNKNOWN / fail-closed** | 无 lsof/ss 时 `unverified`；未实现原生查询 |
 | Forward 端口冲突自动迁移 | **VERIFIED（机制）/ UNKNOWN（真实远端）** | 失败证据+重试避让已实现；真实远端 Magpie 未接 |
 | 真实跨主机 NAT/relay/目录读取/Remote Magpie 注册 | **UNKNOWN** | 本轮仅 loopback 三节点 |
@@ -284,6 +294,20 @@ bun run boot-check && bun run secret-scan
 bash /tmp/oma-phase10-evidence/run.sh
 # 读取 /tmp/oma-phase10-evidence/{na,nb,nc}/snap.json；脚本只杀自己启动的 PID
 ```
+
+### 8.5 独立审复现脚本对新 head 的复跑（synthetic、loopback）
+
+用独立审 `/tmp/oma-repro/*` 的原脚本，仅把 import 指向本工作树，结果保留在 `/tmp/oma-phase10-evidence/repro-fixed/`：
+
+| 脚本 | 旧 head 结果 | 新代码结果 |
+| --- | --- | --- |
+| `forward-capture.ts` | 外部监听拿到真实 Key | `REFUSED: ... not provably owned ... refusing to send the Gateway Key`；captured requests `[]`；Key observed `false` |
+| `race/repro.ts` | B 通过 A 的 RPC“启动成功”，读到 A 的配置 | B `start` 0.55s 抛 `exited before its RPC answered on 127.0.0.1:27933`；未读外部配置 |
+| `service-false-stable.ts` | 外占 RPC 仍 `stable`，applyConfig 成功 | `applyConfig` 抛 `the overlay core does not own its listeners: conflict ... (999999)` |
+| `share-concurrency.ts` | 两个 share 同时进入 applyConfig | 仅 1 次进入（serialize），另一个等待 |
+| `guard-swallow.ts` | guard suspended 仍返回成功 | `threw ... the share guard withdrew sharing`；published=0；sharing=false |
+
+这些是 **SIMULATED**（注入 supervisor / 本地 HTTP 对手），Key 是 synthetic 隔离值，日志只保留脱敏片段。
 
 ## 9. 未完成 / 后续
 
