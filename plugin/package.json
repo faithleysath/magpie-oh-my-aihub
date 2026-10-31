@@ -33,6 +33,7 @@
     "page/settings.js",
     "page/style.css",
     "page/icon.svg",
-    "README.md"
+    "README.md",
+    "!console/*.test.js"
   ]
 }
