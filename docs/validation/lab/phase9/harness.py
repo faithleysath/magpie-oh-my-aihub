@@ -34,6 +34,43 @@ ET_PIN = {
 ET_ZIP = "4be1882d1aa36d31c1d6ba0596f2cf8a097e371f8da124212324b2e0f8df7e4b"
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+# Only app builds whose behaviour has been measured may start a lab. A version
+# is not accepted because it looks newer: it is accepted because its upstream tag
+# and its portable-mode data layout were checked and its binary hash is recorded
+# in every runtime.json. Anything not listed here is refused (never "any
+# version"), and a partial/broken checkout of one of these versions is still
+# caught by the binary and fixture checks below.
+#
+#   0.1.2038  8c63c5b7873c6aa7aa797aa17f481d5fa8301876  billing pin (Phase 3-6)
+#   0.1.2171  244d80e23f91ab4e2b37b4e045d61fda5f7bca50  Phase 9 browser console
+#   0.1.2289  5c637f17b25dad63c490b1edf242c11a83b1b059  Phase 10 target
+#
+# 0.1.2289 was re-measured for Phase 10: tag v0.1.2289, app binary
+# /Applications/Magpie.app/Contents/MacOS/magpie sha256
+# c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c, and
+# internal/appdir/appdir.go still chooses portable mode from a `.portable` file
+# or a `data` folder beside Magpie.app, so the per-node isolation below is
+# unchanged. Its billing semantics are NOT assumed; runtime.json keeps
+# billingPin = 0.1.2038 until they are measured.
+MEASURED_APP_VERSIONS = {
+    "0.1.2038": "8c63c5b7873c6aa7aa797aa17f481d5fa8301876",
+    "0.1.2171": "244d80e23f91ab4e2b37b4e045d61fda5f7bca50",
+    "0.1.2289": "5c637f17b25dad63c490b1edf242c11a83b1b059",
+}
+
+
+def measured_source_sha(version: str) -> str:
+    """The upstream commit for a measured app version; refuse anything else."""
+    sha = MEASURED_APP_VERSIONS.get(version)
+    if sha is None:
+        raise RuntimeError(
+            "unmeasured app version: use one of " + ", ".join(sorted(MEASURED_APP_VERSIONS)) + " explicitly"
+        )
+    return sha
+
+
+
+
 
 def save(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -205,8 +242,7 @@ def prepare(args):
         raise RuntimeError("Magpie source bundle not found")
     with (app / "Contents/Info.plist").open("rb") as f:
         version = plistlib.load(f)["CFBundleShortVersionString"]
-    if version not in {"0.1.2171", "0.1.2038"}:
-        raise RuntimeError("unmeasured app version: use 0.1.2171 or 0.1.2038 explicitly")
+    source_sha = measured_source_sha(version)
     if not (REPO / "package.json").is_file():
         raise RuntimeError("root installable package.json is required")
     root = Path(args.root or f"/tmp/ohmyaihub-phase9-real-{secrets.token_hex(4)}").resolve()
@@ -223,7 +259,7 @@ def prepare(args):
     runtime = {"schema": MARKER, "root": str(root), "createdAt": stamp(),
                "repoHead": run(["git", "rev-parse", "HEAD"], cwd=REPO).stdout.decode().strip(),
                "platform": {"os": platform.system(), "release": platform.release(), "arch": platform.machine()},
-               "magpieSourceSha": "244d80e23f91ab4e2b37b4e045d61fda5f7bca50" if version == "0.1.2171" else None,
+               "magpieSourceSha": source_sha,
                "magpieVersion": version, "billingPin": "0.1.2038",
                "compatibility": "UNKNOWN until actor acceptance", "networkName": "phase9-" + secrets.token_hex(4),
                "networkSecret": secrets.token_hex(24), "nodes": {}}

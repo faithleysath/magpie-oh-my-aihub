@@ -38,6 +38,16 @@ class HarnessTests(unittest.TestCase):
         self.assertTrue(all(not p.endswith("page/options.js") for p in files))
         self.assertTrue(all(not p.endswith("page/launcher.js") for p in files))
 
+    def test_only_measured_app_versions_are_accepted(self):
+        # The Phase 10 target and the two earlier measured builds are allowed …
+        self.assertEqual(h.measured_source_sha("0.1.2289"), "5c637f17b25dad63c490b1edf242c11a83b1b059")
+        self.assertEqual(h.measured_source_sha("0.1.2171"), "244d80e23f91ab4e2b37b4e045d61fda5f7bca50")
+        self.assertEqual(h.measured_source_sha("0.1.2038"), "8c63c5b7873c6aa7aa797aa17f481d5fa8301876")
+        # … and anything else is refused, never silently accepted.
+        for version in ("0.1.2290", "0.1.22890", "0.1.2289-beta", "", "../0.1.2289"):
+            with self.assertRaises(RuntimeError, msg=version):
+                h.measured_source_sha(version)
+
     def test_env_does_not_inherit_user_tokens_or_host_bun_override(self):
         node = {"home": "/tmp/fixture/home", "gatewayAddress": "192.0.2.1:33333", "lan": "192.0.2.1", "webKey": "fixture-key", "bin": "/tmp/fixture/Magpie.app/Contents/MacOS/magpie"}
         old = os.environ.get("OPENAI_API_KEY")
