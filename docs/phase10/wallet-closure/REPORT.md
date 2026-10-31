@@ -1,231 +1,216 @@
-# Phase 10 C — wallet, BSC/Base read-only, zero-file recharge and auto-recharge closure
+# Phase 10 C — wallet, mainnet read-only and the real zero-file payment loop
 
 Status tags: **VERIFIED** (source/config/read), **REPRODUCED** (run and observed here),
 **UNKNOWN** (not measured or blocked), **LIMITATION** (a real, stated boundary).
 
 - Branch: `feature/phase10-wallet-closure`
-- Base: PR #49 `6b4d7d2f6e243b8ae8dfd074842cd71985850876` (A stop-share + B zero-file closure)
-- Final functional head (code, before this docs commit): `56370a6`
+- Base: PR #49 `6b4d7d2f6e243b8ae8dfd074842cd71985850876`
+- Final code head: `d09efe1` (this docs commit follows it; the PR records the final head)
 - PR: https://github.com/faithleysath/magpie-oh-my-aihub/pull/50 (draft, not merged)
-- This report is the integration and acceptance record for this branch. The older
-  `docs/phase10-c-*.md` files are their own units' reports; their integration status is
-  superseded by this file.
-- No real funds were used. Real mainnet access is **read-only public RPC** only. No mainnet
-  send, credit or automatic recharge is enabled anywhere.
+- No real funds. Real mainnet access is read-only public RPC only. Mainnet send, credit and
+  automatic recharge remain closed.
 
 ## 0. One-page status
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| C wallet vault/UI (create, lock, unlock, backup, export, restore) | **REPRODUCED** in a real Magpie 0.1.2289 UI + ego-lite | `evidence/wallet-journey.json`, two wallet screenshots (the mainnet result is in the JSON, below the wallet section) |
-| Mainnet BSC 56 / Base 8453 equal read-only | **REPRODUCED** (real public RPC and browser UI) | `evidence/mainnet-readonly.json` |
-| BSC USDC | **UNKNOWN / refused** (issuer evidence absent) | reader refuses the unregistered contract |
-| B zero-file request → human approval → encrypted delivery → native Remote | **REPRODUCED** on two real portable Magpie nodes | `evidence/lab-partial.json` |
-| Real end-to-end C P2P **payment** (terms → signature → send → watcher → credit) | **UNKNOWN / BLOCKED in this lab** | provider payment requests stayed empty; host instability after the request |
-| Manual built-in-wallet send (preview → confirm → ERC-20 broadcast) | **VERIFIED by tests**, not exercised on the real lab chain | `wallet-payment-send.ts`, vault tests |
-| Automatic recharge | **NOT FULL AUTO** — reminder + one-click confirm only | policy schema and UI explicitly say FULL AUTO is not implemented |
-| Mainnet send / credit / auto-recharge | **CLOSED** by the hard gate | `mainnet-gate.ts`, tests |
+| C wallet (create/lock/unlock/backup/mnemonic/key export/restore) | **REPRODUCED** in the real Magpie 0.1.2289 UI | `wallet-journey.json`, screenshots, zero secret-leak scan |
+| BSC 56 / Base 8453 equal read-only | **REPRODUCED** (public RPC and browser) | `mainnet-readonly.json` |
+| B zero-file request → human approval → encrypted delivery → native Remote | **REPRODUCED** on two real nodes | B approval `acked`, remote generation 1 |
+| **C zero-file payment: request → terms → EIP-712 → send → watcher → ledger → Magpie cap → 已到账** | **REPRODUCED end-to-end on the real two-node lab** | `payment-journey.json`; tx `0x4f7f…0489e`; cap `$0.05 → $1.55` |
+| Manual built-in-wallet ERC-20 send on anvil | **REPRODUCED** | preview → confirm → signed broadcast → receipt status 1 → provider event credited |
+| Duplicate / restart recovery | **REPRODUCED** | provider host restart: one chain deposit, cap unchanged, event still one credited row |
+| Automatic recharge | **NOT FULL AUTO** — reminder + one-click confirm only | policy/UI explicitly say so; no unattended signer |
+| Mainnet send/credit/auto-recharge | **CLOSED** by the hard gate | unit/integration and registry gate |
+| External MetaMask/Rabby connection + signature | **UNKNOWN / tool-blocked** | MetaMask 13.54 loaded and imported in isolated Chromium; EIP-1193 present; popup automation did not complete |
 
 ## 1. Integration provenance
 
-The branch is built on PR #49, not on a merge-base guess. Each unit below was applied as a
-delta from its reviewed source and resolved against the A/B closure tree; shared files were
-kept as the current A/B versions (no old clock, module or transport was replayed).
+Built on PR #49 by applying each reviewed delta and keeping the current A/B files:
 
-| Unit | Source head | Integration commit (this branch) |
+| Unit | Source head | Commit |
 | --- | --- | --- |
-| C1 registry, mainnet gate, read-only reader, receiving policy, ledger provenance | `d96ac56` (PR #21 delta over `889973f`) | `11b4381` |
+| C1 registry, mainnet gate, read-only reader, receiving policy, ledger provenance | `d96ac56` (PR #21) | `11b4381` |
 | Network-local read-only console actions | `59d73bf` (PR #41) | `b683d8c` |
-| Wallet-vault local service (`#38`) | `635bf41` | `31f795e` |
-| Wallet vault UI + read-only network UI (`#39`, `#43`) | `23c9480`, `012c486` | `ed6381c` |
-| Payment-operation journal (`#35`) | `fdb4383` | `60358b1` |
-| Authenticated local payment service (`#44`) | `a50e068` | `1d55b3a` |
-| P2P payment protocol/store/service (`#48`), reviewed and fixed | `2be033b` | `f66fd8a` |
-| B `payment_message` hook on the existing B transport | new reviewed unit | `648c3f2` |
-| C host wiring, built-in wallet signing, manual ERC-20 send, payment UI, auto reminder | new reviewed unit | `bfc2116` |
-| Wallet create-dialog regression fix found in the real lab | — | `0b33899` |
+| Wallet-vault local service (#38) | `635bf41` | `31f795e` |
+| Wallet UI + read-only network UI (#39, #43) | `23c9480`, `012c486` | `ed6381c` |
+| Payment journal (#35) | `fdb4383` | `60358b1` |
+| Authenticated local payment service (#44) | `a50e068` | `1d55b3a` |
+| P2P payment protocol/store/service (#48), reviewed and fixed | `2be033b` | `f66fd8a` |
+| B `payment_message` hook | new unit | `648c3f2` |
+| C host, built-in wallet signing, manual ERC-20 send, payment UI | new unit | `bfc2116` |
+| Wallet create-dialog poll regression | found in the real lab | `0b33899` |
+| Dual-instance catalogue/presence + payment outbound session fixes | found in the rework lab | `e5a7c42` |
+| Payment protocol/host fixes below (real payment closure) | found in the real payment lab | `d09efe1` |
 
-`#23` (vault core) and `#30` (external wallet) were already present in PR #49 with identical
-file content; they were not replayed. The old `payment_request` type and `credit_updated`
-remain B1-unsupported.
+## 2. Root causes found by the rework (and fixed)
 
-## 2. Review findings fixed before product wiring
+These were not unit-test failures; each was observed in the real two-node lab, then fixed and
+re-run until the payment completed.
 
-### #48 review (not accepted just because CI was green)
+1. **Provider control 403 after sharing.** The control listener's allowed Host list was
+   captured at start; enabling sharing later created the mapped host, but the listener still
+   rejected it. The list is now read per request and updated by `ControlApp.sync`. Evidence:
+   the consumer's B request returned `control endpoint HTTP 403`; after the fix the provider
+   received the request.
+2. **C envelope id mismatch.** B's envelope id is 32-hex; the C coordinator required a UUID and
+   answered `invalid`. It now accepts the real 32-hex id (and the synthetic UUID), and logs the
+   exact protocol refusal.
+3. **Checksummed addresses.** The payment protocol accepted only lowercase addresses while the
+   wallet/registry produce checksummed values; the provider rejected its own terms with
+   `terms.recipientAddress must be a non-zero address`. Address validation now accepts mixed case
+   and normalizes; the typed-data comparison normalizes the address fields too (a checksummed
+   EIP-712 document hashes like its lowercase form).
+4. **B approval expiry vs payment.** The B approval's `expiresAt` is the one-time key-delivery
+   window, not the lifetime of the consumer relationship. A payment after that window was
+   rejected as `no current authorization`. The provider now uses the latest **approved**
+   generation/quote until it is revoked; a revoked approval is still refused.
+5. **Control-only consumer delivery.** A provider enqueued terms but had no catalogue endpoint to
+   push to the consumer; the consumer's poll set was empty after a host restart. The C port now
+   watches the peer, rebuilds poll targets from durable obligations on start, and falls back to
+   the B outbox when `ensureSession` cannot discover a catalogue peer. The consumer's authenticated
+   poll then pulls the terms/status.
+6. **Preview balance selector.** The preview read the token balance with the transfer selector
+   (`0xa9059cbb`) instead of `balanceOf` (`0x70a08231`), causing `execution reverted`. Fixed;
+   the preview then produced nonce/gas/fee/balance values.
+7. **Console panel starvation.** One panel throwing during a render could leave the payment panel
+   empty; each panel render is now isolated.
+8. **Single LAN IP catalogue.** The reader probed its own configured port, so two instances on one
+   LAN address could not find each other. The probe window is fixed at `3426..3430`, and a
+   presence-only node migrates on `EADDRINUSE` inside the same window; normal users never enter a
+   port. Lab: provider 3426, consumer 3427, both discovered; the whole payment ran.
 
-1. **Duplicate invoice risk.** A new consumer request id for the same consumer/network/asset/
-   amount could mint a second payable invoice. The provider now reuses the one open invoice;
-   a crash after the ChainStore intent but before the P2P row reuses that unchanged intent.
-2. **Consumer adoption.** A lost terms reply is recoverable: the consumer adopts an already-open
-   invoice only when every selection term still matches, then stores the obligation by invoice.
-3. **Cross-invoice signature binding.** A signature frame with request id A and invoice B used to
-   find A by request id and verify B. The provider now requires the request id and invoice to
-   belong to the same stored request; a test proves the refusal.
-4. **Store failures looked like signature refusals.** Only the wallet verification is wrapped as
-   `actionneeded`; a database failure stays retryable.
-5. **Expired status frames could not be sent.** Status updates get a short positive frame
-   lifetime after invoice expiry; the resolver still denies by `expiresAtMs`.
-6. **Unbounded dedupe.** The payment idempotency rows are pruned (24 h / 1024 rows) and the
-   SQLite WAL/SHM sidecars are now 0600 like the main file.
-7. **Correlation/resume.** Envelope correlation is checked against the frame request id, and a
-   stored request or signature can be resumed without re-signing.
+### 2.1 The repeated plugin-host boot lines
 
-### B hook
+The provider log contained ~380 `plugin boot` + `host shutdown requested` pairs at the same
+millisecond, but **no `uncaught exception`, `unhandled rejection`, `plugin failed to start` or
+parent-gone line**, and one active owner PID remained. Magpie starts short-lived processes that
+invoke the plugin entry (page/host probes); they exit before taking the host lock, and their
+`onExit` cleanup logs the shutdown. They are not restarts of the active owner: the owner's
+`payment-p2p host started` line, the control listener and the payment frames all belong to the
+long-lived process, and the owner processed the real payment. This is a Magpie host-manager probe
+behavior, not a crash and not a reason to disable a safety check. The earlier payment stall was
+caused by the protocol/lifecycle bugs above, not by the log pairs. The new host diagnostics
+(signal/parent/exception/payment-host start-stop) are permanent and can distinguish a real crash
+from a probe.
 
-- One new type, `payment_message` (code 11), on the same signed envelope/AEAD session/outbox/poll.
-- B validates only wrapper shape/size, idempotency/correlation, target, time and one bounded
-  inbox row. The C body is opaque; B has no Ledger/Provisioner/Wallet/cap/credit call.
-- A replay returns the cached C result; a reused key with a different frame is a conflict; a node
-  without a hook answers `unsupported` with no effect.
+## 3. The real zero-file payment (REPRODUCED)
 
-### Wallet UI
+Two fresh portable Magpie 0.1.2289 nodes + real EasyTier 2.6.4 no-TUN on one host/LAN, an
+isolated anvil chain id 84532 and a local MockToken (6 decimals). Course:
 
-- **Real bug found in the lab:** a background status poll closed the create/import dialog on a
-  fresh profile (it was treated as a secret-bearing lifecycle close). The dialog now stays open
-  until a secret or a real lifecycle change; regression test added.
-- The vault gained exact ERC-20 signing: `prepareErc20Payment` binds selector/recipient/amount in
-  calldata with zero native value, and the permit binds the exact calldata hash. Mainnet is
-  refused by the existing vault chain gate.
+1. Consumer UI: choose the approved provider, chain 84532, tUSDC, `1.5`; `申请充值条件`.
+2. Provider receives `payment_message`, creates one real `DepositIntent` (invoice
+   `inv_68716e30-8c0e-411d-999f-8dcb748bb300`), signs/serves terms; consumer's authenticated poll
+   pulls the terms and shows an unsigned obligation.
+3. Consumer: explicit confirmation → built-in wallet EIP-712 signature (payer
+   `0xe744…5599`); provider verifies with `Wallet.signIntent` and returns a waitingpayment ack;
+   only then does the resolver offer `预览并付款`.
+4. Preview: nonce, gas limit, EIP-1559 fees, native/token balances, exact recipient/amount, EIP-712
+   digest; explicit confirmation.
+5. Send: journal reserve → vault ERC-20 signature → journal `markBroadcasting` → anvil
+   `eth_sendRawTransaction` → hash recorded. Transaction
+   `0x4f7f160d92189fbf70a79768e2b8c392a2c1fb7a60da4d9cf3d6d00e6cd0489e`, status `0x1`, block 4.
+6. Provider watcher stores the Transfer, matches the signed intent, requires the chain's own
+   finality (one mined block in the isolated chain), re-reads the block, books the ledger deposit
+   once and raises the Magpie key cap from `$0.05` to `$1.55` (used `$0`).
+7. Provider sends `received`; the consumer's poll stores it; UI shows **已到账**.
 
-## 3. What was verified
+Evidence: `payment-journey.json`, `consumer-payment-received.png`, provider consumer view
+`capUsd=1.55, usedUsd=0`, ledger `chain:84532:…:0` applied `1500000000` nanos, chain event
+`credited`.
 
-### 3.1 Automated
+- **Duplicate/restart:** provider host restart; re-scan produced no second deposit, cap stayed
+  `$1.55`, the same event stayed one credited row.
+- **Reorg attempt:** anvil `anvil_reorg 6 []` was issued after the credit; the transaction was
+  replayed as canonical in the reorg (receipt still valid), so no freeze was observed. A
+  post-credit reorg that actually removes the transaction was not achieved in this lab; the
+  watcher's credited-event recheck/freeze path remains covered by the unit tests and the earlier
+  Phase 7 `anvil_reorg` evidence, not claimed as a new real-lab result.
+- **Unknown broadcast:** not induced in the lab; the journal's `unknown` terminal send gate and
+  the "no automatic retry" tests cover it.
+- **Wrong network/asset/identity/quote:** the payment host only exposes 84532/tUSDC for this
+  provider; 56/8453/unknown chains are refused before a store row; the B identity/quote/generation
+  and the selection are bound and unit-tested. The real UI offered no mainnet asset.
 
-- `bun run typecheck` PASS.
-- `bun run test` **1397 pass / 0 fail** (includes the wallet fixture and console JS tests).
-- `bun run secret-scan` PASS; `bun run boot-check` PASS.
-- `npm pack --dry-run`: 99 files, no `test/` and no `node_modules/`.
-- Coverage relevant to this stick: C registry/gate/read-only (phase10-c-registry), network-local,
-  wallet vault (incl. ERC-20 preparation/signing and permit binding), wallet local service,
-  payment journal, payment local service, P2P payment protocol/store/service (14 tests),
-  B `payment_message` transport (2 tests), protocol allow-list, UI helpers and console shell.
+## 4. Real wallet and mainnet evidence
 
-### 3.2 Real wallet journey (REPRODUCED)
+- Wallet: create → one-time 12-word seed → locked; unlock → address verified; mnemonic export after
+  purpose + confirmation + password equals the lab backup; private-key export derives the same
+  address; restore from the exported mnemonic yields the same address; exact-byte scan of the lab
+  tree found **0** seed/key matches (only the two 0600 lab-private files).
+- Mainnet read-only: BSC 56 native BNB block 130851888, Base 8453 ETH block 53329015, Base USDC
+  block 53329016, `creditEligible:false`, no USD value; BSC USDC refused as unregistered. Browser
+  also read Base ETH at block 53328995. No signature, no broadcast, no funds.
 
-Two fresh portable Magpie 0.1.2289 nodes + real EasyTier 2.6.4, driven in ego-lite. On the
-isolated provider wallet (and the consumer wallet for restore):
+## 5. Automatic recharge: downgraded honestly
 
-- create with password and one-time 12-word seed, then locked;
-- unlock and verify the address for the session;
-- mnemonic export after purpose + confirmation + fresh password; the revealed seed equals the
-  lab-private backup;
-- private-key export after the same reauthentication; the derived ethers address equals the
-  wallet address;
-- restore from the exported mnemonic (replace with current password) yields the **same** address;
-- an exact byte scan of the entire lab tree (logs, state, sqlite, browser-visible files) found
-  **0** matches for the mnemonic or private key; the two 0600 lab-private files were the only
-  copies and are deleted in cleanup.
+The policy stores provider/network/asset, trigger, per-payment and daily caps, gas cap and
+authorization TTL; 56/8453/unknown chains are refused. It has `executor:"none"`,
+`fullAuto:false`, `mode:"manual-confirm"` as constants; the UI says **FULL AUTO 未实现** and only
+shows a reminder when the remaining provider credit is below the trigger; the actual payment is
+the same preview + explicit confirm. No plaintext key is kept for an unattended signer. Mainnet
+auto-recharge has no path.
 
-Sensitive values were never printed, screenshotted, written to the repo or included in state.
+## 6. External MetaMask/Rabby attempt (UNKNOWN)
 
-### 3.3 Mainnet read-only (REPRODUCED)
-
-Public address `0x0000000000000000000000000000000000000001`, real RPCs, no signature/broadcast:
-
-- BSC 56 native BNB, block 130851888, `creditEligible:false`;
-- Base 8453 ETH, block 53329015, `creditEligible:false`;
-- Base 8453 USDC (registered Circle contract), 6 decimals, block 53329016, no USD valuation;
-- BSC USDC contract refused as unregistered; no symbol guess;
-- the browser also shows chain 8453 ETH at block 53328995 with `readOnly:true`,
-  `creditEligible:false`, `usdValue:null`.
-
-BSC and Base are equal records; no primary/default chain. The receiving-network UI defaults to
-empty and never selects a chain automatically.
-
-### 3.4 B zero-file authorization (REPRODUCED on two real nodes)
-
-Consumer discovered the provider, verified and accepted the full fingerprint, sent a no-file
-request; provider selected the model, previewed the selected price version, set a $0.05 cap,
-accepted the consumer fingerprint and confirmed; the consumer pulled the encrypted delivery,
-registered a native Remote and ACKed; the provider shows `acked` with cap/used/remaining and the
-consumer shows one connected provider. No file, CLI or manual key copy was used.
-
-**Lab setup disclosure.** The isolated anvil chain (`--chain-id 84532`), its mock tUSDC asset in
-the node registry and the provider's receiving address were configured before/around the UI run
-with the maintainer API/server (the UI has no anvil-RPC/asset-deployment controls). The wallet
-create/unlock/export/restore, network join, share, discovery, B request/approval and all payment
-UI actions were performed in the real browser. This is a lab prerequisite, not a consumer
-business step; a production deployment still needs an operator-facing asset/network setup.
-
-## 4. Blocker / UNKNOWN: real C payment end-to-end
-
-After the B authorization, the consumer's payment request action returned `200 queued` with
-request id `bcde682d-632f-4254-bd78-9b6a13745ac4`. The provider's payment state remained empty
-(no terms, no invoice, no signature, no send). Observed in the same lab:
-
-- the EasyTier peers are connected (1 peer, direct, 0% loss);
-- the provider's catalogue/presence is readable through the consumer SOCKS5 **and** through a raw
-  `socksHttpGet` (HTTP 200, 1822 bytes);
-- the consumer's directory refresh intermittently timed out at 5 s while the raw read succeeded;
-  after setting both nodes to catalogue port 3426 the peer read succeeded (this is a real
-  multi-instance-on-one-LAN-IP lab constraint: the directory probe uses the local configured
-  catalogue port and two nodes cannot both bind the same LAN address/port);
-- after the payment request the provider's plugin host booted repeatedly (roughly every 5–10 s)
-  and never exposed a provider payment request.
-
-Root cause of the host restart/payment stall is **not established**. It is not classified as a
-passing payment. The C protocol/store/service and B hook are covered by unit/integration tests,
-but a real two-node payment, chain observation, credit and consumer `已到账` are **UNKNOWN** in
-this environment. This is the honest boundary of this stick; the report does not claim a
-completed no-file recharge.
-
-## 5. Automatic recharge: downgraded, not faked
-
-- The policy schema stores provider/network/asset, trigger, per-payment and daily caps, gas cap and
-  authorization TTL, and refuses 56/8453 and unknown chains.
-- `executor: "none"`, `fullAuto: false`, `mode: "manual-confirm"` are constants. The UI says
-  **FULL AUTO 未实现** and only shows a reminder when the provider's remaining credit is below
-  the trigger; the actual send is the same preview + explicit confirm path.
-- No plaintext key is kept for unattended signing; the vault session is short and expiring.
-- No mainnet auto-recharge path exists.
-
-## 6. Security boundaries kept
-
-- Mainnet 56/8453 are read-only: the hard gate refuses send/credit/auto-recharge independently of
-  the registry, options or environment; the ledger refuses mainnet sources.
-- Payment networks are 97/84532 only; 56/8453 and unknown chains are refused before a store row.
-- The journal is the only send gate: reserve → sign → markBroadcasting → broadcast → recordHash;
-  an ambiguous broadcast is `unknown` and never retried automatically.
-- The provider's terms bind the consumer's current B approval generation and accepted quote; the
-  consumer authority re-checks the current signed catalogue quote and its local approved Remote.
-- A peer status can never credit, and a local watcher failure cannot cause a second payment.
-- The Magpie administrative interface is never exposed; B's control plane remains the narrow
-  authenticated transport only.
+- MetaMask **13.54.0** CRX was downloaded and loaded unpacked into an **isolated** Playwright
+  Chromium profile `/tmp/oma-extension-profile` (`--load-extension=/tmp/metamask-ext`); the user's
+  default ego profile and Magpie data were not touched.
+- The lab consumer mnemonic was imported into MetaMask; the extension home shows Account 1
+  `0xE7441…95599` (the lab consumer address); the test page sees `window.ethereum` with one
+  provider.
+- `eth_requestAccounts` from a local test page opened MetaMask's locked `home.html#/unlock`
+  page; after a scripted password unlock the connect request stayed pending/no accounts were
+  returned. `eth_signTypedData_v4` then returned
+  `Invalid parameters: must provide an Ethereum address.` No connection or signature is claimed.
+- Rabby was not attempted after this tool limitation. This is **UNKNOWN**, not a fake-provider
+  compatibility pass; the built-in wallet is the tested signer.
 
 ## 7. Boundaries
 
 1. Single-host loopback/LAN lab; no WAN/NAT/relay or two physical hosts.
-2. Two Magpie instances on one LAN address cannot both bind catalogue port 3426; setting both to
-   3426 allowed discovery but the consumer cannot publish its presence on the same address. The
-   product's per-node catalogue port is a real deployment consideration; the UI does not expose a
-   port choice.
-3. No vendor model execution; the shared model is the deterministic local fixture.
-4. No browser wallet extension (MetaMask/Rabby) was installed or tested; the built-in wallet is
-   the tested local signer. A real extension remains UNKNOWN.
-5. No real mainnet payment, credit or auto-recharge; no real funds.
-6. The P2P payment real-wire journey is blocked as described in §4.
-7. The C payment store, like the journal, is a local SQLite file; no second server is introduced.
+2. Two instances on one LAN address use catalogue ports 3426/3427 from the fixed window; a third
+   instance would need the next window port (bounded 5). Normal UI never asks for a port.
+3. No vendor model; the shared model is the deterministic local fixture. The anvil chain is
+   isolated, not Base Sepolia.
+4. Post-credit reorg removal was not reproduced in this lab (the anvil reorg replayed the tx).
+5. Unknown broadcast, process crash at the exact broadcast boundary and a true mainnet RPC
+   disagreement remain unit/prior-phase evidence, not new real-lab claims.
+6. Real Magpie/ET GUI on Linux/Windows, WAN and external wallet extension connection remain
+   UNKNOWN. No real mainnet payment/credit/auto-recharge.
 
-## 8. Quality gates and evidence
+## 8. Quality gates
 
 | Gate | Result |
 | --- | --- |
 | typecheck | PASS |
-| full test suite | 1397 pass / 0 fail |
+| full test suite | 1402 pass / 0 fail |
 | secret-scan | PASS |
 | boot-check | PASS |
-| pack contents | 99 files, no tests/node_modules |
-| GitHub CI (head `56370a6`) | plugin Linux PASS, plugin macOS PASS, windows subset PASS, secrets (working tree) PASS, secrets (git history) PASS, package contents PASS |
-| evidence | `evidence/` with JSON + 2 screenshots |
-| cleanup | all owned processes stopped; every lab port free; lab root, seeds, private keys and the anvil token lab deleted; `evidence/lab-cleanup-proof.json` |
+| pack | 99 files, no tests/node_modules |
+| CI | to be recorded at the final head |
 
-Evidence files are sanitized. The lab root, seeds and private keys are deleted after the run;
-only public addresses, node ids, block numbers, hashes and outcomes remain.
+## 9. Evidence and cleanup
 
-## 9. Verdict for this stick
+`docs/phase10/wallet-closure/evidence/`: `wallet-journey.json`, `mainnet-readonly.json`,
+`payment-journey.json`, `secret-scan.json`, `lab-partial.json`, `lab-cleanup-proof.json`,
+`consumer-payment-received.png`, `provider-wallet-locked.png`,
+`consumer-wallet-locked-restored.png`. Sanitized only: public addresses, tx hashes, block
+numbers, node ids, invoice ids, cap numbers; no seed/key/session.
 
-- **C integration and wallet/mainnet read-only: VERIFIED/REPRODUCED** within the boundaries above.
-- **B zero-file authorization/approval/delivery: REPRODUCED** on two real Magpie/EasyTier nodes.
-- **Real P2P payment/no-file recharge: UNKNOWN/BLOCKED**; not claimed as complete.
+Cleanup: lab3 runs an owned manifest export, then stops every owned process, verifies all lab
+ports free and deletes the lab root (seeds/private keys included); the anvil process and token
+lab, the extension profile and `/tmp/metamask-ext` are deleted. The user's Magpie/profile/3425
+were never touched; only the isolated portable nodes and an isolated Chromium profile were used.
+
+## 10. Verdict
+
+- **Wallet / mainnet read-only: VERIFIED/REPRODUCED.**
+- **B zero-file authorization and C zero-file payment: REPRODUCED end-to-end** on the real
+  two-node lab, including the chain send, watcher, ledger, native cap and consumer `已到账`.
+- **Manual built-in-wallet anvil send: REPRODUCED.**
+- **Duplicate/restart: REPRODUCED; post-credit reorg removal and unknown broadcast: UNKNOWN in
+  this lab (unit/prior evidence).**
 - **Automatic recharge: reminder + one-click only; FULL AUTO not implemented.**
-- **Mainnet real funds: NO-GO**, unchanged.
+- **Mainnet real funds: NO-GO. External extension connection: UNKNOWN/tool-blocked.**

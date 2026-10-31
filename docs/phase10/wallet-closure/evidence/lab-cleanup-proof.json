@@ -1,13 +1,15 @@
 {
-  "schema": "ohmyaihub.phase10.wallet-lab-cleanup/v1",
-  "at": "2026-10-31T11:58:27Z",
+  "schema": "ohmyaihub.phase10.wallet-lab3-cleanup/v1",
+  "at": "2026-10-31T13:24:11Z",
   "cleanup": {
-    "at": "2026-10-31T11:58:27Z",
+    "at": "2026-10-31T13:24:11Z",
     "nodes": {
       "provider": {
         "before": [
-          45088,
-          45089
+          1506,
+          1507,
+          27193,
+          27275
         ],
         "remaining": [],
         "portsFree": {
@@ -24,10 +26,11 @@
       },
       "consumer": {
         "before": [
-          45120,
-          45141,
-          47622,
-          70141
+          1522,
+          1523,
+          19953,
+          55677,
+          55790
         ],
         "remaining": [],
         "portsFree": {
