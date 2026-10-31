@@ -197,7 +197,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         action: (name: string, body: Record<string, unknown>) => consoleAction(service!, name, body),
         allowedActions: CONSOLE_ACTIONS,
         sensitiveActions: ["key-reveal"],
-        staticModules: ["/session.js", "/providers.js", "/wallet.js"],
+        staticModules: ["/session.js", "/providers.js", "/wallet.js", "/external-wallet.js"],
         pairingFile: statePath("console-pairing.json"),
       };
       consoleServer = startConsoleServer(consoleOptions);
