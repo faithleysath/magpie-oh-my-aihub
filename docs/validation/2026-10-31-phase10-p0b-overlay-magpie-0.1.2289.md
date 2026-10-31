@@ -51,7 +51,7 @@ Provider `current.toml` (network secret and secure-mode keys redacted):
 
 ```toml
 instance_name = "ohmyaihub-<provider nodeId>"
-hostname      = "ohmyaihub-<provider nodeId>"     # stable: same value before and after restart
+hostname      = "ohmyaihub-<provider nodeId>"     # derived from nodeId, which did not change across the restarts measured here
 ipv4          = "10.77.0.42/24"
 listeners     = ["tcp://127.0.0.1:52004"]
 peer          = [{ uri = "tcp://127.0.0.1:54413" }]
