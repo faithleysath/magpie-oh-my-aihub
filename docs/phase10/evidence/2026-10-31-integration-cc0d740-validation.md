@@ -64,7 +64,7 @@ All eight failed with `EADDRNOTAVAIL` on a loopback connect to a freshly bound
 `gitleaks 8.30.1 dir .` on the snapshot: **116 findings**, all classified as known fixtures/public values (values not printed):
 
 - `generic-api-key` ×115: 113 in `docs/validation/**` (public `tokenContract`/`token` hashes across 32 evidence files, e.g. phase7 two-host events), 2 in `plugin/test/wallet-view.test.ts` lines 130/167 (fixture literals).
-- `curl-auth-header` ×1: `prototype/phase0/README.md:27` — archived tutorial placeholder (`sk-magpie-key-for-consumer`), non-product.
+- `curl-auth-header` ×1: `prototype/phase0/README.md:27` — archived tutorial placeholder (value omitted), non-product.
 - Summary: `gitleaks-summary.json`; no real credential identified.
 - **#28 status correction**: #28 exact `10ca2e7ceb2361aea3142c9c22aaf005cdceee5c` has independently PASSed and was approved by the main review, integrated into next `87a72c69a3df74b29a7688b90e8fcd2721b11658`. cc0 itself does not contain #28, so this scan did not use its rules — that is a **scope fact**, not an approval status.
 - The 116 raw findings above are a **scope signal only**. The next integration applies narrow rules and reports a worktree scan of zero; the two results must not be mixed. Pack/security on next was independently verified; no full-history scan was performed here, and none is needed for this unit.
