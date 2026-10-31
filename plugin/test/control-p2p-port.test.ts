@@ -251,6 +251,7 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(auth.quote.priceVersion).toBe(approved.priceVersion);
     await expect(svc.provisioner.confirmHandover("alice", approved.keyId, "sk-test-wrong-secret")).rejects.toThrow(/changed while/);
     await expect(svc.provisioner.confirmHandover("alice", approved.keyId, auth.key)).resolves.toBeUndefined();
+    await expect(svc.provisioner.readHandover("alice", "wrong-key")).rejects.toThrow(/changed while/);
   });
 
   test("consumer import is generation-owned, refuses a different approval while a Remote exists, and survives restart", async () => {

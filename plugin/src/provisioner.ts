@@ -1607,6 +1607,34 @@ export class Provisioner {
   }
 
   /**
+   * Reads the key for a control hand-over under the same per-consumer lock used
+   * by approve/reissue/revoke. The caller has already run the share guard and
+   * status read-back; this method re-checks the exact key generation, the native
+   * key row and the model list, and returns the secret only while holding the
+   * lock. No new secret is written.
+   */
+  async readHandover(consumerId: string, expectedKeyId: string): Promise<{
+    key: string;
+    keyId: string;
+    keyName: string;
+    models: string[];
+    capUsd: number;
+  }> {
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec || rec.revokedAt || !rec.secret || rec.keyId !== expectedKeyId) {
+        throw new Error(`consumer ${consumerId} changed while its key was being prepared; do not hand it over`);
+      }
+      if (!this.magpie.keyById(rec.keyId)) throw new Error(`the key of ${consumerId} is no longer in Magpie; do not hand it over`);
+      const held = this.magpie.keyById(rec.keyId);
+      const models = Array.isArray(held?.models) ? held.models.map(String) : [];
+      if (models.length === 0) throw new Error(`the key of ${consumerId} has no model whitelist in Magpie; refusing to hand it over`);
+      this.validateModels(models);
+      return { key: rec.secret, keyId: rec.keyId, keyName: rec.keyName, models, capUsd: rec.capUsd };
+    });
+  }
+
+  /**
    * Final lock-held check before a control hand-over: the consumer still owns
    * exactly the expected key/secret and Magpie still holds that key. It does
    * not read or persist a new secret; a concurrent reissue after this check
