@@ -126,6 +126,20 @@ describe("real mounted workflow handlers", () => {
     }
   });
 
+  test("several peers never put more than one primary action on the catalogue screen", async () => {
+    const state = baseState();
+    state.status.catalog.peers = [structuredClone(peer), { ...structuredClone(peer), nodeId: "b".repeat(16), hostname: "伙伴乙", quote: { ...structuredClone(peer.quote), node: { displayName: "伙伴乙" } } }];
+    const r = runtime(state);
+    try {
+      const primaries = all(r.roots["discovery-panel"], "button").filter((node) => String(node.className).split(" ").includes("primary"));
+      expect(primaries).toHaveLength(0);
+      // The single primary lives inside the request dialog.
+      await find(r.roots["discovery-panel"], "button", "选择模型并申请").click(); await flush();
+      const dialogPrimaries = all(r.dialog, "button").filter((node) => String(node.className).split(" ").includes("primary"));
+      expect(dialogPrimaries).toHaveLength(1);
+    } finally { r.cleanup(); }
+  });
+
   test("catalogue next steps are Chinese and raw CLI diagnostics remain in collapsed technical details", () => {
     expect(peerNextStep("unverified")).toContain("核对并接受身份");
     expect(peerNextStep("identity-changed")).toContain("核对新身份");

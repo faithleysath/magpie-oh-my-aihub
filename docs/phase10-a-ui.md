@@ -35,7 +35,7 @@
 - token：`plugin/console/style.css` 顶部一套浅色 + 一套深色；纸面 `#fbf2dc`、点阵 `radial-gradient` 20px、2px 墨线、单层硬投影（2/3/4/6px，无模糊）、胶囊按钮。
 - 语义色只有三块：薄荷=成功/可用、粉=危险/支出/失败、天蓝=进行中/信息；“颜色 + 墨线”，不发光、不做装饰性用色。
 - 零 Web 字体（`-apple-system / PingFang SC / Noto Sans CJK SC`），无外部请求，CSP 不变。
-- 字号：正文 16px、标题 18/22/28、表格与标签 14px、无 12/13px 正文。
+- 字号：正文与**数据值** 16px、标题 18/22/28；14px 只给字段标签、状态胶囊、时间戳、技术详情等非正文。
 - 触控：按钮、导航、输入统一 44px 最小高度。
 - 交互：按钮按下位移 3px 且投影归零；`focus-visible` 3px 墨色轮廓 + 2px offset；`prefers-reduced-motion` 全量降级。
 - 主题：跟随系统，用户选择写入 `localStorage["aihub-console-theme"]`（**唯一**持久化的值；会话/密钥仍在内存）。
@@ -76,7 +76,7 @@
 ### 4.2 发现 = 伙伴目录 + 我的连接
 
 - 一个页面、两个 Tab（`role=tablist`），`aria-selected` 与面板 `hidden` 同步。
-- 目录卡展示身份状态、模型、价格；危险动作（接受身份、连接）仍需各自勾选。
+- 目录卡展示身份状态、模型、价格；每张卡的“选择模型并申请”是**次操作**，唯一 primary 在申请弹窗里（同屏多个伙伴也不会出现多个主按钮）。危险动作（接受身份、连接）仍需各自勾选。
 - 不再有“使用能力”开关；消费默认开启由服务端负责。
 
 **REPRODUCED（mock）**：点击“我的连接”后 `discovery-panel.hidden=true`、`connections-panel.hidden=false`、`aria-selected=true`。
@@ -138,7 +138,7 @@ bun test ./test/console-api.test.ts ./test/console-security.test.ts \
 
 **REPRODUCED（2026-10-31，Bun 1.4.3）**
 
-- `bun test ./console`：**71 pass / 0 fail**（4 个文件、569 断言）。新增 `shell.test.js` 覆盖：5 项导航、首页 5 块、三字段、端口只读、每页 ≤1 primary、主题持久化边界、会话文案区分、`join-network` 只发三字段、`status.network` 空值纪律、单次分享、钱包诊断拆分。
+- `bun test ./console`：**73 pass / 0 fail**（5 个文件、582 断言）。新增 `app.test.js` 用真实模块监听 + mock HTTP 断言请求序列：`join-network` 404 时只发一次且**不发** `configure`，同一页面在后端可用时只发一次并进入首页。新增 `shell.test.js` 覆盖：5 项导航、首页 5 块、三字段、端口只读、每页 ≤1 primary、主题持久化边界、会话文案区分、`join-network` 只发三字段、`status.network` 空值纪律、单次分享、钱包诊断拆分。
 - 四个 console TS 用例：**55 pass / 3 fail**，失败均为既有时钟固定导致“请求已过期”（P0-3 已知基线问题），与本轮前端改动无关；本轮**未**运行会探测生产 Magpie/RPC 的 `phase8-prompt-journey`、`service` 等重型用例。
 
 ---
@@ -153,7 +153,7 @@ bun run plugin/scripts/console-preview.ts --scenario first-run  --port 61391 &
 ego-browser nodejs < plugin/scripts/console-shots.mjs   # 输出到 /tmp/oma-ui-shots
 ```
 
-仓库内保留 4 张（`docs/phase10-a-ui/`）：首页 1440 浅色、网络 1440 浅色、钱包 390、首次连接 390。完整 19 张在 `/tmp/oma-ui-shots/`：五页 × 浅/深 @1440（10）、五页浅色 @390（5）、分享确认弹窗（1）、首次连接 @1440 与 @390（2）、键盘焦点（1）。
+仓库内保留 5 张（`docs/phase10-a-ui/`）：首页 1440 浅色、发现 1440 浅色、网络 1440 浅色、钱包 390、首次连接 390。完整 19 张在 `/tmp/oma-ui-shots/`：五页 × 浅/深 @1440（10）、五页浅色 @390（5）、分享确认弹窗（1）、首次连接 @1440 与 @390（2）、键盘焦点（1）。
 
 **清理**：预览服务器只监听 `127.0.0.1`，用 `lsof -nP -iTCP:61390 -sTCP:LISTEN` 找到 PID 后 `kill` 即可；未接触用户 Magpie 安装、数据目录或任何真实凭据。
 
