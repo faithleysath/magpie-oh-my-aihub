@@ -70,13 +70,44 @@ const filtered = await page.evaluate(async () => {
 check("filtering does not drop the selection", filtered.chosenBefore === filtered.chosenAfter && filtered.chosenAfter >= 1, filtered);
 check("share stays enabled after filtering back", filtered.saveDisabled === false, filtered);
 
+// Hidden panels must stay non-displayed when a sibling tab is active.
+const tabs = await page.evaluate(() => {
+  document.getElementById("nav-discovery").click();
+  return new Promise((resolve) => setTimeout(() => {
+    document.getElementById("tab-connections").click();
+    setTimeout(() => {
+      const catalog = document.getElementById("discovery-panel");
+      const connections = document.getElementById("connections-panel");
+      const notice = document.getElementById("notice");
+      resolve({
+        catalogHidden: catalog.hidden, catalogDisplay: getComputedStyle(catalog).display,
+        connectionsDisplay: getComputedStyle(connections).display,
+        noticeDisplay: getComputedStyle(notice).display,
+      });
+    }, 120);
+  }, 220));
+});
+check("hidden tab panel is not displayed", tabs.catalogHidden === true && tabs.catalogDisplay === "none", tabs);
+check("active tab panel is displayed", tabs.connectionsDisplay !== "none", tabs);
+check("hidden notice is not displayed", tabs.noticeDisplay === "none", tabs);
+await page.click("#nav-sharing");
+await page.waitForTimeout(250);
 const dialog = await page.evaluate(() => {
   const panel = document.getElementById("sharing-panel");
   [...panel.querySelectorAll("button")].find((b) => b.textContent === "分享这些模型").click();
   return new Promise((resolve) => setTimeout(() => resolve({ open: Boolean(document.querySelector("dialog.workflow-dialog")?.open) }), 150));
 });
 check("enabled share opens the confirmation dialog", dialog.open === true, dialog);
-await page.evaluate(() => document.querySelector("dialog.workflow-dialog")?.close());
+
+const closed = await page.evaluate(() => {
+  const node = [...document.querySelectorAll("dialog.workflow-dialog")].find((item) => item.open === true);
+  const openBefore = Boolean(node);
+  node?.close();
+  return new Promise((resolve) => setTimeout(() => resolve({ openBefore, openAfter: node?.open === true }), 80));
+});
+check("share dialog opens and closes", closed.openBefore === true && closed.openAfter === false, closed);
+
+await page.evaluate(() => [...document.querySelectorAll("dialog.workflow-dialog")].forEach((node) => node.open && node.close()));
 
 // --- unshared node: stop must be invisible and unreachable ---
 await page.goto(UNSHARED);
