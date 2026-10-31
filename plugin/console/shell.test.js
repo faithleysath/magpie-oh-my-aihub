@@ -92,6 +92,8 @@ describe("five page shell", () => {
     expect(app).toContain("root.dataset.theme");
     expect(css).toContain(':root[data-theme="dark"]');
     expect(css).toContain("prefers-reduced-motion: reduce");
+    // A component display rule must never make a hidden control visible/focusable.
+    expect(css).toContain("[hidden] { display: none !important; }");
     expect(app).toContain("consumeTicketFragment(window.location, window.history)");
   });
 

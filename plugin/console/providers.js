@@ -326,6 +326,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     } finally {
       controls.forEach(({ node, disabled }) => { node.disabled = disabled; });
       working = false;
+      updateSelectionControls();
       if (getState()) setBusy(false);
     }
   }
@@ -524,7 +525,15 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   function outdated(action) {
     return Object.assign(new Error(`当前插件版本不提供「${action}」，无法保证一次完成。为避免只公开一部分模型或留下不一致的共享状态，本页没有做任何修改；请更新 Magpie 中的 Oh My AIHub 插件后重试。`), { status: 404 });
   }
+  function updateSelectionControls() {
+    const chosen = selectableModels(candidates?.models, [...selectedModels]);
+    // One place decides whether the single share action is available: no
+    // selection, only unpriced models, or a running action all disable it.
+    modelSave.disabled = working || chosen.length === 0;
+    stopShareButton.hidden = state?.status?.config?.sharingEnabled !== true;
+  }
   function confirmShare() {
+    if (working) return;
     const chosen = selectableModels(candidates?.models, [...selectedModels]);
     if (!chosen.length) { notice("请至少勾选一个有完整价格的本机模型。", "warn"); return; }
     const names = chosen.map((id) => items(candidates?.models).find((model) => model.id === id)?.displayName || id);
@@ -563,6 +572,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     }
   }
   function stopSharing() {
+    if (working) return;
     openDialog("停止共享", (root) => {
       root.append(paragraph("会停止共享并撤下目录。已授权的伙伴记录与账目保留；需要时可再次分享。"));
       const agree = checkbox("我确认停止共享并撤下目录");
@@ -591,19 +601,23 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
   function renderModels() {
     modelsList.replaceChildren();
-    if (!candidates) { modelsList.append(empty("还没有检测到模型", "点“重新检测本机模型”读取 Magpie 当前的模型与价格。")); modelSave.disabled = true; return; }
+    if (!candidates) { modelsList.append(empty("还没有检测到模型", "点“重新检测本机模型”读取 Magpie 当前的模型与价格。")); updateSelectionControls(); return; }
     const models = items(candidates.models).filter((model) => [model.id, model.displayName].join(" ").toLowerCase().includes(search.sharing.toLowerCase()));
     if (!models.length) modelsList.append(empty("没有可分享的本机模型", "在 Magpie 添加本机服务和模型并设置完整价格后，再重新检测。"));
     for (const model of models) {
       const row = el("div", null, "shared-model-row");
       const choice = checkbox(model.displayName || model.id, selectedModels.has(model.id));
       choice.input.disabled = !model.completePrice;
-      choice.input.addEventListener("change", () => { modelDirty = true; if (choice.input.checked) selectedModels.add(model.id); else selectedModels.delete(model.id); });
+      choice.input.addEventListener("change", () => {
+        modelDirty = true;
+        if (choice.input.checked) selectedModels.add(model.id); else selectedModels.delete(model.id);
+        updateSelectionControls();
+      });
       const body = el("div"); body.append(choice.label, paragraph(model.id), paragraph(priceText(model.pricing)), priceDetails(model));
       row.append(body, badge(model.completePrice ? "价格完整" : "缺少价格", model.completePrice ? "good" : "warn"));
       modelsList.append(row);
     }
-    modelSave.disabled = items(candidates.models).every((model) => !model.completePrice) || !selectedModels.size;
+    updateSelectionControls();
   }
   function importDocument(kind) {
     openDialog(kind === "request" ? "导入连接申请" : "导入伙伴授权", (root) => {
@@ -823,6 +837,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       selectedModels = new Set(policySelection(candidates.models));
       renderModels();
     }
+    updateSelectionControls();
     for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections]]) {
       const digest = JSON.stringify(value ?? null);
       if (caches.get(key) !== digest) { caches.set(key, digest); update(); }
