@@ -58,7 +58,12 @@ export const MAINNET_SIGNING_DENIED_CHAIN_IDS: readonly number[] = Object.freeze
  * allowlist, not a mainnet blacklist: chain 1/10/42161/... and unknown ids are
  * denied even when an injected WalletChainPolicy lies and calls them testnet.
  */
-export const SIGNING_CHAIN_ALLOWLIST: ReadonlySet<number> = new Set([97, 84532]);
+const SIGNING_CHAIN_ALLOWLIST_INTERNAL = new Set<number>([97, 84532]);
+/**
+ * Public view for tests/diagnostics. Mutating this copy cannot change the
+ * internal signing gate; the vault reads SIGNING_CHAIN_ALLOWLIST_INTERNAL only.
+ */
+export const SIGNING_CHAIN_ALLOWLIST: ReadonlySet<number> = new Set(SIGNING_CHAIN_ALLOWLIST_INTERNAL);
 
 /** 31337 is available only through the explicit isolated test option below. */
 export const ISOLATED_SIMULATION_CHAIN_ALLOWLIST: readonly number[] = Object.freeze([31337]);
@@ -1317,7 +1322,7 @@ function buildAllowedSigningChains(
   isolatedSimulationChains: readonly number[] | undefined,
 ): ReadonlyMap<number, "testnet" | "simulation"> {
   const allowed = new Map<number, "testnet" | "simulation">();
-  for (const chainId of SIGNING_CHAIN_ALLOWLIST) allowed.set(chainId, "testnet");
+  for (const chainId of SIGNING_CHAIN_ALLOWLIST_INTERNAL) allowed.set(chainId, "testnet");
   for (const chainId of isolatedSimulationChains ?? []) {
     if (!Number.isSafeInteger(chainId) || !ISOLATED_SIMULATION_CHAIN_ALLOWLIST.includes(chainId)) {
       fail("config-invalid", "isolated simulation chains are limited to 31337");
