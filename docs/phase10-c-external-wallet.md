@@ -1,7 +1,8 @@
 # Phase 10 C — 外置钱包标准适配（external-wallet）
 
 - 分支：`feature/phase10-c-external-wallet`
-- 基线：`origin/main` = `8ce5c57f565fb1b835021a9b730b61014eb47d5f`（PR13 已合并）
+- 原基线：`origin/main` = `8ce5c57f565fb1b835021a9b730b61014eb47d5f`（PR13 已合并）
+- 重建基线：已批准的 P0-clock `889973f55ca3a72da99ae0091e50ecd5ea428207`（PR #15，独立待审）；本分支只重放 C commits，不再 cherry-pick clock。旧 head `837bacb` 已保存为 `archive/phase10-c-external-wallet-837bacb` 审计点。
 - 模块：`plugin/console/external-wallet.js`（纯浏览器 ESM，无构建步骤、无运行时框架）
 - 测试：`plugin/console/external-wallet.test.js`
 - 本机目标版本：Magpie **0.1.2289** + EasyTier **2.6.4**，隔离副本；本模块不读写用户 Magpie 安装/数据。
@@ -73,6 +74,7 @@ const session = createExternalWallet({
   timeouts: { rpcMs, connectMs, signMs, switchMs, sendMs },
   previewTtlMs: 120000,
   now: () => Date.now(),               // 测试可注入
+  operationPort: null,                 // 必须注入 Service 持久 journal 才能发送
 });
 ```
 
@@ -84,16 +86,16 @@ const session = createExternalWallet({
 | `refresh()` | 只用 `eth_accounts` + `eth_chainId` 刷新 | 已明确连接 |
 | `readBalances({assetId?})` | `eth_getBalance` / 固定 `balanceOf` `eth_call` | 已连接；主网只读需 `allowMainnetRead` |
 | `requestSwitchChain(chainId,{userInitiated:true})` | 只调用 `wallet_switchEthereumChain` | 用户明确请求；不自动添加网络 |
-| `signDeposit(document,{userInitiated:true, expectedIntentHash?, allowUnregisteredAsset?})` | 精确校验 EIP-712 后签名并本地恢复地址 | 已连接、网络匹配、未过期；默认要求本地已登记资产 |
+| `signDeposit(document,{userInitiated:true, expectedIntentHash?})` | 精确校验 EIP-712 后签名并本地恢复地址 | 已连接、网络匹配、未过期；**必须本地已登记可授信资产** |
 | `prepareTransfer({userInitiated:true, assetId, amountRaw, recipientAddress})` | 准确余额/gas/calldata 预览 | 已连接、测试网、已注册 mock 资产 |
-| `confirmTransfer(preview,{userInitiated:true, acknowledged:true, previewId})` | 逐笔确认后 `eth_sendTransaction` | 预览未过期、无 blocker、状态未变 |
-| `getReceipt(hash)` | `eth_getTransactionReceipt` | 只读；不代表入账 |
+| `confirmTransfer(preview,{userInitiated:true, acknowledged:true, previewId})` | 逐笔确认 + Service journal 预留/记录后 `eth_sendTransaction` | 预览未过期、无 blocker、状态未变、**已注入 operationPort** |
+| `getReceipt(hash)` | `eth_getTransactionReceipt` | 只读链证据；不代表预期转账/入账 |
 | `snapshot()` | 无 provider 的状态快照 | 任意 |
 | `subscribe(fn)` | 状态变化（账户/网络/断开） | 任意 |
 | `isCurrent(generation)` | 检查旧 generation 是否仍有效 | 任意 |
 | `dispose()` | 移除事件监听并清空内存中的账户/provider | 任意 |
 
-`connect`、`signDeposit`、`prepareTransfer`、`requestSwitchChain`、`confirmTransfer` 均要求 `userInitiated: true`；`confirmTransfer` 还要求 `acknowledged: true` 与完全相同的 `previewId`。缺失时返回 `EXPLICIT_ACTION_REQUIRED` / `PREVIEW_CONFIRMATION_REQUIRED`，且不调用 provider。
+`connect`、`signDeposit`、`prepareTransfer`、`requestSwitchChain`、`confirmTransfer` 均要求 `userInitiated: true`；`confirmTransfer` 还要求 `acknowledged: true`、完全相同的 `previewId`，并且**必须注入 `operationPort`**。缺失时返回 `EXPLICIT_ACTION_REQUIRED` / `PREVIEW_CONFIRMATION_REQUIRED` / `OPERATION_JOURNAL_REQUIRED`，且不调用 provider。
 
 事件：
 
@@ -126,11 +128,11 @@ const session = createExternalWallet({
 
 **重要边界**：签名只证明“该测试网账户同意这份归属请求”，不产生转账、不授信、不入账。入账由服务端 Wallet/Ledger 在验证 EIP-712 签名和链事件后决定。
 
-`signDeposit` 默认要求请求资产在本地注册表中已登记、启用、`testnetOnly` 且 `issuerType === "mock"`，并逐项核对 decimals；本地已登记但发行方未知/禁用时拒绝。只有消费者收到**服务端已核验**的提供方请求、且本地确实没有该资产记录时，调用方才可显式传 `allowUnregisteredAsset: true`；这仍不授信，且**不能绕过网络门禁**（仍必须有可授信测试网登记）。服务端入账前必须用自己的注册表拒绝未知资产/发行方。
+`signDeposit` **始终**要求请求资产在本地注册表中已登记、启用、`testnetOnly`、`issuerType === "mock"`、`credit === true`、`pricingKind === "fixed-test-rate"`，并逐项核对 decimals 与资产四元组；未知资产、未知发行方、禁用或不可授信资产一律拒绝。原 `allowUnregisteredAsset` 布尔绕过已移除；如果未来要支持远方注册资产，必须走明确经认证的 provider/签名报价/资产元数据审阅的独立导入协议，不在本模块用 bool 假装已信任（当前不实现）。服务端入账前仍必须以自己的注册表拒绝未知资产/发行方。
 
 ### 2.4 测试网 ERC-20 预览与发送
 
-`prepareTransfer` 只接受 `assetId`、`amountRaw`、`recipientAddress`，不接受 method/calldata/to 等动态字段。它固定执行：
+`prepareTransfer` 只接受 `assetId`、`amountRaw`、`recipientAddress` 和可选 `intentHash`（32-byte 摘要，仅写入 operation/journalkey，不是身份证明），不接受 method/calldata/to 等动态字段。它固定执行：
 
 1. 重新读 `eth_accounts` / `eth_chainId`；
 2. 从注册表严格取网络与资产（见 §5）；
@@ -140,19 +142,59 @@ const session = createExternalWallet({
 6. `eth_gasPrice` 取当前 legacy gas price；
 7. 计算 `estimatedFeeRaw = gasLimit * gasPrice`，生成不可变预览。
 
-预览包含：`chainId`、`account`、资产四元组、`amountRaw/amountTokens`、`tokenBalance`、`nativeBalance`、`gasLimit`、`gasPrice`、`estimatedFeeNative`、完整 `call.data`、`blockers`、`canSend`、`previewId`、`expiresAt`。余额不足是显式 blocker，不会伪造为 0 成功，也不会发送。
+预览包含：`chainId`、`account`、资产四元组、`amountRaw/amountTokens`、`tokenBalance`、`nativeBalance`、`gasLimit`、`gasPrice`、`estimatedFeeNative`、完整 `call.data`、`calldataHash`、`intentHash`、`blockers`、`canSend`、`previewId`、`expiresAt`。余额不足是显式 blocker，不会伪造为 0 成功，也不会发送。
 
 `confirmTransfer`：
 
+- **没有注入 `operationPort` 时直接返回 `OPERATION_JOURNAL_REQUIRED`，不调用 provider。** 当前 PR 不包含 Service journal 实现，所以发送功能默认不可用。
 - 只接受本模块 `WeakMap` 中登记过的预览对象，伪造预览返回 `PREVIEW_NOT_ISSUED`；
 - 再次读账户/网络/余额/gas；账户、链、gas 估算或 gas price 任一变化 → `PREVIEW_STALE`，不发送；
 - 再次检查 blockers 与有效期；
+- 以精确 operation（intentHash、account、chainId、assetId、contract、recipient、amountRaw、calldata、calldataHash）调用 `operationPort.reserve`；journal 返回 `unknown`/`broadcasting`/`broadcast` 时拒绝发送；
+- 发送前调用 `operationPort.markBroadcasting`；失败则不发送；
 - 只调用一次固定 `eth_sendTransaction`，参数仅含 `from/to/value/data/gas/gasPrice`；
-- 交易哈希必须是 32 字节 hex；否则进入 `UNKNOWN_BROADCAST`，不允许重发；
-- 同一预览重复或并发确认只发送一次，后续返回 `alreadySent: true` 与同一哈希；
-- 返回 `broadcast: true`、`credited: false`、`finality: "unknown"`。**广播不是入账。**
+- 返回哈希后调用 `operationPort.recordHash`；超时/无效哈希/钱包错误调用 `operationPort.recordUnknown` 并进入 unknown，不允许同一 preview 重发；
+- 同一预览重复/并发确认只发送一次，后续返回 `alreadySent: true` 与同一哈希；
+- 返回 `broadcast: true`、`credited: false`、`transferVerified: false`、`finality: "unknown"`。**广播不是入账，也不是预期转账确认。**
 
-`getReceipt(hash)` 返回 `pending | success | reverted | unknown`，并固定 `credited: false`、`finality: "unknown"`；回执状态只作为链上证据，服务端 Ledger/Watcher 才是入账权威。RPC 错误或未知结果不会触发任何重发。
+`getReceipt(hash)` 返回 `pending | success | reverted | unknown`，固定 `evidence: "chain-receipt"`、`credited: false`、`transferVerified: false`、`finality: "unknown"`；回执只证明该哈希的链上执行结果，**不核验 from/to/input/logs，不证明预期转账或入账**。from/to/input/Transfer 日志验证仍由既有 service Watcher 负责；RPC 错误或未知结果不会触发任何重发。
+
+### 2.5 Service 持久 operation journal：窄接口
+
+浏览器模块不保存跨刷新状态，也不使用 localStorage/sessionStorage/indexedDB。发送必须注入：
+
+```ts
+interface ExternalWalletOperationPort {
+  reserve(operation): Promise<{
+    reservationId: string;
+    state: "reserved" | "broadcasting" | "broadcast" | "unknown";
+    hash?: string | null;
+  }>;
+  markBroadcasting(input: { reservationId: string; operation: Operation }): Promise<void>;
+  recordHash(input: { reservationId: string; operation: Operation; hash: string }): Promise<void>;
+  recordUnknown(input: { reservationId: string; operation: Operation; reason: string }): Promise<void>;
+  query(operation): Promise<{ state: string; hash?: string | null } | null>; // recovery UI/service
+}
+
+type Operation = {
+  schema: "ohmyaihub.external-wallet.operation/v1";
+  intentHash: string | null;      // 调用方传入的 32-byte 摘要；不是身份证明
+  account: string;
+  chainId: number;
+  assetId: string;
+  contractAddress: string;
+  recipientAddress: string;
+  amountRaw: string;
+  calldata: string;
+  calldataHash: string;
+};
+```
+
+- `reserve` 必须按精确 operation 幂等；不得只按 `previewId` 建键。已有 `unknown/broadcasting/broadcast` 时必须拒绝再次发送。
+- `markBroadcasting` 必须持久化成功后才能调用 provider；失败则模块不发送。
+- `recordHash`/`recordUnknown` 失败时模块进入 unknown 并报 `OPERATION_JOURNAL_FAILED`，不自动重发。
+- `query` 用于服务/UI 恢复；本模块当前不替代 service 的恢复状态机。
+- **当前状态**：journal 实现不在本 PR；测试中的 `memoryOperationPort` 是模拟，不是 Service 接线。刷新/新 session 只有在同一持久 journal 实现下才能阻止同 intent 再次发送；模块自身内存幂等不等于跨刷新安全。
 
 ## 3. 安全与门禁
 
@@ -183,12 +225,14 @@ eth_sendTransaction, eth_signTypedData_v4, wallet_switchEthereumChain
 - **主网 56/8453**：`prepareTransfer`、`confirmTransfer`、`signDeposit` 默认硬拒绝；`requestSwitchChain` 默认也拒绝，主网只读需 `allowMainnetRead: true` + 记录 `support: "read-only"`，且仍然不能发送。`allowMainnetRead` 只影响只读展示，不能解锁发送/授信/自动充值。浏览器模块是 defense-in-depth，**不是唯一门禁**；服务层必须保持同样的主网硬阻断。
 - **不自动切链**：网络不匹配时返回 `CHAIN_MISMATCH`，由用户显式调用 `requestSwitchChain`。
 - **不自动添加网络**：`wallet_switchEthereumChain` 返回 4901 时只报 `CHAIN_NOT_ADDED`，不调用 `wallet_addEthereumChain`。
-- **不自动重发**：发送超时/无效哈希/RPC 未知 → `UNKNOWN_BROADCAST`，第二次确认直接拒绝；只允许用户用已知哈希查回执。
+- **未接线不发送**：没有注入 `operationPort` 时 `confirmTransfer` 返回 `OPERATION_JOURNAL_REQUIRED`，不调用 provider。
+- **不自动重发**：注入 journal 后，发送超时/无效哈希/钱包错误 → `recordUnknown` + `UNKNOWN_BROADCAST/OPERATION_UNKNOWN`，第二次确认/新 session 同 operation 直接拒绝；只允许用户用已知哈希查回执。
+- **跨刷新安全**：模块内存 `previewId` 墓碑不等于跨刷新安全；只有 Service 持久 journal 能阻止刷新/换扩展后同 intent 再次发送。当前 PR 不含 journal 实现。
 - **不把广播当入账**：所有发送/回执结果都固定 `credited: false`；只读余额返回 `readOnly:true`、`creditEligible:false`、`usdValue:null`（主网/只读记录），不会并入可消费额度。入账需要服务层账本与最终性证据。
 
 ### 3.4 无持久化/无秘密
 
-模块不访问 `localStorage`、`sessionStorage`、`indexedDB`、`document.cookie` 或 `window.name`；不包含助记词/私钥输入字段；签名只在调用返回值中存在，`dispose()` 会清空内存中的账户与 provider 引用。单测静态断言这些属性。
+模块不访问 `localStorage`、`sessionStorage`、`indexedDB`、`document.cookie` 或 `window.name`；不包含助记词/私钥输入字段；签名只在调用返回值中存在，`dispose()` 会清空内存中的账户与 provider 引用。单测静态断言这些属性。**当前 module 只做内存幂等；跨刷新/换扩展的防重复必须依赖注入的 Service journal，不能靠浏览器存储。**
 
 ## 4. 验证状态
 
@@ -196,8 +240,8 @@ eth_sendTransaction, eth_signTypedData_v4, wallet_switchEthereumChain
 
 | 项 | 命令 | 结果 | 标签 |
 | --- | --- | --- | --- |
-| 模块单测 | `bun test plugin/console/external-wallet.test.js` | **46 pass / 0 fail / 298 assertions** | REPRODUCED（合成 provider） |
-| 既有控制台测试 | `bun test plugin/console` | **100 pass / 0 fail / 745 assertions** | REPRODUCED |
+| 模块单测 | `bun test plugin/console/external-wallet.test.js` | **50 pass / 0 fail / 323 assertions** | REPRODUCED（合成 provider） |
+| 既有控制台测试 | `bun test plugin/console` | **104 pass / 0 fail / 770 assertions** | REPRODUCED |
 | 服务端安全/静态文件测试 | `bun test plugin/test/console-security.test.ts` | **32 pass / 0 fail / 1967 assertions** | REPRODUCED |
 | TypeScript 类型检查 | `cd plugin && bun run typecheck` | exit 0 | REPRODUCED |
 | 全量测试（隔离 worktree + hermetic guard） | `bun test --max-concurrency=1 ./test ./console ../docs/validation/lab/phase9/wallet-fixture` | **799 pass / 0 fail / 6248 assertions**（54 files） | REPRODUCED（合成 fixture） |
@@ -211,11 +255,12 @@ eth_sendTransaction, eth_signTypedData_v4, wallet_switchEthereumChain
 - legacy `window.ethereum` 显式选择、未选择前不调用 `eth_requestAccounts`；
 - 名称/rdns/图标 XSS、SVG 活动内容、重复 uuid、伪装/非法字段；
 - 4001 / 4100 / 4900 / 超时；账户/网络/断开事件；旧 generation 失效；
-- `signDeposit` 精确 typed data、digest/intentHash、错误 chain、主网拒绝、本地资产/发行方/精度/credit/pricing、未登记资产显式 opt-in、用户拒绝/锁定/超时、签名账户不符、签名期间切账户/切链；
+- `signDeposit` 精确 typed data、digest/intentHash、错误 chain、主网拒绝、本地资产/发行方/精度/credit/pricing、未知资产/发行方一律拒绝（旧 bool 绕过已删）、用户拒绝/锁定/超时、签名账户不符、签名期间切账户/切链；
 - `prepareTransfer` 精确 token/native 余额、gas、fee、calldata、blockers、未知 chain/token/decimals/issuer/disabled、缺 support/receivable/credit/pricing、伪造 testnet 主网；
 - 显式逐笔确认、伪造预览、缺确认、主网拒绝、余额不足、切账户/切链/gas 变化导致 `PREVIEW_STALE`；
-- 重复/并发确认只发一次；发送超时/无效哈希进入 unknown 且不重发；用户拒绝不自动重试；
-- 回执 pending/success/reverted/unknown、哈希不匹配、广播不等于入账；
+- 未注入 `operationPort` 时拒绝发送且零 provider 调用；模拟 journal 的 reserve → markBroadcasting → send → recordHash 顺序、markBroadcasting 失败不发、跨新 session 同 operation unknown 不重发；
+- 重复/并发确认只发一次；发送超时/无效哈希/用户拒绝进入 unknown 并记录 journal，不自动重试；
+- 回执 pending/success/reverted/unknown、哈希不匹配、`transferVerified:false`、广播不等于预期转账/入账；
 - 无通用方法透传、无存储、dispose 清理监听。
 
 ### 4.2 真实扩展：UNKNOWN / BLOCKED
@@ -286,8 +331,8 @@ type RegistrySnapshot = {
 4. 用户点击“连接”后才 `connect({userInitiated:true})`；连接后显示账户与 chainId。
 5. 网络不一致时显示“请在钱包中切换”并给一个明确的切换按钮；按钮才调用 `requestSwitchChain(target,{userInitiated:true})`，失败不自动重试。
 6. 签名流程：服务端返回的 `result.document` 交给 `signDeposit`，把 `expectedIntentHash` 传服务端已核验的 digest；不要用用户可编辑字段重新拼 typed data。
-7. 转账流程：先 `prepareTransfer` 展示完整预览（网络、合约、收款地址、raw 金额、余额、gas、fee、blockers），用户逐笔勾选后再 `confirmTransfer`；不要复用旧预览，不要在 unknown 后自动重发。
-8. 发送后只显示“已广播，未入账”；用 `getReceipt` 查链上状态，但入账/额度仍以服务端 Ledger/Watcher 和原生额度回读为准。
+7. 转账流程：先 `prepareTransfer` 展示完整预览（网络、合约、收款地址、raw 金额、余额、gas、fee、blockers），用户逐笔勾选后再 `confirmTransfer`；**必须注入 Service journal，未接线时发送不可用**；不要复用旧预览，不要在 unknown 后自动重发。
+8. 发送后只显示“已广播，未入账/未核验预期转账”；`getReceipt` 的 success 只是链证据，未核验 from/to/input/logs；入账/额度仍以服务端 Ledger/Watcher 和原生额度回读为准。
 9. 会话结束/切换钱包时调用 `session.dispose()` 和 `discovery.stop()`；不要把账户、provider、签名写入 localStorage/sessionStorage。
 
 A-ui 代理：`ccb08749-badc-4512-9604-e93ce7bd76b9`。
@@ -298,9 +343,10 @@ C-registry 代理 `0c94d106-6442-470f-8f14-374c38ea20f7` 的 PR #21（draft，he
 
 - 真实扩展兼容、锁定/拒绝 UI、双扩展共存：**UNKNOWN**；需要独立 profile 的真实验收，当前 BLOCKED。
 - 主网发送硬门禁在本模块存在，但**服务层仍是权威**；不得以本模块代替 C-registry/C-wallet/D 的服务端门禁。
-- `signDeposit` 默认要求本地资产登记；对**传入的提供方请求**，若本地没有资产记录，调用方可显式 `allowUnregisteredAsset: true`，此时模块无法验证“发行方”，服务端入账前必须做资产/发行方门禁。模块只保证 chain/decimals/assetId 形状、金额和 EIP-712 精确性；网络仍必须是可授信测试网记录。
+- `signDeposit` 始终要求本地资产登记；`allowUnregisteredAsset` 绕过已删除。当前不支持远方注册资产；未来必须通过经认证 provider/签名报价/资产元数据审阅的独立导入协议，服务端入账前仍须做资产/发行方门禁。
+- `operationPort` 的 Service journal 实现不在本 PR；未接线时 `confirmTransfer` 默认不可用。内存 `memoryOperationPort` 测试只是模拟，不能替代 Service 持久 journal；刷新/新 session 的防重发必须由 Service 实现。
 - gas 预览使用 legacy `eth_gasPrice`；真实钱包可能改用 EIP-1559 并在确认界面显示不同费用。gas limit 是 `eth_estimateGas` 的结果，实际消耗可能更低；不把预估值当作最终扣费。
-- 没有处理交易替换/加速、nonce 冲突、钱包内 pending 队列；未知广播只允许按已知哈希查回执，不自动重发。
+- 没有处理交易替换/加速、nonce 冲突、钱包内 pending 队列；钱包可能改写 gas/fee/nonce，甚至 calldata/recipient；模块不核验交易内容。未知广播只允许按已知哈希查回执，不自动重发。
 - SVG 图标过滤偏严格，可能拒绝部分真实钱包图标；这是安全取舍，不影响 provider 发现和签名。
 - 本次没有真实 RPC 或真实扩展证据；所有“REPRODUCED”均限合成 provider 单测。
 
