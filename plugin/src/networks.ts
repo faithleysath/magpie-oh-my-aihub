@@ -869,7 +869,7 @@ function downgradeLegacyLocalNetworks(doc: RegistryDocument): { doc: RegistryDoc
       !(CREDIT_CHAIN_ALLOWLIST as readonly number[]).includes(n.chainId)
     ) {
       changed = true;
-      const marker = "simulation-import-required: legacy local lab credit disabled; use an explicit simulationRegistry for local tests";
+      const marker = "migration-audit: legacy enabled=true was downgraded; simulation-import-required: use an explicit simulationRegistry for local tests";
       const notes = n.notes ? `${n.notes} | ${marker}` : marker;
       return { ...n, enabled: false, notes };
     }

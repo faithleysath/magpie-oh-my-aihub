@@ -352,6 +352,7 @@ describe("C1 migration from the version-1 testnet document", () => {
     // A historical local lab may load for audit/config inspection, but its
     // automatic credit is disabled and it cannot enter production credit.
     expect(r.network(31337)!.enabled).toBe(false);
+    expect(r.network(31337)!.notes).toContain("legacy enabled=true");
     expect(r.network(31337)!.notes).toContain("simulation-import-required");
     expect(r.creditableNetworks().map((n) => n.chainId)).toEqual([84532]);
     expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([84532]);
@@ -406,6 +407,7 @@ describe("C1 migration from the version-1 testnet document", () => {
     writeFileSync(path, JSON.stringify(doc));
     const r = loadRegistry(path);
     expect(r.network(31337)!.enabled).toBe(false);
+    expect(r.network(31337)!.notes).toContain("legacy enabled=true");
     expect(r.network(31337)!.notes).toContain("simulation-import-required");
     expect(r.creditableNetworks()).toEqual([]);
     expect(() => r.setNetworkEnabled(31337, true)).toThrow(/credit allowlist/);
