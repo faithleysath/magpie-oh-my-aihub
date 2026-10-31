@@ -495,6 +495,114 @@ export class Provisioner {
   }
 
   /**
+   * Strict Ledger seed for a native-key adoption. Unlike the legacy seed path,
+   * this requires a known native used cost and repairs an existing account only
+   * when the one migration adjustment is absent and no other consumption has
+   * been recorded. It never reseeds an already-seeded account and never treats
+   * an unknown/failed read as used=0.
+   */
+  private async seedAdoptedLedger(rec: ConsumerRecord, knownStatus?: LimitStatus | null): Promise<LedgerWindow | null> {
+    if (!this.ledger) return null;
+    const account = this.ledger.account(rec.consumerId);
+    if (account) {
+      if (account.keyId && account.keyId !== rec.keyId) throw new Error("the existing Ledger account belongs to another key");
+      const open = this.ledger.openWindowFor(rec.consumerId);
+      if (!open) throw new Error("the existing Ledger account has no open window; refusing to reopen it");
+      const adjustmentId = `migration:${rec.consumerId}:${open.id}`;
+      if (this.ledger.consumptionAmount(adjustmentId) !== null) {
+        // Already adopted/seeded. Native usage may have grown since; do not
+        // rewrite the historical adjustment or add a second opening.
+        return open;
+      }
+      if (this.ledger.windowConsumptionCount(open.id) > 0) {
+        throw new Error("the Ledger window has consumption but no adoption adjustment; refusing to guess used cost");
+      }
+      let status = knownStatus;
+      if (status === undefined) {
+        try {
+          status = await this.magpie.limitStatus(rec.secret);
+        } catch {
+          status = null;
+        }
+      }
+      if (!status || typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
+        throw new Error("native used cost is unknown; refusing to repair the adoption ledger");
+      }
+      const usedNanos = usdToNanos(status.limit.cost);
+      if (usedNanos > 0) {
+        this.ledger.recordAdjustment({
+          id: adjustmentId,
+          consumerId: rec.consumerId,
+          windowId: open.id,
+          keyId: rec.keyId,
+          amountNanos: usedNanos,
+          reason: "legacy-consumers.json-used-cost",
+        });
+      }
+      try {
+        const size = existsSync(this.usageLog()) ? statSync(this.usageLog()).size : 0;
+        this.ledger.seedCursor(this.usageLog(), rec.keyId, size);
+      } catch {
+        /* unique ids still guard a later import */
+      }
+      this.persist();
+      return open;
+    }
+
+    let status = knownStatus;
+    if (status === undefined) {
+      try {
+        status = await this.magpie.limitStatus(rec.secret);
+      } catch {
+        status = null;
+      }
+    }
+    if (!status || typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
+      throw new Error("native used cost is unknown; refusing to create an adoption opening credit");
+    }
+    const snap =
+      (await this.snapshotFor(rec.models).catch(() => null)) ?? {
+        version: "unpriced",
+        body: JSON.stringify({ models: [...rec.models].sort(), prices: {} }),
+        models: [...rec.models].sort(),
+        prices: {},
+      };
+    const usedNanos = usdToNanos(status.limit.cost);
+    const capNanos = usdToNanos(rec.capUsd);
+    const bounds = this.windowBounds(rec.window);
+    const window = this.ledger.ensureAccount({
+      consumerId: rec.consumerId,
+      keyId: rec.keyId,
+      keyName: rec.keyName,
+      price: snap,
+      windowSpec: rec.window,
+      startAt: status.limit?.start ?? bounds.start,
+      resetAt: status.limit?.reset ?? bounds.reset,
+      openingNanos: capNanos,
+      capNanos,
+    });
+    if (usedNanos > 0) {
+      this.ledger.recordAdjustment({
+        id: `migration:${rec.consumerId}:${window.id}`,
+        consumerId: rec.consumerId,
+        windowId: window.id,
+        keyId: rec.keyId,
+        amountNanos: usedNanos,
+        reason: "legacy-consumers.json-used-cost",
+      });
+    }
+    try {
+      const size = existsSync(this.usageLog()) ? statSync(this.usageLog()).size : 0;
+      this.ledger.seedCursor(this.usageLog(), rec.keyId, size);
+    } catch {
+      /* unique ids still guard a later import */
+    }
+    rec.priceVersion = snap.version;
+    this.persist();
+    return window;
+  }
+
+  /**
    * Freezes a consumer because a credited chain deposit was reverted.
    *
    * The ledger deposit is **not** removed and the balance is **not** adjusted:
@@ -1694,7 +1802,7 @@ export class Provisioner {
         // Crash after the consumer write but before the Ledger seed: finish the
         // existing seed path. It is a no-op when the account/window already
         // exists; an unknown native used cost stays unresolved.
-        await this.seedLedger(existing, { requireKnownUsage: true });
+        await this.seedAdoptedLedger(existing);
         return;
       }
       const key = this.magpie.keyByName(expectedName) ?? this.magpie.keyById(input.keyId);
@@ -1736,7 +1844,7 @@ export class Provisioner {
         if (idx >= 0) this.list.splice(idx, 1);
         throw e;
       }
-      await this.seedLedger(rec, { requireKnownUsage: true, status });
+      await this.seedAdoptedLedger(rec, status);
       logger.info(`adopted native gateway key ${rec.keyName} (${rec.keyId}) for ${input.consumerId} without creating a key`);
     });
   }

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { catalogPriceVersion } from "../src/pricing.ts";
+import { catalogPriceVersion, priceSnapshot } from "../src/pricing.ts";
 import { statePath } from "../src/paths.ts";
 import { Service } from "../src/service.ts";
 import { FakeMagpie, LAB_MODEL, LAB_PRICE } from "./support/fake-magpie.ts";
@@ -452,6 +452,88 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(adoptedAgain.key).toBe(nativeKey.secret);
     expect(magpie.keys.size).toBe(countBefore);
     expect(svc.ledger!.balance("native-only")).toEqual(balance); // no duplicate opening/credit
+  });
+
+  test("adoption reads limit once and seeds from that same snapshot", async () => {
+    const { svc, magpie } = realService();
+    const key = await magpie.addKey("ohmyaihub-single-read");
+    await magpie.setModels(key.id, [LAB_MODEL]);
+    await magpie.setCostLimit(key.id, "3650d", 1);
+    magpie.call(key.id, 1000, 1000);
+    const used = magpie.used(magpie.keys.get(key.id)!);
+    const original = magpie.limitStatus.bind(magpie);
+    let calls = 0;
+    (magpie as any).limitStatus = async (secret: string) => {
+      calls += 1;
+      if (calls > 1) throw new Error("late limit read failed");
+      return original(secret);
+    };
+    await svc.provisioner.adoptControlKey({
+      consumerId: "single-read", keyId: key.id, keyName: "ohmyaihub-single-read",
+      models: [LAB_MODEL], capUsd: 1, quoteHash: HASH, priceVersion: catalogPriceVersion([models[0]!])!,
+    });
+    expect(calls).toBe(1);
+    const balance = svc.ledger!.balance("single-read");
+    expect(balance.depositedNanos).toBe(1_000_000_000);
+    expect(balance.consumedNanos).toBe(Math.round(used * 1_000_000_000));
+    // Existing account: a retry must not add another opening even if readback is down.
+    await svc.provisioner.adoptControlKey({
+      consumerId: "single-read", keyId: key.id, keyName: "ohmyaihub-single-read",
+      models: [LAB_MODEL], capUsd: 1, quoteHash: HASH, priceVersion: catalogPriceVersion([models[0]!])!,
+    });
+    expect(svc.ledger!.balance("single-read")).toEqual(balance);
+  });
+
+  test("adoption repairs an opening that has no migration adjustment", async () => {
+    const { svc, magpie } = realService();
+    const key = await magpie.addKey("ohmyaihub-halfstate");
+    await magpie.setModels(key.id, [LAB_MODEL]);
+    await magpie.setCostLimit(key.id, "3650d", 1);
+    magpie.call(key.id, 1000, 1000);
+    const used = magpie.used(magpie.keys.get(key.id)!);
+    const snap = priceSnapshot([{ id: LAB_MODEL, price: LAB_PRICE }], [LAB_MODEL])!;
+    svc.ledger!.ensureAccount({
+      consumerId: "halfstate", keyId: key.id, keyName: "ohmyaihub-halfstate", price: snap,
+      windowSpec: "3650d", startAt: "2026-10-31T00:00:00.000Z", resetAt: "2036-10-31T00:00:00.000Z",
+      openingNanos: 1_000_000_000, capNanos: 1_000_000_000,
+    });
+    await svc.provisioner.adoptControlKey({
+      consumerId: "halfstate", keyId: key.id, keyName: "ohmyaihub-halfstate",
+      models: [LAB_MODEL], capUsd: 1, quoteHash: HASH, priceVersion: snap.version,
+    });
+    const balance = svc.ledger!.balance("halfstate");
+    expect(balance.depositedNanos).toBe(1_000_000_000);
+    expect(balance.consumedNanos).toBe(Math.round(used * 1_000_000_000));
+  });
+
+  test("adoption refuses an unproven native used cost instead of opening the full cap", async () => {
+    const { svc, magpie } = realService();
+    const approvalFile = join(process.cwd(), "control-approvals.json");
+    const port = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    const consumer = { accountId: "6".repeat(64), nodeId: "used-unknown", hostname: "ohmyaihub-used-unknown", fingerprint: "6".repeat(64) };
+    const price = catalogPriceVersion([models[0]!])!;
+    const key = await magpie.addKey("ohmyaihub-used-unknown");
+    await magpie.setModels(key.id, [LAB_MODEL]);
+    await magpie.setCostLimit(key.id, "3650d", 1);
+    magpie.call(key.id, 1000, 1000);
+    const pending = {
+      approvalId: "6".repeat(32), requestHash: "6".repeat(64), generation: 1,
+      consumerNodeId: "used-unknown", consumerFingerprint: "6".repeat(64),
+      models: [LAB_MODEL], capUsd: 1, quoteHash: HASH, priceVersion: price,
+      expiresAt: "2026-10-31T00:10:00.000Z", keyId: null, keyName: null, memo: null,
+      state: "pending", error: null, createdAt: "2026-10-31T00:00:00.000Z", updatedAt: "2026-10-31T00:00:00.000Z",
+    };
+    writeFileSync(approvalFile, JSON.stringify({ version: 1, approvals: [pending] }));
+    expect((await port.reconcileApproval!({ requestHash: "6".repeat(64), approvalId: pending.approvalId, generation: 1, consumer, keyId: null })).state).toBe("keyReady");
+    (magpie as any).limitStatus = async () => { throw new Error("ECONNREFUSED"); };
+    await expect(port.takeAuthorization({
+      approvalId: pending.approvalId, generation: 1, consumerNodeId: "used-unknown", consumerFingerprint: "6".repeat(64),
+      requestHash: "6".repeat(64), models: [LAB_MODEL], capUsd: 1,
+      quote: { contentHash: HASH, priceVersion: price, identityFingerprint: FP },
+      keyId: key.id, keyName: "ohmyaihub-used-unknown",
+    })).rejects.toBeInstanceOf(Error);
+    expect(svc.ledger?.account("used-unknown") ?? null).toBeNull();
+    expect(svc.provisioner.find("used-unknown") ?? null).toBeNull();
   });
 
   test("reconcileApproval returns unknown when Magpie key management cannot be read", async () => {
