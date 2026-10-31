@@ -7,6 +7,8 @@
 > 基线：`origin/main` = `8ce5c57f565fb1b835021a9b730b61014eb47d5f`（PR13 已合并）
 > 工作树：`/Users/laysath/.paseo/worktrees/1z728cdk/c-registry`
 > 分支：`feature/phase10-c-mainnet-registry`
+> 本单元原始 head：`5ef4430`（base `main` `8ce5c57`；CI run `41158999333` 仅 5 个已知时钟失败）。
+> 当前 head 已显式 stack 到 PR15 clock fix `889973f55ca3a72da99ae0091e50ecd5ea428207`（base branch `fix/phase10-validation-clock`），CI run `41159282548` 双平台 **pass**。原 head 保留在 `archive/phase10-c-registry-5ef4430`。
 > 本单元代码 commit：`efc554f`（hard gate）、`70f28ee`（v2 registry）、`30ea31c`（selection/read-only/ledger guards）；本文档随后单独 commit
 > 平台：macOS 26.6.2 (Darwin 25.6.0, arm64)；Bun 1.4.3；TypeScript 5.9.3
 > 版本上下文：Magpie 0.1.2289 + EasyTier 2.6.4（本单元不启动宿主，不接触用户安装/数据）
@@ -480,7 +482,7 @@ bun test --preload /tmp/phase10-prep/guard.ts \
 - `browser wallet workflows > pending older than 50-row preview ...` → 过期导致 0 行
 - `browser wallet workflows > production watcher credit ...` → “请求已失效或无法再次签名”
 
-基线 `VALIDATION-PREP.md` 记录全量 740 pass / 5 fail；本次目标集没有新增失败。CI（run `41158413320`，commit `0c94c08`）两个平台均恰好 **5 fail**，全部是同一已知时钟缺陷（wallet wizard 1 + numeric admission 1 + browser wallet workflows 3），`778/779 tests`；本单元新增的 registry/selection/read-only/ledger 测试全绿。早期 run 另有 4 个 fixture 资产字段失败，已用 `0c94c08` 修正（fixture 显式 `credit:true`/`fixed-test-rate`），不再出现。
+基线 `VALIDATION-PREP.md` 记录全量 740 pass / 5 fail；原始 head `5ef4430` 的 CI（run `41158999333`）两个平台均恰好 5 fail，全部是同一已知时钟缺陷（wallet wizard 1 + numeric admission 1 + browser wallet workflows 3），无本单元新增失败。显式 stack 到 PR15 `889973f` 后，CI run `41159282548`（head `9fd8be7`）双平台 **pass**；本地同一 guard 下 261 pass / 0 fail（15 文件）。早期 run 另有 4 个 fixture 资产字段失败，已用 `0c94c08` 修正（fixture 显式 `credit:true`/`fixed-test-rate`），不再出现。
 
 全量本地测试仍可能受本机端口占用/生产网关影响（本次本地全量看到 `EADDRINUSE 13650/31589` 与既有 guard 拦截，不是本分支回归）；全量前按协调方要求使用已审查的 guard preload，避免 `phase8-prompt-journey.test.ts` 读取本机 LAN:3425 生产 Magpie、`service.test.ts` 访问公共测试网 RPC。
 
