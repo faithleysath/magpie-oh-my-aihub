@@ -1,6 +1,6 @@
 # Phase 10 C — 内置钱包核心（BIP39 / BIP44 / keystore-v3 / 受限签名）
 
-> 状态：**核心模块与隔离测试完成，draft PR 待审查；不合并、不接真实资金**。
+> 状态：**核心模块与隔离测试完成，draft PR #23 待审查；不合并、不接真实资金**。
 > 本文只描述本分支实际实现和实际运行结果。它**不是**安全验收，也不是生产 GO。
 > 关键结论：**能力已开发 ≠ 真实资金获准**；生产真实资产内置钱包仍为 **NO-GO**。
 
@@ -187,10 +187,10 @@ bun install --frozen-lockfile
 
 `SigningPermit`：
 
-- 只能由本地 `WalletVault.createSigningPermit()` 在解锁会话中创建；
-- 绑定 `vaultId/sessionId/kind/purpose/chainId`；
-- TTL 1–300 秒（默认 60 秒），最多 8 次；
-- 付款 permit 还绑定 `maxPerPaymentWei`、`maxTotalWei`，累计 `spentWei`；
+- 只能由本地 `WalletVault.createSigningPermit()` 在解锁会话中创建，并且必须传入本 vault 生成的 prepared 对象；
+- 绑定 `vaultId/sessionId/kind/purpose/chainId` 以及**精确 intent**：typed-data 绑定 digest，付款绑定 `paymentIntentHash`（chain/from/to/value/nonce/data）；换收款人、换 calldata、换 value 或换 typed-data 文档都会失效；
+- TTL 1–300 秒（默认 60 秒），最多 8 次；多次使用也只能重复**同一个精确 intent**；
+- 付款 permit 还绑定 `maxPerPaymentWei`、`maxTotalWei`，累计 `spentWei`，作为 defense-in-depth；不得低于 prepared 的 value；
 - 失败的限制检查不消耗次数；签名前的成功消耗在异常时不退款（fail closed）；
 - 锁定/重新解锁/重启/过期后失效；不能序列化。
 
@@ -200,7 +200,7 @@ bun install --frozen-lockfile
 - 其他主网/未知链由注入的 `WalletChainPolicy` 拒绝；默认策略 `DENY_ALL_CHAIN_POLICY` 拒绝一切，避免“没接线就能签”。
 - `preparePayment()` 只允许 policy 分类为 simulation/testnet 的链；主网 56/8453 连准备都拒绝。
 - `signPayment()` 再次检查 chain policy，并解析回读 raw tx；没有 `send`/`broadcast` API，模块没有 RPC/fetch 代码。
-- `validateAutoRechargePolicy()` 只校验 policy 形状：chain/asset 四元组、per-payment/total 上限、最多 8 次、≤5 分钟、nonce、余额阈值；不读余额、不执行、不自动签名。未来执行器必须把它转换成上述 `SigningPermit`，并由本地用户 opt-in 创建。
+- `validateAutoRechargePolicy()` 只校验 policy 形状：chain/asset 四元组、per-payment/total 上限、最多 8 次、≤5 分钟、nonce、余额阈值；不读余额、不执行、不自动签名。未来执行器必须逐笔 `preparePayment()`，再用上述 exact-intent `SigningPermit` 签名；permit 不能变成“任意收款人/任意 calldata 的长期授权”。
 
 ### 3.8 窄接口
 
@@ -235,12 +235,13 @@ bun install --frozen-lockfile
 | 命令 | 结果 | 说明 |
 | --- | --- | --- |
 | `bun run typecheck` | PASS | `tsc --noEmit` 无输出 |
-| `bun test test/wallet-vault.test.ts` | **39 pass / 0 fail / 201 expect** | 纯模块，临时目录，无网络 |
+| `bun test test/wallet-vault.test.ts` | **40 pass / 0 fail / 208 expect** | 纯模块，临时目录，无网络 |
 | `bun run secret-scan` | PASS | 工作树无凭据模式 |
 | `bun install --frozen-lockfile` | PASS（no changes） | lock 可复现 |
 | `npm audit --omit=dev`（公共 registry） | 0 known vulnerabilities | 不是完整供应链审计 |
+| GitHub Actions `plugin` run `41158492240`（commit `4801374`，当时模块测试 39 个） | 779 pass / 1 skip / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块测试全部 pass |
 
-**没有运行完整 `bun run test` 作为本轮门禁**：仓库存在已知固定时钟失败（P0-3）和会探测生产 Magpie/公共 RPC 的旧测试；网络 guard 由另一个小 PR 处理。本模块只跑针对性纯测试，不把旧失败或旧网络访问写成通过。
+**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `4801374` 上跑全量得到 779 pass / 1 skip / 5 fail，5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
 
 ### 覆盖矩阵
 
@@ -266,7 +267,7 @@ bun install --frozen-lockfile
 | 主网 56/8453 只 preview，prepare/sign 拒绝 | `mainnet domains...` / `hard deny...` | REPRODUCED |
 | 伪造 prepared / 跨 vault prepared | `forged prepared...` / `prepared documents...` | REPRODUCED |
 | 模拟链 EIP-1559 付款签名、不广播 | `signs a bounded EIP-1559...` | REPRODUCED |
-| permit 上限/次数/锁定拒绝 | `value limits...` / `signing while locked...` | REPRODUCED |
+| permit exact-intent 绑定/上限/次数/锁定拒绝 | `a permit is bound...` / `a typed-data permit is bound...` / `signing while locked...` | REPRODUCED |
 | 自动充值 policy 形状拒绝主网/长 TTL/坏上限 | `auto-recharge policy shape...` | REPRODUCED |
 | 并发 unlock/export/sign | `concurrency...` | REPRODUCED |
 
@@ -303,7 +304,7 @@ bun install --frozen-lockfile
 
 1. **链识别只来自 C-registry**：Service 实现 `WalletChainPolicy.classify(chainId)`，不要在本模块或 UI 复制 56/8453/testnet 清单。vault 自己仍硬拒绝 56/8453，作为第二道门。
 2. **prepared/intent 绑定**：typed data 必须经 `prepareTypedData()` 返回的 `PreparedTypedData`；付款必须经 `preparePayment()`。外部钱包适配器应使用同一个 digest/字段集合，不要另造一份付款归属规则或自行计算可签对象。
-3. **permit 只在本地创建**：`createSigningPermit()` 不属于 `signingFacade()`。Service 只能在用户明确确认后创建一次性 permit；P2P 消息不能直接产生 permit。
+3. **permit 只在本地创建且绑定 exact intent**：`createSigningPermit()` 必须接收本地 `prepareTypedData()`/`preparePayment()` 的 prepared 对象，绑定 digest 或 paymentIntentHash；`signingFacade()` 不包含它。P2P 消息不能直接产生 permit，也不能把一个 permit 换到另一个收款人/金额/calldata/typed-data 文档上。
 4. **导出只在本地**：完整 `WalletVault` 留在本地 UI/Service；P2P 只拿 facade。`createExportCapability()` 必须在用户点击后调用，导出结果绝不能进入普通响应、幂等缓存、日志或崩溃快照。
 5. **主网只读**：56/8453 只允许 `previewTypedData()` 和只读展示；不得调用 `preparePayment`/`sign*`，不得广播，不得自动授信/自动充值。
 6. **存储路径**：使用专用目录（建议 `<state-dir>/wallet/keystore.json`），不要放浏览器 storage；Service 停止/重启时调用 `lock()`/`dispose()`；重启后默认 locked。
