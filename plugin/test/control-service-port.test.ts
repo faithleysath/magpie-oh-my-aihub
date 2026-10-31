@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,8 +71,17 @@ function realService() {
   return { svc, magpie };
 }
 
+// Other test files in the shared Bun process may leave MAGPIE_ADDR pointing at
+// their own loopback gateway. This file asserts an exact gateway port, so pin it
+// for this file and restore the previous value afterwards.
+const previousMagpieAddr = process.env.MAGPIE_ADDR;
 beforeEach(() => {
+  process.env.MAGPIE_ADDR = "127.0.0.1:3425";
   process.chdir(mkdtempSync(join(tmpdir(), "control-service-port-")));
+});
+afterAll(() => {
+  if (previousMagpieAddr === undefined) delete process.env.MAGPIE_ADDR;
+  else process.env.MAGPIE_ADDR = previousMagpieAddr;
 });
 
 describe("provider context", () => {
