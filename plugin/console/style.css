@@ -530,6 +530,7 @@ dialog::backdrop { background: var(--scrim); }
 
 /* ---------- network ---------- */
 .advanced-recovery,
+.legacy-wallet-flows,
 .diagnostics,
 .advanced-network {
   margin-top: var(--space-4);
@@ -540,6 +541,7 @@ dialog::backdrop { background: var(--scrim); }
   box-shadow: var(--shadow-sm);
 }
 .advanced-recovery > summary,
+.legacy-wallet-flows > summary,
 .diagnostics > summary,
 .advanced-network > summary {
   min-height: var(--control-h);
@@ -551,6 +553,7 @@ dialog::backdrop { background: var(--scrim); }
   font-size: var(--text-base);
 }
 .advanced-recovery[open] > summary,
+.legacy-wallet-flows[open] > summary,
 .diagnostics[open] > summary,
 .advanced-network[open] > summary { margin-bottom: var(--space-3); border-bottom: 1px solid var(--line-soft); }
 #accounting-panel > section:first-child { margin-top: 0; }
