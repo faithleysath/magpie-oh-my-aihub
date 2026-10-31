@@ -691,6 +691,9 @@ export class NetworkRegistry {
         throw new Error(`${e} is not a URL`);
       }
       if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error(`${e} must be http or https`);
+      if ((n.support === "read-only" || n.networkType === "mainnet") && u.protocol !== "https:") {
+        throw new Error(`${e} must use https for a mainnet/read-only network`);
+      }
     }
     if (n.enabled && clean.length === 0) throw new Error(`chain ${chainId} is enabled; it needs at least one endpoint`);
     n.rpcEndpoints = clean;

@@ -199,6 +199,14 @@ describe("C1 product network registry: BSC and Base are peers", () => {
     expect(() => build({ ...base, chainId: 999999, support: "credit" })).toThrow(/read-only|credit/);
   });
 
+  test("a mainnet/read-only endpoint must use https", () => {
+    const r = productRegistry();
+    expect(() => r.setRpcEndpoints(56, ["http://127.0.0.1:8545"])).toThrow(/https/);
+    expect(r.setRpcEndpoints(56, ["https://bsc-dataseed.bnbchain.org"]).rpcEndpoints).toEqual(["https://bsc-dataseed.bnbchain.org"]);
+    // The testnet local-dev path still accepts http.
+    expect(r.setRpcEndpoints(97, ["http://127.0.0.1:8545"]).rpcEndpoints).toEqual(["http://127.0.0.1:8545"]);
+  });
+
   test("the hard chain-id boundary is independent of the registry", () => {
     expect(isMainnetChainId(56)).toBe(true);
     expect(isMainnetChainId(8453)).toBe(true);
