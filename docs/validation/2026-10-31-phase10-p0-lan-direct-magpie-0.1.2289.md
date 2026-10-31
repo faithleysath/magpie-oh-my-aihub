@@ -1,4 +1,12 @@
-# P0 — Magpie 0.1.2289 isolated two-node run (401 / 429 / limit / top-up / restart / Remote)
+# P0-A — Magpie 0.1.2289 LAN-direct isolated run (EasyTier NOT started)
+
+> **Read this first — scope limit.** Two isolated Magpie processes were run on
+> one Mac and reached each other over the **LAN address** with a native Remote
+> Magpie provider. **EasyTier was not started**: no overlay, no `port_forward`,
+> no mapped `/32`, no virtual IP. This is **not** an overlay/P0 two-node pass
+> and must not be quoted as one. The EasyTier binaries were only seeded and
+> hash-checked by the fixture. Overlay results are a separate run
+> (P0-B), recorded separately when it exists.
 
 Scope: the **target version** only. No real funds, no mainnet, no user Magpie
 profile, no user network. This run answers "does the gateway/Key semantics the
@@ -94,7 +102,7 @@ the plugin's id/name ownership lookup is unchanged for this path (`move`/LAN
 
 ## Not covered (do not read this as broader evidence)
 
-- **EasyTier overlay was not exercised**: binaries were seeded and hash-checked,
+- **EasyTier overlay was not exercised at all**: binaries were seeded and hash-checked,
   but no overlay, no `port_forward`, no mapped-subnet forward. The Remote Magpie
   above used the provider's LAN address directly. Cross-node overlay 401/429
   still needs the Phase 9 forward path on 0.1.2289.
