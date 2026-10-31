@@ -5,25 +5,15 @@ name: security-gates
 #   - git-history secret scan (all fetched branches; history-only findings)
 #   - npm package content gate (tests/docs/secrets/static assets)
 #
-# The allowlist policy lives in .gitleaks.toml (finding-level line rules only,
+# The allowlist policy lives in .gitleaks.toml (finding-level match/line rules,
 # never path skips) and .gitleaksignore (reviewed commit fingerprints).
 
 on:
+  # Run on every PR and every main push: a docs/ or prototype/ secret must not
+  # wait for a plugin change to be scanned.
   pull_request:
-    paths:
-      - "plugin/**"
-      - "package.json"
-      - ".gitleaks.toml"
-      - ".gitleaksignore"
-      - ".github/workflows/security-gates.yml"
   push:
     branches: [main]
-    paths:
-      - "plugin/**"
-      - "package.json"
-      - ".gitleaks.toml"
-      - ".gitleaksignore"
-      - ".github/workflows/security-gates.yml"
   workflow_dispatch:
 
 permissions:
@@ -97,6 +87,6 @@ jobs:
           echo "${GITLEAKS_LINUX_X64_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
           sudo tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
           gitleaks version
-      - name: Check both tarballs (root and plugin/)
+      - name: Check both tarballs (root and plugin/) + gate selftest
         working-directory: plugin
-        run: bun run scripts/pack-check.ts
+        run: bun run scripts/pack-check.ts --selftest
