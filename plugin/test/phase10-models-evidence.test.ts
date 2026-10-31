@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Service, type SupervisorLike } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import { FakeBinder, FakeOwnership } from "./support/fake-ports.ts";
-import { MODELS_EVIDENCE_TTL_MS, loadState } from "../src/state.ts";
+import { MODELS_EVIDENCE_TTL_MS, loadState, projectModelsEvidence, type ProviderConnection } from "../src/state.ts";
 
 const KEY = "sk-labmodel01";
 const KEY2 = "sk-labmodel02";
@@ -211,6 +211,52 @@ describe("provider models evidence", () => {
     const e = evidence(svc);
     expect(e).toMatchObject({ status: "current", source: "reconcile", callable: "yes" });
     expect(e.generation).toBe(before.generation + 1);
+  });
+
+  test("a restart keeps keyGeneration, accepted fingerprint and evidence generation", async () => {
+    const svc = await connected();
+    const before = svc.providers()[0];
+    const saved = loadState().state.providers[0]!;
+    expect(saved.keyGeneration).toBe(before.keyGeneration);
+    expect(saved.modelsEvidence?.generation).toBe(before.modelsEvidence.generation);
+    expect(saved.modelsEvidence?.status).toBe("current");
+    const restarted = new Service({
+      magpie: magpie as never,
+      magpieVersion: "magpie 0.1.2289",
+      supervisor: sup,
+      lanIp: () => "127.0.0.1",
+      probeTimeoutMs: 100,
+      ports: { binder, ownership, now: () => new Date(clockMs) },
+      probes: { catalogModels: async () => [] as never },
+    });
+    services.push(restarted);
+    const after = restarted.providers()[0];
+    expect(after.keyGeneration).toBe(before.keyGeneration);
+    expect(after.modelsEvidence.status).toBe("current");
+    expect(after.modelsEvidence.generation).toBe(before.modelsEvidence.generation);
+    expect(after.modelsEvidence.models).toEqual(before.modelsEvidence.models);
+  });
+
+  test("future read times and invalid expiry are stale, never current", async () => {
+    const svc = await connected();
+    const rec = (svc as unknown as { state: ReturnType<typeof loadState>["state"] }).state.providers[0]!;
+    const now = Date.parse("2026-10-31T00:00:00.000Z");
+    const base = rec.modelsEvidence!;
+    const future = projectModelsEvidence(
+      { ...rec, modelsEvidence: { ...base, readAt: new Date(now + 86_400_000).toISOString(), expiresAt: new Date(now + 172_800_000).toISOString() } },
+      now,
+    );
+    expect(future.status).toBe("stale");
+    expect(future.error).toMatch(/future/);
+    const invalid = projectModelsEvidence({ ...rec, modelsEvidence: { ...base, expiresAt: "not-a-date" } }, now);
+    expect(invalid.status).toBe("stale");
+    expect(invalid.modelCount).toBeNull();
+    const missingRead = projectModelsEvidence(
+      { ...rec, modelsEvidence: { ...base, readAt: null, expiresAt: new Date(now + 60_000).toISOString() } },
+      now,
+    );
+    expect(missingRead.status).toBe("stale");
+    expect(missingRead.callable).toBe("unknown");
   });
 
   test("disconnecting the provider never leaves current evidence", async () => {
