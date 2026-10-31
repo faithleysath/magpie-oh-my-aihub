@@ -259,7 +259,8 @@ describe("B-core P2pBusinessPort mapping", () => {
     const approvalFile = join(process.cwd(), "control-approvals.json");
     const port = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
     const consumer = { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) };
-    expect(await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 1, consumer, keyId: null })).toEqual({ state: "noSideEffect", detail: "no Provisioner consumer exists for this approval" });
+    const missing = await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 1, consumer, keyId: null });
+    expect(missing.state).toBe("unknown"); // a missing journal is not proof of no side effect
     const approved = await port.approve({
       approvalId: APPROVAL,
       generation: 1,
@@ -275,6 +276,12 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(ready.state).toBe("keyReady");
     if (ready.state === "keyReady") {
       expect(ready.keyId).toBe(approved.keyId);
+      expect(ready.knownKeyId).toBe(approved.keyId);
+      expect(ready.consumerNodeId).toBe("alice");
+      expect(ready.approvalId).toBe(APPROVAL);
+      expect(ready.generation).toBe(1);
+      expect(ready.source).toBe("journal+native");
+      expect(ready.observedAt).toMatch(/T/);
       expect(ready.models).toEqual([LAB_MODEL]);
       expect(ready.capUsd).toBe(1);
     }
@@ -282,6 +289,28 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect((await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 2, consumer, keyId: null })).state).toBe("unknown");
     expect((await port.reconcileApproval!({ requestHash: HASH, approvalId: "9".repeat(32), generation: 1, consumer, keyId: null })).state).toBe("unknown");
     expect(magpie.keys.size).toBe(1);
+
+    // noSideEffect requires a durable pending intent plus native absence, not
+    // merely a missing record.
+    const other = "8".repeat(32);
+    const pending = {
+      approvalId: other, requestHash: "8".repeat(64), generation: 1,
+      consumerNodeId: "nobody", consumerFingerprint: "8".repeat(64),
+      models: [LAB_MODEL], capUsd: 1, quoteHash: HASH, priceVersion: "p".repeat(64),
+      expiresAt: "2026-10-31T00:10:00.000Z", keyId: null, keyName: null, memo: null,
+      state: "pending", error: null, createdAt: "2026-10-31T00:00:00.000Z", updatedAt: "2026-10-31T00:00:00.000Z",
+    };
+    writeFileSync(approvalFile, JSON.stringify({ version: 1, approvals: [pending] }));
+    const none = await port.reconcileApproval!({
+      requestHash: "8".repeat(64), approvalId: other, generation: 1,
+      consumer: { accountId: "8".repeat(64), nodeId: "nobody", hostname: "ohmyaihub-nobody", fingerprint: "8".repeat(64) }, keyId: null,
+    });
+    expect(none.state).toBe("noSideEffect");
+    if (none.state === "noSideEffect") {
+      expect(none.knownKeyId).toBeNull();
+      expect(none.source).toBe("journal+native");
+      expect(none.consumerNodeId).toBe("nobody");
+    }
   });
 
   test("reconcileApproval treats a corrupt journal as unknown, not noSideEffect", async () => {

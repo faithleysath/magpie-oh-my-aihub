@@ -116,8 +116,19 @@ export interface P2pApprovalReconcileInput {
   keyId: string | null;
 }
 
+export interface P2pApprovalReconcileBinding {
+  consumerNodeId: string;
+  requestHash: string;
+  approvalId: string;
+  generation: number;
+  knownKeyId: string | null;
+  observedAt: string;
+  /** where the observation came from; never a key or ciphertext */
+  source: "journal+native" | "journal" | "native-management" | "none";
+}
+
 export type P2pApprovalReconcile =
-  | {
+  | (P2pApprovalReconcileBinding & {
       state: "keyReady";
       keyId: string;
       keyName: string;
@@ -125,10 +136,10 @@ export type P2pApprovalReconcile =
       capUsd: number;
       priceVersion: string;
       expiresAt: string;
-      detail?: string | null;
-    }
-  | { state: "noSideEffect"; detail?: string | null }
-  | { state: "unknown"; detail: string | null };
+      detail: string | null;
+    })
+  | (P2pApprovalReconcileBinding & { state: "noSideEffect"; knownKeyId: null; detail: string | null })
+  | (P2pApprovalReconcileBinding & { state: "unknown"; detail: string | null });
 
 export interface P2pApprovedMaterials {
   approvalId: string;
@@ -710,52 +721,87 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
     },
 
     async reconcileApproval(input) {
+      const observedAt = now().toISOString();
+      const binding = {
+        consumerNodeId: input.consumer.nodeId,
+        requestHash: input.requestHash,
+        approvalId: input.approvalId,
+        generation: input.generation,
+        observedAt,
+      };
       try {
         const state = loadApprovals(approvalStateFile);
         const record = state.approvals.find((a) => a.approvalId === input.approvalId);
         const consumer = service.provisioner.find(input.consumer.nodeId);
+        const knownKeyId = consumer?.keyId ?? record?.keyId ?? null;
         if (input.keyId && consumer?.keyId && consumer.keyId !== input.keyId) {
-          return { state: "unknown", detail: "the native consumer key id differs from the interrupted approval" };
+          return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the native consumer key id differs from the interrupted approval" };
         }
-        if (record) {
-          if (
-            record.requestHash !== input.requestHash ||
-            record.generation !== input.generation ||
-            record.consumerNodeId !== input.consumer.nodeId ||
-            record.consumerFingerprint !== input.consumer.fingerprint
-          ) {
-            return { state: "unknown", detail: "the approval journal entry does not match the interrupted approval" };
-          }
-          if (record.state === "revoked") {
-            return { state: "unknown", detail: "the approval was already revoked" };
-          }
-          if (record.state === "approved" || record.state === "pending" || record.state === "uncertain") {
-            const recovered = recoverApproval(record, service, now().toISOString());
-            if (recovered && consumer) {
-              if (input.keyId && recovered.keyId !== input.keyId) {
-                return { state: "unknown", detail: "the recovered key id does not match the interrupted approval" };
-              }
-              return {
-                state: "keyReady",
-                keyId: recovered.keyId!,
-                keyName: recovered.keyName!,
-                models: recovered.models,
-                capUsd: recovered.capUsd,
-                priceVersion: recovered.priceVersion,
-                expiresAt: recovered.expiresAt,
-                detail: "recovered from the persistent approval/native key binding",
-              };
-            }
-            if (record.state === "pending" && !consumer) {
-              return { state: "noSideEffect", detail: "no Provisioner consumer exists for this approval" };
-            }
-            return { state: "unknown", detail: "the approval exists but its native key binding cannot be proven" };
-          }
+        if (!record) {
+          // A missing journal is not proof that this approval intent never
+          // existed. A Provisioner consumer may be from this or another
+          // attempt; only an unknown result can prevent a second key.
+          return {
+            ...binding,
+            state: "unknown",
+            knownKeyId,
+            source: consumer ? "native-management" : "none",
+            detail: consumer
+              ? "a Provisioner consumer exists without a persistent approval binding"
+              : "no persistent approval journal entry proves this intent",
+          };
         }
-        if (!consumer) return { state: "noSideEffect", detail: "no Provisioner consumer exists for this approval" };
-        return { state: "unknown", detail: "a consumer key exists without a matching persistent approval binding" };
+        if (
+          record.requestHash !== input.requestHash ||
+          record.generation !== input.generation ||
+          record.consumerNodeId !== input.consumer.nodeId ||
+          record.consumerFingerprint !== input.consumer.fingerprint
+        ) {
+          return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval journal entry does not match the interrupted approval" };
+        }
+        if (record.state === "revoked") {
+          return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval was already revoked" };
+        }
+        if (record.state === "approved" || record.state === "pending" || record.state === "uncertain") {
+          const recovered = recoverApproval(record, service, observedAt);
+          if (recovered && consumer) {
+            if (input.keyId && recovered.keyId !== input.keyId) {
+              return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the recovered key id does not match the interrupted approval" };
+            }
+            return {
+              ...binding,
+              state: "keyReady",
+              knownKeyId: recovered.keyId!,
+              keyId: recovered.keyId!,
+              keyName: recovered.keyName!,
+              models: recovered.models,
+              capUsd: recovered.capUsd,
+              priceVersion: recovered.priceVersion,
+              expiresAt: recovered.expiresAt,
+              source: "journal+native",
+              detail: "recovered from the persistent approval/native key binding",
+            };
+          }
+          if (record.state === "pending" && !consumer) {
+            return {
+              ...binding,
+              state: "noSideEffect",
+              knownKeyId: null,
+              source: "journal+native",
+              detail: "the durable pending intent exists and the native management view has no consumer key for it",
+            };
+          }
+          return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval exists but its native key binding cannot be proven" };
+        }
+        return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval journal state is not recoverable" };
       } catch (error) {
-        return { state: "unknown", detail: String((error as Error)?.message ?? error).slice(0, 200) };
+        return {
+          ...binding,
+          state: "unknown",
+          knownKeyId: null,
+          source: "none",
+          detail: String((error as Error)?.message ?? error).slice(0, 200),
+        };
       }
     },
 
