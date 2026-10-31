@@ -983,6 +983,16 @@ describe("funds provenance and pending recovery", () => {
       "2026-10-30T00:00:00.000Z",
       null,
     );
+    // A bare asset patch is refused and does not mutate the row.
+    expect(() =>
+      (ledger as unknown as { reviewChainDepositProvenance: (input: unknown) => unknown }).reviewChainDepositProvenance({
+        id: depositId,
+        chainId: 97,
+        assetId: asset.assetId,
+        note: "bare patch",
+      }),
+    ).toThrow(/ChainStore|evidence/);
+    expect(ledger.deposit(depositId)!.assetId).toBeNull();
     // No evidence/incorrect invoice: no mutation, row remains readable.
     expect(() => recoverLegacyChainDeposit({ ledger, store, evidence: { depositId, chainId: 97, assetId: asset.assetId, invoiceId: "wrong-invoice", txHash: observed.event.txHash, logIndex: 0 } })).toThrow(/claimed|event|invoice/);
     expect(ledger.deposit(depositId)!.assetId).toBeNull();
@@ -991,7 +1001,13 @@ describe("funds provenance and pending recovery", () => {
     expect(recovered.assetId).toBe(asset.assetId);
     expect(recovered.amountNanos).toBe(usdToNanos(1));
     expect(recovered.source).toBe("chain:97");
+    expect(recovered.status).toBe("applied");
     expect(recovered.fundsClass).toBe("chain");
+    const repeated = recoverLegacyChainDeposit({ ledger, store, evidence: { depositId, chainId: 97, assetId: asset.assetId, invoiceId: intent.invoiceId, txHash: observed.event.txHash, logIndex: 0 } });
+    expect(repeated.assetId).toBe(asset.assetId);
+    expect(repeated.amountNanos).toBe(usdToNanos(1));
+    expect(repeated.source).toBe("chain:97");
+    expect(repeated.status).toBe("applied");
     store.close();
     ledger.close();
   });

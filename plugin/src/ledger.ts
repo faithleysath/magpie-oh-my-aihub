@@ -24,6 +24,7 @@ import { magpieDataDir, statePath } from "./paths.ts";
 import { costNanos, parsePriceSnapshot, type PriceSnapshot, type UsageTokens } from "./pricing.ts";
 import { assertCreditSourceNotMainnet } from "./mainnet-gate.ts";
 import { CREDIT_CHAIN_ALLOWLIST } from "./networks.ts";
+import type { ChainStore } from "./chainstore.ts";
 
 export type AccountStatus = "active" | "paused" | "revoked";
 export type WindowStatus = "open" | "draining" | "closed";
@@ -773,34 +774,85 @@ export class Ledger {
 
   /** Sum of applied credits minus every recorded consumption; negative means overdraft. */
   /**
-   * Advanced local recovery for a legacy chain row whose asset id was not
-   * stored. It cannot create or relabel a chain row: the caller must first
-   * obtain ChainStore evidence (invoice/tx/log/amount/recipient/consumer) and
-   * use `recoverLegacyChainDeposit()`. This method only fills the missing asset
-   * metadata; class/source/amount/status stay untouched.
+   * Internal/low-level mutator. It is not a public recovery API: a bare
+   * `{id,chainId,assetId,note}` call is rejected. The only supported caller is
+   * `recoverLegacyChainDeposit()`, which supplies the local ChainStore and the
+   * original invoice/tx/log evidence. The same function verifies all evidence
+   * before touching the row; class/source/amount/status are never changed.
    */
-  reviewChainDepositProvenance(input: { id: string; chainId: number; assetId: string; note: string }): LedgerDeposit {
-    if (!input.note.trim()) throw new Error("reviewing a legacy chain deposit needs an audit note");
+  reviewChainDepositProvenance(input: {
+    id: string;
+    chainId: number;
+    assetId: string;
+    store: ChainStore;
+    evidence: { invoiceId: string; txHash: string; logIndex: number };
+    note?: string;
+  }): LedgerDeposit {
+    const store = input.store;
+    const evidence = input.evidence;
+    if (!store || typeof store.event !== "function" || typeof store.intent !== "function") {
+      throw new Error("chain provenance recovery requires a local ChainStore; a bare asset patch is refused");
+    }
+    if (!evidence || typeof evidence.invoiceId !== "string" || typeof evidence.txHash !== "string" || !Number.isSafeInteger(evidence.logIndex)) {
+      throw new Error("chain provenance recovery requires invoice/tx/log evidence; a bare asset patch is refused");
+    }
     assertCreditChainAllowed(input.chainId);
     const assetChain = assetIdChainId(input.assetId);
     if (assetChain !== input.chainId) throw new Error(`asset ${input.assetId} belongs to chain ${assetChain}, not ${input.chainId}`);
-    return this.tx(() => {
-      const row = this.db.query("SELECT * FROM deposits WHERE id=?").get(input.id) as DepositRow | null;
-      if (!row) throw new Error(`deposit ${input.id} does not exist`);
-      const current = mapDeposit(row);
-      if (current.fundsClass !== "chain") throw new Error(`deposit ${input.id} is ${current.fundsClass}, not a chain deposit`);
-      if (current.chainId !== input.chainId) throw new Error(`deposit ${input.id} is on chain ${String(current.chainId)}, not ${input.chainId}`);
-      if (current.assetId !== null && current.assetId !== input.assetId) {
-        throw new Error(`deposit ${input.id} already has asset ${current.assetId}; it cannot be rewritten`);
-      }
+    const row = this.db.query("SELECT * FROM deposits WHERE id=?").get(input.id) as DepositRow | null;
+    if (!row) throw new Error(`deposit ${input.id} does not exist`);
+    const current = mapDeposit(row);
+    if (current.fundsClass !== "chain") throw new Error(`deposit ${input.id} is ${current.fundsClass}, not a chain deposit; evidence recovery cannot relabel it`);
+    if (current.chainId !== input.chainId) throw new Error(`deposit ${input.id} is on chain ${String(current.chainId)}, not ${input.chainId}`);
+    if (current.assetId !== null) {
       if (current.assetId === input.assetId) return current;
+      throw new Error(`deposit ${input.id} already has asset ${current.assetId}; it cannot be rewritten`);
+    }
+    if (!input.id.startsWith("chain:")) throw new Error("a legacy chain deposit id must start with chain:");
+    const eventId = input.id.slice("chain:".length);
+    const event = store.event(eventId);
+    if (!event) throw new Error(`no ChainStore event ${eventId} for deposit ${input.id}`);
+    if (event.status !== "credited" || event.creditedNanos === null) {
+      throw new Error(`event ${eventId} is ${event.status} and has no credited amount; it is not verified credit evidence`);
+    }
+    if (event.depositId !== input.id) throw new Error(`event ${eventId} does not point at deposit ${input.id}`);
+    if (event.chainId !== input.chainId) throw new Error(`event ${eventId} is on chain ${event.chainId}`);
+    if (event.txHash.toLowerCase() !== evidence.txHash.toLowerCase() || event.logIndex !== evidence.logIndex) {
+      throw new Error(`event ${eventId} does not match tx/log ${evidence.txHash}:${evidence.logIndex}`);
+    }
+    if (event.invoiceId !== evidence.invoiceId) throw new Error(`event ${eventId} is claimed by ${String(event.invoiceId)}, not ${evidence.invoiceId}`);
+    const expectedAsset = `eip155:${event.chainId}:${event.tokenContract.toLowerCase()}`;
+    if (input.assetId !== expectedAsset) throw new Error(`event ${eventId} token is ${expectedAsset}, not ${input.assetId}`);
+    if (event.creditedNanos !== current.amountNanos) {
+      throw new Error(`event ${eventId} credited ${event.creditedNanos} nanos, deposit has ${current.amountNanos}; refusing recovery`);
+    }
+    const intent = store.intent(evidence.invoiceId);
+    if (!intent) throw new Error(`no local deposit intent ${evidence.invoiceId}`);
+    if (intent.chainId !== event.chainId) throw new Error(`intent ${evidence.invoiceId} is for another chain`);
+    if (intent.consumerId !== current.consumerId) throw new Error(`intent ${evidence.invoiceId} belongs to another consumer`);
+    if (intent.tokenContract.toLowerCase() !== event.tokenContract.toLowerCase() || intent.assetId !== expectedAsset) {
+      throw new Error(`intent ${evidence.invoiceId} token does not match event ${eventId}`);
+    }
+    if (intent.recipientAddress.toLowerCase() !== event.toAddress.toLowerCase()) {
+      throw new Error(`intent ${evidence.invoiceId} recipient does not match event ${eventId}`);
+    }
+    if (!intent.payerAddress || intent.payerAddress.toLowerCase() !== event.fromAddress.toLowerCase()) {
+      throw new Error(`intent ${evidence.invoiceId} payer does not match event ${eventId}`);
+    }
+    if (intent.expectedAmountRaw !== event.amountRaw) {
+      throw new Error(`intent ${evidence.invoiceId} amount does not match event ${eventId}`);
+    }
+    if (intent.status !== "matched" || intent.attributionStatus !== "matched") {
+      throw new Error(`intent ${evidence.invoiceId} is ${intent.status}/${intent.attributionStatus}, not matched evidence`);
+    }
+    return this.tx(() => {
       this.db.query("UPDATE deposits SET asset_id=? WHERE id=?").run(input.assetId, input.id);
       this.event(row.consumer_id, "deposit-provenance-reviewed", {
         depositId: input.id,
         fundsClass: "chain",
         chainId: input.chainId,
         assetId: input.assetId,
-        note: input.note.slice(0, 500),
+        note: (input.note ?? `verified ChainStore event ${eventId} tx ${event.txHash} log ${event.logIndex} invoice ${evidence.invoiceId}`).slice(0, 500),
         source: "chain-store-evidence",
       });
       return mapDeposit(this.db.query("SELECT * FROM deposits WHERE id=?").get(input.id) as DepositRow);
