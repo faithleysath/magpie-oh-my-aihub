@@ -27,6 +27,7 @@ function fakeService() {
     catalogStatus: () => ({ quote: null, peers: [] }),
     setControlPresence: (fn: (() => unknown | null) | null) => { presence = fn; },
     setControlPort: (port: number) => { cfg.controlPort = port; calls.push(`port:${port}`); },
+    markCatalogWithdrawn: (nodeId: string, detail?: string) => { calls.push(`withdrawn:${nodeId}`); },
     setControlActive: (active: boolean) => { controlActive = active; calls.push(`active:${active}`); },
     applyControlPublication: async () => { calls.push(`publish:${controlActive}`); },
     gatewayPort: () => 3425,
@@ -110,7 +111,7 @@ function neighbourPresence(identity: CatalogIdentity, over: Partial<PresenceBody
 
 describe("control-only neighbour presence", () => {
   test("is discovered from its signature, pinned on first sight, and accepted only by a human", async () => {
-    const { service } = fakeService();
+    const { service, calls } = fakeService();
     const now = new Date("2026-10-31T12:00:00.000Z");
     const identity = otherIdentity();
     let doc = signPresence(neighbourPresence(identity), identity);
@@ -142,6 +143,9 @@ describe("control-only neighbour presence", () => {
     app!.trustPresence("bbbb2222", identity.summary.fingerprint);
     state = await app!.state();
     expect((state.presence as Record<string, unknown>[])[0].tofu).toBe("accepted");
+    // The presence says providesModels:false, so the catalogue is withdrawn at
+    // once rather than waiting for the quote TTL.
+    expect(calls).toContain("withdrawn:bbbb2222");
 
     // A different key is a change: reported, never accepted, and the accepted
     // fingerprint cannot be replaced by the new one without a human.

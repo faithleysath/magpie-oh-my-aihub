@@ -679,6 +679,38 @@ describe("peer discovery", () => {
   });
 });
 
+describe("a signed presence can withdraw the display catalogue", () => {
+  test("the quote is cleared at once, not only after the TTL", async () => {
+    const idB = identity();
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3")));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    let peers = await s.refreshCatalog();
+    const before = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    await s.trustCatalogPeer("bbbbbbbb", before.identity!.fingerprint);
+    peers = await s.refreshCatalog();
+    const published = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(published.quote).not.toBeNull();
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, { fingerprint: published.identity!.fingerprint, quoteHash: published.quoteHash! })).not.toThrow();
+
+    s.markCatalogWithdrawn("bbbbbbbb");
+    const withdrawn = s.peersInDirectory().find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(withdrawn.quote).toBeNull();
+    expect(withdrawn.quoteHash).toBeNull();
+    expect(withdrawn.catalog).toBe("withdrawn");
+    expect(withdrawn.status).toBe("no-catalog");
+    expect(withdrawn.lastQuoteAt).toBe(published.fetchedAt);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, { fingerprint: published.identity!.fingerprint, quoteHash: published.quoteHash! })).toThrow(/withdrawn/);
+
+    // A real catalogue read restores the offer (the provider shared again).
+    peers = await s.refreshCatalog();
+    const restored = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(restored.catalog).toBe("published");
+    expect(restored.quoteFresh).toBe(true);
+  });
+});
+
 describe("a migrated catalogue port stays discoverable", () => {
   test("a remembered port that no longer answers falls back to the bounded range", async () => {
     const idB = identity();

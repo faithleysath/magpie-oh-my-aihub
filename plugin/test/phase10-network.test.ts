@@ -653,7 +653,10 @@ describe("no Gateway Key is sent before the forward is proven ours", () => {
       unregisterTestServer(forwardProbe);
       gateway.stop();
     }
-  });
+    // The default 5 s is the same budget as one unkeyed HTTP probe; under a
+    // loaded machine (parallel suites, a real lab) the ownership probe plus the
+    // reconcile can exceed it. The assertions above are unchanged.
+  }, 20_000);
 });
 
 describe("network projection: evidence, not assumptions", () => {

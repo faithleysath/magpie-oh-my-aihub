@@ -2742,6 +2742,28 @@ export class Service {
     };
   }
 
+  /**
+   * The signed presence is authoritative about whether a node currently offers
+   * models. When it says no, the cached catalogue (which a presence-only server
+   * may still answer with 503) is no longer an offer: it is withdrawn at once,
+   * not only after the quote TTL. A later successful catalogue read restores it.
+   */
+  markCatalogWithdrawn(nodeId: string, detail = "the peer's signed presence says it is not sharing models"): void {
+    const peer = this.catalogPeers.find((p) => p.nodeId === nodeId);
+    if (!peer) return;
+    if (peer.catalog === "withdrawn" && peer.status === "no-catalog" && peer.quote === null) return;
+    peer.lastQuoteAt = peer.fetchedAt ?? peer.lastQuoteAt;
+    peer.quote = null;
+    peer.quoteHash = null;
+    peer.fetchedAt = null;
+    peer.quoteFresh = false;
+    peer.quoteExpiresAt = null;
+    peer.catalog = "withdrawn";
+    peer.status = "no-catalog";
+    peer.detail = detail;
+    this.writeSnapshot();
+  }
+
   /** Adds a provider from a discovered quote using the existing connect path. */
   async catalogConnect(
     nodeId: string,

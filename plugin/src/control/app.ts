@@ -436,6 +436,7 @@ export class ControlApp {
       throw new Error("the provider published no mapped endpoint; LAN fallback is disabled");
     }
     this.seenPresence.set(presence.node.nodeId, presence);
+    this.applyPresenceCapability(presence);
     this.registerPeer(presence.node.nodeId, endpoint, {
       accountId: presence.node.fingerprint,
       nodeId: presence.node.nodeId,
@@ -568,6 +569,7 @@ export class ControlApp {
     // A published provider's signed presence is the prerequisite for a
     // zero-file request; discover it (and its owned control forward) before the
     // user can click. Bounded: two peers per tick, never a model request.
+    await this.refreshSeenPresences().catch(() => {});
     await this.discoverCataloguedPresence().catch(() => {});
     await this.probeControlOnlyNeighbours().catch(() => {});
     for (const nodeId of this.targets) {
@@ -713,11 +715,65 @@ export class ControlApp {
       }
       savePresenceTrust(pins);
       this.seenPresence.set(presence.node.nodeId, presence);
+      this.applyPresenceCapability(presence);
       this.presenceTofu.set(presence.node.nodeId, state);
       this.presenceProbed.set(presence.node.hostname, { at: this.now().getTime(), port, detail: null });
       return presence;
     }
     throw new Error(lastDetail);
+  }
+
+  /**
+   * A presence that says "no models" is the authoritative withdrawal signal for
+   * the display catalogue; the catalogue server itself may still answer 503.
+   */
+  private applyPresenceCapability(presence: PresenceBody): void {
+    const sharing = presence.capability.sharing === "enabled" && presence.capability.providesModels === true;
+    if (sharing) return;
+    const svc = this.service as unknown as { markCatalogWithdrawn?: (nodeId: string, detail?: string) => void };
+    svc.markCatalogWithdrawn?.(presence.node.nodeId, "the provider's signed presence says it is not sharing models");
+  }
+
+  /**
+   * Re-read a presence near its half-life without touching the owned forward:
+   * this only keeps the announced capability (and therefore the catalogue
+   * withdrawal) current. An endpoint change is handled by discover() on the
+   * next request/poll, which retires the forward safely.
+   */
+  async refreshPresence(nodeId: string): Promise<void> {
+    const cfg = this.service.config();
+    const peer = this.service.catalogStatus().peers.find((p) => p.nodeId === nodeId);
+    if (!cfg || !peer?.mappedCidr) return;
+    const base = peer.catalogPort ?? cfg.catalog.port;
+    let res: { status: number; body: string } | null = null;
+    for (const port of [base, ...[1, 2, 3, 4].map((d) => base + d), base - 1, base - 2].filter((p) => p >= 1 && p <= 65535).slice(0, 7)) {
+      const attempt = await this.presenceHttpGet({
+        socksPort: cfg.catalog.socksPort,
+        host: mappedHost(peer.mappedCidr),
+        port,
+        path: PRESENCE_PATH,
+        timeoutMs: 4000,
+      }).catch(() => null);
+      if (attempt?.status === 200) { res = attempt; break; }
+    }
+    if (!res) return;
+    const presence = verifyPresence(JSON.parse(res.body), this.now(), { expectedMappedCidr: peer.mappedCidr });
+    if (presence.node.nodeId !== peer.nodeId) return;
+    if (peer.identity?.fingerprint && presence.node.fingerprint !== peer.identity.fingerprint) return;
+    this.seenPresence.set(presence.node.nodeId, presence);
+    this.applyPresenceCapability(presence);
+  }
+
+  private async refreshSeenPresences(): Promise<void> {
+    const now = this.now().getTime();
+    let budget = 2;
+    for (const presence of [...this.seenPresence.values()]) {
+      if (budget <= 0) break;
+      const exp = Date.parse(presence.expiresAt);
+      if (!Number.isFinite(exp) || exp - now > 90_000) continue;
+      budget -= 1;
+      await this.refreshPresence(presence.node.nodeId).catch(() => {});
+    }
   }
 
   /** Human acceptance of a control-only peer's full fingerprint (TOFU). */
