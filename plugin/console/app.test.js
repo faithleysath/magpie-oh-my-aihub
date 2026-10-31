@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * Behavioural test for the shell: a mocked browser (generic DOM records, real
@@ -53,7 +53,9 @@ class Node {
 }
 
 function browser() {
-  const previous = { document: globalThis.document, window: globalThis.window };
+  // Tests in one process share globals: restore fetch so a later suite is not
+  // served by this mock.
+  const previous = { document: globalThis.document, window: globalThis.window, fetch: globalThis.fetch };
   const nodes = new Map();
   const body = new Node("body");
   const documentElement = new Node("html");
@@ -78,7 +80,7 @@ function browser() {
   };
   globalThis.document = document;
   globalThis.window = window;
-  return { document, window, body, nodes, restore() { globalThis.document = previous.document; globalThis.window = previous.window; } };
+  return { document, window, body, nodes, restore() { globalThis.document = previous.document; globalThis.window = previous.window; globalThis.fetch = previous.fetch; } };
 }
 
 const unconfigured = () => ({
