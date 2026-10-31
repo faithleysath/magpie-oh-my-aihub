@@ -167,6 +167,8 @@ export interface P2pDeliveryRow {
   authorizationHash: string;
   keyId: string;
   keyName: string;
+  /** SHA-256 of the actual Gateway Key received from the port; never the key */
+  keyHash: string | null;
   state: P2pDeliveryState;
   preparedAt: string;
   deliveredAt: string | null;
@@ -333,6 +335,7 @@ CREATE TABLE IF NOT EXISTS p2p_deliveries (
   authorization_hash TEXT NOT NULL,
   key_id TEXT NOT NULL,
   key_name TEXT NOT NULL,
+  key_hash TEXT,
   state TEXT NOT NULL,
   prepared_at TEXT NOT NULL,
   delivered_at TEXT,
@@ -555,6 +558,38 @@ export class P2pStore {
            last_seen_at=excluded.last_seen_at, revoked_at=NULL`,
       )
       .run(peer.nodeId, peer.accountId, peer.fingerprint, peer.publicKey, peer.hostname, at, at);
+  }
+
+  /**
+   * Explicitly rejects the pending key change and keeps the previously accepted
+   * identity. This is the human "no" to a changed fingerprint; nothing is
+   * auto-accepted and the old key is not silently replaced.
+   */
+  rejectPendingPeer(nodeId: string, expectedFingerprint: string, now: Date): P2pPeerTrustRow {
+    const row = this.getPeer(nodeId);
+    if (!row) fail("not_found", "this peer has never been seen");
+    if (!row.pendingJson) fail("conflict", "this peer has no pending identity change");
+    let pendingFingerprint: string | null = null;
+    try {
+      pendingFingerprint = (JSON.parse(row.pendingJson) as { fingerprint?: string }).fingerprint ?? null;
+    } catch {
+      pendingFingerprint = "unreadable";
+    }
+    if (pendingFingerprint !== expectedFingerprint) fail("stale_identity", "the pending fingerprint changed; review it again");
+    this.db.query("UPDATE p2p_peer_trust SET pending_json = NULL, last_seen_at = ? WHERE node_id = ?").run(now.toISOString(), nodeId);
+    return this.getPeer(nodeId)!;
+  }
+
+  /** Prior deliveries of the same Gateway Key (by hash) for another approval. */
+  keyHashSeenElsewhere(consumerNodeId: string, keyHash: string, approvalId: string): Array<{ approvalId: string; generation: number; consumerFingerprint: string }> {
+    const rows = this.db
+      .query(
+        `SELECT d.approval_id, a.generation, a.consumer_fingerprint
+         FROM p2p_deliveries d JOIN p2p_approvals a ON a.approval_id = d.approval_id
+         WHERE a.consumer_node_id = ? AND d.key_hash = ? AND d.approval_id != ?`,
+      )
+      .all(consumerNodeId, keyHash, approvalId) as Array<{ approval_id: string; generation: number; consumer_fingerprint: string }>;
+    return rows.map((raw) => ({ approvalId: String(raw.approval_id), generation: numberOr(raw.generation, 1), consumerFingerprint: String(raw.consumer_fingerprint) }));
   }
 
   revokePeer(nodeId: string, now: Date): void {
@@ -872,13 +907,13 @@ export class P2pStore {
   prepareDelivery(row: P2pDeliveryRow): boolean {
     const res = this.db
       .query(
-        `INSERT INTO p2p_deliveries (approval_id, authorization_hash, key_id, key_name, state, prepared_at, delivered_at, last_error)
-         VALUES (?,?,?,?,?,?,?,?)
+        `INSERT INTO p2p_deliveries (approval_id, authorization_hash, key_id, key_name, key_hash, state, prepared_at, delivered_at, last_error)
+         VALUES (?,?,?,?,?,?,?,?,?)
          ON CONFLICT(approval_id) DO UPDATE SET state = excluded.state, last_error = excluded.last_error,
            delivered_at = COALESCE(excluded.delivered_at, p2p_deliveries.delivered_at)
          WHERE p2p_deliveries.authorization_hash = excluded.authorization_hash AND p2p_deliveries.key_id = excluded.key_id`,
       )
-      .run(row.approvalId, row.authorizationHash, row.keyId, row.keyName, row.state, row.preparedAt, row.deliveredAt, row.lastError);
+      .run(row.approvalId, row.authorizationHash, row.keyId, row.keyName, row.keyHash, row.state, row.preparedAt, row.deliveredAt, row.lastError);
     if (res.changes === 0) {
       const current = this.getDelivery(row.approvalId);
       if (current && (current.authorizationHash !== row.authorizationHash || current.keyId !== row.keyId)) {
@@ -896,6 +931,7 @@ export class P2pStore {
       authorizationHash: String(raw.authorization_hash),
       keyId: String(raw.key_id),
       keyName: String(raw.key_name),
+      keyHash: raw.key_hash === null || raw.key_hash === undefined ? null : String(raw.key_hash),
       state: raw.state as P2pDeliveryState,
       preparedAt: String(raw.prepared_at),
       deliveredAt: raw.delivered_at === null ? null : String(raw.delivered_at),

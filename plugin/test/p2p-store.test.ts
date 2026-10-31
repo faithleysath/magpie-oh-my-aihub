@@ -149,8 +149,8 @@ describe("approvals and generations", () => {
   });
 
   test("a delivery cannot silently change its authorization", () => {
-    store.prepareDelivery({ approvalId: "5".repeat(32), authorizationHash: "a".repeat(64), keyId: "key-1", keyName: "n", state: "delivering", preparedAt: NOW.toISOString(), deliveredAt: null, lastError: null });
-    expect(() => store.prepareDelivery({ approvalId: "5".repeat(32), authorizationHash: "b".repeat(64), keyId: "key-1", keyName: "n", state: "delivering", preparedAt: NOW.toISOString(), deliveredAt: null, lastError: null })).toThrow(P2pError);
+    store.prepareDelivery({ approvalId: "5".repeat(32), authorizationHash: "a".repeat(64), keyId: "key-1", keyName: "n", keyHash: "e".repeat(64), state: "delivering", preparedAt: NOW.toISOString(), deliveredAt: null, lastError: null });
+    expect(() => store.prepareDelivery({ approvalId: "5".repeat(32), authorizationHash: "b".repeat(64), keyId: "key-1", keyName: "n", keyHash: "e".repeat(64), state: "delivering", preparedAt: NOW.toISOString(), deliveredAt: null, lastError: null })).toThrow(P2pError);
     expect(store.getDelivery("5".repeat(32))?.authorizationHash).toBe("a".repeat(64));
   });
 });
@@ -220,7 +220,7 @@ describe("recovery", () => {
 describe("database hygiene", () => {
   test("the sqlite file contains no key, private key or mnemonic", () => {
     store.insertApproval(approval());
-    store.prepareDelivery({ approvalId: "5".repeat(32), authorizationHash: "a".repeat(64), keyId: "key-1", keyName: "n", state: "delivered", preparedAt: NOW.toISOString(), deliveredAt: NOW.toISOString(), lastError: null });
+    store.prepareDelivery({ approvalId: "5".repeat(32), authorizationHash: "a".repeat(64), keyId: "key-1", keyName: "n", keyHash: "e".repeat(64), state: "delivered", preparedAt: NOW.toISOString(), deliveredAt: NOW.toISOString(), lastError: null });
     store.enqueueOutbox(outbox({ type: "authorization_delivery", idempotency: "f".repeat(32), payloadJson: JSON.stringify({ approvalId: "5".repeat(32) }) }));
     store.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     const bytes = readFileSync(join(dir, "p2p.sqlite")).toString("latin1");

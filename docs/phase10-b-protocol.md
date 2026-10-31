@@ -53,8 +53,14 @@ The source-scan test asserts that `src/p2p/*` does not import `ledger.ts`,
   writes the authorization tombstone and turns the generation `revoked`; a
   refusal/failure leaves it `uncertain` (recoverable, no fake success). Queued
   old approved/delivery frames are marked dead, and an identity tombstone records
-  the replacement. A new identity cannot receive a key id that belonged to the
-  replaced identity (core check over the port's result).
+  the replacement. A new identity cannot receive a key id or Gateway Key that
+  belonged to the replaced identity (core checks over the port's result and the
+  actual received key hash). A pending change can be **explicitly rejected**
+  (`rejectConsumerIdentityChange(nodeId, fingerprint)` /
+  `P2pStore.rejectPendingPeer`), which clears the pending record and keeps the
+  previously accepted key. A hello is fully validated (signature, identity,
+  target, time) before `recordPeerSeen`, so an unauthenticated hello cannot
+  create a pending change or lock the accepted identity.
 - The Ed25519 private key is read from the Catalogue file; it is never copied.
   Session X25519 keys exist only in memory and are wiped on close.
 
@@ -171,6 +177,18 @@ requested → approved → delivered → acked
 - **One key per `(requestHash, generation)`.** A re-approval after a terminal
   state gets a new generation and a new approval id; the old generation is
   revoked/tombstoned and can never be reused.
+- **A failed port.approve is an unresolved intent, not a licence to mint a new
+  key.** The `approving`/`uncertain` row (same approvalId and generation) is
+  persisted before the port call. A later approve, including after a restart,
+  must first use the read-only `reconcileApproval` lookup:
+  `keyReady` adopts the original key, `noSideEffect` retries the **same**
+  approvalId/generation, `unknown`/missing/throw keeps it `uncertain` with
+  action-needed. No new generation or second key is created to clear an unknown.
+- **Historic-identity gate:** every approve (including after pending is cleared or
+  a restart) and every delivery checks all approvals for the consumer node. Any
+  approval from a different identity that is not confirmed revoked (typed
+  enforcement + authorization tombstone) blocks the new approval/delivery. Only
+  a confirmed revoke or explicit reconcile clears it.
 - **Human approval is the only authorisation.** `approve()` runs the port's
   approval, binds the key identity, computes the authorization hash, and queues
   the encrypted delivery. There is no second “send key” action.
@@ -219,7 +237,11 @@ Key constraints:
 - requests: `request_hash` PK (content-addressed);
 - approvals: `approval_id` PK, unique `(request_hash, generation)`, partial unique
   index on `request_hash` for live states only;
-- deliveries: `approval_id` PK, same authorization hash + key id only;
+- deliveries: `approval_id` PK, same authorization hash + key id, plus
+  `key_hash = SHA-256(actual received Gateway Key)`; no key column. The hash is
+  compared across approvals for the consumer node, so an old secret cannot be
+  re-delivered under a new key id/generation; the core computes it from the key
+  the port actually returned (a caller-declared hash is never trusted);
 - outbox/inbox: unique `(type, idempotency)`; outbox payload is non-sensitive
   business inputs, never an envelope with a key;
 - tombstones: `(scope, key)` PK with expiry.
@@ -273,6 +295,11 @@ interface P2pBusinessPort {
   approve(input): Promise<P2pApprovedMaterials>;   // selected models/cap/key
   takeAuthorization(input): Promise<P2pAuthorizationDocument>; // key in memory only
   recordAck(input): Promise<void>;
+  reconcileApproval?({ requestHash, approvalId, generation, consumer, keyId }): Promise<
+    | { state: "keyReady"; keyId; keyName; models; capUsd; priceVersion; expiresAt; detail? }
+    | { state: "noSideEffect"; detail? }
+    | { state: "unknown"; detail: string | null }
+  >; // read-only: must not create or rotate a key
   revoke(input: { consumerNodeId, approvalId, keyId, generation, reason }): Promise<
     | { revoked: true; enforcement: "keyRevoked" | "secretRotated";
         consumerNodeId; approvalId; keyId; generation; detail: string | null }
@@ -366,7 +393,7 @@ The tests use a temp directory, a fixed clock and an in-process overlay; they do
 not resolve the LAN IP, open a port, read the production Magpie state or call a
 public RPC.
 
-Expected result at this commit: `63 pass / 0 fail`, typecheck clean.
+Expected result at this commit: `70 pass / 0 fail`, typecheck clean.
 
 ## 12. Not verified (UNKNOWN)
 

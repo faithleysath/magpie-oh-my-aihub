@@ -150,6 +150,19 @@ export interface P2pApprovalRequest {
   quote: { contentHash: string; identityFingerprint: string };
 }
 
+export interface P2pApprovalReconcileInput {
+  requestHash: string;
+  approvalId: string;
+  generation: number;
+  consumer: P2pPeerView;
+  keyId: string | null;
+}
+
+export type P2pApprovalReconcile =
+  | { state: "keyReady"; keyId: string; keyName: string; models: string[]; capUsd: number; priceVersion: string; expiresAt: string; detail?: string | null }
+  | { state: "noSideEffect"; detail?: string | null }
+  | { state: "unknown"; detail: string | null };
+
 export interface P2pApprovedMaterials {
   approvalId: string;
   generation: number;
@@ -247,6 +260,10 @@ export interface P2pBusinessPort {
   validateRequest(input: P2pRequestValidationInput): Promise<P2pRequestValidation>;
   recordRequest(input: P2pRecordedRequest): Promise<boolean>;
   approve(input: P2pApprovalRequest): Promise<P2pApprovedMaterials>;
+  // Read-only lookup for an interrupted approval attempt. Must not create or
+  // rotate a key. unknown keeps the approval uncertain; noSideEffect allows a
+  // retry with the same approvalId/generation.
+  reconcileApproval?(input: P2pApprovalReconcileInput): Promise<P2pApprovalReconcile>;
   takeAuthorization(input: P2pTakeAuthorizationInput): Promise<P2pAuthorizationDocument>;
   recordAck(input: P2pAckRecord): Promise<void>;
   /** Must actually revoke the native key. Resolving means "the key is gone". */
@@ -630,6 +647,14 @@ export class P2pNode {
       return this.finishInbox(inbox.row, "awaiting-trust", { requestHash: body.requestHash, state: "awaiting-trust" });
     }
 
+    // A previous identity's native key may still be usable. Do not start a new
+    // request flow until that is reconciled and confirmed revoked.
+    if (this.unresolvedLegacyIdentity(peer.nodeId, peer.fingerprint)) {
+      this.store.setRequestState(body.requestHash, "rejected", now, { note: "legacy-key-unresolved" });
+      await this.enqueueRejection(body.requestHash, "policy", "a previous identity's key is not confirmed revoked");
+      return this.finishInbox(inbox.row, "rejected", { requestHash: body.requestHash, state: "rejected", reason: "policy" });
+    }
+
     // Revalidate against the local provider context. A consumer may have read a
     // stale quote; that is a policy rejection, not a key.
     try {
@@ -897,6 +922,27 @@ export class P2pNode {
     }
     if (session.catalogQuoteHash && document.quote.contentHash !== session.catalogQuoteHash) fail("quote_mismatch", "the authorization is for a quote this session did not bind");
 
+    // The actual received key must not already have been imported under another
+    // approval/generation. The hash is computed by the core from the received
+    // document, not trusted from a caller-declared field.
+    const receivedKeyHash = keyHashOf(document.key);
+    if (receivedKeyHash !== document.keyHash) fail("malformed", "the received authorization key does not match its hash");
+    const priorKey = this.store.keyHashSeenElsewhere(this.identity.peer.nodeId, receivedKeyHash, body.approvalId);
+    if (priorKey.length > 0) {
+      this.store.prepareDelivery({
+        approvalId: body.approvalId,
+        authorizationHash: body.authorizationHash,
+        keyId: body.keyId,
+        keyName: body.keyName,
+        keyHash: receivedKeyHash,
+        state: "uncertain",
+        preparedAt: this.clock().toISOString(),
+        deliveredAt: null,
+        lastError: "this Gateway Key was already imported under another approval",
+      });
+      fail("conflict", "this Gateway Key was already imported under another approval; it cannot be reused");
+    }
+
     const inbound = inboundApprovalOf({ ...body, consumerNodeId: this.identity.peer.nodeId, consumerFingerprint: this.identity.peer.fingerprint, providerNodeId: session.peer.nodeId, providerFingerprint: session.peer.fingerprint } as P2pApprovedBody, session.peer);
     // Registration happens before any ACK. If it throws, the inbox row is
     // abandoned and the provider's bounded retry can deliver the same generation
@@ -912,6 +958,7 @@ export class P2pNode {
         authorizationHash: body.authorizationHash,
         keyId: body.keyId,
         keyName: body.keyName,
+        keyHash: receivedKeyHash,
         state: "uncertain",
         preparedAt: this.clock().toISOString(),
         deliveredAt: null,
@@ -926,6 +973,7 @@ export class P2pNode {
         authorizationHash: body.authorizationHash,
         keyId: body.keyId,
         keyName: body.keyName,
+        keyHash: receivedKeyHash,
         state: "delivered",
         preparedAt: this.clock().toISOString(),
         deliveredAt: this.clock().toISOString(),
@@ -1094,15 +1142,6 @@ export class P2pNode {
       if (memo !== null && /[\u0000-\u001f\u007f]/.test(memo)) fail("malformed", "the memo contains a control character");
       const request = this.store.getRequest(requestHash);
       if (!request) fail("not_found", "no such connection request");
-      const active = this.store.activeApprovalByRequest(requestHash);
-      if (active) {
-        const sameDecision = sameSet(JSON.parse(active.modelsJson) as string[], models) && Math.abs(active.capUsd - capUsd) <= 1e-9 && (active.memo ?? null) === memo;
-        if (sameDecision) return this.viewOf(active);
-        fail("conflict", "this request is already approved with a different decision");
-      }
-      if (!["received", "awaiting-trust", "awaiting-approval", "rejected", "expired", "revoked"].includes(request.state)) {
-        fail("conflict", `the request is ${request.state}`);
-      }
 
       const peerRow = this.store.getPeer(request.consumerNodeId);
       if (!peerRow) fail("not_found", "the consumer identity is not recorded");
@@ -1127,14 +1166,52 @@ export class P2pNode {
         }
         verdict = "accepted";
       }
+      // Runs on every approval path (pending cleared, restart, same identity):
+      // a historic identity whose key is not confirmed revoked blocks this.
+      this.assertNoUnresolvedLegacyIdentity(request.consumerNodeId, peer.fingerprint, "approval");
       if (!models.every((m) => JSON.parse(request.modelsJson).includes(m))) fail("conflict", "approved models must be a subset of the request");
+
+      const active = this.store.activeApprovalByRequest(requestHash);
+      if (active) {
+        const sameDecision = sameSet(JSON.parse(active.modelsJson) as string[], models) && Math.abs(active.capUsd - capUsd) <= 1e-9 && (active.memo ?? null) === memo;
+        if (sameDecision) return this.viewOf(active);
+        fail("conflict", "this request is already approved with a different decision");
+      }
+      if (!["received", "awaiting-trust", "awaiting-approval", "rejected", "expired", "revoked"].includes(request.state)) {
+        fail("conflict", `the request is ${request.state}`);
+      }
 
       const document = JSON.parse(request.documentJson) as P2pRequestDocument;
       const context = await this.port.providerContext();
       this.assertRequestAgainstContext(document, context);
+
+      // A port.approve may have created a key and then failed/restarted. That
+      // unresolved attempt, not a new generation, is the only thing we may
+      // continue: first a read-only reconcile, then either adopt the original
+      // key or retry the same approvalId/generation. Never mint a second key.
+      const unresolved = this.store
+        .listApprovals(peer.nodeId)
+        .filter((a) => a.requestHash === requestHash && (a.state === "approving" || a.state === "uncertain"))
+        .sort((a, b) => b.generation - a.generation)[0] ?? null;
+      if (unresolved) {
+        const sameDecision =
+          sameSet(JSON.parse(unresolved.modelsJson) as string[], models) &&
+          Math.abs(unresolved.capUsd - capUsd) <= 1e-9 &&
+          (unresolved.memo ?? null) === memo;
+        if (!sameDecision) fail("conflict", "an unresolved approval exists with a different models/cap/memo decision; resolve it first");
+        if (Date.parse(unresolved.expiresAt) <= this.clock().getTime()) {
+          fail("conflict", "the unresolved approval has expired; reconcile or revoke it explicitly, do not create a new key");
+        }
+        const reconciled = await this.reconcileApprovalAttempt(unresolved, peer, document);
+        if (reconciled) return reconciled;
+        return this.runApprovalAttempt(unresolved, peer, document);
+      }
+
       const generation = this.store.nextGeneration(requestHash);
       const approvalId = id16();
       const expiresAt = new Date(this.clock().getTime() + this.approvalTtlMs).toISOString();
+      // Persist the attempt BEFORE calling the port: a crash or a throw can no
+      // longer be mistaken for "no key was created".
       this.store.insertApproval({
         approvalId,
         requestHash,
@@ -1159,52 +1236,145 @@ export class P2pNode {
         deliveredAt: null,
         error: null,
       });
-
-      let materials: P2pApprovedMaterials;
-      try {
-        materials = await this.port.approve({
-          approvalId,
-          generation,
-          requestHash,
-          request: document,
-          consumer: peer,
-          models,
-          capUsd,
-          memo,
-          quote: { contentHash: document.quote.contentHash, identityFingerprint: document.quote.identityFingerprint },
-        });
-      } catch (e) {
-        this.store.transitionApproval(approvalId, ["approving"], "uncertain", { error: e instanceof Error ? e.message.slice(0, 300) : "approval failed" });
-        throw e;
-      }
-      this.assertApprovedMaterials(approvalId, generation, peer, models, capUsd, memo, document, materials);
-      // A replaced identity must never receive any key that belonged to its
-      // predecessor. This is defense in depth over the port's own key scoping.
-      const priorKeys = this.store.listApprovals(peer.nodeId).filter((a) => a.consumerFingerprint !== peer.fingerprint && a.keyId);
-      if (priorKeys.some((a) => a.keyId === materials.keyId)) {
-        this.store.transitionApproval(approvalId, ["approving"], "uncertain", { error: "the provisioner reused a key from a replaced identity" });
-        fail("conflict", "the provisioner returned a key from a replaced identity; it was not delivered");
-      }
-      // The approved price version is the one for the SELECTED subset returned by
-      // the port, never the request's full-set version. Both are kept explicitly:
-      // request.priceVersion (accepted set) and approval.priceVersion (approved set).
-      if (!this.store.transitionApproval(approvalId, ["approving"], "approved", { approvedAt: this.clock().toISOString(), keyId: materials.keyId, keyName: materials.keyName, expiresAt: materials.expiresAt, priceVersion: materials.priceVersion })) {
-        this.store.transitionApproval(approvalId, ["approving"], "uncertain", { error: "approval state changed concurrently" });
-        fail("conflict", "the approval was revoked while it was being prepared");
-      }
-      this.store.setRequestState(requestHash, "approved", this.clock(), { approvalId });
-      this.enqueueApproved(approvalId, peer, document, materials);
-      try {
-        await this.prepareDelivery(approvalId);
-      } catch (e) {
-        // The approval stands and the consumer is told; the key/delivery needs a
-        // human look. Never retry this by creating a new key.
-        this.store.transitionApproval(approvalId, ["approved", "delivering"], "uncertain", { error: `delivery preparation failed: ${e instanceof Error ? e.message.slice(0, 240) : "unknown"}` });
-      }
-      const session = this.newestSessionFor(peer.nodeId, peer.fingerprint);
-      if (session) await this.sendDueFor(session);
-      return this.viewApproval(approvalId);
+      return this.runApprovalAttempt(this.store.getApproval(approvalId)!, peer, document);
     });
+  }
+
+  /**
+   * Calls the approval port for an already persisted attempt. On a throw the row
+   * stays the single unresolved intent for this request; a later approve must
+   * reconcile it, not create a new generation.
+   */
+  private async runApprovalAttempt(approval: P2pApprovalRow, peer: P2pPeerView, document: P2pRequestDocument): Promise<P2pApprovalView> {
+    const models = JSON.parse(approval.modelsJson) as string[];
+    let materials: P2pApprovedMaterials;
+    try {
+      materials = await this.port.approve({
+        approvalId: approval.approvalId,
+        generation: approval.generation,
+        requestHash: approval.requestHash,
+        request: document,
+        consumer: peer,
+        models,
+        capUsd: approval.capUsd,
+        memo: approval.memo,
+        quote: { contentHash: approval.quoteHash, identityFingerprint: document.quote.identityFingerprint },
+      });
+    } catch (e) {
+      this.store.transitionApproval(approval.approvalId, ["approving", "uncertain"], "uncertain", {
+        error: e instanceof Error ? e.message.slice(0, 300) : "approval failed",
+      });
+      throw e;
+    }
+    this.assertApprovedMaterials(approval.approvalId, approval.generation, peer, models, approval.capUsd, approval.memo, document, materials);
+    this.assertNoReusedKeyId(approval.approvalId, peer.nodeId, materials.keyId, materials.keyName);
+    if (!this.store.transitionApproval(approval.approvalId, ["approving", "uncertain"], "approved", {
+      approvedAt: this.clock().toISOString(),
+      keyId: materials.keyId,
+      keyName: materials.keyName,
+      expiresAt: materials.expiresAt,
+      priceVersion: materials.priceVersion,
+    })) {
+      this.store.transitionApproval(approval.approvalId, ["approving", "uncertain"], "uncertain", { error: "approval state changed concurrently" });
+      fail("conflict", "the approval was revoked while it was being prepared");
+    }
+    this.store.setRequestState(approval.requestHash, "approved", this.clock(), { approvalId: approval.approvalId });
+    this.enqueueApproved(approval.approvalId, peer, document, materials);
+    try {
+      await this.prepareDelivery(approval.approvalId);
+    } catch (e) {
+      // The approval stands and the consumer is told; the key/delivery needs a
+      // human look. Never retry this by creating a new key.
+      this.store.transitionApproval(approval.approvalId, ["approved", "delivering"], "uncertain", { error: `delivery preparation failed: ${e instanceof Error ? e.message.slice(0, 240) : "unknown"}` });
+    }
+    const session = this.newestSessionFor(peer.nodeId, peer.fingerprint);
+    if (session) await this.sendDueFor(session);
+    return this.viewApproval(approval.approvalId);
+  }
+
+  /**
+   * Read-only lookup of an interrupted approval attempt. Returns a view if the
+   * original key exists; null means the port confirms no side effect and the
+   * same approvalId/generation may be retried; anything unknown keeps the row
+   * uncertain and blocks a new generation.
+   */
+  private async reconcileApprovalAttempt(approval: P2pApprovalRow, peer: P2pPeerView, document: P2pRequestDocument): Promise<P2pApprovalView | null> {
+    if (!this.port.reconcileApproval) {
+      fail("conflict", "an approval attempt is unresolved and the port has no read-only reconcile; refusing to create a new key");
+    }
+    let result: P2pApprovalReconcile;
+    try {
+      result = await this.port.reconcileApproval({
+        requestHash: approval.requestHash,
+        approvalId: approval.approvalId,
+        generation: approval.generation,
+        consumer: peer,
+        keyId: approval.keyId,
+      });
+    } catch (e) {
+      fail("conflict", `cannot reconcile the unresolved approval: ${e instanceof Error ? e.message.slice(0, 200) : "unknown"}; it stays uncertain`);
+    }
+    if (result.state === "unknown") {
+      fail("conflict", `the unresolved approval is still unknown${result.detail ? ` (${result.detail.slice(0, 120)})` : ""}; reconcile or revoke it explicitly`);
+    }
+    if (result.state === "noSideEffect") return null;
+
+    const materials: P2pApprovedMaterials = {
+      approvalId: approval.approvalId,
+      generation: approval.generation,
+      consumerNodeId: approval.consumerNodeId,
+      consumerFingerprint: approval.consumerFingerprint,
+      models: result.models,
+      capUsd: result.capUsd,
+      quoteHash: approval.quoteHash,
+      priceVersion: result.priceVersion,
+      expiresAt: result.expiresAt,
+      keyId: result.keyId,
+      keyName: result.keyName,
+      memo: approval.memo,
+    };
+    this.assertApprovedMaterials(approval.approvalId, approval.generation, peer, JSON.parse(approval.modelsJson) as string[], approval.capUsd, approval.memo, document, materials);
+    this.assertNoReusedKeyId(approval.approvalId, peer.nodeId, materials.keyId, materials.keyName);
+    if (!this.store.transitionApproval(approval.approvalId, ["approving", "uncertain"], "approved", {
+      approvedAt: this.clock().toISOString(),
+      keyId: materials.keyId,
+      keyName: materials.keyName,
+      expiresAt: materials.expiresAt,
+      priceVersion: materials.priceVersion,
+    })) {
+      fail("conflict", "the unresolved approval changed concurrently; re-read it");
+    }
+    this.store.setRequestState(approval.requestHash, "approved", this.clock(), { approvalId: approval.approvalId });
+    this.enqueueApproved(approval.approvalId, peer, document, materials);
+    try {
+      await this.prepareDelivery(approval.approvalId);
+    } catch (e) {
+      this.store.transitionApproval(approval.approvalId, ["approved", "delivering"], "uncertain", { error: `delivery preparation failed: ${e instanceof Error ? e.message.slice(0, 240) : "unknown"}` });
+    }
+    const session = this.newestSessionFor(peer.nodeId, peer.fingerprint);
+    if (session) await this.sendDueFor(session);
+    return this.viewApproval(approval.approvalId);
+  }
+
+  /** A key id seen on any other approval for this node must not be reused. */
+  private assertNoReusedKeyId(approvalId: string, nodeId: string, keyId: string, keyName: string): void {
+    const prior = this.store.listApprovals(nodeId).filter((a) => a.approvalId !== approvalId && a.keyId && a.keyId === keyId);
+    if (prior.length > 0) {
+      // Persist the returned key identity so a revoke can bind to the real key;
+      // this is an uncertain attempt, not a delivered authorization.
+      this.store.transitionApproval(approvalId, ["approving", "uncertain"], "uncertain", {
+        keyId,
+        keyName,
+        error: `the provisioner reused key ${keyId} from approval ${prior[0].approvalId}`,
+      });
+      fail("conflict", "the provisioner returned an already-used key id; it was not delivered");
+    }
+  }
+
+  /** Explicitly rejects a pending key change; the previously accepted key stays. */
+  rejectConsumerIdentityChange(nodeId: string, expectedFingerprint: string): void {
+    this.assertOpen();
+    this.store.rejectPendingPeer(nodeId, expectedFingerprint, this.clock());
   }
 
   async reject(requestHash: string, reason: P2pRejectionReason, note?: string): Promise<void> {
@@ -1532,6 +1702,30 @@ export class P2pNode {
    * A result is accepted only if it is typed, explicitly enforced and bound to
    * this exact approval and key generation. Everything else is uncertain.
    */
+  /**
+   * Any approval for this consumer node from a different (historic) identity
+   * whose native key is not confirmed revoked blocks new approvals/deliveries.
+   */
+  private unresolvedLegacyIdentity(nodeId: string, currentFingerprint: string): P2pApprovalRow | null {
+    for (const approval of this.store.listApprovals(nodeId)) {
+      if (approval.consumerFingerprint === currentFingerprint) continue;
+      if (approval.state === "rejected" && !approval.keyId) continue;
+      if (approval.state === "expired" && !approval.keyId) continue;
+      if (approval.state === "revoked" && this.store.hasTombstone("authorization", approval.approvalId)) continue;
+      return approval;
+    }
+    return null;
+  }
+
+  private assertNoUnresolvedLegacyIdentity(nodeId: string, currentFingerprint: string, action: string): void {
+    const legacy = this.unresolvedLegacyIdentity(nodeId, currentFingerprint);
+    if (!legacy) return;
+    fail(
+      "conflict",
+      `previous identity approval ${legacy.approvalId} is ${legacy.state} and not confirmed revoked; reconcile before ${action}`,
+    );
+  }
+
   private revokeConfirmation(outcome: P2pRevokeOutcome | null | undefined, approval: P2pApprovalRow): { ok: true } | { ok: false; reason: string } {
     if (!outcome || typeof outcome !== "object") return { ok: false, reason: "the port returned no enforceable result" };
     if (outcome.revoked !== true) {
@@ -1623,8 +1817,18 @@ export class P2pNode {
       const current = this.store.getApproval(approvalId);
       if (current?.state !== "delivering" && current?.state !== "delivered") fail("conflict", `the approval is ${current?.state ?? "gone"}`);
     }
+    this.assertNoUnresolvedLegacyIdentity(approval.consumerNodeId, approval.consumerFingerprint, "delivery");
     const document = await this.takeAuthorization(approval);
     const authorizationHash = authorizationHashOf(document, document.keyHash);
+    const receivedKeyHash = keyHashOf(document.key);
+    if (receivedKeyHash !== document.keyHash) fail("malformed", "the received authorization key does not match its hash");
+    const priorKey = this.store.keyHashSeenElsewhere(approval.consumerNodeId, receivedKeyHash, approvalId);
+    if (priorKey.length > 0) {
+      this.store.transitionApproval(approvalId, ["delivering"], "uncertain", {
+        error: `the Gateway Key was already delivered under approval ${priorKey[0].approvalId} generation ${priorKey[0].generation}`,
+      });
+      fail("conflict", "this Gateway Key was already delivered under another approval; refusing to reuse an old secret");
+    }
     const existing = this.store.getDelivery(approvalId);
     if (existing && (existing.authorizationHash !== authorizationHash || existing.keyId !== document.keyId)) {
       this.store.transitionApproval(approvalId, ["delivering"], "uncertain", { error: "a different authorization was already prepared" });
@@ -1635,6 +1839,7 @@ export class P2pNode {
       authorizationHash,
       keyId: document.keyId,
       keyName: document.keyName,
+      keyHash: receivedKeyHash,
       state: "delivering",
       preparedAt: this.clock().toISOString(),
       deliveredAt: null,
@@ -1991,6 +2196,7 @@ export class P2pNode {
     const approval = this.store.getApproval(approvalId);
     if (!approval) fail("not_found", "no such approval");
     if (!["delivering", "delivered", "acked"].includes(approval.state)) fail("conflict", `the approval is ${approval.state}; it cannot be delivered`);
+    this.assertNoUnresolvedLegacyIdentity(approval.consumerNodeId, approval.consumerFingerprint, "delivery");
     if (this.store.hasTombstone("authorization", approvalId)) fail("conflict", "the authorization was revoked");
     if (Date.parse(approval.expiresAt) <= this.clock().getTime()) {
       this.store.transitionApproval(approvalId, ["approved", "delivering"], "expired", { error: "approval expired before delivery" });

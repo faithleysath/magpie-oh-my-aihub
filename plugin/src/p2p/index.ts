@@ -21,6 +21,8 @@ export type {
   P2pRecordedRequest,
   P2pApprovalRequest,
   P2pApprovedMaterials,
+  P2pApprovalReconcileInput,
+  P2pApprovalReconcile,
   P2pTakeAuthorizationInput,
   P2pAckRecord,
   P2pRevokeRequest,

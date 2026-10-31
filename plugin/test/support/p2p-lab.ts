@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson, loadOrCreateCatalogIdentity, sha256Hex } from "../../src/catalog.ts";
+import { keyHashOf } from "../../src/p2p/protocol.ts";
 import { p2pIdentityFromCatalog, type P2pIdentity } from "../../src/p2p/identity.ts";
 import { P2pStore } from "../../src/p2p/store.ts";
 import {
@@ -46,6 +47,8 @@ export interface LabFaults {
   revokeEnforcement?: string;
   narrowModels?: string[] | null;
   approveKeyId?: string;
+  takeKey?: string;
+  reconcileMode?: "unknown" | "keyReady" | "noSideEffect";
   readbackModels?: string[] | null;
   readbackCapUsd?: number | null;
 }
@@ -72,8 +75,10 @@ export class P2pLab {
     recordAck: 0,
     recordApproval: 0,
     drop: 0,
+    reconcile: 0,
   };
   readonly importedApprovals: string[] = [];
+  readonly approveInputs: Array<{ approvalId: string; generation: number }> = [];
   readonly sentFrames: Array<{ sessionId: string; from: "A" | "B"; frame: Buffer }> = [];
   readonly registeredSessions: Array<{ approvalId: string; providerNodeId: string; providerFingerprint: string }> = [];
 
@@ -227,6 +232,7 @@ export class P2pLab {
       },
       async approve(input: P2pApprovalRequest): Promise<P2pApprovedMaterials> {
         self.calls.approve += 1;
+        self.approveInputs.push({ approvalId: input.approvalId, generation: input.generation });
         if (self.faults.failApprove) throw new Error("provisioner refused");
         return {
           approvalId: input.approvalId,
@@ -244,8 +250,27 @@ export class P2pLab {
           memo: input.memo,
         };
       },
+      async reconcileApproval(input: { approvalId: string; generation: number; keyId: string | null }) {
+        self.calls.reconcile = (self.calls.reconcile ?? 0) + 1;
+        const mode = self.faults.reconcileMode ?? "unknown";
+        if (mode === "unknown") return { state: "unknown" as const, detail: "not reconciled" };
+        if (mode === "noSideEffect") return { state: "noSideEffect" as const, detail: null };
+        const approval = self.storeB.getApproval(input.approvalId);
+        if (!approval) return { state: "unknown" as const, detail: "approval missing" };
+        return {
+          state: "keyReady" as const,
+          keyId: self.faults.approveKeyId ?? KEY_ID,
+          keyName: KEY_NAME,
+          models: JSON.parse(approval.modelsJson) as string[],
+          capUsd: approval.capUsd,
+          priceVersion: sha256Hex(canonicalJson({ selected: JSON.parse(approval.modelsJson) as string[] })).slice(0, 64),
+          expiresAt: approval.expiresAt,
+          detail: null,
+        };
+      },
       async takeAuthorization(input: P2pTakeAuthorizationInput): Promise<P2pAuthorizationDocument> {
         self.calls.takeAuthorization += 1;
+        const key = self.faults.takeKey ?? KEY;
         return {
           schema: "ohmyaihub.authorization/v2",
           createdAt: new Date(self.clock.now.getTime()).toISOString(),
@@ -263,8 +288,8 @@ export class P2pLab {
           },
           keyId: input.keyId,
           keyName: input.keyName,
-          keyHash: KEY_HASH,
-          key: KEY,
+          keyHash: keyHashOf(key),
+          key,
         };
       },
       async recordAck() {
