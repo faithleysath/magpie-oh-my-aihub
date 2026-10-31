@@ -12,6 +12,7 @@
 
 import { capOnGrid, modelList, type ConnectionRequest } from "../connection-request.ts";
 import { sha256Hex } from "../catalog.ts";
+import { catalogPriceVersion } from "../pricing.ts";
 import type { Service } from "../service.ts";
 import type { ConsumerRecord } from "../provisioner.ts";
 
@@ -388,3 +389,278 @@ export async function dropAuthorization(service: Service, providerNodeId: string
 }
 
 export { providerIdFor };
+
+// --- B-core `P2pApprovalPort` adapter ---------------------------------------
+//
+// These names intentionally match B-core's narrow port. The types are local
+// until B-core's reviewed commit is available; when it lands, this block is
+// replaced by imports from `../p2p/service.ts` without changing behaviour.
+
+export interface P2pPeerViewLike {
+  accountId: string;
+  nodeId: string;
+  hostname: string;
+  fingerprint: string;
+}
+
+export interface P2pRequestValidationLike {
+  models: string[];
+  quoteHash: string;
+  priceVersion: string;
+  expiresAt: string;
+}
+
+export interface P2pApprovalResultLike {
+  keyId: string;
+  keyName: string;
+  models: string[];
+  capUsd: number;
+  /** B-core must store this for the approval; it is not validation.priceVersion
+   *  when the human approves a subset. */
+  priceVersion: string;
+}
+
+export interface P2pKeyMaterialLike {
+  key: string;
+  keyId: string;
+  keyName: string;
+  models: string[];
+  capUsd: number;
+}
+
+export interface P2pApprovalPortLike {
+  validateRequest(input: { requestHash: string; request: ControlRequestDocument; consumer: P2pPeerViewLike; sessionId: string }): Promise<P2pRequestValidationLike>;
+  approveRequest(input: {
+    requestHash: string;
+    approvalId: string;
+    consumer: P2pPeerViewLike;
+    models: string[];
+    capUsd: number;
+    quoteHash: string;
+    priceVersion: string;
+  }): Promise<P2pApprovalResultLike>;
+  readKeyMaterial(input: {
+    requestHash: string;
+    approvalId: string;
+    consumer: P2pPeerViewLike;
+    provider: { nodeId: string; fingerprint: string; mappedCidr: string; gatewayPort: number };
+    keyId: string;
+    keyName: string;
+    models: string[];
+    capUsd: number;
+    quoteHash: string;
+    priceVersion: string;
+  }): Promise<P2pKeyMaterialLike>;
+  registerAuthorization(input: {
+    provider: { nodeId: string; fingerprint: string; mappedCidr: string; gatewayPort: number };
+    consumer: { nodeId: string; fingerprint: string };
+    document: ControlAuthorizationDocument;
+  }): Promise<{ keyId: string; models: string[]; capUsd: number }>;
+  revokeConsumer?(input: { consumer: P2pPeerViewLike; approvalId: string | null; reason: string }): Promise<void>;
+  onNotice?(notice: {
+    kind: "revoked" | "quote-changed" | "status";
+    approvalId: string | null;
+    requestHash: string | null;
+    detail: string | null;
+    quoteHash?: string;
+    priceVersion?: string;
+    models?: string[];
+  }): Promise<void>;
+}
+
+function configuredProvider(service: Service): { nodeId: string; mappedCidr: string; gatewayPort: number } {
+  const cfg = service.config();
+  if (!cfg?.nodeId || !cfg.mappedCidr) return refuse("conflict", "this provider has no published overlay address");
+  return { nodeId: cfg.nodeId, mappedCidr: cfg.mappedCidr, gatewayPort: service.gatewayPort() };
+}
+
+/**
+ * A process-local cache of the request document B-core last validated. It
+ * contains only public request fields (never a key) and is bounded. B-core
+ * calls validateRequest again inside approveRequest, in the same local action,
+ * so an approval after a restart always refreshes this entry before it is used.
+ */
+const validatedRequests = new WeakMap<Service, Map<string, ControlRequestDocument>>();
+
+function requestCache(service: Service): Map<string, ControlRequestDocument> {
+  let cache = validatedRequests.get(service);
+  if (!cache) {
+    cache = new Map();
+    validatedRequests.set(service, cache);
+  }
+  return cache;
+}
+
+function remember(cache: Map<string, ControlRequestDocument>, hash: string, document: ControlRequestDocument): void {
+  cache.delete(hash);
+  cache.set(hash, document);
+  while (cache.size > 256) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
+
+async function validateForPort(
+  service: Service,
+  input: { requestHash: string; request: ControlRequestDocument; consumer: P2pPeerViewLike },
+): Promise<P2pRequestValidationLike> {
+  const request = input.request;
+  if (request.consumer.nodeId !== input.consumer.nodeId) return refuse("untrusted_peer", "the request consumer is not the session peer");
+  const provider = configuredProvider(service);
+  if (request.provider.nodeId !== provider.nodeId || request.provider.mappedCidr !== provider.mappedCidr || request.provider.gatewayPort !== provider.gatewayPort) {
+    return refuse("quote_mismatch", "the request targets a different provider address");
+  }
+  const quote = service.catalogStatus().quote;
+  if (!quote || quote.contentHash !== request.quote.contentHash || quote.identity?.fingerprint !== request.quote.identityFingerprint) {
+    return refuse("quote_mismatch", "the request's accepted quote is not this node's current published quote");
+  }
+  const requestedQuote = quote.models.filter((m) => request.models.includes(m.id));
+  const requestedVersion = catalogPriceVersion(requestedQuote);
+  if (!requestedVersion || requestedVersion !== request.quote.priceVersion) {
+    return refuse("quote_mismatch", "the request's accepted price version is not current for those models");
+  }
+  const candidates = await service.shareCandidates();
+  const eligible = request.models.filter((id) => candidates.models.some((m) => m.id === id && m.allowedByPolicy && m.completePrice));
+  if (eligible.length === 0) return refuse("quote_mismatch", "none of the requested models is a currently priced native model allowed by policy");
+  const eligibleQuote = quote.models.filter((m) => eligible.includes(m.id));
+  const priceVersion = catalogPriceVersion(eligibleQuote);
+  if (!priceVersion) return refuse("quote_mismatch", "the eligible models have no complete price");
+  const cache = requestCache(service);
+  remember(cache, input.requestHash, structuredClone(request));
+  return { models: eligible, quoteHash: quote.contentHash, priceVersion, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() };
+}
+
+/** Builds the actual B-core port. No key is created by validateRequest. */
+export function createApprovalPort(service: Service): P2pApprovalPortLike {
+  const dropped = new Map<string, string>(); // approvalId -> providerNodeId for the consumer side
+  return {
+    async validateRequest(input) {
+      return validateForPort(service, input);
+    },
+
+    async approveRequest(input) {
+      const document = requestCache(service).get(input.requestHash);
+      if (!document) return refuse("conflict", "the request is not in this process's validated cache; approve again after a re-read");
+      if (input.quoteHash !== document.quote.contentHash) return refuse("quote_mismatch", "the approval quote differs from the validated request");
+      const materials = await approve(service, {
+        approvalId: input.approvalId,
+        requestHash: input.requestHash,
+        consumerNodeId: input.consumer.nodeId,
+        consumerFingerprint: input.consumer.fingerprint,
+        document,
+        models: input.models,
+        capUsd: input.capUsd,
+        memo: "",
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      });
+      const quote = service.catalogStatus().quote;
+      const version = quote ? catalogPriceVersion(quote.models.filter((m) => materials.models.includes(m.id))) : null;
+      if (!version) return refuse("quote_mismatch", "the approved models lost their price; nothing was issued");
+      return {
+        keyId: materials.keyId,
+        keyName: materials.keyName,
+        models: materials.models,
+        capUsd: materials.capUsd,
+        priceVersion: version,
+      };
+    },
+
+    async readKeyMaterial(input) {
+      const provider = configuredProvider(service);
+      if (input.provider.nodeId !== provider.nodeId || input.provider.mappedCidr !== provider.mappedCidr || input.provider.gatewayPort !== provider.gatewayPort) {
+        return refuse("quote_mismatch", "the provider address changed after approval");
+      }
+      const material = await readKeyMaterial(service, {
+        approvalId: input.approvalId,
+        consumerNodeId: input.consumer.nodeId,
+        consumerFingerprint: input.consumer.fingerprint,
+        requestHash: input.requestHash,
+        models: input.models,
+        capUsd: input.capUsd,
+        quote: { contentHash: input.quoteHash, priceVersion: input.priceVersion, identityFingerprint: input.provider.fingerprint },
+        keyId: input.keyId,
+        keyName: input.keyName,
+      });
+      return { key: material.key, keyId: material.keyId, keyName: material.keyName, models: material.models, capUsd: material.capUsd };
+    },
+
+    async registerAuthorization(input) {
+      const document = input.document;
+      if (document.provider.nodeId !== input.provider.nodeId) return refuse("untrusted_peer", "the authorization names another provider");
+      if (document.consumer.nodeId !== input.consumer.nodeId || document.consumer.fingerprint !== input.consumer.fingerprint) {
+        return refuse("untrusted_peer", "the authorization is addressed to another consumer");
+      }
+      const approval: ControlInboundApproval = {
+        approvalId: document.approvalId,
+        requestHash: document.requestHash,
+        consumerNodeId: input.consumer.nodeId,
+        consumerFingerprint: input.consumer.fingerprint,
+        providerNodeId: input.provider.nodeId,
+        models: document.models,
+        capUsd: document.capUsd,
+        quoteHash: document.quote.contentHash,
+        priceVersion: document.quote.priceVersion,
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        keyId: document.keyId,
+        keyName: document.keyName,
+      };
+      const result = await importAuthorization(service, { document, approval, providerFingerprint: input.provider.fingerprint });
+      dropped.set(document.approvalId, input.provider.nodeId);
+      return { keyId: document.keyId, models: result.models, capUsd: result.capUsd };
+    },
+
+    async revokeConsumer(input) {
+      try {
+        await service.revokeConsumer(input.consumer.nodeId);
+      } catch (error) {
+        if (/^no (?:active )?consumer /.test(String((error as Error)?.message ?? ""))) return;
+        throw error;
+      }
+    },
+
+    async onNotice(notice) {
+      if (notice.kind !== "revoked" || !notice.approvalId) return;
+      const providerNodeId = dropped.get(notice.approvalId);
+      if (!providerNodeId) return;
+      try {
+        await dropAuthorization(service, providerNodeId);
+        dropped.delete(notice.approvalId);
+      } catch {
+        // Keep the map entry: a later notice or explicit repair can retry the
+        // removal; never remove a provider we cannot prove is ours.
+      }
+    },
+  };
+}
+
+/** Reads the key for B-core after rechecking the complete approval binding. */
+async function readKeyMaterial(service: Service, input: ControlTakeAuthorizationInput): Promise<P2pKeyMaterialLike> {
+  const consumer = consumerOf(service, input.consumerNodeId);
+  if (consumer.keyId !== input.keyId || consumer.keyName !== input.keyName) {
+    return refuse("conflict", "the consumer key changed after approval; nothing was sent");
+  }
+  if (consumer.acceptedQuoteHash !== input.quote.contentHash || consumer.priceVersion !== input.quote.priceVersion) {
+    return refuse("quote_mismatch", "the consumer is bound to a different quote than this approval");
+  }
+  if (consumer.capUsd !== input.capUsd || consumer.models.length !== input.models.length || !sameSet(consumer.models, input.models)) {
+    return refuse("conflict", "the consumer cap or models changed after approval; nothing was sent");
+  }
+  const context = service.requestApprovalContext();
+  if (!context.quote || context.quote.contentHash !== input.quote.contentHash || context.quote.identity?.fingerprint !== input.quote.identityFingerprint) {
+    return refuse("quote_mismatch", "the published quote changed after approval; nothing was sent");
+  }
+  const currentVersion = catalogPriceVersion(context.quote.models.filter((m) => input.models.includes(m.id)));
+  if (!currentVersion || currentVersion !== input.quote.priceVersion) {
+    return refuse("quote_mismatch", "the approved model prices changed after approval; nothing was sent");
+  }
+  const handover = await service.handover(input.consumerNodeId);
+  if (handover.capUsd !== input.capUsd || handover.models.length !== input.models.length || !sameSet(handover.models, input.models)) {
+    return refuse("conflict", "the consumer cap or models changed during hand-over; nothing was sent");
+  }
+  const after = consumerOf(service, input.consumerNodeId);
+  if (after.keyId !== input.keyId || after.acceptedQuoteHash !== input.quote.contentHash || after.priceVersion !== input.quote.priceVersion) {
+    return refuse("conflict", "the consumer key or quote binding changed during hand-over; nothing was sent");
+  }
+  return { key: handover.key, keyId: after.keyId, keyName: handover.keyName, models: [...handover.models], capUsd: handover.capUsd };
+}

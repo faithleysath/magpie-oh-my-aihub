@@ -8,6 +8,7 @@ import { FakeMagpie, LAB_MODEL, LAB_PRICE } from "./support/fake-magpie.ts";
 import {
   ControlServiceRefusal,
   approve,
+  createApprovalPort,
   dropAuthorization,
   importAuthorization,
   providerContext,
@@ -305,5 +306,116 @@ describe("consumer import", () => {
     expect(calls).toEqual([{ kind: "remove", id: providerIdFor(PROVIDER) }]);
     const absent = { provider: () => undefined, removeProvider: async () => { throw new Error("must not"); } } as never;
     await dropAuthorization(absent, PROVIDER);
+  });
+});
+
+describe("B-core approval port adapter", () => {
+  function portFixture() {
+    const { svc, magpie } = realService();
+    const quoteModels = [
+      { id: LAB_MODEL, pricing: models[0]!.pricing },
+      { id: "lab/other", pricing: models[0]!.pricing },
+    ];
+    (svc as any).catalogStatus = () => ({
+      quote: {
+        contentHash: HASH,
+        billing: { priceVersion: catalogPriceVersion(quoteModels) },
+        identity: { fingerprint: FP },
+        models: quoteModels,
+      },
+    });
+    svc.requestApprovalContext = () => ({ provider: { nodeId: NODE, mappedCidr: "10.66.1.2/32", gatewayPort: 3425 }, quote: { contentHash: HASH, identity: { fingerprint: FP }, models: quoteModels } });
+    const metas = quoteModels.map((m) => ({ id: m.id, price: LAB_PRICE, displayName: null, gatewayApis: ["chat"], nativeApis: null, contextWindow: null, maxOutputTokens: null, images: null, modalities: null, reasoningLevels: null, priceSource: "magpie-settings", capabilitiesSource: "magpie-settings" }));
+    (magpie as any).catalogModels = async () => metas;
+    (svc as any).probes.catalogModels = async () => metas;
+    const doc = {
+      ...document(),
+      models: [LAB_MODEL, "lab/other"],
+      quote: { ...document().quote, priceVersion: catalogPriceVersion([...models, { id: "lab/other", pricing: models[0]!.pricing }])! },
+    };
+    return { svc, magpie, doc, port: createApprovalPort(svc) };
+  }
+
+  test("validate returns only priced native models and binds the accepted quote", async () => {
+    const { port, doc } = portFixture();
+    const valid = await port.validateRequest({ requestHash: HASH, request: doc as any, consumer: { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) }, sessionId: "s".repeat(32) });
+    expect(valid.models).toEqual([LAB_MODEL, "lab/other"]);
+    expect(valid.quoteHash).toBe(HASH);
+    expect(valid.priceVersion).toBe(catalogPriceVersion([...models, { id: "lab/other", pricing: models[0]!.pricing }])!);
+    await expect(port.validateRequest({ requestHash: HASH, request: { ...doc, quote: { ...doc.quote, contentHash: "9".repeat(64) } } as any, consumer: { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) }, sessionId: "s".repeat(32) })).rejects.toThrow(/current published quote/);
+  });
+
+  test("approval returns the price version for the selected subset, not the whole eligible set", async () => {
+    const { port, doc, magpie } = portFixture();
+    const consumer = { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) };
+    await port.validateRequest({ requestHash: HASH, request: doc as any, consumer, sessionId: "s".repeat(32) });
+    const result = await port.approveRequest({
+      requestHash: HASH,
+      approvalId: APPROVAL,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      quoteHash: HASH,
+      priceVersion: catalogPriceVersion([...models, { id: "lab/other", pricing: models[0]!.pricing }])!,
+    });
+    expect(result.models).toEqual([LAB_MODEL]);
+    expect(result.capUsd).toBe(1);
+    expect(result.priceVersion).toBe(catalogPriceVersion([models[0]!])!);
+    expect(magpie.keys.size).toBe(1);
+    const material = await port.readKeyMaterial({
+      requestHash: HASH,
+      approvalId: APPROVAL,
+      consumer,
+      provider: { nodeId: NODE, fingerprint: FP, mappedCidr: "10.66.1.2/32", gatewayPort: 3425 },
+      keyId: result.keyId,
+      keyName: result.keyName,
+      models: result.models,
+      capUsd: result.capUsd,
+      quoteHash: HASH,
+      priceVersion: result.priceVersion,
+    });
+    expect(material.key).toBe(magpie.keyById(result.keyId)!.secret);
+    await expect(port.readKeyMaterial({
+      requestHash: HASH,
+      approvalId: APPROVAL,
+      consumer,
+      provider: { nodeId: NODE, fingerprint: FP, mappedCidr: "10.66.1.2/32", gatewayPort: 3425 },
+      keyId: result.keyId,
+      keyName: result.keyName,
+      models: result.models,
+      capUsd: result.capUsd,
+      quoteHash: HASH,
+      priceVersion: catalogPriceVersion([...models, { id: "lab/other", pricing: models[0]!.pricing }])!,
+    })).rejects.toThrow(/different quote|prices changed/);
+  });
+
+  test("registerAuthorization maps a v2 document to addProvider/readback and onNotice drops it", async () => {
+    const calls: any[] = [];
+    const service = {
+      addProvider: async (input: any) => { calls.push({ kind: "add", input }); return { id: input.id }; },
+      providerModels: async (id: string) => ({ id, models: [LAB_MODEL], limit: { costLimit: 1 } }),
+      removeProvider: async (id: string) => { calls.push({ kind: "remove", id }); return { id }; },
+      provider: (id: string) => (id === providerIdFor(PROVIDER) ? { id } : undefined),
+      revokeConsumer: async () => {},
+    } as never;
+    const port = createApprovalPort(service);
+    const doc = authorization();
+    const { createHash } = await import("node:crypto");
+    doc.keyHash = createHash("sha256").update(doc.key).digest("hex");
+    const result = await port.registerAuthorization({
+      provider: { nodeId: PROVIDER, fingerprint: FP, mappedCidr: "10.66.2.3/32", gatewayPort: 3425 },
+      consumer: { nodeId: "alice", fingerprint: "a".repeat(64) },
+      document: doc,
+    });
+    expect(result).toEqual({ keyId: doc.keyId, models: [LAB_MODEL], capUsd: 1 });
+    await port.onNotice?.({ kind: "revoked", approvalId: APPROVAL, requestHash: HASH, detail: "revoked" });
+    expect(calls.some((c) => c.kind === "remove" && c.id === providerIdFor(PROVIDER))).toBe(true);
+  });
+
+  test("revokeConsumer is idempotent for a vanished consumer but propagates a real failure", async () => {
+    const gone = { revokeConsumer: async () => { throw new Error("no consumer alice"); } } as never;
+    await expect(createApprovalPort(gone).revokeConsumer?.({ consumer: { accountId: "", nodeId: "alice", hostname: "", fingerprint: "" }, approvalId: null, reason: "x" })).resolves.toBeUndefined();
+    const broken = { revokeConsumer: async () => { throw new Error("magpie refused"); } } as never;
+    await expect(createApprovalPort(broken).revokeConsumer?.({ consumer: { accountId: "", nodeId: "alice", hostname: "", fingerprint: "" }, approvalId: null, reason: "x" })).rejects.toThrow(/refused/);
   });
 });
