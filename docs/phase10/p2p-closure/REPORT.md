@@ -6,8 +6,10 @@ Status tags: **VERIFIED** (read in source/config/CLI), **REPRODUCED** (run and o
 - Date: 2026-10-31 (Asia/Shanghai), branch `feature/phase10-p2p-closure`
 - Integration base at start: `58645bb92fc003cbc7cef92b037acc9676c3034f`
   (A share-fix real-run head; F3/F4/F5 unfixed at that point)
-- Final head when this report was written: see `git rev-parse HEAD` in the branch; the last
-  functional commit before the docs is `2f27002` (later commits are this report only).
+- Final functional head before the CI-fix commit: `2f27002`; the CI fix adds a sorted
+  expectation in one test and a two-line, finding-scoped gitleaks allowlist for the canonical
+  public BIP39 test vector. PR: https://github.com/faithleysath/magpie-oh-my-aihub/pull/49
+  (draft, not merged).
 - Evidence index: [`evidence/`](evidence/) with SHA-256 in [`evidence/SHA256SUMS`](evidence/SHA256SUMS).
 - This is **not** a Phase-10 GO for wallet/mainnet (C/D are not in this run) and not a WAN test.
 
@@ -243,7 +245,7 @@ Sanitized call bodies and the lab/cleanup manifests are in [`evidence/`](evidenc
 | `bun run secret-scan` | PASS (working tree) |
 | `bun run boot-check` | PASS (stub Magpie 0.1.2038, random API port, 0600 snapshot) |
 | Hermetic network guard | Enforced by `bunfig.toml`; the two-service tests register the exact child origins they started |
-| CI | GitHub Actions run on the pushed branch/PR: see the PR checks (Linux + macOS, Bun 1.4.3); the workflow also runs the Windows subset and secret/package gates from earlier units |
+| CI | GitHub Actions on PR #49: macOS plugin + package content gates pass; Linux initially failed on one order-dependent test (`sup.forwards…sort()` asserted against an unsorted expected pair) and the secret gates on two exact public BIP39 test-vector lines. Both are fixed (sorted both sides; a finding-scoped, line-scoped allowlist). The post-fix run is the acceptance record for this PR. |
 
 The two PR47 lifecycle tests (`host.lock` release after a constructor failure; SIGTERM during
 `Service.start`) failed on PR47's older base `f39975c`; they pass on this runtime in the full suite
