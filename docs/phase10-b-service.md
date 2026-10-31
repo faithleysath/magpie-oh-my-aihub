@@ -261,7 +261,7 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | Enforced revoke readback/lock/both-fail | VERIFIED (unit, fake Magpie) | 15 port tests |
 | PR #19 transport | PASS (reviewed 7bcf7e0, rebased on approved PR #15) | 20 real/unit tests; see PR #19 |
 | PR #20 adapter targeted | PASS (local, rebased branch) | 20 transport + 12 old adapter + 17 new port tests = 49 total |
-| Full `bun run test` on PR #20 head `ffeb28c` | PASS (CI) | run `41161147370` linux+macOS success; includes the approved PR #15 clock base |
+| Full `bun run test` on PR #20 head `49285ba` | PASS (CI) | run `41161481260` linux+macOS success; includes the approved PR #15 clock base |
 | Real B-core `P2pNode` stacked and compiled | UNKNOWN (not approved) | B-core PR #26 is committed (`fdc7d4c`/`fba73c`) but not approved for stack; the local port mirrors its `P2pBusinessPort` shape and is compile-checked only in a temporary snapshot |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
 | Real EasyTier 2.6.4 two-node hello/frame/TOFU | UNKNOWN | no two-node overlay run |
@@ -269,8 +269,8 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | Control port from A-service | PLANNED | A-service `reservePort`/`verifyOwnedPort`; no fixed 3427/user port |
 | Real funds / mainnet | **NO-GO** | out of scope; no wallet or real asset used |
 
-PR #20's CI run `41161147370` is green on linux and macOS for head
-`ffeb28ce7c67668c1096f916f8ae255699a47dc5`; it is the PR head, not a temporary
+PR #20's CI run `41161481260` is green on linux and macOS for head
+`49285ba648c72f8caa652f075ea3222dcf7738c1`; it is the PR head, not a temporary
 combination. The earlier 773/0 local run was the PR #19 transport combined with the
 two P0 branches in /tmp and is recorded separately. Neither is a claim that the
 hermetic guard is part of B or an approval to integrate P0. No real two-node pass is

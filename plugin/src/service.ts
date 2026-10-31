@@ -2855,12 +2855,13 @@ export class Service {
       await this.provisioner.setModels(consumerId, rec.models);
       models = this.deps.magpie.keyById(rec.keyId)?.models?.map(String) ?? [];
     }
-    if (models.length === 0) {
-      throw new Error(`the key of ${consumerId} has no model whitelist in Magpie; refusing to hand it over`);
-    }
+    // Read the secret under the same per-consumer lock that approve/reissue/
+    // revoke use, and re-check the exact key generation/native row there.
+    const locked = await this.provisioner.readHandover(consumerId, rec.keyId);
+    models = locked.models;
     this.assertShareable(models);
-    logger.info(`handing key ${rec.keyName} over for ${consumerId} (${models.join(", ")})`);
-    return { consumerId, keyName: rec.keyName, key: rec.secret, models, capUsd: rec.capUsd };
+    logger.info(`handing key ${locked.keyName} over for ${consumerId} (${models.join(", ")})`);
+    return { consumerId, keyName: locked.keyName, key: locked.key, models, capUsd: locked.capUsd };
   }
 
   async topUp(consumerId: string, usd: number, depositId?: string): Promise<ConsumerView> {
