@@ -5,8 +5,11 @@
  * this job does and does not prove. Exit code 0 means "the report was produced",
  * never "Windows is supported".
  */
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { localDesktop, nativeDesktopParent, openerArgv } from "../src/console-launch.ts";
+import { ConsolePairingJournal } from "../src/console-pairing.ts";
 import { assetFor } from "../src/easytier-manifest.ts";
 import { ownsProcess, rpcListeners } from "../src/easytier.ts";
 import { resolveMagpieBin } from "../src/paths.ts";
@@ -73,6 +76,22 @@ try {
   rows.push({ capability: "win32 opener argv", state: "UNKNOWN", evidence: message(e) });
 }
 
+try {
+  const dir = mkdtempSync(join(tmpdir(), "ohmy-pairing-probe-"));
+  try {
+    new ConsolePairingJournal(join(dir, "pairing.json")).create();
+    rows.push({ capability: "durable browser pairing journal", state: "VERIFIED", evidence: "create() wrote and read back a journal" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+} catch (e) {
+  rows.push({
+    capability: "durable browser pairing journal",
+    state: "FAIL-CLOSED",
+    evidence: `create() refused on win32 (${message(e)}); pairing returns 503, source uses a directory fsync (src/console-pairing.ts)`,
+  });
+}
+
 const asset = assetFor("win32", "x64");
 rows.push({ capability: "EasyTier win32 release pin", state: "VERIFIED", evidence: `${asset.file} sha256=${asset.sha256.slice(0, 12)}...` });
 
@@ -101,6 +120,7 @@ const lines = [
   "- Real EasyTier 2.6.4 core: no-TUN overlay, RPC/SOCKS listeners, process adoption after restart.",
   "- Real Magpie 0.1.2289: Gateway Key enforcement, pricing, remote journeys.",
   "- Windows desktop auto-launch (nativeDesktopParent is hard-coded false on win32).",
+  "- Durable browser pairing journal (POSIX directory fsync; win32 refuses with 503).",
   "- POSIX file-mode semantics (0600/0700) and shell-script test fixtures.",
   "",
   "## Verdict",
