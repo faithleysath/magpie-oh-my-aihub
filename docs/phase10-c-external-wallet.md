@@ -42,7 +42,7 @@
 import {
   createWalletDiscovery, createExternalWallet,
   validateDepositDocument, typedDataDigest, recoverTypedDataSigner,
-  formatUnits, safeWalletIcon, sanitizeWalletInfo,
+  formatUnits, safeWalletIcon, sanitizeWalletInfo, // safeWalletIcon 已 deprecated，恒返回 null
   isMainnetChainId, assertNoMainnetSend,
   EIP6963_ANNOUNCE, EIP6963_REQUEST, TESTNET_CHAIN_IDS, MAINNET_CHAIN_IDS,
   WALLET_ERROR, ExternalWalletError,
@@ -334,7 +334,7 @@ type RegistrySnapshot = {
 1. 增加 `/external-wallet.js` 到控制台静态文件白名单（本分支已在 `plugin/src/index.ts` 的 `staticModules` 增加，未改 `app.js/index.html/style.css/wallet.js`）。
    - A-ui 传入的 `registry` 必须是 C-registry 新快照（含 `support/receivable/credit/pricing` 或 `pricingKind`）。旧快照缺字段会 fail closed；不得用 `priceVersion` 子串推断可授信。
 2. 页面加载只 `discovery.start()` 并展示发现列表；不要自动 `select`，不要自动 `connect`，不要读 `window.ethereum` 作为默认。
-3. 钱包项必须显示 `name/rdns` 和“信息未验证”提示；图标只用 `safeWalletIcon` 返回值赋给 `<img src>`。**注意：现有 CSP 是 `img-src 'self'`，`data:` 图标会被浏览器拦截；A-ui 不要为了显示图标擅自放宽 CSP，先用名称首字母/默认图标，是否允许 `img-src data:` 需单独安全评审。**
+3. 钱包项必须显示 `name/rdns` 和“信息未验证”提示；**不使用 `safeWalletIcon`/任何 `data:`/SVG 图标，只用 `initial`（名称首字母）或内置静态图标**。现有 CSP 保持 `img-src 'self'`，不为图标放宽。
 4. 用户点击“连接”后才 `connect({userInitiated:true})`；连接后显示账户与 chainId。
 5. 网络不一致时显示“请在钱包中切换”并给一个明确的切换按钮；按钮才调用 `requestSwitchChain(target,{userInitiated:true})`，失败不自动重试。
 6. 签名流程：服务端返回的 `result.document` 交给 `signDeposit`，把 `expectedIntentHash` 传服务端已核验的 digest；不要用用户可编辑字段重新拼 typed data。
