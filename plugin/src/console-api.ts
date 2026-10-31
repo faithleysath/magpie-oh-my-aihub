@@ -2,6 +2,7 @@ import { redact } from "./log.ts";
 import { ConsoleInputError } from "./console-server.ts";
 import { configureInput } from "./server.ts";
 import { consoleWorkflows } from "./console-workflows.ts";
+import { NETWORK_LOCAL_ACTIONS, consoleNetworkAction, consoleNetworkState } from "./console-network.ts";
 import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
 import { hex64, modelList, RequestValidationError } from "./connection-request.ts";
 import type { Service } from "./service.ts";
@@ -13,6 +14,7 @@ export const CONSOLE_ACTIONS = [
   "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
   ...WALLET_CONSOLE_ACTIONS,
+  ...NETWORK_LOCAL_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
   if (typeof value === "string") return redact(value) as T;
@@ -31,7 +33,7 @@ export async function consoleState(service: Service) {
       magpie: snapshot.magpie, config: snapshot.config, easytier: snapshot.easytier, providers: snapshot.providers,
       catalog: snapshot.catalog, consumers: snapshot.consumers, accounting: snapshot.accounting,
       checks: snapshot.checks, checksAt: snapshot.checksAt, checksDurationMs: snapshot.checksDurationMs, readiness: snapshot.readiness,
-    }, ...workflows, wallet: consoleWalletState(service),
+    }, ...workflows, wallet: consoleWalletState(service), networkLocal: consoleNetworkState(service),
   });
 }
 const refuse = (message: string): never => { throw new ConsoleInputError(message); };
@@ -56,6 +58,7 @@ function knownRefusal(error: unknown): boolean {
 }
 export async function consoleAction(service: Service, name: string, input: Record<string, unknown>): Promise<unknown> {
   try {
+    if ((NETWORK_LOCAL_ACTIONS as readonly string[]).includes(name)) return consoleNetworkAction(service, name, input);
     if ((WALLET_CONSOLE_ACTIONS as readonly string[]).includes(name)) return consoleWalletAction(service, name, input);
     const w = () => consoleWorkflows(service);
     switch (name) {
