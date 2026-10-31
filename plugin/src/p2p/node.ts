@@ -1776,7 +1776,7 @@ export class P2pNode {
       const recovered: P2pRecoveryReport | null = this.recoveryReport;
       this.recoveryReport = null;
       const sessionsExpired = this.store.expireSessions(at);
-      this.store.purgeSessions?.(at, 24 * 60 * 60_000);
+      this.store.purgeSessions?.(at, 0);
       this.store.purgeTombstones(at);
       for (const session of this.sessions.values()) {
         if (!session.closedReason && Date.parse(session.expiresAt) <= at.getTime()) session.close("expired");
