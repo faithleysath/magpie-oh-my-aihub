@@ -48,6 +48,8 @@ interface Running {
   api: { port: number; stop: () => void };
   console?: ConsoleServer;
   control?: ControlApp;
+  /** Awaitable normal stop used by the host/tests; releases the host lock. */
+  stop: () => Promise<void>;
 }
 
 const g = globalThis as unknown as { __ohMyAIHub?: Promise<Running>; __ohMyAIHubStopped?: boolean };
@@ -80,10 +82,6 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     const shutdown = () => {
       stopped = true;
       launcher?.stop(); consoleServer?.stop(); api?.stop();
-      // Normal exit must also withdraw presence/close the control listener and
-      // retire its forwarded port; this is best-effort because process exit is
-      // synchronous, while failed startup awaits the same stop explicitly.
-      void controlApp?.stop().catch((e) => logger.warn(`P2P control stop: ${String(e)}`));
       const pid = service?.supervisor.snapshot().pid;
       const configPath = statePath("easytier", "current.toml");
       if (pid && ownsProcess(pid, configPath)) {
@@ -94,13 +92,25 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         }
       }
     };
+    const stopHost = async () => {
+      stopped = true;
+      if (controlApp) {
+        try { await controlApp.stop(); }
+        catch (e) { logger.warn(`P2P control stop: ${String(e)}`); }
+      }
+      try { if (service) await service.stop(); }
+      catch (e) { logger.warn(`service stop: ${String(e)}`); }
+      shutdown();
+      lock?.release();
+      lock = null;
+    };
     const onExit = () => { try { shutdown(); } finally { lock?.release(); } };
-    const onSignal = () => { stopped = true; process.exit(0); };
+    const onSignal = () => { stopped = true; void stopHost().finally(() => process.exit(0)); };
     // Install before ownership wait, Service construction, or any async startup.
     process.on("exit", onExit);
     process.on("SIGTERM", onSignal); process.on("SIGINT", onSignal);
     const orphanWatch = setInterval(() => {
-      if (parentGone()) { stopped = true; process.exit(0); }
+      if (parentGone()) { stopped = true; void stopHost().finally(() => process.exit(0)); }
     }, 500);
     orphanWatch.unref?.();
     failedBootCleanup = async () => {
@@ -244,7 +254,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     );
 
     ensureRunning();
-    return { service, api, console: consoleServer, control: controlApp };
+    return { service, api, console: consoleServer, control: controlApp, stop: stopHost };
   })().catch(async (error) => {
     // A failed startup must stop its partial Service before another boot can
     // take ownership. Cleanup failure deliberately leaves the lock fail-closed.

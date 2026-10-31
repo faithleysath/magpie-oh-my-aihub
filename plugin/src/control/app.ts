@@ -649,8 +649,6 @@ export class ControlApp {
     const forwards = [...this.controlForwards.values()];
     const retired = [...this.retiredForwards.entries()];
     const owned = [...forwards.map((f) => `127.0.0.1:${f.localPort}`), ...retired.map(([p]) => `127.0.0.1:${p}`)];
-    this.controlForwards.clear();
-    this.retiredForwards.clear();
     let degraded: string | null = null;
     const retire = (this.service as { retireControlForward?: (bind: string, dst: string, owned?: string[]) => Promise<{ closed: boolean }> }).retireControlForward;
     for (const forward of forwards) {
@@ -676,7 +674,6 @@ export class ControlApp {
     }
     this.node.close();
     const published = this.previousPublishedPorts;
-    this.previousPublishedPorts = null;
     if (published && typeof (this.service as { configure?: unknown }).configure === "function") {
       try {
         await this.service.configure({ publishedPorts: published });
@@ -684,9 +681,12 @@ export class ControlApp {
         degraded = `control port ACL restore failed: ${String((error as Error)?.message ?? error)}`;
       }
     }
+    if (degraded) throw new Error(degraded);
+    this.controlForwards.clear();
+    this.retiredForwards.clear();
+    this.previousPublishedPorts = null;
     active = null;
     byService.delete(this.service);
-    if (degraded) throw new Error(degraded);
     this.stopped = true;
   }
 }

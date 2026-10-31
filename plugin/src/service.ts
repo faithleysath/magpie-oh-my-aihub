@@ -3723,7 +3723,7 @@ export class Service {
     bindAddr: string,
     dstAddr: string,
     ownedControlBinds: string[] = [],
-  ): Promise<{ closed: boolean; restarted: boolean; orphan: boolean }> {
+  ): Promise<{ closed: boolean; restarted: boolean; orphan: boolean; detail?: string | null }> {
     return this.serialize(async () => {
       const localPort = Number(bindAddr.split(":").pop());
       if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) throw new Error("invalid control forward bind address");
@@ -3779,6 +3779,7 @@ export class Service {
       }
       recordOrphan(pids, "2.6.4 remove did not close the listener");
       let restarted = false;
+      let restoreError: string | null = null;
       const cfg = this.state.config;
       if (cfg) {
         try {
@@ -3794,7 +3795,11 @@ export class Service {
         try {
           await this.supervisor.addPortForward(ownedForward.bindAddr, ownedForward.dstAddr);
         } catch (e) {
-          logger.error(`could not restore control forward ${ownedForward.bindAddr} after restart: ${String(e)}`);
+          restoreError = `could not restore control forward ${ownedForward.bindAddr}: ${String((e as Error)?.message ?? e)}`;
+          logger.error(restoreError);
+          const port = Number(ownedForward.bindAddr.split(":").pop());
+          const pids = await this.ownership.listenerPids(port).then((r) => r.pids ?? []).catch(() => []);
+          recordOrphan(pids, restoreError.slice(0, 300));
         }
       }
       for (const extra of extras) {
@@ -3810,7 +3815,7 @@ export class Service {
         this.state.orphanForwards = this.state.orphanForwards.filter((o) => o.localPort !== localPort || o.dstAddr !== dstAddr);
         saveState(this.state);
       }
-      return { closed: !orphan, restarted, orphan };
+      return { closed: !orphan && !restoreError, restarted, orphan: orphan || Boolean(restoreError), detail: restoreError };
     });
   }
 
