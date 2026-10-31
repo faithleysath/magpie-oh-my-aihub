@@ -1663,6 +1663,13 @@ export class Provisioner {
         if (quiet >= 2) break;
       }
       const balance = ledger.balance(consumerId);
+      if (balance.unreviewedNanos > 0) {
+        const detail = `${nanosToUsd(balance.unreviewedNanos).toFixed(9)} USD of deposit provenance is unknown; review it locally before reissue`;
+        rec.ledgerUncertain = detail;
+        await this.pause(rec, "manual", detail, true);
+        this.persist();
+        throw new Error(`cannot reissue ${consumerId}: ${detail}. No key was created.`);
+      }
       if (oldWindow) ledger.closeWindow(oldWindow.id, `reissued: ${rec.paused?.reason ?? "manual"}`);
       if (balance.balanceNanos < GRID_NANOS) {
         const reason: NonNullable<ConsumerRecord["paused"]>["reason"] = balance.balanceNanos < 0 ? "overdraft" : "dust";
