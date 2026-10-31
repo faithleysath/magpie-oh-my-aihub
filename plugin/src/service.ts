@@ -563,7 +563,15 @@ export class Service {
     return {
       depositIntent: (input) => {
         if (!ledger) throw new Error("a chain deposit needs the durable ledger");
-        const r = ledger.depositIntent({ id: input.id, consumerId: input.consumerId, amountNanos: input.amountNanos, source: input.source });
+        const r = ledger.depositIntent({
+          id: input.id,
+          consumerId: input.consumerId,
+          amountNanos: input.amountNanos,
+          source: input.source,
+          fundsClass: input.fundsClass,
+          chainId: input.chainId,
+          assetId: input.assetId,
+        });
         return { created: r.created };
       },
       applyDeposit: async (input) => {
