@@ -36,7 +36,7 @@ const baseState = () => ({
     ],
     assets: [{ assetId: USDC_ID, chainId: 8453, contractAddress: USDC, symbol: "USDC", decimals: 6, issuerType: "native-issuer", testnetOnly: false, credit: false, pricingKind: "not-creditable" }],
   },
-  receiving: { providerId: "local-node", chainIds: [], updatedAt: null }, watchAddresses: [], lastBalance: null,
+  receiving: { providerId: "local-node", chainIds: [], updatedAt: null, available: true, errorCode: null }, watchAddresses: [], lastBalance: null,
   readOnly: true, creditEligible: false, usdValue: null,
 });
 
@@ -132,7 +132,7 @@ describe("read-only network/asset UI", () => {
     let state = { ...baseState(), watchAddresses: [ADDRESS] };
     const ui = mount({
       "network-local-state": async () => state,
-      "network-local-balance-refresh": async (input) => ({ balance: { schema: "ohmyaihub.network-local-balance/v1", state: "ok", chainId: input.chainId, address: input.address, asset: { assetId: USDC_ID, contractAddress: USDC, symbol: "USDC", decimals: 6, issuerType: "native-issuer" }, nativeSymbol: "ETH", balanceRaw: "1234567", decimals: 6, balanceTokens: "1.234567", blockNumber: 42, readOnly: true, creditEligible: false, usdValue: null, observedAt: "2026-10-31T00:00:00Z" } }),
+      "network-local-balance-refresh": async (input) => ({ balance: { schema: "ohmyaihub.network-local-balance/v1", state: "ok", chainId: input.chainId, address: input.address, asset: { assetId: USDC_ID, contractAddress: USDC, symbol: "USDC", decimals: 6, issuerType: "native-issuer" }, nativeSymbol: "ETH", balanceRaw: "1234567", decimals: 6, balanceTokens: "1.234567", blockNumber: 42, addressSource: "watch", readOnly: true, creditEligible: false, usdValue: null, observedAt: "2026-10-31T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z", fresh: true, stale: false, needsRefresh: false } }),
     });
     try {
       await ui.show();
@@ -146,6 +146,42 @@ describe("read-only network/asset UI", () => {
       expect(ui.root.textContent).toContain("未估值");
       expect(ui.root.textContent).toContain("只读余额不是可消费额度");
       expect(ui.root.textContent).not.toContain("$0");
+    } finally { ui.restore(); }
+  });
+
+  test("stale/historical balance is labelled and is not shown as real-time", async () => {
+    const state = { ...baseState(), watchAddresses: [ADDRESS], lastBalance: { schema: "ohmyaihub.network-local-balance/v1", state: "ok", chainId: 56, address: ADDRESS, addressSource: "watch", asset: null, nativeSymbol: "BNB", balanceRaw: "1000000000000000000", decimals: 18, balanceTokens: "1", blockNumber: 1, readOnly: true, creditEligible: false, usdValue: null, observedAt: "2026-10-31T00:00:00Z", expiresAt: "2026-10-31T00:05:00Z", fresh: false, stale: true, needsRefresh: true } };
+    const ui = mount({ "network-local-state": async () => state });
+    try {
+      await ui.show();
+      expect(ui.root.textContent).toContain("历史已知余额");
+      expect(ui.root.textContent).toContain("不是实时");
+      expect(ui.root.textContent).toContain("显式 watch");
+      expect(ui.root.textContent).not.toContain("实时绿");
+    } finally { ui.restore(); }
+  });
+
+  test("receiving unavailable/errorCode is not rendered as a user-cleared empty selection", async () => {
+    const state = baseState();
+    state.receiving = { ...state.receiving, available: false, errorCode: "receiving_selection_unreadable", chainIds: [] };
+    const ui = mount({ "network-local-state": async () => state });
+    try {
+      await ui.show();
+      expect(ui.root.textContent).toContain("无法读取");
+      expect(ui.root.textContent).toContain("不代表你清空了选择");
+      expect(all(ui.root, "input").filter((node) => node.type === "checkbox")).toHaveLength(0);
+    } finally { ui.restore(); }
+  });
+
+  test("watch address list is capped at 32 and never auto-expands", async () => {
+    const state = { ...baseState(), watchAddresses: Array.from({ length: 32 }, (_, index) => "0x" + index.toString(16).padStart(40, "0")) };
+    const ui = mount({ "network-local-state": async () => state, "network-local-watch-address": async () => state });
+    try {
+      await ui.show();
+      const input = inputByLabel(ui.root, "公开 watch 地址"); input.value = ADDRESS;
+      await find(ui.root, "button", "添加 watch 地址").click(); await flush();
+      expect(ui.root.textContent).toContain("最多只能显式 watch 32");
+      expect(ui.calls.filter((call) => call.name === "network-local-watch-address")).toHaveLength(0);
     } finally { ui.restore(); }
   });
 

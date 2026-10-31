@@ -111,6 +111,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
   function addWatch() {
     const value = watchInput?.input.value.trim();
     if (!/^0x[0-9a-fA-F]{40}$/.test(value) || /^0x0{40}$/i.test(value)) { fail("请填写非零的完整公开 watch 地址；它不是收款/签名授权。"); return; }
+    if ((Array.isArray(state?.watchAddresses) ? state.watchAddresses : []).length >= 32) { fail("最多只能显式 watch 32 个公开地址；不会自动扩展地址簿。"); return; }
     watchInput.input.value = "";
     void request("network-local-watch-address", { address: value }).then(() => { selectedWatch = value.toLowerCase(); render(); report("已加入显式 watch 地址；仅用于只读余额查询。", "good"); }).catch((error) => fail(error?.message || "添加 watch 地址未完成"));
   }
@@ -185,13 +186,21 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
       const decimals = lastBalance.asset?.decimals ?? lastBalance.decimals;
       let amount = "未知";
       try { amount = formatTokenUnits(lastBalance.balanceRaw, decimals); } catch { /* malformed stays unknown */ }
-      card.append(details("最近一次只读查询", [["网络", lastBalance.chainId], ["地址", lastBalance.address], ["资产", lastBalance.asset?.symbol || lastBalance.nativeSymbol], ["原始余额", lastBalance.balanceRaw], ["显示余额", amount], ["小数位", decimals], ["区块", lastBalance.blockNumber], ["只读", lastBalance.readOnly === true ? "是" : "未知"], ["可授信", lastBalance.creditEligible === true ? "是" : "否"], ["美元估值", lastBalance.usdValue === null ? "未估值（不伪造 $）" : lastBalance.usdValue], ["观察时间", lastBalance.observedAt]], true));
+      const freshness = balanceFreshness(lastBalance);
+      const freshnessText = freshness === "fresh" ? "5 分钟内的只读证据，仍需按观察/过期时间判断" : freshness === "stale" ? "历史已知余额，已过期或需手动刷新；不是实时，也不是可消费额度" : "新鲜度未知；请手动刷新，不显示为实时绿";
+      if (freshness !== "fresh") card.append(p(freshnessText, "inline-warning"));
+      card.append(details("最近一次只读查询", [["网络", lastBalance.chainId], ["地址", lastBalance.address], ["地址来源", lastBalance.addressSource === "watch" ? "显式 watch" : "非 watch（不应作为可信余额）"], ["资产", lastBalance.asset?.symbol || lastBalance.nativeSymbol], ["原始余额", lastBalance.balanceRaw], ["显示余额", amount], ["小数位", decimals], ["区块", lastBalance.blockNumber], ["只读", lastBalance.readOnly === true ? "是" : "未知"], ["可授信", lastBalance.creditEligible === true ? "是" : "否"], ["美元估值", lastBalance.usdValue === null ? "未估值（不伪造 $）" : lastBalance.usdValue], ["观察时间", lastBalance.observedAt], ["过期时间", lastBalance.expiresAt], ["新鲜度", freshnessText]], true));
       card.append(p("只读余额不是可消费额度，也不等于 provider 信用；主网资金当前未开放。", "muted small"));
     }
     return card;
   }
   function renderReceiving() {
     const card = section("接受哪些网络充值", "默认不选择。BSC/Base 可单选、双选或清空，仅用于付款请求与自动授信匹配设置。");
+    if (state?.receiving?.available === false || state?.receiving?.errorCode) {
+      card.append(p(`充值网络选择当前无法读取（${state?.receiving?.errorCode || "receiving_unavailable"}）。chainIds=[] 不代表你清空了选择；不会自动覆盖或猜链。`, "inline-warning"));
+      card.append(button("重新读取状态", () => { service = "unknown"; loaded = true; void loadState(); }));
+      return card;
+    }
     const chains = receivingChainIds(state);
     const list = el("div", null, "wallet-network-receiving");
     for (const network of productNetworks(state)) {
@@ -203,6 +212,14 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
     }
     card.append(list, p("主网发送、授信、自动充值和资金流当前未开放；选择充值网络不会解除这些门禁。此设置只影响本机付款请求/自动授信匹配，不宣称链上禁止其他人转账。", "inline-warning"));
     return card;
+  }
+  function balanceFreshness(balance) {
+    if (!balance || balance.state !== "ok") return "unknown";
+    if (balance.fresh === false || balance.stale === true || balance.needsRefresh === true) return "stale";
+    const expires = Date.parse(balance.expiresAt || "");
+    if (Number.isFinite(expires)) return Date.now() < expires ? (balance.fresh === true ? "fresh" : "unknown") : "stale";
+    if (balance.fresh === true) return "fresh";
+    return "unknown";
   }
   function render() {
     if (disposed) return;
