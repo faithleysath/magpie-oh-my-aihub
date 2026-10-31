@@ -517,7 +517,7 @@ describe("several remote providers", () => {
     expect(providers.map((p) => p.id).sort()).toEqual(["peer-b", "peer-c"]);
     expect(providers.every((p) => p.status === "connected")).toBe(true);
     expect(magpie.providers_().map((p) => p.id).sort()).toEqual(["peer-b", "peer-c"]);
-    expect(sup.forwards.map((f) => f.bindAddr).sort()).toEqual([`127.0.0.1:${b.port}`, `127.0.0.1:${c.port}`]);
+    expect(sup.forwards.map((f) => f.bindAddr).sort()).toEqual([`127.0.0.1:${b.port}`, `127.0.0.1:${c.port}`].sort());
   });
 
   test("the key of one provider is not handed to another", async () => {

@@ -59,3 +59,21 @@ condition = "AND"
 rules = ['generic-api-key']
 regexTarget = "line"
 regexes = ['mergeSaved\(.*networkSecret:']
+
+# The wallet-vault tests use the canonical public BIP-39 vector ("abandon …
+# about") and derive its well-known key. These two exact lines are test
+# fixtures, not credentials; a real key or secret on any other line of the same
+# file is still reported (gitleaks-selftest checks it).
+[[allowlists]]
+description = "public BIP-39 test vector: derived value held in a test constant"
+condition = "AND"
+rules = ['generic-api-key']
+regexTarget = "line"
+regexes = ['^\s*const VECTOR_12_PRIVATE_KEY = VECTOR_12_WALLET\.privateKey;\s*$']
+
+[[allowlists]]
+description = "public BIP-39 test vector: keystore tamper fixture adds the derived value to an extra field"
+condition = "AND"
+rules = ['generic-api-key']
+regexTarget = "line"
+regexes = ['^\s*extra\.privateKey = VECTOR_12_PRIVATE_KEY;\s*$']
