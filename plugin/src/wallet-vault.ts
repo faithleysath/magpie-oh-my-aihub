@@ -960,8 +960,10 @@ export class WalletVault {
       fail("payment-invalid", "payment recipient must not be the zero address");
     }
     const data = input.data ?? "0x";
+    if (typeof data !== "string" || data.length > MAX_PAYMENT_DATA_BYTES * 2 + 2) {
+      fail("payment-invalid", "payment data is too large");
+    }
     if (!isHexData(data)) fail("payment-invalid", "payment data must be an even-length hex string");
-    if (byteLength(data) > MAX_PAYMENT_DATA_BYTES) fail("payment-invalid", "payment data is too large");
 
     const transaction = {
       type: 2 as const,
@@ -1305,7 +1307,7 @@ function parseMnemonic(phrase: string): Mnemonic {
 }
 
 function assertNewPassword(password: string): void {
-  if (typeof password !== "string" || Array.from(password).length < 12) {
+  if (typeof password !== "string" || password.length < 12) {
     fail("password-policy", "wallet password must have at least 12 characters");
   }
   if (byteLength(password) > 1024) fail("password-policy", "wallet password must be at most 1024 UTF-8 bytes");
@@ -1626,7 +1628,9 @@ function isHexData(value: string): boolean {
 }
 
 function byteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
+  // Buffer.byteLength measures UTF-8 without allocating an encoded copy of a
+  // potentially hostile, oversized input.
+  return Buffer.byteLength(value, "utf8");
 }
 
 // --- typing/signing helpers -------------------------------------------------
