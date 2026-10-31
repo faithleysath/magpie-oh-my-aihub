@@ -193,7 +193,7 @@ const server = Bun.serve({
     const url = new URL(request.url);
     if (request.method === "GET" && assets[url.pathname]) {
       const [file, type] = assets[url.pathname];
-      return new Response(readFileSync(resolve(root, file)), { headers: { "content-type": type, "cache-control": "no-store" } });
+      return new Response(new Uint8Array(readFileSync(resolve(root, file))), { headers: { "content-type": type, "cache-control": "no-store" } });
     }
     if (url.pathname === "/ui/session") {
       return json({ csrf, instance, expiresAt: new Date(Date.now() + 3600_000).toISOString() });
