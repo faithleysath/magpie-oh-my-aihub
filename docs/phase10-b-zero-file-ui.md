@@ -92,7 +92,7 @@
 
 ```bash
 cd plugin
-bun test ./console     # 92 pass / 0 fail / 636 assertions
+bun test ./console     # 93 pass / 0 fail / 641 assertions
 bun run typecheck      # clean
 bun run secret-scan    # PASS
 ```
@@ -109,6 +109,8 @@ bun run secret-scan    # PASS
 - presence 缺失/过期/仅控制能力：禁用并给出准确原因。
 - 400/500：只显示一次、不重试；404 不回退旧文件动作。
 - 批准弹窗默认全选、TOFU accepted 不重复勾选指纹但仍发绑定字段。
+- **延迟预览竞态**：选择变化会递增预览代次并取消进行中的预览；旧请求迟到时即使模型集合“看起来相同”也不会复活旧价格或重新启用批准，必须对新选择重新预览。
+- 字段与后端实际 projection 对齐（B overlay `e1e24bb`）：`presence.signature/tofu`、`p2p-quote-preview` 响应、`p2p-approve` 必填字段；`trust-peer` 仍用 `{ nodeId, fingerprint }`。
 
 `app.test.js` 断言首页 `status.p2p.counts` 待办与“发现 → 我的连接”tab 路由。
 

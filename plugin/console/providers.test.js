@@ -675,6 +675,42 @@ describe("zero-file P2P UI (assembly draft contract, mocked state)", () => {
     } finally { r.cleanup(); }
   });
 
+  test("a late preview for an old selection never restores its price", async () => {
+    const second = { ...model, id: "native/second", displayName: "第二个模型" };
+    const state = withP2p({ inboundRequests: [inbound({ models: [model.id, second.id], tofu: "accepted" })] });
+    state.status.catalog.quote.models = [model, second];
+    const pending = [];
+    const r = runtime(state, (name, input) => {
+      if (name === "p2p-quote-preview") return new Promise((resolve) => pending.push({ resolve, input }));
+      return {};
+    });
+    try {
+      await find(r.roots["sharing-panel"], "button", "核对并批准").click(); await flush();
+      expect(pending).toHaveLength(1); // initial preview for the full request
+      const modelBoxes = checkboxes(r.dialog).slice(0, 2);
+      modelBoxes[1].checked = false; await modelBoxes[1].emit("change");
+      // The old request resolves after the selection changed.
+      pending[0].resolve({ requestId: "req-1", quoteHash, priceVersion: "o".repeat(64), models: [model.id, second.id], pricing: [{ id: model.id, pricing: model.pricing }, { id: second.id, pricing: second.pricing }] });
+      await flush();
+      expect(r.dialog.textContent).toContain("选择已变化，请重新预览");
+      const agree = checkboxes(r.dialog)[checkboxes(r.dialog).length - 1];
+      agree.checked = true; await agree.emit("change");
+      all(r.dialog, "input").find((node) => node.type === "number").value = "1";
+      await find(r.dialog, "button", "确认批准").click(); await flush();
+      expect(approveCalls(r)).toHaveLength(0);
+      // A fresh preview for the new selection is required and is the one bound.
+      await find(r.dialog, "button", "预览选中报价").click(); await flush();
+      expect(pending[1].input).toEqual({ requestId: "req-1", models: [model.id] });
+      pending[1].resolve({ requestId: "req-1", quoteHash, priceVersion: "n".repeat(64), models: [model.id], pricing: [{ id: model.id, pricing: model.pricing }] });
+      await flush();
+      await find(r.dialog, "button", "确认批准").click(); await flush();
+      expect(approveCalls(r)).toEqual([{ name: "p2p-approve", input: {
+        requestId: "req-1", consumerFingerprint: fp, quoteHash, priceVersion: "n".repeat(64),
+        generation: null, models: [model.id], capUsd: 1,
+      } }]);
+    } finally { r.cleanup(); }
+  });
+
   test("a stale quote preview blocks approval until the human previews again", async () => {
     const r = runtime(withP2p({ inboundRequests: [inbound({ tofu: "accepted" })] }), async (name) => {
       if (name === "p2p-quote-preview") throw Object.assign(new Error("stale_quote"), { status: 409 });

@@ -679,7 +679,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       function sameSet(left, right) { return left.length === right.length && [...left].sort().every((id, index) => id === [...right].sort()[index]); }
       function invalidatePreview() {
         preview = null;
+        // Invalidate any in-flight preview as well: a late response for an old
+        // selection must never restore its price or re-enable approval.
+        previewGeneration++;
+        previewing = false;
         previewBox.replaceChildren(paragraph("选择已变化，请重新预览当前报价。"));
+        updateApprove();
       }
       function updateApprove() {
         submit.disabled = !agree.input.checked || previewing || !preview || selected.size === 0 || !sameSet(preview.models, [...selected]);
@@ -706,6 +711,8 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         try {
           const result = await client.action("p2p-quote-preview", { requestId: request.requestId, models: [...selected] });
           if (generation !== previewGeneration || !dialog.open) return;
+          // A response for a selection that is no longer current is ignored.
+          if (!sameSet(items(result.models), [...selected])) return;
           preview = { quoteHash: result.quoteHash, priceVersion: result.priceVersion, models: items(result.models), pricing: items(result.pricing) };
           renderPreview();
         } catch (error) {
