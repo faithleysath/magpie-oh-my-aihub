@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { catalogPriceVersion } from "../src/pricing.ts";
@@ -172,18 +173,58 @@ afterEach(() => {
   server.stop(true);
 });
 
-async function cli(args: string[], timeoutMs = 10_000): Promise<{ out: string; err: string; code: number }> {
-  const proc = Bun.spawn(["bun", "bin/ohmyaihub.ts", "--data", dataDir, ...args], {
-    cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, OH_MY_AIHUB_MAGPIE: join(binDir, "magpie"), OH_MY_AIHUB_PREFLIGHT_LAN: "none" },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+/**
+ * Spawn the real CLI with `child-network-spy.ts` preloaded. The child may reach
+ * only this test's fake host API; any other fetch is refused and logged, so a
+ * leaked probe is both harmless and visible to the test.
+ */
+async function cli(args: string[], timeoutMs = 10_000, netLog?: string): Promise<{ out: string; err: string; code: number }> {
+  const log = netLog ?? join(dataDir, `child-net-${randomUUID()}.log`);
+  const proc = Bun.spawn(
+    [process.execPath, "--preload", join(import.meta.dir, "support/child-network-spy.ts"), "bin/ohmyaihub.ts", "--data", dataDir, ...args],
+    {
+      cwd: join(import.meta.dir, ".."),
+      env: {
+        ...process.env,
+        OH_MY_AIHUB_MAGPIE: join(binDir, "magpie"),
+        OH_MY_AIHUB_PREFLIGHT_LAN: "none",
+        HERMETIC_CHILD_LOG: log,
+        HERMETIC_CHILD_ALLOW: `http://127.0.0.1:${server.port}`,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   const timer = setTimeout(() => proc.kill(), timeoutMs);
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   clearTimeout(timer);
   return { out, err, code };
 }
+
+describe("child CLI network confinement", () => {
+  test("no CLI path reaches an endpoint outside the controlled host API", async () => {
+    const paths: [string[], string][] = [
+      [["setup"], "setup"],
+      [["setup", "--check"], "setup-check"],
+      [["preflight"], "preflight"],
+      [["doctor"], "doctor"],
+      [["resume"], "resume"],
+    ];
+    for (const [args, label] of paths) {
+      const log = join(dataDir, `child-net-${label}-${randomUUID()}.log`);
+      await cli(args, 15_000, log);
+      const lines = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
+      // Nothing was refused: the child never tried the LAN, :3425 or a public RPC.
+      expect({ label, blocked: lines.filter((line) => line.startsWith("BLOCKED")) }).toEqual({ label, blocked: [] });
+      for (const line of lines) {
+        expect(line.startsWith("ALLOW ")).toBe(true);
+        expect(line).toContain(`127.0.0.1:${server.port}`);
+      }
+      // A hard-coded probe that the spy happened to allow would still show up here.
+      expect(lines.join("\n")).not.toMatch(/:3425|192\.168\.|publicnode|sepolia\.base\.org|thirdweb|tenderly/);
+    }
+  });
+});
 
 describe("phase 8 setup journeys", () => {
   test("setup on an existing node reports resume and never calls /configure", async () => {
