@@ -330,17 +330,20 @@ describe("forward recovery for an owned Remote", () => {
     expect(loadState().state.providers.find((p) => p.id === "peer")!.status).toBe("degraded");
   });
 
-  test("if the old registration cannot be removed, it is neutralized before aborting", async () => {
+  test("if the old registration cannot be removed, abort without retargeting it", async () => {
     const svc = await service();
     await withProvider(svc);
+    const before = magpie.providers.get("peer")!.chat;
     ownership.pids.set(OLD, [999_999]);
     magpie.failRemoveOnce = true;
     const starts = sup.starts;
     const out = await svc.reconcileProviders({ only: "peer", quiet: true });
     const rec = out.find((p) => p.id === "peer")!;
     expect(rec.status).toBe("degraded");
-    expect(magpie.providers.get("peer")!.chat).toBe("http://127.0.0.1:1/v1");
-    expect(sup.starts).toBe(starts); // no restart with an unsafe old registration
+    expect(rec.detail).toMatch(/could not be removed|Remove it in Magpie/);
+    // The entry keeps its real URL; it is never pointed at another local port.
+    expect(magpie.providers.get("peer")!.chat).toBe(before);
+    expect(sup.starts).toBe(starts); // no restart while the key route is unresolved
     expect(keyedCalls.some((c) => c.port === OLD && c.key === KEY)).toBe(false);
   });
 
