@@ -78,7 +78,7 @@
 | 仓库 | https://github.com/ethers-io/ethers.js |
 | 源码审查范围 | `lib.esm/wallet/json-keystore.js`（V3 + x-ethers）、`wallet/hdwallet.js`、`wallet/mnemonic.js`、`crypto/scrypt.js`；核对 BIP39/BIP44、V3 加密/解密、scrypt 参数与 `x-ethers` mnemonic 布局 |
 | 已知安全公告 | GitHub `security-advisories` 返回空数组；`search/issues` 无 open security 标签（2026-10-31 查询） |
-| npm audit | 使用公共 registry `npm audit --omit=dev`：0 个 known vulnerabilities（prod 10 / total 9 计数来自 npm 输出）；npmmirror 镜像的 audit endpoint 404，不能作为证据 |
+| npm audit | 使用公共 registry `npm audit --omit=dev`：`vulnerabilities` 为空、0 known vulnerabilities（快照时点）；npmmirror 镜像的 audit endpoint 404，不能作为证据 |
 | 正式审计 | 未找到针对本集成的独立第三方审计；UNKNOWN。本文只声明“审查了这些源码路径”，不声明 ethers 整体经过审计 |
 
 锁定依赖（`bun.lock` 记录 integrity）：
@@ -154,7 +154,7 @@ bun install --frozen-lockfile
 - 临时文件同目录、`wx` + `0600`、写入后 `fsync`，再用 hard-link（不覆盖）或 rename（显式 replace）发布，最后 fsync 目录。
 - 不使用 `.prev` 备份：避免密码更换后旧密码仍能解开旧副本。代价是旧 inode 可能留在磁盘/快照；**不承诺安全擦除**。
 - 写入失败会清理临时文件并保留旧文件（rename 前的失败）。
-- Windows 的 `0600`/目录 fsync 语义未验证；本分支只在 macOS 实测，Linux 预期相同但本轮未跑，Windows **UNKNOWN**。
+- macOS 本地实测；Linux 由 CI 跑了同一模块测试并通过；Windows 的 `0600`/目录 fsync 语义未验证，**UNKNOWN**。
 
 ### 3.5 敏感导出能力
 
@@ -190,7 +190,7 @@ bun install --frozen-lockfile
 `SigningPermit`：
 
 - 只能由本地 `WalletVault.createSigningPermit()` 在解锁会话中创建，并且必须传入本 vault 生成的 prepared 对象；
-- 绑定 `vaultId/sessionId/kind/purpose/chainId` 以及**精确 intent**：typed-data 绑定 digest，付款绑定 `paymentIntentHash`（chain/from/to/value/nonce/data）；换收款人、换 calldata、换 value 或换 typed-data 文档都会失效；
+- 绑定 `vaultId/sessionId/kind/purpose/chainId` 以及**精确 intent**：typed-data 绑定 digest，付款绑定 `paymentIntentHash`（chain/from/to/value/nonce/gas/fees/data）；换收款人、换 calldata、换 value、gas/fee 或 typed-data 文档都会失效；
 - TTL 1–300 秒（默认 60 秒），最多 8 次；多次使用也只能重复**同一个精确 intent**；
 - 付款 permit 还绑定 `maxPerPaymentWei`、`maxTotalWei`，累计 `spentWei`，作为 defense-in-depth；不得低于 prepared 的 value；
 - 失败的限制检查不消耗次数；签名前的成功消耗在异常时不退款（fail closed）；
