@@ -177,6 +177,7 @@ async function service(): Promise<Service> {
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2289",
     supervisor: sup,
+    wallet: null,
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 300,
     ports: { binder, ownership, now: () => new Date("2026-10-31T00:00:10.000Z") },

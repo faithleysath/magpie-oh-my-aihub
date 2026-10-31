@@ -8,8 +8,10 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { registerTestServer, unregisterTestServer } from "./support/network-guard.ts";
 import { Service, type SupervisorLike } from "../src/service.ts";
 import { consoleAction, CONSOLE_ACTIONS } from "../src/console-api.ts";
+import { FORWARD_PORT_FROM } from "../src/state.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta } from "../src/magpie.ts";
 import { emptyPortLedger, SocketBinder } from "../src/ports.ts";
@@ -212,6 +214,7 @@ async function service(opts: Opts = {}): Promise<Service> {
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2289",
     supervisor: sup,
+    wallet: null,
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 200,
     ports: { binder, ownership, now: () => new Date("2026-10-31T00:00:10.000Z") },
@@ -301,6 +304,8 @@ describe("join-network: three fields, everything else automatic", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: new FakeSupervisor(),
+    wallet: null,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership },
@@ -347,6 +352,8 @@ describe("join-network: three fields, everything else automatic", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: new FakeSupervisor(),
+    wallet: null,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership },
@@ -370,6 +377,8 @@ describe("join-network: three fields, everything else automatic", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: new FakeSupervisor(),
+    wallet: null,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership },
@@ -455,6 +464,7 @@ describe("share-native-models: one explicit transaction", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: sup,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership, now: () => new Date("2026-10-31T00:00:30.000Z") },
@@ -519,6 +529,7 @@ describe("sharing is a bounded, explicit transaction", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: sup,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership },
@@ -551,6 +562,7 @@ describe("sharing is a bounded, explicit transaction", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: sup,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership },
@@ -595,6 +607,7 @@ describe("no Gateway Key is sent before the forward is proven ours", () => {
   test("a foreign listener on the forward port never sees a key", async () => {
     const gateway = new KeyedGateway(0, "sk-labcap12");
     const realPort = (gateway.server as unknown as { port: number }).port;
+    registerTestServer(`http://127.0.0.1:${realPort}`);
     try {
       const svc = await service();
       sup.routeRows = [{ ipv4: "10.66.1.2/32", hostname: "peer-host", proxyCidrs: "192.0.2.84->10.66.1.2", nextHop: "DIRECT", pathLen: 1 }];
@@ -605,6 +618,7 @@ describe("no Gateway Key is sent before the forward is proven ours", () => {
       ).rejects.toThrow(/not provably owned|refusing to send the Gateway Key/);
       expect(gateway.authHeaders).toEqual([]);
     } finally {
+      unregisterTestServer(`http://127.0.0.1:${realPort}`);
       gateway.stop();
     }
   });
@@ -612,11 +626,15 @@ describe("no Gateway Key is sent before the forward is proven ours", () => {
   test("reconcile does not re-send the key once the forward owner is foreign", async () => {
     const gateway = new KeyedGateway(0, "sk-labcap12");
     const realPort = (gateway.server as unknown as { port: number }).port;
+    registerTestServer(`http://127.0.0.1:${realPort}`);
+    const forwardProbe = `http://127.0.0.1:${FORWARD_PORT_FROM}`;
+    registerTestServer(forwardProbe);
     try {
       const svc = new Service({
         magpie: magpie as never,
         magpieVersion: "magpie 0.1.2289",
         supervisor: sup,
+        wallet: null,
         lanIp: () => "127.0.0.1",
         probeTimeoutMs: 500,
         ports: { binder, ownership },
@@ -634,6 +652,8 @@ describe("no Gateway Key is sent before the forward is proven ours", () => {
       expect(gateway.authHeaders.length).toBe(afterConnect);
       expect(svc.provider("peer")!.detail).toMatch(/not provably owned|not sending the Gateway Key/);
     } finally {
+      unregisterTestServer(`http://127.0.0.1:${realPort}`);
+      unregisterTestServer(forwardProbe);
       gateway.stop();
     }
   });
@@ -677,6 +697,7 @@ describe("network projection: evidence, not assumptions", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: sup,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership },
@@ -709,6 +730,8 @@ describe("network projection: evidence, not assumptions", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: new FakeSupervisor(),
+    wallet: null,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership, now: () => new Date("2026-10-31T00:00:20.000Z") },
@@ -767,6 +790,8 @@ describe("stale port evidence never hides a live failure", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2289",
       supervisor: new FakeSupervisor(),
+    wallet: null,
+      wallet: null,
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 100,
       ports: { binder, ownership },
