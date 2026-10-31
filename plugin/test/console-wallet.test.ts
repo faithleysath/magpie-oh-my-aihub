@@ -24,7 +24,7 @@ async function setup(){
     for(const c of consumers){const rec=lab.provisioner.find(c.consumerId)!;if(rec.paused||rec.revokedAt)continue;const {limit}=await lab.magpie.limitStatus(rec.secret) as any;readbacks[c.consumerId]={at:new Date().toISOString(),fromGateway:true,capUsd:limit!.costLimit,usedUsd:limit!.cost,leftUsd:limit!.costLeft};}
     return {wallet:lab.statusLocal(),consumers,readbacks,deposits:lab.deposits(),accounting:{state:"ok",reason:null,serving:true}};
   },walletStatement:async()=>null} as unknown as Service;
- const file=join(lab.dir,"operations.json"), adapter=new ConsoleWallet(service,file);
+ const file=join(lab.dir,"operations.json"), adapter=new ConsoleWallet(service,file,lab.nowMs);
  const input={consumerId:"alice",chainId:84532,assetId:lab.assetFor(84532).assetId,amount:"1.000000000000000001",ttlSec:3600};
  return {lab,service,adapter,input,file};
 }
@@ -35,11 +35,11 @@ describe("browser wallet workflows",()=>{
   const {preview}=await adapter.action("wallet-intent-preview",input);expect(preview.amountRaw).toBe("1000000000000000001");
   const body={...input,requestId:id,previewHash:preview.previewHash};
   const created=await adapter.action("wallet-intent-create",body);expect(created.transfer).toBeNull();
-  expect(previewDepositDocument(created.document,"alice").verified).toBe(true);
-  const external=externalSignatureDocument(created.document,signDigest(created.document.digest),TEST_PAYER,"alice");
+  expect(previewDepositDocument(created.document,"alice",new Date(lab.clock.at)).verified).toBe(true);
+  const external=externalSignatureDocument(created.document,signDigest(created.document.digest),TEST_PAYER,"alice",new Date(lab.clock.at));
   expect(external.document.invoiceId).toBe(created.document.invoiceId);expect(external.verified).toBe(true);
-  expect(()=>externalSignatureDocument(created.document,"0x"+"11".repeat(65),TEST_PAYER,"alice")).toThrow();
-  const reopened=new ConsoleWallet(service,file),replay=await reopened.action("wallet-intent-create",body);
+  expect(()=>externalSignatureDocument(created.document,"0x"+"11".repeat(65),TEST_PAYER,"alice",new Date(lab.clock.at))).toThrow();
+  const reopened=new ConsoleWallet(service,file,lab.nowMs),replay=await reopened.action("wallet-intent-create",body);
   expect(replay.document.invoiceId).toBe(created.document.invoiceId);expect(lab.wallet.intents("alice")).toHaveLength(1);
   const signed=await adapter.action("wallet-signature-import",{consumerId:"alice",invoiceId:created.document.invoiceId,document:{schema:"ohmyaihub.deposit-signature/v1",invoiceId:created.document.invoiceId,payerAddress:TEST_PAYER,signature:signDigest(created.document.digest)}});
   expect(signed.transfer.schema).toBe("ohmyaihub.transfer-instructions/v1");expect(signed.transfer.amountRaw).toBe(preview.amountRaw);
@@ -71,10 +71,19 @@ describe("browser wallet workflows",()=>{
   const {preview}=await adapter.action("wallet-intent-preview",input);expect(preview.pending.map((p:any)=>p.invoiceId)).toContain(first.intent.invoiceId);expect(preview.blockers).toHaveLength(1);
   await expect(adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash})).rejects.toThrow(/未完成/);
  });
+ test("the injected clock decides expiry; exactly at the TTL the request is already expired",async()=>{
+  const {adapter,input,lab}=await setup();
+  const {preview}=await adapter.action("wallet-intent-preview",input); // ttlSec 3600
+  const {document}=await adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash});
+  expect(previewDepositDocument(document,"alice",new Date(lab.clock.at)).verified).toBe(true);
+  lab.advance(3_600_000); // exactly the requested TTL, not one millisecond more
+  expect(()=>previewDepositDocument(document,"alice",new Date(lab.clock.at))).toThrow(/过期/);
+  await expect(adapter.action("wallet-signature-import",{consumerId:"alice",invoiceId:document.invoiceId,document:{schema:"ohmyaihub.deposit-signature/v1",invoiceId:document.invoiceId,payerAddress:TEST_PAYER,signature:signDigest(document.digest)}})).rejects.toThrow(/失效/);
+ });
  test("import rejects tampered human-visible amount, wrong consumer and private-key fields",async()=>{
-  const {adapter,input}=await setup();const {preview}=await adapter.action("wallet-intent-preview",input);const {document}=await adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash});
-  expect(()=>previewDepositDocument({...document,amount:{tokens:"2",raw:"2"}},"alice")).toThrow();
-  expect(()=>previewDepositDocument(document,"other-consumer")).toThrow();
+  const {adapter,input,lab}=await setup();const {preview}=await adapter.action("wallet-intent-preview",input);const {document}=await adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash});
+  expect(()=>previewDepositDocument({...document,amount:{tokens:"2",raw:"2"}},"alice",new Date(lab.clock.at))).toThrow();
+  expect(()=>previewDepositDocument(document,"other-consumer",new Date(lab.clock.at))).toThrow();
   expect(()=>parseWalletSignature({signature:"0x"+"11".repeat(65),payerAddress:TEST_PAYER,privateKey:"fixture-only"})).toThrow();
  });
  test("passive projection does no RPC and does not leak credential-bearing RPC URLs",async()=>{
