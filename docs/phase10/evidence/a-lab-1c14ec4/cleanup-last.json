@@ -1,0 +1,45 @@
+{
+ "at": "2026-10-31T04:02:27Z",
+ "nodes": {
+  "provider": {
+   "before": [
+    17529,
+    17798,
+    19029,
+    46163
+   ],
+   "remaining": [],
+   "portsFree": {
+    "web": true,
+    "gateway": true,
+    "upstream": true,
+    "listen": true,
+    "catalog": true,
+    "socks": true,
+    "api-port": true,
+    "console-port": true,
+    "rpc": true
+   }
+  },
+  "consumer": {
+   "before": [
+    73081,
+    73091,
+    85576,
+    85581
+   ],
+   "remaining": [],
+   "portsFree": {
+    "web": true,
+    "gateway": true,
+    "upstream": true,
+    "listen": true,
+    "catalog": true,
+    "socks": true,
+    "api-port": true,
+    "console-port": true,
+    "rpc": true
+   }
+  }
+ }
+}

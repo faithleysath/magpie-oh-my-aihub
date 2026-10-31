@@ -1,0 +1,124 @@
+{
+ "head": "1c14ec4d4accf68dfef161c5f85bc8a18e6f6bf8",
+ "platform": "macOS 26.6.2 arm64",
+ "nodes": {
+  "provider": {
+   "corePid": 19029,
+   "rpcPort": 17930
+  },
+  "consumer": {
+   "corePid": 85581,
+   "rpcPort": 17929
+  }
+ },
+ "gateway": {
+  "providerNoKey": 401,
+  "providerWrongKey": 401,
+  "consumerForwardNoKey": 401,
+  "consumerForwardWrongKey": 401,
+  "validKey": 200,
+  "requestLog": "401/401/200 through 127.0.0.1:13426 after migration"
+ },
+ "synthetic": {
+  "costCap": {
+   "capUsd": 0.0001,
+   "firstChat": 200,
+   "costUsd": 0.012,
+   "secondChat": 429,
+   "retryAfterSeconds": 43436,
+   "limit": {
+    "calls": 1,
+    "tokens": 12,
+    "cost": 0.012,
+    "costLimit": 0.0001,
+    "spent": true
+   }
+  },
+  "tokenCap": {
+   "tokenLimit": 1,
+   "costLimit": 1,
+   "firstChat": 200,
+   "tokensUsed": 12,
+   "secondChat": 429,
+   "error": "magpie gateway key ... has used 12 of its 1 input, output and cache-write tokens for this day",
+   "limit": {
+    "calls": 1,
+    "tokens": 12,
+    "cost": 0.012,
+    "tokenLimit": 1,
+    "costLimit": 1,
+    "tokensLeft": 0,
+    "costLeft": 0.988,
+    "spent": true
+   }
+  },
+  "keyRotation": {
+   "oldKey": 401,
+   "newKey": 200,
+   "noKey": 401,
+   "consumerRecord": {
+    "status": "connected",
+    "keyGeneration": 2,
+    "evidenceGeneration": 2,
+    "limitPreserved": {
+     "calls": 1,
+     "cost": 0.012,
+     "costLimit": 0.05
+    }
+   }
+  }
+ },
+ "migration": {
+  "trigger": "owned Remote forward port 127.0.0.1:13425 taken over by the lab's own occupier listener while the consumer core was stopped",
+  "observed": "plugin refused to start core with the old forward (Address already in use), then /providers/reconcile used the source migrateProviderForward path",
+  "from": 13425,
+  "to": 13426,
+  "detail": "forward recovered 13425 -> 13426: loopback 13425 is not owned by the core (unverified: no live process identity is available for 127.0.0.1:13425; a configuration claim is not ownership)",
+  "oldPortProbe": "RemoteDisconnected (lab occupier, not the plugin)",
+  "newPortProbes": {
+   "noKey": 401,
+   "wrongKey": 401,
+   "validKey": 200
+  },
+  "afterRestart": {
+   "localPort": 13426,
+   "noKey": 401,
+   "validKey": 200,
+   "checks": "all true",
+   "magpieProviderUrl": "http://127.0.0.1:13426/v1"
+  },
+  "limits": {
+   "labConstraint": "only one mapped /32 per provider; second Remote with the same mapped CIDR is rejected 400; other-peer preservation limited to the same ET provider peer"
+  }
+ },
+ "ui": {
+  "F1": {
+   "file": "plugin/console/providers.js",
+   "lines": [
+    594,
+    601,
+    606
+   ],
+   "symptom": "share button disabled after checkbox until a render (search input); unchecking after share also stays enabled",
+   "impact": "normal user cannot complete share without a re-render"
+  },
+  "F2": {
+   "files": {
+    "js": "plugin/console/providers.js:814",
+    "css": "plugin/console/style.css:286-287"
+   },
+   "symptom": "stop-share button hidden=true but computed display:flex",
+   "impact": "invalid action visible before sharing"
+  },
+  "observation": {
+   "neighborCount": "provider home briefly showed 0 other nodes while network page had the consumer; transient, UNKNOWN"
+  },
+  "browserReport": "2026-10-31-a-lab-1c14ec4-browser.md; screenshots screenshots/"
+ },
+ "scope": {
+  "same_host": true,
+  "easyter_transport": "tcp://127.0.0.1:11010 peer link",
+  "nat_wan": "not tested",
+  "b_file_path": "not installed; no ZeroFile GO"
+ }
+}

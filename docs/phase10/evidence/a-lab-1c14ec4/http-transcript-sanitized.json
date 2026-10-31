@@ -1,0 +1,175 @@
+{
+ "note": "Sanitized request/response transcript reconstructed from tool output during the run. Not byte-exact raw captures (raw response bodies were not persisted); values are redacted and key names masked.",
+ "providerGateway": "http://192.168.43.86:33060",
+ "consumerForward": "http://127.0.0.1:13426 (was 13425 before migration)",
+ "entries": [
+  {
+   "req": "GET /v1/models (provider LAN, no key)",
+   "status": 401
+  },
+  {
+   "req": "GET /v1/models (provider LAN, wrong key)",
+   "status": 401
+  },
+  {
+   "req": "GET /v1/models (consumer forward, no key)",
+   "status": 401
+  },
+  {
+   "req": "GET /v1/models (consumer forward, wrong key)",
+   "status": 401
+  },
+  {
+   "req": "GET /v1/models (consumer forward, valid synthetic key)",
+   "status": 200
+  },
+  {
+   "req": "POST /v1/chat/completions (cap $0.0001, 12 tokens)",
+   "status": 200,
+   "body_excerpt": "chat.completion; model provider-model; usage 12 tokens"
+  },
+  {
+   "req": "POST /v1/chat/completions (same cap, second call)",
+   "status": 429,
+   "headers": {
+    "Retry-After": "43436"
+   },
+   "body_excerpt": "magpie gateway key \"<key-name>\" has used $0.01 of its $0.00 estimated cost for this day; resets 2026-11-01 00:00 CST"
+  },
+  {
+   "req": "GET /v1/magpie/limit (cost cap)",
+   "status": 200,
+   "body_excerpt": {
+    "period": "day",
+    "calls": 1,
+    "tokens": 12,
+    "cost": 0.012,
+    "costLimit": 0.0001,
+    "tokensLeft": 0,
+    "costLeft": 0,
+    "spent": true
+   }
+  },
+  {
+   "req": "POST /v1/chat/completions (token cap 1, 12 tokens)",
+   "status": 200,
+   "body_excerpt": "chat.completion; usage 12 tokens"
+  },
+  {
+   "req": "POST /v1/chat/completions (token cap 1, second call)",
+   "status": 429,
+   "headers": {
+    "Retry-After": "43131"
+   },
+   "body_excerpt": "magpie gateway key \"<key-name>\" has used 12 of its 1 input, output and cache-write tokens for this day"
+  },
+  {
+   "req": "GET /v1/magpie/limit (token cap)",
+   "status": 200,
+   "body_excerpt": {
+    "calls": 1,
+    "tokens": 12,
+    "cost": 0.012,
+    "tokenLimit": 1,
+    "costLimit": 1,
+    "tokensLeft": 0,
+    "costLeft": 0.988,
+    "spent": true
+   }
+  },
+  {
+   "req": "GET /v1/models (old rotated key)",
+   "status": 401
+  },
+  {
+   "req": "GET /v1/models (new rotated key)",
+   "status": 200
+  },
+  {
+   "req": "GET /v1/models (no key, after rotation)",
+   "status": 401
+  },
+  {
+   "req": "GET http://192.168.43.86:39219/ (admin web)",
+   "result": "connection refused (loopback-only)"
+  },
+  {
+   "req": "GET http://192.168.43.86:34517/status (plugin API)",
+   "result": "connection refused (loopback-only)"
+  },
+  {
+   "req": "GET http://192.168.43.86:17930/ (ET RPC)",
+   "result": "connection refused (loopback-only)"
+  },
+  {
+   "req": "GET http://192.168.43.86:3426/catalog/v1 (catalogue)",
+   "status": 200
+  },
+  {
+   "req": "GET http://10.77.0.141:39219/ via temp ET forward (virtual IP admin web)",
+   "result": "timeout 4s"
+  },
+  {
+   "req": "GET http://10.66.164.176:39219/ via temp ET forward (mapped IP admin web)",
+   "result": "timeout 4s"
+  },
+  {
+   "req": "GET http://10.77.0.141:17930/ via temp ET forward (virtual IP RPC)",
+   "result": "connection reset ~3.1s"
+  },
+  {
+   "req": "POST /providers/add {id: peer-a-synth, mappedCidr: 10.66.164.176/32, providerPort: 33060}",
+   "status": 200,
+   "body_excerpt": {
+    "status": "connected",
+    "localPort": 13425,
+    "models": [
+     "provider/provider-model"
+    ],
+    "modelsEvidence": {
+     "status": "current",
+     "source": "connect-readback",
+     "generation": 1
+    },
+    "limit": {
+     "costLimit": 0.0001
+    }
+   }
+  },
+  {
+   "req": "POST /providers/update {id: peer-a-synth, key: <rotated>}",
+   "status": 200,
+   "body_excerpt": {
+    "status": "connected",
+    "localPort": 13425,
+    "keyGeneration": 2,
+    "modelsEvidence": {
+     "generation": 2,
+     "source": "connect-readback"
+    }
+   }
+  },
+  {
+   "req": "POST /providers/reconcile (after owned port 13425 conflict)",
+   "status": 200,
+   "body_excerpt": {
+    "providers": [
+     {
+      "id": "peer-a-synth",
+      "status": "connected",
+      "localPort": 13426,
+      "detail": "forward recovered 13425 -> 13426: loopback 13425 is not owned by the core (unverified: no live process identity ...)"
+     }
+    ]
+   }
+  },
+  {
+   "req": "GET http://127.0.0.1:13426/v1/models after migration/restart",
+   "status": 401
+  },
+  {
+   "req": "GET http://127.0.0.1:13426/v1/models with valid key after migration/restart",
+   "status": 200
+  }
+ ]
+}

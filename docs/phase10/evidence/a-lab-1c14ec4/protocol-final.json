@@ -1,0 +1,117 @@
+{
+ "root": "<lab-root>",
+ "nodes": {
+  "provider": {
+   "core": {
+    "pid": 19029,
+    "argv": "/private<lab-root>/provider/data/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private<lab-root>/provider/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17930",
+    "listeners": [
+     "*:11010",
+     "127.0.0.1:13401",
+     "127.0.0.1:17930"
+    ]
+   },
+   "config": {
+    "nodeId": "5252ffc0",
+    "hostname": null,
+    "listenAddr": "tcp://0.0.0.0:11010",
+    "virtualIpv4": "10.77.0.141/24",
+    "mappedCidr": "10.66.164.176/32",
+    "proxyCidr": "192.168.43.86/32",
+    "publishedPorts": [
+     33060
+    ],
+    "sharingEnabled": true,
+    "consumingEnabled": true,
+    "peers": []
+   },
+   "catalog": {
+    "enabled": true,
+    "discoveryEnabled": true,
+    "port": 3426,
+    "socksPort": 13401
+   },
+   "share": {
+    "models": [
+     "provider/provider-model"
+    ]
+   },
+   "providers": [],
+   "forward_rules_toml": [],
+   "acl": "[acl.acl_v1]\n# Forward: the subnet-proxy path a consumer reaches; exactly the published ports.\n[[acl.acl_v1.chains]]\nname = \"Forward\"\nchain_type = 3\nenabled = true\ndefault_action = 2\n[[acl.acl_v1.chains.rules]]\nname = \"allow-33060\"\npriority = 1000\nenabled = true\nprotocol = 1\nports = [\"33060\"]\naction = 1\nstateful = true\n[[acl.acl_v1.chains.rules]]\nname = \"allow-3426\"\npriority = 1000\nenabled = true\nprotocol = 1\nports = [\"3426\"]\naction = 1\nstateful = true\n# Inbound: nothing addressed to this node's own virtual IP is delivered.\n# Never add a rule here for a Magpie port: in no-TUN that is the 127.0.0.1\n# rewrite, which Magpie treats as a local, unauthenticated caller.\n[[acl.acl_v1.chains]]\nname = \"Inbound\"\nchain_type = 1\nenabled = true\ndefault_action = 2\n"
+  },
+  "consumer": {
+   "core": {
+    "pid": 73112,
+    "argv": "/private<lab-root>/consumer/data/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private<lab-root>/consumer/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17929",
+    "listeners": [
+     "*:11011",
+     "*:60024",
+     "127.0.0.1:13402",
+     "127.0.0.1:13426",
+     "127.0.0.1:17929"
+    ]
+   },
+   "config": {
+    "nodeId": "9551aff0",
+    "hostname": null,
+    "listenAddr": "tcp://0.0.0.0:11011",
+    "virtualIpv4": "10.77.0.196/24",
+    "mappedCidr": null,
+    "proxyCidr": null,
+    "publishedPorts": [
+     25759
+    ],
+    "sharingEnabled": false,
+    "consumingEnabled": true,
+    "peers": [
+     "tcp://127.0.0.1:11010"
+    ]
+   },
+   "catalog": {
+    "enabled": false,
+    "discoveryEnabled": true,
+    "port": 3426,
+    "socksPort": 13402
+   },
+   "share": {
+    "models": []
+   },
+   "providers": [
+    {
+     "id": "peer-a-synth",
+     "status": "connected",
+     "localPort": 13426,
+     "mappedCidr": "10.66.164.176/32",
+     "providerPort": 33060,
+     "keyGeneration": 2,
+     "models": [
+      "provider/provider-model"
+     ],
+     "evidence": {
+      "status": "unknown",
+      "readAt": "2026-10-31T03:58:24.618Z",
+      "expiresAt": null,
+      "generation": 3,
+      "keyGeneration": 2,
+      "source": "reconcile"
+     },
+     "limit": {
+      "period": "day",
+      "calls": 1,
+      "cost": 0.012,
+      "costLimit": 0.05,
+      "costLeft": 0.038000000000000006,
+      "tokens": 12,
+      "spent": false,
+      "reset": "2026-11-01T00:00:00+08:00"
+     }
+    }
+   ],
+   "forward_rules_toml": [
+    "[[port_forward]] | bind_addr = \"127.0.0.1:13426\" | dst_addr = \"10.66.164.176:33060\" | proto = \"tcp\""
+   ],
+   "acl": "[acl.acl_v1]\n# Inbound: nothing addressed to this node's own virtual IP is delivered.\n# Never add a rule here for a Magpie port: in no-TUN that is the 127.0.0.1\n# rewrite, which Magpie treats as a local, unauthenticated caller.\n[[acl.acl_v1.chains]]\nname = \"Inbound\"\nchain_type = 1\nenabled = true\ndefault_action = 2\n"
+  }
+ }
+}

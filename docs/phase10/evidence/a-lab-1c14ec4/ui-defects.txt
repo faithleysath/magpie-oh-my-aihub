@@ -1,0 +1,11 @@
+== UI defect source evidence (HEAD 1c14ec4) ==
+-- F1: renderModels sets modelSave.disabled only on render; change handler does not update it
+594:    if (!candidates) { modelsList.append(empty("还没有检测到模型", "点“重新检测本机模型”读取 Magpie 当前的模型与价格。")); modelSave.disabled = true; return; }
+601:      choice.input.addEventListener("change", () => { modelDirty = true; if (choice.input.checked) selectedModels.add(model.id); else selectedModels.delete(model.id); });
+606:    modelSave.disabled = items(candidates.models).every((model) => !model.completePrice) || !selectedModels.size;
+-- F2: stopShareButton.hidden set; .button display overrides [hidden] (no [hidden] reset)
+814:    stopShareButton.hidden = next.status.config.sharingEnabled !== true;
+286:.button {
+287-  display: inline-flex;
+288-  align-items: center;
+0

@@ -1,0 +1,116 @@
+{
+ "schema": "ohmyaihub-phase9-isolated-lab/v1",
+ "root": "/private<lab-root>",
+ "createdAt": "2026-10-31T03:41:23Z",
+ "repoHead": "1c14ec4d4accf68dfef161c5f85bc8a18e6f6bf8",
+ "platform": {
+  "os": "Darwin",
+  "release": "25.6.0",
+  "arch": "arm64"
+ },
+ "magpieSourceSha": "5c637f17b25dad63c490b1edf242c11a83b1b059",
+ "magpieBinarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
+ "magpieVersion": "0.1.2289",
+ "billingPin": "0.1.2038",
+ "compatibility": "UNKNOWN until actor acceptance",
+ "networkName": "phase9-8f4c16df",
+ "nodes": {
+  "provider": {
+   "name": "provider",
+   "root": "/private<lab-root>/provider",
+   "data": "/private<lab-root>/provider/data",
+   "home": "/private<lab-root>/provider/home",
+   "logs": "/private<lab-root>/provider/logs",
+   "bin": "/private<lab-root>/provider/Magpie.app/Contents/MacOS/magpie",
+   "lan": "192.168.43.86",
+   "gatewayAddress": "192.168.43.86:33060",
+   "pluginCopy": "/private<lab-root>/provider/package",
+   "webOrigin": "http://127.0.0.1:39219",
+   "ports": {
+    "web": 39219,
+    "gateway": 33060,
+    "upstream": 47751,
+    "listen": 48846,
+    "catalog": 32672,
+    "socks": 42562
+   },
+   "processes": {
+    "upstream": {
+     "pid": 17529,
+     "startedAt": "2026-10-31T03:41:32Z",
+     "argv0": "<python>"
+    },
+    "web": {
+     "pid": 17798,
+     "startedAt": "2026-10-31T03:41:32Z",
+     "argv0": "/private<lab-root>/provider/Magpie.app/Contents/MacOS/magpie"
+    }
+   },
+   "fixture": {
+    "model": "provider/provider-model",
+    "price": "1000,1000,0,0",
+    "portableProviderFileExists": true
+   },
+   "binarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
+   "readiness": {
+    "at": "2026-10-31T03:41:32Z",
+    "webReachable": true,
+    "webLoopbackOnly": true,
+    "gatewayNoKeyStatus": 401,
+    "gatewayWrongKeyStatus": 401,
+    "pluginInstalledByHarness": false
+   }
+  },
+  "consumer": {
+   "name": "consumer",
+   "root": "/private<lab-root>/consumer",
+   "data": "/private<lab-root>/consumer/data",
+   "home": "/private<lab-root>/consumer/home",
+   "logs": "/private<lab-root>/consumer/logs",
+   "bin": "/private<lab-root>/consumer/Magpie.app/Contents/MacOS/magpie",
+   "lan": "192.168.43.86",
+   "gatewayAddress": "192.168.43.86:25759",
+   "pluginCopy": "/private<lab-root>/consumer/package",
+   "webOrigin": "http://127.0.0.1:33009",
+   "ports": {
+    "web": 33009,
+    "gateway": 25759,
+    "upstream": 43014,
+    "listen": 31256,
+    "catalog": 32671,
+    "socks": 48551
+   },
+   "processes": {
+    "upstream": {
+     "pid": 73081,
+     "startedAt": "2026-10-31T03:58:23Z",
+     "argv0": "<python>"
+    },
+    "web": {
+     "pid": 73091,
+     "startedAt": "2026-10-31T03:58:23Z",
+     "argv0": "/private<lab-root>/consumer/Magpie.app/Contents/MacOS/magpie"
+    }
+   },
+   "fixture": {
+    "model": "consumer/consumer-model",
+    "price": "1000,1000,0,0",
+    "portableProviderFileExists": true
+   },
+   "binarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
+   "readiness": {
+    "at": "2026-10-31T03:58:24Z",
+    "webReachable": true,
+    "webLoopbackOnly": true,
+    "gatewayNoKeyStatus": 401,
+    "gatewayWrongKeyStatus": 401,
+    "pluginInstalledByHarness": false
+   }
+  }
+ },
+ "hostBun": {
+  "version": "1.4.4",
+  "sha256": "0a2237cdcfa0d16ef501d9acca9f0026309ef348bea7393a64e8d1e3609565cc",
+  "origin": "Magpie-managed cache fixture"
+ }
+}
