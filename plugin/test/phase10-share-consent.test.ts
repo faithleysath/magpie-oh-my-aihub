@@ -183,6 +183,20 @@ describe("wildcard sharing consent", () => {
     expect(svc.config()!.share.models).toEqual(before.share.models);
   });
 
+  test("strict configure validates exact models against native priced snapshot", async () => {
+    const svc = await service();
+    const base = { networkName: "share-consent-lab", networkSecret: "share-consent-secret", sharingEnabled: true };
+    await expect(
+      svc.configure({ ...base, shareModels: ["beta/remote-model"] }, { strictShareModels: true }),
+    ).rejects.toThrow(/not a native model|unverified/);
+    await expect(
+      svc.configure({ ...base, shareModels: [UNPRICED] }, { strictShareModels: true }),
+    ).rejects.toThrow(/complete effective price/);
+    const ok = await svc.configure({ ...base, shareModels: [PRICED] }, { strictShareModels: true });
+    expect(ok.config.share.models).toEqual([PRICED]);
+    expect(ok.config.sharingEnabled).toBe(true);
+  });
+
   test("an explicit shareNativeModels selection clears the legacy policy suspension", async () => {
     const svc = await service();
     await legacyWildcard(svc);
