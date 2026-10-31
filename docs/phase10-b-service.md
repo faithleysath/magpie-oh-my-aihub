@@ -217,7 +217,7 @@ bun test test/control-http.test.ts test/control-service-port.test.ts
 | --- | --- | --- |
 | HTTP transport policy and limits | VERIFIED (unit) | 13 pass, typecheck |
 | Approval/handover/import adapter reuses Service | VERIFIED (unit with fake Magpie / loopback gateway) | 12 pass |
-| Full `bun run test` | UNKNOWN / blocked | P0-clock guard not yet received; old tests may probe production 3425/public RPC |
+| Full `bun run test` | PASS in a **temporary verification copy**, not integrated | 778 pass / 0 fail with PR #15 `889973f55ca3a72da99ae0091e50ecd5ea428207` + PR #17 `60d0d04`/`3ce22ee7358ef6f3817b7d4957c4696fbd9a4144`; temp worktree deleted; no P0 commit is part of this branch |
 | Real B-core `P2pService` stacked and compiled | UNKNOWN | B-core has not committed a reviewed base |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
 | Real EasyTier 2.6.4 two-node hello/frame/TOFU | UNKNOWN | no two-node overlay run |
@@ -225,7 +225,11 @@ bun test test/control-http.test.ts test/control-service-port.test.ts
 | Control port from A-service | PLANNED | A-service `reservePort`/`verifyOwnedPort`; no fixed 3427/user port |
 | Real funds / mainnet | **NO-GO** | out of scope; no wallet or real asset used |
 
-No full-suite pass and no real two-node pass is claimed. The next gates are: B-core's
+The 778/0 full-suite run was made in an isolated `/tmp` worktree that combined this
+branch's head with the two P0 review branches; the temporary worktree and branch were
+deleted afterwards. It is evidence that this branch does not regress the hermetic
+suite, not an approval to integrate P0 or a claim that the guard is part of B.
+No real two-node pass is claimed. The next gates are: B-core's
 reviewed commit + contract confirmation, explicit stacked base approval, A-service's
 port API, then an isolated Magpie/EasyTier two-node run with sanitised logs. The full
 test suite must run only with P0-clock's hermetic guard.
