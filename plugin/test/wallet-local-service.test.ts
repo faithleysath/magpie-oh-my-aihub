@@ -361,6 +361,21 @@ describe("real console auth for wallet vault", () => {
     expect(await backupReplay.text()).not.toContain('"keystore"');
   });
 
+  test("console stop/lock tears down the local vault and grants", async () => {
+    const service = new WalletLocalService({ path: tempPath() });
+    const h = fixture(service, () => 1_700_000_000_000);
+    const session = await open(h);
+    await action(h, session, "wallet-vault-import", { mnemonic: VECTOR, password: PASSWORD });
+    await action(h, session, "wallet-vault-unlock", { password: PASSWORD });
+    const grant = (await (await action(h, session, "wallet-vault-reveal-authorize", {
+      kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
+    })).json()).result.authorizationId as string;
+    const sessionId = session.cookie.split("=")[1]!;
+    h.stop();
+    expect((await service.status()).wallet.status).toBe("locked");
+    expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: grant, password: PASSWORD }, context(sessionId)))).toBe("wallet-reveal-invalid");
+  });
+
   test("wrong password locks; cross-session and expired grants reject; reauthorization succeeds once", async () => {
     let now = 1_700_000_000_000;
     const service = new WalletLocalService({ path: tempPath(), now: () => now });
