@@ -376,8 +376,16 @@ describe("join-network: three fields, everything else automatic", () => {
       probes: { catalogModels: async () => catalogModels(), statusWith: async () => true },
     });
     services.push(fresh);
+    let recovered = false;
+    (fresh as unknown as { provisioner: { recover: () => Promise<unknown> } }).provisioner.recover = async () => {
+      recovered = true;
+      return { recovered: [], removed: [], uncertain: [] };
+    };
     await fresh.start();
     expect(fresh.problem()).toMatch(/does not own its listeners|held by pid/);
+    // No catalogue/guard/provisioner loops on top of an unproven core.
+    expect(recovered).toBe(false);
+    expect((fresh as unknown as { catalogServer: unknown }).catalogServer).toBeNull();
     const net = fresh.networkView();
     expect(net.state).toBe("failed");
     expect(net.core.running).toBe(false);
