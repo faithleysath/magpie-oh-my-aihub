@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { registerTestServer } from "./support/network-guard.ts";
+import { expectBlocked, isTestServerAllowed, registerTestServer, unregisterTestServer } from "./support/network-guard.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -205,7 +205,10 @@ class FakeGateway {
     });
     this.port = this.server.port!;
   }
+  private stopped = false;
   stop() {
+    if (this.stopped) return;
+    this.stopped = true;
     this.server.stop(true);
   }
 }
@@ -218,18 +221,26 @@ let sup: FakeSupervisor;
 let localGateway: ReturnType<typeof Bun.serve> | null = null;
 /** Port of the server above, fixed for the duration of one test. */
 let localGatewayPort = 0;
+// Captured when the module loads so `afterAll` can put the process back exactly
+// as this file found it, even when a test throws.
+const originalMagpieAddr = process.env.MAGPIE_ADDR;
+const originalCwd = process.cwd();
+/** Origins registered with `registerTestServer`, for the afterAll fallback. */
+const explicitOrigins = new Set<string>();
 
-function closeOpenResources(): void {
-  for (const s of services.splice(0)) void s.stop();
+async function closeOpenResources(): Promise<void> {
+  // Service.stop() is asynchronous: the next test must not start while the
+  // previous supervisor is still shutting down.
+  await Promise.all(services.splice(0).map((s) => s.stop()));
   for (const g of gateways.splice(0)) g.stop();
   localGateway?.stop(true);
   localGateway = null;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await closeOpenResources();
   const dir = mkdtempSync(join(tmpdir(), "ohmyaihub-service-"));
   process.chdir(dir);
-  closeOpenResources();
   localGateway = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -443,16 +454,27 @@ describe("several remote providers", () => {
     await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port });
     await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: c.port });
 
-    b.stop();
     // The provider is down on purpose: re-declare its own (now closed) port so
     // the reconcile probe may reach the OS and observe a refused connection,
-    // instead of the hermetic guard blocking a port no test declares.
-    registerTestServer(`http://127.0.0.1:${b.port}`);
-    const after = await s.reconcileProviders({ verifyModels: true });
-    expect(after.find((p) => p.id === "peer-b")!.status).toBe("degraded");
-    expect(after.find((p) => p.id === "peer-c")!.status).toBe("connected");
-    // a degraded provider is not unregistered: Magpie would just fail its calls
-    expect(magpie.providers_().map((p) => p.id).sort()).toEqual(["peer-b", "peer-c"]);
+    // instead of the hermetic guard blocking a port no test declares. The
+    // explicit registration is undone afterwards: `server.stop()` only removes
+    // the automatic one.
+    const closedOrigin = `http://127.0.0.1:${b.port}`;
+    b.stop();
+    registerTestServer(closedOrigin);
+    explicitOrigins.add(closedOrigin);
+    try {
+      const after = await s.reconcileProviders({ verifyModels: true });
+      expect(after.find((p) => p.id === "peer-b")!.status).toBe("degraded");
+      expect(after.find((p) => p.id === "peer-c")!.status).toBe("connected");
+      // a degraded provider is not unregistered: Magpie would just fail its calls
+      expect(magpie.providers_().map((p) => p.id).sort()).toEqual(["peer-b", "peer-c"]);
+    } finally {
+      unregisterTestServer(closedOrigin);
+      explicitOrigins.delete(closedOrigin);
+      expect(isTestServerAllowed(closedOrigin)).toBe(false);
+      expect(await expectBlocked(() => fetch(closedOrigin))).toBe(true);
+    }
   });
 
   test("a mapped address taken over by another overlay name is unregistered, then restored", async () => {
@@ -1014,7 +1036,25 @@ describe("secrets stay out of the status", () => {
   });
 });
 
-// Ownership: whatever a failing last test left open is closed with the file.
-afterAll(() => {
-  closeOpenResources();
+describe("resource ownership", () => {
+  test("closeOpenResources waits for an asynchronous stop", async () => {
+    let stopped = false;
+    services.push({ stop: async () => { await Bun.sleep(20); stopped = true; } } as unknown as Service);
+    await closeOpenResources();
+    expect(stopped).toBe(true);
+  });
+});
+
+// Ownership: whatever a failing last test left open is closed with the file,
+// and the process environment and cwd are restored even when cleanup throws.
+afterAll(async () => {
+  try {
+    await closeOpenResources();
+  } finally {
+    for (const origin of explicitOrigins) unregisterTestServer(origin);
+    explicitOrigins.clear();
+    if (originalMagpieAddr === undefined) delete process.env.MAGPIE_ADDR;
+    else process.env.MAGPIE_ADDR = originalMagpieAddr;
+    process.chdir(originalCwd);
+  }
 });
