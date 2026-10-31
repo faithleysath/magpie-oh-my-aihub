@@ -921,6 +921,7 @@ describe("simulated/testnet payment signing", () => {
     await vault.unlock(PASSWORD);
     for (const input of [
       paymentInput({ valueWei: 0n }),
+      paymentInput({ valueWei: 1n << 256n }),
       paymentInput({ to: "0x0000000000000000000000000000000000000000" }),
       paymentInput({ data: "0x1" }),
       paymentInput({ nonce: -1 }),

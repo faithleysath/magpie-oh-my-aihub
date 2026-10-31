@@ -64,6 +64,7 @@ export const MAX_SIGNING_PERMIT_USES = 8;
 export const MAX_AUTO_RECHARGE_TTL_MS = 5 * 60_000;
 export const MAX_KEYSTORE_BYTES = 128 * 1024;
 export const MAX_PAYMENT_DATA_BYTES = 16 * 1024;
+const UINT256_MAX = (1n << 256n) - 1n;
 
 export interface WalletKdfParams {
   /** scrypt N; must be a power of two in [MIN_KDF_N, MAX_KDF_N] */
@@ -949,8 +950,8 @@ export class WalletVault {
     if (!Number.isSafeInteger(input.chainId) || input.chainId < 1) {
       fail("payment-invalid", "chain id must be a positive safe integer");
     }
-    if (typeof input.valueWei !== "bigint" || input.valueWei <= 0n) {
-      fail("payment-invalid", "payment value must be a positive bigint");
+    if (typeof input.valueWei !== "bigint" || input.valueWei <= 0n || input.valueWei > UINT256_MAX) {
+      fail("payment-invalid", "payment value must be a positive uint256 bigint");
     }
     if (!Number.isSafeInteger(input.nonce) || input.nonce < 0) {
       fail("payment-invalid", "nonce must be a non-negative safe integer");
@@ -960,8 +961,11 @@ export class WalletVault {
       typeof input.maxFeePerGas !== "bigint" ||
       typeof input.maxPriorityFeePerGas !== "bigint" ||
       input.gasLimit <= 0n ||
+      input.gasLimit > UINT256_MAX ||
       input.maxFeePerGas <= 0n ||
+      input.maxFeePerGas > UINT256_MAX ||
       input.maxPriorityFeePerGas < 0n ||
+      input.maxPriorityFeePerGas > UINT256_MAX ||
       input.maxPriorityFeePerGas > input.maxFeePerGas
     ) {
       fail("payment-invalid", "invalid gas or fee fields");
