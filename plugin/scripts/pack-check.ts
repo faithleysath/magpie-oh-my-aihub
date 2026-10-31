@@ -7,7 +7,7 @@
  *
  * `--selftest` (on by default) proves the checker is not vacuous.
  */
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -58,6 +58,15 @@ export function checkEntries(entries: string[], required: string[]): void {
   if (missing.length > 0) throw new Error(`required runtime file(s) missing from tarball: ${missing.join(", ")}`);
 }
 
+/** The root package is the Magpie install entry; sub-package deps must be there too. */
+export function missingRuntimeDeps(
+  rootManifest: { dependencies?: Record<string, string> },
+  pluginManifest: { dependencies?: Record<string, string> },
+): string[] {
+  const root = rootManifest.dependencies ?? {};
+  return Object.keys(pluginManifest.dependencies ?? {}).filter((name) => !Object.hasOwn(root, name));
+}
+
 function run(cmd: string[], cwd: string): { code: number; out: string; err: string } {
   const proc = Bun.spawnSync({ cmd, cwd, stdout: "pipe", stderr: "pipe" });
   return { code: proc.exitCode ?? -1, out: proc.stdout.toString(), err: proc.stderr.toString() };
@@ -99,7 +108,13 @@ function selftest(): void {
     missingThrew = true;
   }
   if (!missingThrew) throw new Error("selftest: the gate did not reject a missing static asset");
-  console.log("pack-check selftest PASS: 5 forbidden cases and 1 missing asset rejected");
+  if (missingRuntimeDeps({ dependencies: {} }, { dependencies: { ethers: "6.17.0" } }).length !== 1) {
+    throw new Error("selftest: the gate did not reject a plugin dependency missing from the root package");
+  }
+  if (missingRuntimeDeps({ dependencies: { ethers: "6.17.0" } }, { dependencies: { ethers: "6.17.0" } }).length !== 0) {
+    throw new Error("selftest: the gate rejected a dependency declared at both levels");
+  }
+  console.log("pack-check selftest PASS: 5 forbidden cases, 1 missing asset and 1 missing root dependency rejected");
 }
 
 function checkPack(label: string, cwd: string, required: string[], tracked: string[]): void {
@@ -128,6 +143,34 @@ function checkPack(label: string, cwd: string, required: string[], tracked: stri
       extracted,
     );
     if (scan.code !== 0) throw new Error(`${label}: secret scan of the tarball failed: ${scan.err || scan.out}`);
+
+    if (label === "root") {
+      // Magpie installs this package, not plugin/package.json. A runtime dep that
+      // only exists in the sub-package is unresolvable after a clean install.
+      const packageDir = join(extracted, "package");
+      const rootManifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")) as { dependencies?: Record<string, string> };
+      const pluginManifest = JSON.parse(readFileSync(join(packageDir, "plugin/package.json"), "utf8")) as { dependencies?: Record<string, string> };
+      const missingDeps = missingRuntimeDeps(rootManifest, pluginManifest);
+      if (missingDeps.length > 0) {
+        throw new Error(
+          `root package is the Magpie install entry but does not declare plugin runtime dependency(ies): ${missingDeps.join(", ")}. ` +
+            `A clean root install leaves them unresolved; declare them in the root dependencies as well.`,
+        );
+      }
+      const runtimeDeps = Object.keys(pluginManifest.dependencies ?? {});
+      if (runtimeDeps.length > 0) {
+        const install = run(["bun", "install", "--production", "--ignore-scripts"], packageDir);
+        if (install.code !== 0) throw new Error(`root package clean install failed: ${install.err || install.out}`);
+        for (const dep of runtimeDeps) {
+          try {
+            Bun.resolveSync(dep, packageDir);
+          } catch {
+            throw new Error(`root package clean install left runtime dependency unresolved: ${dep}`);
+          }
+        }
+        console.log(`pack-check dependency PASS (root): ${runtimeDeps.length} runtime dependency(ies) resolve after a clean install`);
+      }
+    }
 
     const size = (statSync(tarball).size / 1024).toFixed(1);
     console.log(`pack-check PASS (${label}): ${files.length} files, ${size} KiB, no tests/docs/secrets, static assets complete`);
