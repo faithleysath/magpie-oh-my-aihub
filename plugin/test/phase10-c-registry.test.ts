@@ -841,6 +841,7 @@ describe("funds provenance and pending recovery", () => {
     );
     const row = ledger.deposit("legacy-unknown")!;
     expect(row.fundsClass).toBe("unknown");
+    expect(row.needsReview).toBe(true);
     expect(ledger.depositsFor("alice").some((d) => d.id === "legacy-unknown")).toBe(true);
     const before = ledger.balance("alice");
     expect(before.depositedNanos).toBe(usdToNanos(2));
@@ -853,6 +854,7 @@ describe("funds provenance and pending recovery", () => {
 
     const reviewed = ledger.reviewDepositProvenance({ id: "legacy-unknown", fundsClass: "simulated", note: "legacy operator opening reviewed" });
     expect(reviewed.fundsClass).toBe("simulated");
+    expect(reviewed.needsReview).toBe(false);
     expect(reviewed.amountNanos).toBe(usdToNanos(1));
     expect(ledger.balance("alice").depositedNanos).toBe(before.depositedNanos);
     expect(ledger.balance("alice").unreviewedNanos).toBe(0);

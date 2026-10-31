@@ -119,6 +119,8 @@ export interface LedgerDeposit {
   source: string;
   /** `unknown` is an audit state for legacy rows, never creditable */
   fundsClass: FundsClass;
+  /** true only for an unknown legacy source awaiting local provenance review */
+  needsReview: boolean;
   /** chain id for chain-derived rows; null otherwise */
   chainId: number | null;
   /** registry asset id for chain-derived rows when known; null for legacy rows */
@@ -393,6 +395,7 @@ function mapDeposit(r: DepositRow): LedgerDeposit {
     amountNanos: r.amount_nanos,
     source: r.source,
     fundsClass,
+    needsReview: fundsClass === "unknown",
     chainId: fundsClass === "chain" ? r.chain_id ?? classifyChainSource(r.source) : null,
     assetId: fundsClass === "chain" ? r.asset_id ?? null : null,
     status: r.status,
