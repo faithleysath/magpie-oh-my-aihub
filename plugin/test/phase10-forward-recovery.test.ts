@@ -77,8 +77,10 @@ class FakeSupervisor implements SupervisorLike {
   routeRows: RouteRow[] = [];
   starts = 0;
   failStartOnce = false;
+  onStart: (() => void) | null = null;
 
   async start(cfg: EasytierConfig): Promise<SupervisorState> {
+    this.onStart?.();
     if (this.failStartOnce) {
       this.failStartOnce = false;
       throw new Error("simulated core restart failure");
@@ -249,7 +251,17 @@ describe("forward recovery for an owned Remote", () => {
     await withProvider(svc);
     const cfgId = svc.config()!.nodeId;
     ownership.pids.set(OLD, [999_999]); // foreign listener on the old port
+    let sawPending = false;
+    let sawOldRegistrationGone = false;
+    sup.onStart = () => {
+      const saved = loadState().state.providers.find((p) => p.id === "peer")!;
+      sawPending = Boolean(saved.forwardPending && saved.forwardPending.from === OLD && saved.forwardPending.to !== OLD);
+      sawOldRegistrationGone = !magpie.providers.has("peer");
+    };
     const first = await svc.reconcileProviders({ only: "peer", quiet: true, verifyModels: true });
+    sup.onStart = null;
+    expect(sawPending).toBe(true);
+    expect(sawOldRegistrationGone).toBe(true);
     const rec = first.find((p) => p.id === "peer")!;
     expect(rec.status).toBe("connected");
     expect(rec.localPort).not.toBe(OLD);
@@ -288,11 +300,11 @@ describe("forward recovery for an owned Remote", () => {
     const svc = await service();
     await withProvider(svc);
     ownership.pids.set(OLD, [999_999]);
-    magpie.failReplaceOnce = true;
+    magpie.failAddOnce = true;
     const out = await svc.reconcileProviders({ only: "peer", quiet: true });
     const rec = out.find((p) => p.id === "peer")!;
     expect(rec.status).toBe("degraded");
-    expect(rec.detail).toMatch(/removed|not provably owned/);
+    expect(rec.detail).toMatch(/removed|not provably owned|re-registering/);
     expect(magpie.providers.has("peer")).toBe(false);
     expect(magpie.removeCalls).toContain("peer");
     expect(keyedCalls.some((c) => c.port === OLD && c.key === KEY)).toBe(false);
@@ -317,7 +329,7 @@ describe("forward recovery for an owned Remote", () => {
     const svc = await service();
     await withProvider(svc);
     ownership.pids.set(OLD, [999_999]);
-    magpie.failReplaceOnce = true;
+    magpie.failAddOnce = true;
     await svc.reconcileProviders({ only: "peer", quiet: true });
     const starts = sup.starts;
     await svc.reconcileProviders({ only: "peer", quiet: true });
@@ -362,6 +374,45 @@ describe("forward recovery for an owned Remote", () => {
     } finally {
       foreign.stop(true);
     }
+  });
+
+  test("migration refreshes model evidence from the same keyed read-back", async () => {
+    const svc = await service();
+    await withProvider(svc);
+    const state = stateOf(svc);
+    const rec = state.providers.find((p) => p.id === "peer")! as unknown as Record<string, unknown>;
+    rec.modelsEvidence = {
+      status: "current", source: "connect-readback", readAt: "2026-10-30T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z", models: ["stale-model"], modelCount: 1,
+      callable: "yes", identity: null, generation: 3, keyRef: rec.keyRef, keyGeneration: 1, error: null,
+    };
+    saveState(state);
+    ownership.pids.set(OLD, [999_999]);
+    await svc.reconcileProviders({ only: "peer", quiet: true, verifyModels: true });
+    const evidence = (stateOf(svc).providers.find((p) => p.id === "peer")! as unknown as { modelsEvidence?: Record<string, unknown> }).modelsEvidence;
+    expect(evidence).toMatchObject({ status: "current", source: "reconcile", callable: "yes", modelCount: MODELS.length });
+    expect(evidence!.models).toEqual(MODELS);
+    expect(evidence!.generation).toBe(4);
+  });
+
+  test("a failed migration leaves old model evidence stale, never current", async () => {
+    const svc = await service();
+    await withProvider(svc);
+    const state = stateOf(svc);
+    const rec = state.providers.find((p) => p.id === "peer")! as unknown as Record<string, unknown>;
+    rec.modelsEvidence = {
+      status: "current", source: "connect-readback", readAt: "2026-10-30T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z", models: MODELS, modelCount: MODELS.length,
+      callable: "yes", identity: null, generation: 2, keyRef: rec.keyRef, keyGeneration: 1, error: null,
+    };
+    saveState(state);
+    ownership.pids.set(OLD, [999_999]);
+    magpie.failAddOnce = true;
+    await svc.reconcileProviders({ only: "peer", quiet: true });
+    const evidence = (stateOf(svc).providers.find((p) => p.id === "peer")! as unknown as { modelsEvidence?: Record<string, unknown> }).modelsEvidence;
+    expect(evidence!.status).toBe("stale");
+    expect(evidence!.modelCount).toBeNull();
+    expect(evidence!.callable).toBe("unknown");
   });
 
   test("a foreign Magpie entry is never migrated or edited", async () => {
