@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, setSystemTime, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConsoleHandler, ConsoleInputError } from "../src/console-server.ts";
@@ -211,7 +211,28 @@ describe("network-local product projection", () => {
     expect(consoleNetworkState(service).product.networks.map((n) => n.chainId)).toEqual([56, 8453]);
     await act(service, "network-local-watch-address", { address: ADDRESS });
     await expect(act(service, "network-local-balance-refresh", { chainId: 999, address: ADDRESS, addressSource: "watch" })).rejects.toBeInstanceOf(ConsoleInputError);
+    await expect(act(service, "network-local-receiving-set", { chainId: 999, selected: true })).rejects.toBeInstanceOf(ConsoleInputError);
+    await expect(act(service, "network-local-receiving-set", { chainId: 999, selected: false })).rejects.toBeInstanceOf(ConsoleInputError);
     wallet.close();
+
+    // A pre-existing non-product selection is readable but explicitly unavailable;
+    // state must not silently filter it into a fake empty user selection or rewrite it.
+    const seededPath = join(dir, "seeded-receiving.json");
+    const seeded = JSON.stringify({ version: 1, providers: { "local-node": { chainIds: [999], updatedAt: "2026-10-31T00:00:00Z" } } });
+    writeFileSync(seededPath, seeded);
+    const seededWallet = new Wallet({
+      credit: { depositIntent: () => ({ created: true }), applyDeposit: async () => {}, freezeConsumer: async () => {}, balance: () => ({ depositedNanos: 0, consumedNanos: 0, balanceNanos: 0 }) },
+      registry,
+      store: new ChainStore(join(dir, "seeded-chain.sqlite")),
+      receivingPath: seededPath,
+      readOnlyFetch: new MockRpc().fetch as typeof fetch,
+    });
+    const seededService = { config: () => ({ nodeId: "local-node" }), walletForConfiguration: () => seededWallet } as unknown as Service;
+    const seededState = consoleNetworkState(seededService);
+    expect(seededState.receiving).toMatchObject({ chainIds: [999], available: false, errorCode: "receiving_selection_not_product" });
+    await expect(act(seededService, "network-local-receiving-set", { chainId: 999, selected: false })).rejects.toBeInstanceOf(ConsoleInputError);
+    expect(readFileSync(seededPath, "utf8")).toBe(seeded);
+    seededWallet.close();
   });
 
   test("unselected chain remains refused for payment requests and selected mainnet is still credit-forbidden", async () => {

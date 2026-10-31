@@ -102,7 +102,7 @@ export interface NetworkLocalState {
     updatedAt: string | null;
     /** false means [] is not a user empty selection; it is unavailable */
     available: boolean;
-    errorCode: "not_configured" | "receiving_selection_unreadable" | "wallet_unavailable" | null;
+    errorCode: "not_configured" | "receiving_selection_unreadable" | "receiving_selection_not_product" | "wallet_unavailable" | null;
   };
   watchAddresses: string[];
   lastBalance: NetworkLocalBalance | null;
@@ -210,7 +210,10 @@ class NetworkLocalAdapter {
     if (providerId) {
       try {
         const selection = wallet.receivingSelection(providerId);
-        receiving = { providerId, chainIds: selection.chainIds, updatedAt: selection.updatedAt, available: true, errorCode: null };
+        const exactProduct = selection.chainIds.every((chainId) => (PRODUCT_CHAIN_IDS as readonly number[]).includes(chainId));
+        receiving = exactProduct
+          ? { providerId, chainIds: selection.chainIds, updatedAt: selection.updatedAt, available: true, errorCode: null }
+          : { providerId, chainIds: [...selection.chainIds], updatedAt: selection.updatedAt, available: false, errorCode: "receiving_selection_not_product" };
       } catch {
         // The core policy deliberately fails closed on a corrupt/invalid file.
         // Project that as an error, not as a user empty selection, and never let
@@ -336,6 +339,9 @@ class NetworkLocalAdapter {
         const providerId = this.providerId();
         if (!wallet) refuse("the local wallet is unavailable");
         if (!providerId) refuse("configure this node first");
+        // A hard product check comes before the policy setter so selecting false
+        // for 97/999 cannot rewrite or normalize the local policy file either.
+        productNetwork(wallet, chainId);
         try {
           wallet.setReceivingNetwork(providerId, chainId, selected);
         } catch (e) {
