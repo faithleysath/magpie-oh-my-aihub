@@ -23,6 +23,5 @@ c868577cbebc0ec045a3e055f0140212ae677dd2a7211674e900fe4f1ed92228  ./screenshots/
 4d1b0a2399c85fb8d5657f6e79d358077b2d1c49bb3930004bf3a5b69661d2a7  ./screenshots/provider-share-button-disabled-1440.png
 b83ab0e326092347e415d6e1df2226830f6e0728679b423bd3fb3b16385236da  ./screenshots/provider-share-disabled-bug-1440.png
 b4fb80ed12051ddb3054f4bf5a0393421279c027c62c7e6d5287e3fd69fae253  ./screenshots/provider-sharing-1440-light.png
-3b544ff5c1c4fc65c0b1ce76c078faf21aabd553d48a2630ffe88758762dadb0  ./seed-hashes.txt
 1924b9f89de3bb67e49d7d11746e50f8cad10fb95007fe9cb8e2c4014409849f  ./ui-defects.txt
 088eab858d841a2f270eec9acf73775351cad211ed9c5febfbb4aea374a9060f  ./versions.txt
