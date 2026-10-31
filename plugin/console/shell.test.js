@@ -60,6 +60,7 @@ describe("five page shell", () => {
   test("ports are read-only diagnostics and never form inputs", () => {
     const network = html.slice(html.indexOf('<section id="settings-panel"'));
     expect(network).toContain('id="network-ports"');
+    expect(network).toContain("地址或端口被占用不等于由本插件验证");
     const diagnostics = network.slice(network.indexOf('<details class="diagnostics"'), network.indexOf("</details>"));
     expect(diagnostics).not.toMatch(/type="number"/);
     expect(network).not.toContain("编辑端口");
