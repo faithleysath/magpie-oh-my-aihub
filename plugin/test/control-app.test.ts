@@ -9,8 +9,8 @@ import type { Service } from "../src/service.ts";
 const prev = process.cwd();
 let apps: ControlApp[] = [];
 beforeEach(() => { process.chdir(mkdtempSync(join(tmpdir(), "control-app-"))); });
-afterAll(() => {
-  for (const app of apps.splice(0)) app.stop();
+afterAll(async () => {
+  for (const app of apps.splice(0)) await app.stop();
   process.chdir(prev);
 });
 

@@ -3728,6 +3728,17 @@ export class Service {
       const localPort = Number(bindAddr.split(":").pop());
       if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) throw new Error("invalid control forward bind address");
       const ownedControl = new Set([bindAddr, ...ownedControlBinds]);
+      const recordOrphan = (pids: number[], detail: string): void => {
+        const existing = this.state.orphanForwards.find((o) => o.localPort === localPort && o.dstAddr === dstAddr);
+        if (existing) {
+          existing.pids = pids;
+          existing.detail = detail;
+          existing.since = new Date().toISOString();
+        } else {
+          this.state.orphanForwards.push({ localPort, dstAddr, since: new Date().toISOString(), pids, detail });
+        }
+        saveState(this.state);
+      };
       // Preserve forwards owned by other state providers and any manual ET
       // forward; the restart below rebuilds only plugin state.
       const before = await this.supervisor.listPortForwards().catch(() => []);
@@ -3737,8 +3748,7 @@ export class Service {
       if (extras.length > 0) {
         // A manual/foreign forward is not ours to import or silently rebuild.
         const pids = await this.ownership.listenerPids(localPort).then((r) => r.pids ?? []).catch(() => []);
-        this.state.orphanForwards.push({ localPort, dstAddr, since: new Date().toISOString(), pids, detail: `control restart refused; other forward(s) present: ${extras.map((f) => f.bindAddr).join(", ")}`.slice(0, 300) });
-        saveState(this.state);
+        recordOrphan(pids, `control restart refused; other forward(s) present: ${extras.map((f) => f.bindAddr).join(", ")}`.slice(0, 300));
         logger.error(`refusing a control restart while ${extras.length} non-plugin forward(s) are present: ${extras.map((f) => f.bindAddr).join(", ")}`);
         return { closed: false, restarted: false, orphan: true };
       }
@@ -3763,13 +3773,11 @@ export class Service {
       if (!corePid || pids.length === 0 || !pids.includes(corePid)) {
         // A listener we cannot attribute to the supervised core is not ours to
         // kill/restart around. Keep the evidence and leave it degraded.
-        this.state.orphanForwards.push({ localPort, dstAddr, since: new Date().toISOString(), pids, detail: "listener owner is not the supervised core; restart refused" });
-        saveState(this.state);
+        recordOrphan(pids, "listener owner is not the supervised core; restart refused");
         logger.error(`control forward ${bindAddr} remains, but its listener is not owned by the supervised core (pids=${pids.join(",") || "unknown"})`);
         return { closed: false, restarted: false, orphan: true };
       }
-      this.state.orphanForwards.push({ localPort, dstAddr, since: new Date().toISOString(), pids, detail: "2.6.4 remove did not close the listener" });
-      saveState(this.state);
+      recordOrphan(pids, "2.6.4 remove did not close the listener");
       let restarted = false;
       const cfg = this.state.config;
       if (cfg) {

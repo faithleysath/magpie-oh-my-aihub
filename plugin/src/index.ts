@@ -77,9 +77,13 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     };
     const isStopped = () => stopped || parentGone();
     const ensureRunning = () => { if (isStopped()) throw new Error("plugin host stopped before startup completed"); };
-    const shutdown = () => {
+    const shutdown = async () => {
       stopped = true;
       launcher?.stop(); consoleServer?.stop(); api?.stop();
+      if (controlApp) {
+        try { await controlApp.stop(); }
+        catch (e) { logger.warn(`P2P control stop: ${String(e)}`); }
+      }
       const pid = service?.supervisor.snapshot().pid;
       const configPath = statePath("easytier", "current.toml");
       if (pid && ownsProcess(pid, configPath)) {
@@ -90,13 +94,13 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         }
       }
     };
-    const onExit = () => { try { shutdown(); } finally { lock?.release(); } };
-    const onSignal = () => { stopped = true; process.exit(0); };
+    const onExit = () => { void shutdown().finally(() => lock?.release()); };
+    const onSignal = () => { stopped = true; void shutdown().finally(() => process.exit(0)); };
     // Install before ownership wait, Service construction, or any async startup.
     process.on("exit", onExit);
     process.on("SIGTERM", onSignal); process.on("SIGINT", onSignal);
     const orphanWatch = setInterval(() => {
-      if (parentGone()) { stopped = true; process.exit(0); }
+      if (parentGone()) { stopped = true; void shutdown().finally(() => process.exit(0)); }
     }, 500);
     orphanWatch.unref?.();
     failedBootCleanup = async () => {
@@ -108,7 +112,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
       }
       try { if (service) await service.stop(); }
       finally {
-        shutdown(); lock?.release(); clearInterval(orphanWatch);
+        await shutdown(); lock?.release(); clearInterval(orphanWatch);
         process.off("exit", onExit); process.off("SIGTERM", onSignal); process.off("SIGINT", onSignal);
       }
     };

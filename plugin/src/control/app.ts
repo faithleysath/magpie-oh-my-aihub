@@ -642,7 +642,6 @@ export class ControlApp {
 
   async stop(): Promise<void> {
     if (this.stopped) return;
-    this.stopped = true;
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = null;
     this.service.setControlPresence(null);
@@ -688,6 +687,7 @@ export class ControlApp {
     active = null;
     byService.delete(this.service);
     if (degraded) throw new Error(degraded);
+    this.stopped = true;
   }
 }
 
