@@ -4,12 +4,12 @@ Read [`REPORT.md`](REPORT.md) first; this is only the next-session shortcut.
 
 ## State
 
-- Branch `feature/phase10-final-acceptance`; rework functional head `340c378` (docs/CI at `d7ee008`);
+- Branch `feature/phase10-final-acceptance`; functional head `4d96196`;
   PR **#51** (draft) → `feature/phase10-wallet-closure` (#50).
 - #50 was retargeted to `feature/phase10-p2p-closure` (#49); #49 stays → `main`.
   Nothing is merged. #14–#48 remain open drafts (history; not closed to avoid
   losing evidence).
-- Local gates: typecheck PASS, 1405 tests / 0 fail, secret-scan PASS, boot-check
+- Local gates: typecheck PASS, 1411 tests / 0 fail, secret-scan PASS, boot-check
   PASS. CI result is on PR #51.
 
 ## What was proven on real Magpie 0.1.2289 + EasyTier 2.6.4 (one host/LAN)
@@ -33,21 +33,24 @@ request → terms → EIP-712 → preview → broadcast →
 watcher/finality → one ledger deposit → cap `$0.05→$1.55` → 已到账; restart does
 not double-credit. Evidence `evidence/payment/`.
 
-**Re-approval after revoke:** implemented + unit-tested (new key, one active,
-append-only ledger, price version). Real provider-side issuance works; the B key
-delivery after re-approval hits a stale-session HTTP 410 (open transport bug).
+**Re-approval after revoke: REPRODUCED end-to-end.** The B stale-session 410 is
+fixed (only explicit 410 drops the session; fresh hello; same row/idempotency
+retried). Real path: revoke → provider restart → request retried after 410 →
+manual re-approval → new key/ledger window → new Remote `p2p-22cf…`, cap $0.05,
+ACK → 200 call. One active key; ledger append-only; evidence
+`evidence/reactivation/reactivation-delivery.json`.
+
+**F12:** one identity function, adopted-core hostname mismatch restart, invalid
+persisted nodeId fail-closed, self-connect also compares the IPv4. Windows floor
+is 360 everywhere with `provisioner.test.ts` a documented gap.
 
 ## Still open
 
-- B outbox/session retry after a peer host restart can return HTTP 410 instead of
-  a fresh handshake; this blocks the consumer delivery after re-approval.
-- External wallets: real MetaMask/Rabby announce EIP-6963 (evidence
-  `external-wallet-eip6963.json`); product connect/network/EIP-712 still not
-  completed.
-- F12 transient overlay hostname/node-id mismatch (not reproduced after a
-  restart; root cause unknown).
-- Windows: `test/provisioner.test.ts` excluded, executed floor 360 (comment says
-  380).
+- External wallets: real MetaMask/Rabby announce EIP-6963; product
+  connect/network/EIP-712 remains UNKNOWN (browser onboarding/popup blocked).
+- Windows: `test/provisioner.test.ts` is a documented gap; floor is 360
+  everywhere now.
+
 
 ## Never do
 

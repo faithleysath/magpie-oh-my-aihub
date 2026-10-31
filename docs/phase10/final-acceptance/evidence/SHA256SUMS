@@ -24,6 +24,7 @@ ed5a892713ac13a2cdc5847dcaa143318c4e0ab59aef2c2dce6440840171327a  ./payment/cons
 e1fd841ee8514891a4102adee59fb0a0aac085eaa00c54450709e9adbd0d6825  ./payment/isolated-anvil-fund-transfer.json
 9c96032dcdf52352c5280bb6102633b47a6032212635555e788373c48fd6677b  ./payment/payment-journey.json
 d5281bbc2418a2a9e917264f59a4e33294700c6ddddfa14bd86fa2cc8358f5e7  ./reactivation.json
+74d8e8fc6a2caeda4320d721a163fa886bb69931a7f53c0c1384e591c0993beb  ./reactivation/reactivation-delivery.json
 ab8a179f41d5268082ccd428a9776d3f4375eec7a56e375567701bde01b5a4e7  ./runtime-restart-loop.log
 1838ccbdb6169c9f55f72b962387f5eae7aa3f5c47a85835efce01ac68e5091c  ./stability-5min-run2.txt
 42aaa147f2efe59e43c43c8bcfb0f1551355bf6f77e0f2af1989c7ff37edf820  ./stability-5min-run3.txt

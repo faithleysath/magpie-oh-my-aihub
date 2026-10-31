@@ -1,3 +1,83 @@
+# LATEST FINAL STATE — supersedes every earlier section of this file
+
+> The round-1 report and the "Post-review rework" section below are retained as
+> history. Wherever they say **F11 open**, **Zero-file P2P NO-GO**, **re-approval
+> delivery PARTIAL**, or **legacy revoke visible**, read this section instead:
+> those items were fixed and re-measured. The five final verdicts are at the end
+> of this section.
+
+- Functional code head: `4d9619600d38f654e620b31f7d83fd167549181d` (docs/evidence
+  and CI-only commits follow on the same branch; PR #51).
+- Rework round 2 added: the peer-closed-session recovery, the one-identity
+  hardening, the reactivated-account key binding, and the Windows floor cleanup.
+
+## L1. B stale-session HTTP 410 — fixed and reproduced
+
+**Cause:** `P2pNode` kept a locally "live" session after the peer host restarted;
+the outbox push (`sendDueFor`/`tick`) sent frames on that session id and the
+provider answered **HTTP 410 session_closed**. The row was retried forever on the
+same dead session; the consumer never delivered the new request, so a re-approval
+could never reach it.
+
+**Fix:** only an explicit `HTTP 410` / `session_closed` / `session closed` verdict
+closes that session (`dropStaleSession`); the next authenticated poll hello opens
+a fresh one and the **same outbox row** (same message id, idempotency and
+generation) is retried after its normal backoff. A 400/403/404/5xx/timeout never
+discards a session, never changes generation and never creates a second key.
+Regression: `plugin/test/p2p-node.test.ts` "a stale-session 410 drops the closed
+session and re-sends the same request on a fresh hello".
+
+**Real two-node path (REPRODUCED, `evidence/reactivation/reactivation-delivery.json`):**
+initial approval delivered ($0.05) and a 200 call through native Remote
+`p2p-786339993dcbeeb7`; provider B revoke removed the old key; **provider host
+restart**; consumer's new request hit the dead session (outbox `attempts=2` after
+the 410) and was re-sent on a fresh hello; provider explicit re-approval used the
+reactivation path (new key `f12949…`, new ledger window, priceVersion bound);
+sealed delivery reached the consumer, which auto-registered new Remote
+`p2p-22cf242a21fa71c2` with cap `$0.05` and ACKed; a new model call returned
+**200**. The old Remote/key are gone, the old approval is revoked, the ledger old
+window is closed and the new window names the new key — **one active key**.
+
+**Payment smoke:** the full real-chain payment was reproduced immediately before
+this transport change (see `evidence/payment/`, tx
+`0x185f0d451063f26b72c628288a69470e1bb708d867b83c7f87121a0ecbedf336`, one ledger
+deposit, cap `$0.05→$1.55`, restart no double credit). The 410 change is additive
+to the same outbox path and the full suite + the B re-approval smoke pass; a
+second on-chain payment was not re-run in this round (stated, not implied).
+
+## L2. F12 one identity — closed
+
+- `configHostname()` now delegates to the single `overlayHostname()`; ET config,
+  catalogue presence, diagnostics and the self-connect guard cannot derive
+  different names.
+- An adopted core whose own reported `hostname` differs from the current config
+  is **not adopted**: it is stopped and restarted from the freshly rendered
+  canonical TOML.
+- A persisted `nodeId` that is not a valid overlay identity is **refused**
+  (fail closed) instead of being used for hostnames/keys/self-connect; regression
+  in `plugin/test/state.test.ts`.
+- The self-connect guard now also compares the route owner's IPv4 with this
+  node's virtual IP, not only the hostname.
+- The original transient mismatch was not reproduced after these checks; it is
+  covered by the consistency/fail-closed paths, not silently ignored.
+
+## L3. Windows gate
+
+Runner (`MIN_EXECUTED = 360`), workflow comment and
+`docs/validation/windows/COVERAGE.md` now all say **360**. `test/provisioner.test.ts`
+remains explicitly excluded because it hangs before its first test on the Windows
+runner; this is a documented Windows gap, not a complete Windows pass.
+
+## L4. Final five verdicts (this state)
+
+| Area | Verdict | Reason |
+| --- | --- | --- |
+| Visual UX | **GO** | final 40-image matrix, Chinese states, collapsed history, advanced legacy revoke, fresh-online headline; focus-visible and reduced-motion checked |
+| Zero-file P2P | **GO** | original authorization journey + full payment + **revoke → restart → request retry after 410 → manual reactivation → new sealed delivery → new Remote/cap → ACK → 200** all reproduced on real Magpie/ET; one active key, ledger append-only |
+| Wallet Usability | **NO-GO** | built-in wallet and recharge work; real MetaMask/Rabby announce EIP-6963 but the product-level connect/network/EIP-712 flow remains UNKNOWN (tooling/onboarding blocked) |
+| Mainnet Network Support | **GO — read-only/selection only** | equal BSC 56/Base 8453 read-only, strict assets, hard gate; no mainnet send/credit |
+| Real-money Production | **NO-GO** | D review unchanged (soft-cap overshoot etc.); no real funds |
+
 # Post-review rework (2026-10-31 evening) — supersedes the verdicts below
 
 Functional head: `340c378045bf22ed59a24044b75aa8589a0a1736` (this addendum and the
