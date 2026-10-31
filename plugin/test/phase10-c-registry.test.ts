@@ -486,6 +486,9 @@ describe("C9 hard gates: mainnet send/credit/auto-recharge", () => {
     const { wallet } = walletOnlyProduct();
     expect(wallet.productNetworks().map((n) => n.chainId)).toEqual([56, 8453]);
     expect(wallet.receivingSelection("provider-a").chainIds).toEqual([]);
+    const status = wallet.statusLocal();
+    expect(status.registry.networks.find((n) => n.chainId === 56)).toMatchObject({ support: "read-only", receivable: true, enabled: false });
+    expect(status.registry.assets.find((a) => a.assetId === BASE_USDC_ID)).toMatchObject({ credit: false, pricingKind: "not-creditable", issuerType: "native-issuer" });
 
     expect(() =>
       wallet.requestIntent({ providerId: "provider-a", consumerId: "c1", chainId: 56, assetId: BASE_USDC_ID, amountRaw: "1" }),
