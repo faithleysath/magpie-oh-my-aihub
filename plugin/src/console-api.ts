@@ -102,7 +102,7 @@ export async function consoleAction(service: Service, name: string, input: Recor
         if (parsed.sharingEnabled === true && !parsed.shareModels && !service.config()?.share.models.length) {
           return refuse("sharing requires an explicit native model selection (share-native-models)");
         }
-        await service.configure(parsed); return consoleState(service);
+        await service.configure(parsed, { strictShareModels: true }); return consoleState(service);
       }
       case "checks": fields(input,[]); await service.checks(); return consoleState(service);
       case "share-candidates": fields(input,[]); return clean(await w().shareCandidates());

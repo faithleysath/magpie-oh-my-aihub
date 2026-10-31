@@ -269,7 +269,7 @@ async function handle(req: Request, svc: Service, token: string, port: number): 
         }
         const input = configureInput(body);
         if (typeof input === "string") return json({ error: input }, 400);
-        return json(await svc.configure(input));
+        return json(await svc.configure(input, { strictShareModels: true }));
       }
       case "/sharing": {
         const { enabled } = body as { enabled?: unknown };

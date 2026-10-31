@@ -1182,7 +1182,7 @@ export class Service {
     catalogSocksPort?: number;
     catalogRefreshSec?: number;
     catalogMinTopUpUsd?: number;
-  }): Promise<StatusSnapshot> {
+  }, opts: { strictShareModels?: boolean } = {}): Promise<StatusSnapshot> {
     return this.serialize(async () => {
       const prev = this.state.config;
       // Snapshot only what this operation owns. A failed wizard must restore the
@@ -1243,7 +1243,18 @@ export class Service {
       }
 
       const secureIdentity = secureMode ? (prev?.secureIdentity ?? generateSecureIdentity()) : null;
-      const share = input.shareModels ? { models: normalizeShareModels(input.shareModels) } : (prev?.share ?? { models: ["*"] });
+      let shareModels = input.shareModels ? normalizeShareModels(input.shareModels) : (prev?.share.models ?? ["*"]);
+      if (opts.strictShareModels) {
+        const effective = input.shareModels ?? prev?.share.models ?? (sharingEnabled ? ["*"] : []);
+        if (sharingEnabled && effective.some((m) => m.includes("*"))) {
+          throw new Error("refusing to share with a wildcard model policy: choose the exact native models with their prices");
+        }
+        if (effective.length === 0 && sharingEnabled) {
+          throw new Error("sharing requires at least one exact native model with a complete effective price");
+        }
+        if (effective.length > 0) shareModels = await this.validateShareSelection(effective, { expandGlobs: false });
+      }
+      const share = { models: shareModels };
       const catalog = normalizeCatalogConfig(
         {
           ...(prev?.catalog ?? {}),
@@ -1896,6 +1907,57 @@ export class Service {
   }
 
   /**
+   * Validates an external share selection against the node's own native model
+   * snapshot. Exact ids must exist and have a complete price; wildcards expand
+   * to priced native models only. No pricing logic is duplicated: this uses the
+   * same `catalogModel`/`priceSnapshot` path as shareCandidates.
+   */
+  private async validateShareSelection(entries: string[], opts: { expandGlobs: boolean }): Promise<string[]> {
+    const requested = [...new Set(entries.map((m) => m.trim()).filter(Boolean))];
+    if (!requested.length) throw new Error("choose at least one native model");
+    const models = await this.nativeShareCandidates();
+    const byId = new Map(models.map((m) => [m.id, m]));
+    const hasGlob = requested.some((m) => m.includes("*"));
+    if (hasGlob && !opts.expandGlobs) {
+      throw new Error("refusing a wildcard share policy: choose the exact native models with their prices first");
+    }
+    let exact: string[];
+    if (hasGlob) {
+      const selected = new Set<string>();
+      const dropped: string[] = [];
+      for (const token of requested) {
+        if (!token.includes("*")) {
+          if (!byId.has(token)) throw new Error(`refusing to share ${token}: it is not a native model`);
+          selected.add(token);
+          continue;
+        }
+        if (token !== "*" && !/^[A-Za-z0-9._-]+\/\*$/.test(token)) {
+          throw new Error(`share model glob must be "*" or "provider/*": ${token}`);
+        }
+        const matches = models.filter((m) => allowedByPolicy(m.id, { models: [token] }));
+        if (!matches.length) throw new Error(`the wildcard ${token} matches no native model`);
+        for (const m of matches) {
+          if (m.completePrice) selected.add(m.id);
+          else dropped.push(m.id);
+        }
+      }
+      exact = [...selected].sort();
+      if (!exact.length) throw new Error("the wildcard matched no native model with a complete effective price");
+      if (dropped.length) logger.warn(`wildcard share policy left out ${dropped.join(", ")} (no complete effective price)`);
+    } else {
+      exact = [...requested].sort();
+    }
+    const bad: string[] = [];
+    for (const model of exact) {
+      const candidate = byId.get(model);
+      if (!candidate) bad.push(`${model}: not a native model`);
+      else if (!candidate.completePrice) bad.push(`${model}: no complete effective price`);
+    }
+    if (bad.length) throw new Error(`refusing to share an unverified model snapshot: ${bad.join("; ")}`);
+    return exact;
+  }
+
+  /**
    * Replaces the sharing allow list.
    *
    * A wildcard is never stored: with `confirmExact` it is expanded against the
@@ -1919,55 +1981,13 @@ export class Service {
         await this.publishCatalogNow().catch((e) => logger.warn(`catalogue rebuild after share models: ${String(e)}`));
         return this.status();
       }
-      const requested = [...new Set(models.map((m) => m.trim()).filter(Boolean))];
-      if (!requested.length) throw new Error("choose at least one native model");
-      const view = await this.shareCandidates();
-      const byId = new Map(view.models.map((m) => [m.id, m]));
-      const hasGlob = requested.some((m) => m.includes("*"));
-      if (hasGlob && opts.confirmExact !== true) {
+      if (models.some((m) => m.includes("*")) && opts.confirmExact !== true) {
         throw new Error(
           "refusing a wildcard share policy: expand it to exact native models and confirm the reviewed price snapshot " +
             "(confirmExact: true)",
         );
       }
-      let exact: string[];
-      if (hasGlob) {
-        const selected = new Set<string>();
-        const dropped: string[] = [];
-        for (const token of requested) {
-          if (!token.includes("*") && !byId.has(token)) throw new Error(`refusing to share ${token}: it is not a native model`);
-          if (!token.includes("*")) {
-            selected.add(token);
-            continue;
-          }
-          if (token !== "*" && !/^[A-Za-z0-9._-]+\/\*$/.test(token)) {
-            throw new Error(`share model glob must be "*" or "provider/*": ${token}`);
-          }
-          const matches = view.models.filter((m) => allowedByPolicy(m.id, { models: [token] }));
-          if (!matches.length) throw new Error(`the wildcard ${token} matches no native model`);
-          for (const m of matches) {
-            if (m.completePrice) selected.add(m.id);
-            else dropped.push(m.id);
-          }
-        }
-        exact = [...selected].sort();
-        if (!exact.length) throw new Error("the wildcard matched no native model with a complete effective price");
-        if (dropped.length) {
-          logger.warn(
-            `wildcard share policy expanded to ${exact.length} priced native model(s); ` +
-              `left out ${dropped.join(", ")} (no complete effective price)`,
-          );
-        }
-      } else {
-        exact = [...requested].sort();
-      }
-      const bad: string[] = [];
-      for (const model of exact) {
-        const candidate = byId.get(model);
-        if (!candidate) bad.push(`${model}: not a native model`);
-        else if (!candidate.completePrice) bad.push(`${model}: no complete effective price`);
-      }
-      if (bad.length) throw new Error(`refusing to share an unverified model snapshot: ${bad.join("; ")}`);
+      const exact = await this.validateShareSelection(models, { expandGlobs: true });
       cfg.share = { models: exact };
       if (this.state.shareSuspended?.reason.startsWith(SHARE_POLICY_SUSPENSION)) this.state.shareSuspended = null;
       saveState(this.state);
@@ -1982,9 +2002,8 @@ export class Service {
    * whether that price is complete enough to back a capped key. Read-only: it
    * never creates a key, publishes a quote or changes the allow list.
    */
-  async shareCandidates(): Promise<ShareCandidatesView> {
-    const cfg = this.state.config;
-    if (!cfg) throw new Error("configure this node first");
+  /** The node's own native, priced models — the only source of a share snapshot. */
+  private async nativeShareCandidates(): Promise<ShareCandidate[]> {
     const metas = await this.probes.catalogModels().catch((e) => {
       throw new Error(`cannot read Magpie's native models: ${(e as Error).message}`);
     });
@@ -2004,10 +2023,20 @@ export class Service {
         provider,
         pricing: model.pricing,
         completePrice: priceSnapshot([meta], [meta.id]) !== null,
-        allowedByPolicy: allowedByPolicy(meta.id, cfg.share),
+        allowedByPolicy: false,
       });
     }
     models.sort((a, b) => a.id.localeCompare(b.id));
+    return models;
+  }
+
+  async shareCandidates(): Promise<ShareCandidatesView> {
+    const cfg = this.state.config;
+    if (!cfg) throw new Error("configure this node first");
+    const models = (await this.nativeShareCandidates()).map((m) => ({
+      ...m,
+      allowedByPolicy: allowedByPolicy(m.id, cfg.share),
+    }));
     const selected = models.filter((m) => m.allowedByPolicy && m.completePrice);
     const priceVersion = catalogPriceVersion(selected.map((m) => ({ id: m.id, pricing: m.pricing })));
     const blocking = models
