@@ -33,6 +33,10 @@ export async function consoleState(service: Service) {
     status: {
       plugin: { version: snapshot.plugin.version, startedAt: snapshot.plugin.startedAt, stateVersion: snapshot.plugin.stateVersion },
       magpie: snapshot.magpie, config: snapshot.config, easytier: snapshot.easytier, providers: snapshot.providers,
+      // The read-only network projection (evidence times, stale markers, port
+      // diagnostics) is the network page's data source; it was dropped from
+      // this object, so the page silently fell back to raw config values.
+      network: snapshot.network,
       catalog: snapshot.catalog, consumers: snapshot.consumers, accounting: snapshot.accounting,
       checks: snapshot.checks, checksAt: snapshot.checksAt, checksDurationMs: snapshot.checksDurationMs, readiness: snapshot.readiness,
       // The zero-file panel reads status.p2p; the control app's state object is

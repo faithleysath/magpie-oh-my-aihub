@@ -26,6 +26,13 @@ function fixture() {
     config: { nodeId: "local-node", networkName: "private-network", sharingEnabled: false, consumingEnabled: false },
     easytier: { running: false, peers: [], lastError: null },
     providers: [], catalog: { peers: [] }, consumers: [], accounting: { uncertain: false },
+    network: {
+      state: "online",
+      summary: "Connected to 1 peer over the overlay.",
+      evidence: { readAt: "2026-10-30T00:00:01Z", staleMs: 500, live: true, stale: false },
+      thisNode: { virtualIpv4: "10.77.0.9/24", hostname: "ohmyaihub-local-node", stale: false },
+      neighbors: [],
+    },
     checks: [], checksAt: null, checksDurationMs: null, readiness: { state: "unknown" },
     logs: ["must not be included"], wallet: { privateInternalField: "must not be included" },
   } as unknown as StatusSnapshot;
@@ -50,6 +57,9 @@ describe("console business boundary", () => {
     expect(state.status.plugin).not.toHaveProperty("dataDir");
     expect(state.status).not.toHaveProperty("logs");
     expect(state.status).not.toHaveProperty("wallet");
+    // The A network page reads the projection, not raw config as a fallback.
+    expect(state.status.network?.state).toBe("online");
+    expect(state.status.network?.evidence?.live).toBe(true);
     expect(JSON.stringify(state)).not.toContain("/private/host/data");
   });
 
