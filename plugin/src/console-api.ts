@@ -1,5 +1,6 @@
 import { redact } from "./log.ts";
-import { ConsoleInputError } from "./console-server.ts";
+import { ConsoleInputError, type ConsoleActionContext } from "./console-server.ts";
+import { PAYMENT_LOCAL_ACTIONS, paymentLocalAction } from "./payment-local-service.ts";
 import { configureInput } from "./server.ts";
 import { consoleWorkflows } from "./console-workflows.ts";
 import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
@@ -13,6 +14,7 @@ export const CONSOLE_ACTIONS = [
   "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
   ...WALLET_CONSOLE_ACTIONS,
+  ...PAYMENT_LOCAL_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
   if (typeof value === "string") return redact(value) as T;
@@ -54,8 +56,14 @@ function knownRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
   return /^(no (?:active consumer|remote provider|discovered catalogue peer)|configure this node first|consumption is disabled|choose |refusing |the (?:request|accepted|effective price|provider's catalogue identity|identity of|key of)|a shared model|consumer .+ (?:is paused|was revoked|has an unconfirmed|has no)|cannot reissue|this key is bound|pass the catalogue|.* is (?:first-seen|offline|unverified|stale);|.* offered an older|.* does not offer:)/.test(message);
 }
-export async function consoleAction(service: Service, name: string, input: Record<string, unknown>): Promise<unknown> {
+export async function consoleAction(
+  service: Service,
+  name: string,
+  input: Record<string, unknown>,
+  context?: ConsoleActionContext,
+): Promise<unknown> {
   try {
+    if ((PAYMENT_LOCAL_ACTIONS as readonly string[]).includes(name)) return paymentLocalAction(service, name, input, context);
     if ((WALLET_CONSOLE_ACTIONS as readonly string[]).includes(name)) return consoleWalletAction(service, name, input);
     const w = () => consoleWorkflows(service);
     switch (name) {
