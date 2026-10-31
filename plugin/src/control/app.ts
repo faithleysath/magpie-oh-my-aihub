@@ -552,6 +552,10 @@ export class ControlApp {
   }
 
   private async pollTick(): Promise<void> {
+    // A published provider's signed presence is the prerequisite for a
+    // zero-file request; discover it (and its owned control forward) before the
+    // user can click. Bounded: two peers per tick, never a model request.
+    await this.discoverCataloguedPresence().catch(() => {});
     await this.probeControlOnlyNeighbours().catch(() => {});
     for (const nodeId of this.targets) {
       try {
@@ -579,6 +583,23 @@ export class ControlApp {
       await this.node.tick();
     } catch {
       /* surfaced by status/action-needed, never retried as a new write here */
+    }
+  }
+
+  private async discoverCataloguedPresence(): Promise<void> {
+    const peers = this.service.catalogStatus().peers.filter(
+      (p) => p.online === true && Boolean(p.quote) && Boolean(p.nodeId) && !this.endpoints.has(p.nodeId!),
+    );
+    let budget = 2;
+    for (const peer of peers) {
+      if (budget <= 0) break;
+      budget -= 1;
+      try {
+        await this.discover(peer.nodeId!);
+      } catch {
+        // Bounded retry on the next tick; a missing presence only disables the
+        // zero-file path, never the catalogue display.
+      }
     }
   }
 
