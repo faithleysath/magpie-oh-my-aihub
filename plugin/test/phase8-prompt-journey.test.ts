@@ -138,7 +138,9 @@ describe("phase 8 prompt journeys", () => {
       return status(baseConfig({ sharingEnabled: body.sharingEnabled, consumingEnabled: body.consumingEnabled, networkName: body.networkName }));
     });
     const io = scriptedIO(["prompt-net", "2", "prompt-secret", "tcp://relay.example:11010", "", "n"]);
-    const code = await runSetup([], dataDir, io);
+    const code = await runSetup([], dataDir, io, {
+      preflight: { lan: "127.0.0.1", fetchImpl: async () => new Response("", { status: 401 }) },
+    });
     expect(code).toBe(0);
     const configure = calls.find((c) => c.path === "/configure");
     expect(configure!.body).toMatchObject({

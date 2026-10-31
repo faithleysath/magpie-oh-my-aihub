@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { registerTestServer } from "./support/network-guard.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -240,6 +241,11 @@ async function service(opts: { sharing?: boolean; consuming?: boolean; fresh?: b
     supervisor: sup,
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 400,
+    // This suite exercises shares/providers, not the chain module: an injected
+    // null wallet keeps `configure()` from opening watchers, and the key limit
+    // read-back is not part of it (the wallet suites inject their own).
+    wallet: null,
+    probes: { remoteLimit: async () => null },
   });
   services.push(s);
   await s.configure({
@@ -263,7 +269,9 @@ async function serviceSim(portKeys: Map<number, string>, opts: { sharing?: boole
     supervisor: sup,
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 400,
+    wallet: null,
     probes: {
+      remoteLimit: async () => null,
       statusWith: async (_host, port, want, bearer) => {
         if (port === LOCAL_GATEWAY_PORT) return want === 401;
         const key = portKeys.get(port);
@@ -423,6 +431,10 @@ describe("several remote providers", () => {
     await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: c.port });
 
     b.stop();
+    // The provider is down on purpose: re-declare its own (now closed) port so
+    // the reconcile probe may reach the OS and observe a refused connection,
+    // instead of the hermetic guard blocking a port no test declares.
+    registerTestServer(`http://127.0.0.1:${b.port}`);
     const after = await s.reconcileProviders({ verifyModels: true });
     expect(after.find((p) => p.id === "peer-b")!.status).toBe("degraded");
     expect(after.find((p) => p.id === "peer-c")!.status).toBe("connected");
@@ -855,7 +867,7 @@ describe("the share guard reacts to changes made outside the plugin", () => {
 
     magpie.native.delete("alpha");
     magpie.providers.set("alpha", { id: "alpha", preset: "remote-magpie", chat: "http://127.0.0.1:1/v1", key: "sk-test-foreign" });
-    const restarted = new Service({ magpie: magpie as never, magpieVersion: "magpie 0.1.2038", supervisor: sup, lanIp: () => "127.0.0.1", probeTimeoutMs: 400 });
+    const restarted = new Service({ magpie: magpie as never, magpieVersion: "magpie 0.1.2038", supervisor: sup, lanIp: () => "127.0.0.1", probeTimeoutMs: 400, wallet: null, probes: { remoteLimit: async () => null } });
     services.push(restarted);
     await restarted.start();
     await restarted.stop();
