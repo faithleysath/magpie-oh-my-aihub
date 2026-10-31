@@ -35,7 +35,11 @@ export async function runSetup(argv: string[], dataDir: string, io: WizardIO = d
   const resume = args.has("resume");
   const reconfigure = args.has("reconfigure");
   if (checkOnly || resume) {
-    return resumeOrCheck(dataDir, args, { checkOnly });
+    // `--check`/`resume` take the same preflight, so they must take the same
+    // injected transport and LAN override: dropping them made
+    // OH_MY_AIHUB_PREFLIGHT_LAN=none (and a test's stub fetch) apply only to a
+    // full setup, while these four commands still probed the real LAN gateway.
+    return resumeOrCheck(dataDir, args, { checkOnly, deps });
   }
 
   const pf = await preflight({
@@ -152,13 +156,14 @@ export async function runSetup(argv: string[], dataDir: string, io: WizardIO = d
 }
 
 /** `resume` and `setup --check`: never submit a configuration. */
-async function resumeOrCheck(dataDir: string, args: ParsedArgs, opts: { checkOnly: boolean }): Promise<number> {
+async function resumeOrCheck(dataDir: string, args: ParsedArgs, opts: { checkOnly: boolean; deps: SetupDeps }): Promise<number> {
   const pf = await preflight({
     dataDir,
     magpieBin: args.one("magpie-bin"),
     gatewayPort: args.one("gateway-port") ? Number(args.one("gateway-port")) : undefined,
     liveChecks: args.has("live-checks"),
     timeoutMs: args.one("timeout-ms") ? Number(args.one("timeout-ms")) : undefined,
+    ...opts.deps.preflight,
   });
   if (args.has("json")) printJson(pf);
   else printPreflight(pf);
