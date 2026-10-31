@@ -34,5 +34,8 @@
     "page/style.css",
     "page/icon.svg",
     "README.md"
-  ]
+  ],
+  "dependencies": {
+    "ethers": "6.17.0"
+  }
 }
