@@ -75,7 +75,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   dialog.append(dialogHead, dialogBody, dialogError); document.body.append(dialog);
   dialog.setAttribute("aria-labelledby", dialogTitle.id);
   dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialog(); });
-  dialog.addEventListener("close", () => { if (!dialog.open && (secret || dialogBody.children.length)) closeDialog(); });
+  dialog.addEventListener("close", () => { if (!dialog.open && (secret || dialogBody.children.length)) closeDialog({ bump: false }); });
 
   let wallet = null;
   let service = "unknown";
@@ -92,15 +92,17 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   let discovery = null;
   let discoveryStarted = false;
   let disposed = false;
+  let generation = 0;
 
   function report(message, tone = "warn") { try { notice(message, tone); } catch { /* notice is advisory */ } }
   function fail(message) { dialogError.textContent = message; dialogError.hidden = false; }
   function clearInputs(node = dialogBody) { for (const input of node.querySelectorAll?.("input,textarea") || []) { input.value = ""; input.checked = false; } }
-  function closeDialog() {
+  function closeDialog({ bump = true } = {}) {
     secret = null; secretKind = null; secretVisible = false;
     if (dialogBody) dialogBody.replaceChildren();
     if (dialogError) { dialogError.textContent = ""; dialogError.hidden = true; }
     if (dialog.open) dialog.close();
+    if (bump) generation++;
   }
   function openDialog(title, build) {
     closeDialog();
@@ -108,8 +110,12 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     build(dialogBody);
     dialog.showModal();
   }
-  function openSecretDialog(value, kind, warning) {
-    closeDialog();
+  function openSecretDialog(value, kind, warning, token = generation) {
+    // A late response from a closed/navigated/disposed flow must never reopen
+    // the secret dialog or restore a secret reference.
+    if (disposed || token !== generation) return false;
+    if (!wallet || wallet.status !== "unlocked" || wallet.addressVerified !== true) return false;
+    closeDialog({ bump: false });
     secret = value; secretKind = kind; secretVisible = false;
     dialogTitle.textContent = kind === "mnemonic" ? "恢复助记词 · 仅显示一次" : kind === "private-key" ? "私钥 · 仅显示一次" : "加密备份";
     dialogError.hidden = true;
@@ -127,17 +133,20 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     const end = button("结束并清除", () => closeDialog());
     actions.append(toggle, end);
     body.append(pre, status, actions);
-    dialog.showModal();
+    try { dialog.showModal(); } catch { secret = null; secretKind = null; secretVisible = false; dialogBody.replaceChildren(); return false; }
+    return true;
   }
 
-  async function action(name, input = {}) {
+  async function action(name, input = {}, token = generation) {
     if (working) throw new Error("正在处理上一步操作");
     working = true;
     try {
       const result = await client.action(name, input);
+      if (disposed || token !== generation) return result;
       if (result?.wallet) applyWallet(result.wallet);
       return result;
     } catch (error) {
+      if (disposed || token !== generation) throw error;
       if (error?.status === 404) {
         service = "unavailable";
         serviceError = "本地钱包服务未接入或当前版本不支持；请更新 Magpie 中的 Oh My AIHub 插件后重试。";
@@ -151,21 +160,30 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     }
   }
 
-  function applyWallet(next) {
+  function applyWallet(next, renderNow = true) {
     if (!next || typeof next !== "object") return;
+    const wasTrusted = wallet?.status === "unlocked" && wallet.addressVerified === true;
     wallet = { version: next.version, address: next.address ?? null, addressVerified: next.addressVerified === true, status: next.status, unlockExpiresAt: next.unlockExpiresAt ?? null };
-    if (wallet.status !== "unlocked") { secret = null; secretKind = null; secretVisible = false; }
-    render();
+    const invalid = wallet.status !== "unlocked" || wallet.addressVerified !== true;
+    if (invalid && (wasTrusted || secret !== null || dialog.open)) {
+      generation++;
+      closeDialog({ bump: false });
+      clearInputs();
+    }
+    if (renderNow) render();
   }
 
   async function loadStatus() {
     if (loading || disposed || !getState()?.configured) return;
+    const token = generation;
     loading = true; render();
     try {
       const result = await client.action("wallet-vault-status", {});
-      if (result?.wallet) applyWallet(result.wallet);
+      if (disposed || token !== generation) return;
+      if (result?.wallet) applyWallet(result.wallet, true);
       service = "available"; serviceError = ""; loaded = true;
     } catch (error) {
+      if (disposed || token !== generation) return;
       loaded = true;
       service = "unavailable";
       serviceError = error?.status === 404 || error?.status === 400
@@ -173,11 +191,25 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
         : "暂时无法读取本地钱包状态；没有把未知状态当作未创建。";
       report(serviceError);
     } finally {
-      loading = false; render();
+      loading = false;
+      if (!disposed && token === generation) render();
     }
   }
 
-  function actionError(error) { fail(error?.message || "本地钱包操作未完成"); }
+  const SAFE_ERRORS = {
+    "wallet-invalid-input": "输入不符合本地钱包要求。",
+    "wallet-session-required": "需要当前已认证的本地浏览器会话。",
+    "wallet-unlock-required": "请先解锁并验证钱包。",
+    "wallet-password-invalid": "钱包密码验证失败。",
+    "wallet-locked": "钱包已锁定。",
+    "wallet-exists": "本机已有钱包；请使用导入/恢复或当前密码替换。",
+    "wallet-absent": "本机还没有钱包。",
+    "wallet-keystore-invalid": "钱包文件无效或不可安全读取。",
+    "wallet-mnemonic-invalid": "恢复助记词无效。",
+    "wallet-reveal-invalid": "敏感导出授权无效或已过期。",
+    "wallet-operation-failed": "本地钱包操作未完成；未自动重试。",
+  };
+  function actionError(error) { fail(SAFE_ERRORS[error?.code] || "本地钱包操作未完成；未自动重试。"); }
   function passwordPair() {
     const password = field("钱包密码（至少 12 位）", "password");
     const confirm = field("再次输入密码", "password");
@@ -209,11 +241,18 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
         if (!validPasswordPair(pair.password, pair.confirm)) { fail("两次密码必须一致，且至少 12 位。"); return; }
         if (!agree.input.checked) { fail("请确认恢复信息保护提醒。"); return; }
         const password = pair.password.input.value; pair.password.input.value = ""; pair.confirm.input.value = "";
+        const token = generation;
         submit.disabled = true;
         try {
-          const result = await action("wallet-vault-create", { password, strength: Number(strength.input.value) || 128 });
+          const result = await action("wallet-vault-create", { password, strength: Number(strength.input.value) || 128 }, token);
+          if (disposed) return;
+          if (token !== generation) {
+            if (result?.wallet && getState()?.configured) applyWallet(result.wallet);
+            report("钱包已创建；恢复助记词未显示。请重新解锁后导出助记词，不能自动重复创建钱包。", "warn");
+            return;
+          }
           if (typeof result?.mnemonic !== "string" || !result.mnemonic) throw new Error("钱包已创建，但没有收到一次性恢复助记词；请立即检查钱包状态并按恢复流程处理。");
-          openSecretDialog(result.mnemonic, "mnemonic", result.warning || "这是唯一一次显示恢复助记词。请立即离线备份；不要粘贴到网站、聊天或日志。");
+          openSecretDialog(result.mnemonic, "mnemonic", result.warning || "这是唯一一次显示恢复助记词。请立即离线备份；不要粘贴到网站、聊天或日志。", token);
         } catch (error) { actionError(error); submit.disabled = false; }
       }, true);
       agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
@@ -277,11 +316,13 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       const agree = check("我理解这是敏感文件，准备保存到离线位置");
       const submit = button("生成加密备份", async () => {
         if (!agree.input.checked) { fail("请确认保存边界。"); return; }
+        const token = generation;
         submit.disabled = true;
         try {
-          const result = await action("wallet-vault-backup", {});
+          const result = await action("wallet-vault-backup", {}, token);
+          if (disposed || token !== generation) return;
           const value = typeof result.keystore === "string" ? result.keystore : JSON.stringify(result.keystore ?? result, null, 2);
-          openSecretDialog(value, "backup", "这是密码保护的加密备份。请保存到离线位置；本页不会自动下载、复制或写入浏览器存储。");
+          openSecretDialog(value, "backup", "这是密码保护的加密备份。请保存到离线位置；本页不会自动下载、复制或写入浏览器存储。", token);
         } catch (error) { actionError(error); submit.disabled = false; }
       }, true);
       submit.disabled = true; agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
@@ -297,9 +338,10 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       const authorize = button("生成一次性导出授权", async () => {
         if (!purpose.input.value) { fail("请选择明确的导出用途。"); return; }
         if (!agree.input.checked) { fail("请先确认导出范围与风险。"); return; }
-        const value = purpose.input.value; authorize.disabled = true;
+        const value = purpose.input.value; const token = generation; authorize.disabled = true;
         try {
-          const result = await action("wallet-vault-reveal-authorize", { kind, purpose: value, confirmation: "local-user-confirmed" });
+          const result = await action("wallet-vault-reveal-authorize", { kind, purpose: value, confirmation: "local-user-confirmed" }, token);
+          if (disposed || token !== generation) return;
           if (!result?.authorizationId) throw new Error("没有收到一次性导出授权，请重新操作。");
           passwordRevealDialog(kind, result.authorizationId, value);
         } catch (error) { actionError(error); authorize.disabled = false; }
@@ -315,38 +357,44 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       const password = field("再次输入钱包密码", "password"); password.input.maxLength = 1024;
       const submit = button("显示一次", async () => {
         if (!password.input.value) { fail("请输入钱包密码。"); return; }
-        const value = password.input.value; password.input.value = ""; submit.disabled = true;
+        const value = password.input.value; password.input.value = ""; const token = generation; submit.disabled = true;
         try {
-          const result = await action(kind === "mnemonic" ? "wallet-vault-reveal-mnemonic" : "wallet-vault-reveal-private-key", { authorizationId, password: value });
+          const result = await action(kind === "mnemonic" ? "wallet-vault-reveal-mnemonic" : "wallet-vault-reveal-private-key", { authorizationId, password: value }, token);
+          if (disposed || token !== generation) return;
           const secretValue = kind === "mnemonic" ? result?.mnemonic : result?.privateKey;
           if (typeof secretValue !== "string" || !secretValue) throw new Error("没有收到敏感内容；授权可能已失效，请重新开始。");
-          openSecretDialog(secretValue, kind, `用途：${purpose}。内容默认隐藏；显示后请在本页核对，不要截图、粘贴到聊天或保存到日志。`);
+          openSecretDialog(secretValue, kind, `用途：${purpose}。内容默认隐藏；显示后请在本页核对，不要截图、粘贴到聊天或保存到日志。`, token);
         } catch (error) { actionError(error); submit.disabled = false; }
       }, true);
       body.append(password.label, submit);
     });
   }
 
-  function render() {
+  function render(next = null) {
+    if (disposed) return;
+    if (next?.walletVault?.wallet) {
+      service = "available"; loaded = true;
+      applyWallet(next.walletVault.wallet, false);
+    }
     if (disposed) return;
     localRoot.replaceChildren();
     const heading = el("div", null, "section-heading");
     heading.append(el("h2", "本地钱包"), pill(service === "unavailable" ? "服务未接入" : loading ? "正在读取" : wallet ? walletStatusLabel(wallet.status) : "尚未读取", service === "unavailable" || wallet?.status === "locked" ? "warn" : wallet?.status === "unlocked" ? "good" : "neutral"));
-    root.append(heading, p("测试网本地钱包。密钥加密保存在本机；这里不发起付款，也不把资产余额当成提供者信用。", "muted"));
-    if (loading || service === "unknown") { root.append(p("正在读取本地钱包状态…")); renderExternal(); return; }
+    localRoot.append(heading, p("测试网本地钱包。密钥加密保存在本机；这里不发起付款，也不把资产余额当成提供者信用。", "muted"));
+    if (loading || service === "unknown") { localRoot.append(p("正在读取本地钱包状态…")); renderExternal(); return; }
     if (service === "unavailable") {
       const card = section("本地钱包服务未接入", serviceError || "当前服务没有提供钱包动作。");
       card.append(button("重新读取状态", () => { loaded = true; service = "unknown"; void loadStatus(); }), p("在服务接入前，本页不会创建钱包、不会假装已创建，也不会提供模拟发送。", "inline-warning"));
-      root.append(card); renderExternal(); return;
+      localRoot.append(card); renderExternal(); return;
     }
     if (!wallet || wallet.status === "absent") {
-      root.append(section("还没有本地钱包", "选择下面一项明确开始；创建和导入都需要密码与恢复信息保护确认。"));
+      localRoot.append(section("还没有本地钱包", "选择下面一项明确开始；创建和导入都需要密码与恢复信息保护确认。"));
       const choices = el("div", null, "wallet-choice-grid");
       choices.append(
         choice("创建新钱包", "生成新的本地测试网钱包，并一次性显示恢复助记词。", button("创建钱包", () => createWalletDialog(), true)),
         choice("连接已有钱包", "导入助记词、恢复加密备份，或连接已安装的 EIP-6963 浏览器钱包扩展。", button("选择已有钱包方式", () => connectChoiceDialog())),
       );
-      root.append(choices);
+      localRoot.append(choices);
     } else {
       const view = walletAddressView(wallet);
       const card = section("本地钱包状态", wallet.status === "unlocked" ? "钱包已解锁；地址仅在当前解锁会话内可视为已验证。" : "钱包已锁定；公开地址不代表已验证，不能用于收款或转账目标。");
@@ -360,11 +408,11 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       if (!view.trusted) card.append(p("不要把此地址当作可信收款地址。只有解锁后本机验证通过，才可在明确的收款流程中显示。", "inline-warning"));
       const actions = el("div", null, "workflow-actions");
       if (wallet.status === "locked") actions.append(button("解锁", () => unlockDialog(), true));
-      if (wallet.status === "unlocked") actions.append(button("锁定", async () => { try { await action("wallet-vault-lock", {}); closeDialog(); report("钱包已锁定；敏感导出授权已失效。", "good"); } catch (error) { report(error?.message || "锁定未完成", "warn"); } }));
+      if (wallet.status === "unlocked") actions.append(button("锁定", async () => { try { await action("wallet-vault-lock", {}); closeDialog(); report("钱包已锁定；敏感导出授权已失效。", "good"); } catch { report("钱包锁定未完成；未自动重试。", "warn"); } }));
       actions.append(button("刷新状态", () => { service = "unknown"; void loadStatus(); }));
       if (wallet.status === "unlocked") actions.append(button("生成加密备份", () => backupDialog()), button("导出恢复助记词", () => revealDialog("mnemonic")), button("导出私钥", () => revealDialog("private-key")));
       actions.append(button("导入或恢复其他钱包", () => connectChoiceDialog()));
-      card.append(actions); root.append(card);
+      card.append(actions); localRoot.append(card);
     }
     renderExternal();
   }
@@ -432,7 +480,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
             externalSession = session; externalState = session.snapshot();
             session.subscribe((next) => { externalState = next; if (externalRoot) renderExternal(); });
             renderExternal();
-          } catch (error) { report(error?.message || "外部钱包连接未完成", "warn"); }
+          } catch { report("外部钱包连接未完成；未自动重试。", "warn"); }
         }, true));
       }
     } else {
@@ -467,13 +515,16 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   function dispose() {
     if (disposed) return;
     disposed = true;
+    generation++;
     clearSecrets();
     disconnectExternal();
     discovery?.stop(); discovery = null; discoveryStarted = false;
+    windowTarget?.removeEventListener?.("pagehide", onPageHide);
     dialog.remove();
   }
 
-  windowTarget?.addEventListener?.("pagehide", () => { clearSecrets(); externalSession?.dispose(); externalSession = null; discovery?.stop(); });
+  const onPageHide = () => { clearSecrets(); externalSession?.dispose(); externalSession = null; discovery?.stop(); };
+  windowTarget?.addEventListener?.("pagehide", onPageHide);
 
   render();
   return { render, onShow, clearSecrets, disconnectExternal, reset, dispose, snapshot() { return wallet; } };

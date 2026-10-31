@@ -228,6 +228,94 @@ describe("local wallet UI", () => {
     } finally { ui.restore(); }
   });
 
+  test("late create after close is discarded and never reopens a secret dialog", async () => {
+    let resolveCreate;
+    const pending = new Promise((resolve) => { resolveCreate = resolve; });
+    const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: absent }), "wallet-vault-create": async () => pending } });
+    try {
+      await ui.show();
+      await find(ui.root, "button", "创建钱包").click(); await flush();
+      fillPasswordDialog(ui.dialog); const agree = checkAgree(ui.dialog); await agree.emit("change");
+      void find(ui.dialog, "button", "创建钱包").click(); await flush();
+      await find(ui.dialog, "button", "关闭").click(); await flush();
+      resolveCreate({ wallet: unlocked, mnemonic: "late create secret", warning: "once" }); await flush();
+      expect(ui.dialog.open).toBe(false);
+      expect(ui.dialog.textContent).not.toContain("late create secret");
+      expect(ui.root.textContent).not.toContain("late create secret");
+      expect(ui.notices.some(([message]) => message.includes("钱包已创建；恢复助记词未显示"))).toBeTrue();
+      expect(ui.root.textContent).toContain("已解锁");
+    } finally { ui.restore(); }
+  });
+
+  test("late reveal after clearSecrets/pagehide/dispose is discarded", async () => {
+    for (const cancel of ["clear", "pagehide", "dispose"]) {
+      let resolveReveal;
+      const pending = new Promise((resolve) => { resolveReveal = resolve; });
+      const ui = mount({ actions: {
+        "wallet-vault-status": async () => ({ wallet: unlocked }),
+        "wallet-vault-reveal-authorize": async () => ({ authorizationId: "d".repeat(64), kind: "private-key" }),
+        "wallet-vault-reveal-private-key": async () => pending,
+      } });
+      try {
+        await ui.show();
+        await find(ui.root, "button", "导出私钥").click(); await flush();
+        all(ui.dialog, "select")[0].value = "eip155-external-wallet";
+        const agree = checkAgree(ui.dialog); await agree.emit("change");
+        await find(ui.dialog, "button", "生成一次性导出授权").click(); await flush();
+        all(ui.dialog, "input").find((node) => node.type === "password").value = "correct-horse-battery";
+        void find(ui.dialog, "button", "显示一次").click(); await flush();
+        if (cancel === "clear") ui.mounted.clearSecrets();
+        else if (cancel === "pagehide") ui.target.dispatchEvent(new Event("pagehide"));
+        else ui.mounted.dispose();
+        resolveReveal({ privateKey: "late reveal secret", warning: "w" }); await flush();
+        expect(ui.dialog.open).toBeFalse();
+        expect(ui.dialog.textContent).not.toContain("late reveal secret");
+      } finally { if (cancel !== "dispose") ui.restore(); else ui.restore(); }
+    }
+  });
+
+  test("state-pushed locked snapshot closes secret DOM and removes trusted address", async () => {
+    const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: unlocked }), "wallet-vault-reveal-authorize": async () => ({ authorizationId: "e".repeat(64), kind: "mnemonic" }), "wallet-vault-reveal-mnemonic": async () => ({ mnemonic: "state push secret", warning: "w" }) } });
+    try {
+      await ui.show();
+      await find(ui.root, "button", "导出恢复助记词").click(); await flush();
+      all(ui.dialog, "select")[0].value = "wallet-recovery";
+      const agree = checkAgree(ui.dialog); await agree.emit("change");
+      await find(ui.dialog, "button", "生成一次性导出授权").click(); await flush();
+      all(ui.dialog, "input").find((node) => node.type === "password").value = "correct-horse-battery";
+      await find(ui.dialog, "button", "显示一次").click(); await flush();
+      await find(ui.dialog, "button", "显示内容").click();
+      expect(ui.dialog.textContent).toContain("state push secret");
+      ui.mounted.render({ walletVault: { wallet: locked } }); await flush();
+      expect(ui.dialog.open).toBeFalse();
+      expect(ui.dialog.textContent).not.toContain("state push secret");
+      expect(ui.root.textContent).toContain("未验证地址");
+      expect(ui.root.textContent).not.toContain("当前会话已验证");
+    } finally { ui.restore(); }
+  });
+
+  test("repeated render does not append duplicate headings", async () => {
+    const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: locked }) } });
+    try {
+      await ui.show();
+      ui.mounted.render({}); ui.mounted.render({}); await flush();
+      expect(all(ui.root, "h2").filter((node) => node.textContent === "本地钱包")).toHaveLength(1);
+      expect(ui.root.textContent).toContain("未验证地址");
+    } finally { ui.restore(); }
+  });
+
+  test("error text is a stable code mapping, not reflected input or secret", async () => {
+    const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: absent }), "wallet-vault-create": async () => { throw Object.assign(new Error("password=super-secret input"), { code: "wallet-invalid-input" }); } } });
+    try {
+      await ui.show();
+      await find(ui.root, "button", "创建钱包").click(); await flush();
+      fillPasswordDialog(ui.dialog); const agree = checkAgree(ui.dialog); await agree.emit("change");
+      await find(ui.dialog, "button", "创建钱包").click(); await flush();
+      expect(ui.dialog.textContent).not.toContain("super-secret");
+      expect(ui.dialog.textContent).toContain("输入不符合本地钱包要求");
+    } finally { ui.restore(); }
+  });
+
   test("EIP-6963 discovery is explicit, uses only name/initial, and never auto-connects", async () => {
     const calls = [];
     const provider = { request: async (call) => { calls.push(structuredClone(call)); if (call.method === "eth_requestAccounts") return [ADDRESS]; if (call.method === "eth_chainId") return "0x61"; throw Object.assign(new Error("unsupported"), { code: 4200 }); } };
