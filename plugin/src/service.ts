@@ -43,6 +43,7 @@ import {
 } from "./easytier.ts";
 import { mappedHost, randomMappedCidr, randomVirtualIp } from "./addresses.ts";
 import {
+  OsSocketOwnership,
   SocketBinder,
   claimFreePort,
   emptyPortLedger,
@@ -56,6 +57,7 @@ import {
   type PortOwner,
   type PortProof,
   type PortPurpose,
+  type SocketOwnershipProbe,
 } from "./ports.ts";
 import { projectNetwork, splitListenAddr, type NetworkView } from "./network.ts";
 import {
@@ -173,7 +175,7 @@ export interface ServiceDeps {
    * Port claims. The default holds real sockets; a unit test injects a binder
    * (or a fake supervisor) so no listener is created on the host.
    */
-  ports?: { binder?: PortBinder; now?: () => Date };
+  ports?: { binder?: PortBinder; ownership?: SocketOwnershipProbe; now?: () => Date };
 }
 
 /**
@@ -438,12 +440,14 @@ export class Service {
   private cachedChecksDurationMs: number | null = null;
   private cachedChecksError: string | null = null;
   private binder: PortBinder;
+  private ownership: SocketOwnershipProbe;
   private clock: () => Date;
   private lastNetworkRefreshAt = 0;
 
   constructor(private deps: ServiceDeps) {
     this.state = loadState().state;
     this.binder = deps.ports?.binder ?? new SocketBinder();
+    this.ownership = deps.ports?.ownership ?? new OsSocketOwnership();
     this.clock = deps.ports?.now ?? (() => new Date());
     this.probes = { ...defaultProbes(deps.magpie), ...(deps.probes ?? {}) };
     this.accountingTickMs = Math.max(10, deps.accountingTickMs ?? ACCOUNTING_TICK_MS);
@@ -919,8 +923,12 @@ export class Service {
         // never "tried and retried" until it happens to work.
         await this.ensureConfiguredPorts(cfg);
         await this.supervisor.start(this.etConfig(cfg));
-        await this.reconcileCorePorts(cfg).catch((e) => logger.warn(`could not record port evidence: ${String(e)}`));
+        this.assertCorePortsProven(await this.reconcileCorePorts(cfg));
+        this.lastProblem = null;
       } catch (e) {
+        // A core we cannot attribute is not "online": stop it rather than serve
+        // with a state that was never proven.
+        await this.supervisor.stop().catch(() => {});
         this.lastProblem = String(e);
         logger.error(`supervisor did not start: ${String(e)}`);
       }
@@ -1180,7 +1188,7 @@ export class Service {
       const rpcPort =
         input.rpcPort ??
         prev?.rpcPort ??
-        (await this.choosePort("easytier-rpc", "127.0.0.1", portRange(17888, 17959), [
+        (await this.choosePort("easytier-rpc", "127.0.0.1", this.rpcCandidates(), [
           this.gatewayPort(),
           prev?.catalog.port ?? 3426,
           prev?.catalog.socksPort ?? 13400,
@@ -1334,7 +1342,7 @@ export class Service {
     const listenAddr =
       prev?.listenAddr ??
       `tcp://0.0.0.0:${await this.choosePort("overlay-listen", "0.0.0.0", portRange(11010, 11059), [this.gatewayPort()])}`;
-    return this.configure({
+    const snapshot = await this.configure({
       networkName: input.networkName,
       networkSecret: secret || prev?.networkSecret || "",
       peers: initialNode ? [initialNode] : (prev?.peers ?? []),
@@ -1344,6 +1352,13 @@ export class Service {
       consumingEnabled: true,
       catalogDiscovery: true,
     });
+    // `configure` keeps the saved config even when the core refuses to run (a
+    // later boot can retry). Do not report a join that did not happen.
+    const et = this.supervisor.snapshot();
+    if (!et.running) {
+      throw new Error(`the overlay core is not running after the join: ${et.lastError ?? "no error was recorded"}`);
+    }
+    return snapshot;
   }
 
   /**
@@ -1396,6 +1411,10 @@ export class Service {
     saveState(this.state);
     try {
       await this.applyConfig(next);
+      const et = this.supervisor.snapshot();
+      if (!et.running) {
+        throw new Error(`the overlay core is not running after the restart: ${et.lastError ?? "no error was recorded"}`);
+      }
       await this.applyCatalog();
       // Never republish blindly: the guard can withdraw the export instead.
       await this.guardSharedKeys().catch((e) => logger.warn(`share guard after sharing models: ${String(e)}`));
@@ -1445,6 +1464,7 @@ export class Service {
       providers: this.providers(),
       gatewayPort: this.gatewayPort(),
       ledger: this.portLedger(),
+      serviceProblem: this.lastProblem,
       consolePort: readPortFile("console-port.json"),
       apiPort: readPortFile("api-port"),
       now: () => this.clock().getTime(),
@@ -1490,25 +1510,41 @@ export class Service {
     return port;
   }
 
+  /**
+   * Candidates for the core's RPC portal. Deliberately not in ascending order:
+   * 17888 is a well-known EasyTier default that other Magpie/piggybacked cores
+   * on this host may already use, and a collision there is exactly how a
+   * supervisor could read somebody else's core. The chosen port is persisted,
+   * so this only affects first allocation and explicit migration.
+   */
+  private rpcCandidates(exclude: number[] = []): number[] {
+    const ports = portRange(17888, 17959).filter((p) => !exclude.includes(p));
+    for (let i = ports.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ports[i], ports[j]] = [ports[j], ports[i]];
+    }
+    return ports;
+  }
+
   private async recordPortProof(input: {
     purpose: PortPurpose;
     host: string;
     port: number | null;
     owner: PortOwner;
     reported: boolean | null;
+    /** the live PIDs allowed to own this port; empty = no proof possible */
+    expectedPids: number[];
     detail?: string | null;
   }): Promise<PortProof | null> {
     if (!input.port) return null;
-    // A test double cannot prove a real listener; record "unverified" instead of
-    // a false "stable" or a false "conflict".
-    const reported = this.deps.supervisor === undefined ? input.reported : null;
     const proof = await verifyOwnedPort({
-      binder: this.binder,
+      ownership: this.ownership,
       purpose: input.purpose,
       host: input.host,
       port: input.port,
       owner: input.owner,
-      reported,
+      reported: input.reported,
+      expectedPids: input.expectedPids,
       now: this.clock,
     });
     const evidence = proofEvidence({
@@ -1540,33 +1576,54 @@ export class Service {
    * Proves the supervised core really holds the ports its configuration names.
    * Recorded as evidence, never trusted from the config alone.
    */
-  private async reconcileCorePorts(cfg: PluginConfig): Promise<void> {
+  private async reconcileCorePorts(cfg: PluginConfig): Promise<PortProof[]> {
     const snap = this.supervisor.snapshot();
     const running = Boolean(snap.running);
+    const expected = snap.pid ? [snap.pid] : [];
+    const proofs: (PortProof | null)[] = [];
     const listen = splitListenAddr(cfg.listenAddr);
-    await this.recordPortProof({
-      purpose: "overlay-listen",
-      host: listen.host ?? "0.0.0.0",
-      port: listen.port,
-      owner: "easytier",
-      reported: running ? true : false,
-    });
-    await this.recordPortProof({
-      purpose: "easytier-rpc",
-      host: "127.0.0.1",
-      port: cfg.rpcPort,
-      owner: "easytier",
-      reported: running && (snap.rpcPort === null || snap.rpcPort === cfg.rpcPort),
-    });
-    if (cfg.catalog.discoveryEnabled) {
+    proofs.push(
       await this.recordPortProof({
-        purpose: "catalog-socks",
-        host: "127.0.0.1",
-        port: cfg.catalog.socksPort,
+        purpose: "overlay-listen",
+        host: listen.host ?? "0.0.0.0",
+        port: listen.port,
         owner: "easytier",
-        reported: running && (snap.socks5Port === null || snap.socks5Port === cfg.catalog.socksPort),
-      });
+        reported: running,
+        expectedPids: expected,
+      }),
+    );
+    proofs.push(
+      await this.recordPortProof({
+        purpose: "easytier-rpc",
+        host: "127.0.0.1",
+        port: cfg.rpcPort,
+        owner: "easytier",
+        reported: running && (snap.rpcPort === null || snap.rpcPort === cfg.rpcPort),
+        expectedPids: expected,
+      }),
+    );
+    if (cfg.catalog.discoveryEnabled) {
+      proofs.push(
+        await this.recordPortProof({
+          purpose: "catalog-socks",
+          host: "127.0.0.1",
+          port: cfg.catalog.socksPort,
+          owner: "easytier",
+          reported: running && (snap.socks5Port === null || snap.socks5Port === cfg.catalog.socksPort),
+          expectedPids: expected,
+        }),
+      );
     }
+    return proofs.filter((p): p is PortProof => p !== null);
+  }
+
+  /** Every core listener the last apply produced must be owned by the live core. */
+  private assertCorePortsProven(proofs: PortProof[]): void {
+    const bad = proofs.filter((p) => p.state !== "stable");
+    if (bad.length === 0) return;
+    throw new Error(
+      `the overlay core does not own its listeners: ${bad.map((p) => `${p.state}: ${p.detail ?? "no detail"}`).join("; ")}`,
+    );
   }
 
   /**
@@ -1579,9 +1636,22 @@ export class Service {
     if (snap.running) return;
     const reserved = [this.gatewayPort(), cfg.catalog.port, cfg.catalog.socksPort];
     if (!(await this.binder.isFree("127.0.0.1", cfg.rpcPort))) {
-      const next = await this.choosePort("easytier-rpc", "127.0.0.1", portRange(17888, 17959), reserved);
+      const next = await this.choosePort("easytier-rpc", "127.0.0.1", this.rpcCandidates(reserved), reserved);
       this.migratePort("easytier-rpc", cfg.rpcPort, next, "the stored RPC port was already in use");
       cfg.rpcPort = next;
+      saveState(this.state);
+    }
+    const listen = splitListenAddr(cfg.listenAddr);
+    if (listen.host && listen.port && !(await this.binder.isFree(listen.host, listen.port))) {
+      const next = await this.choosePort("overlay-listen", listen.host, portRange(11010, 11059), [
+        this.gatewayPort(),
+        cfg.rpcPort,
+        cfg.catalog.port,
+        cfg.catalog.socksPort,
+        listen.port,
+      ]);
+      this.migratePort("overlay-listen", listen.port, next, "the stored overlay listener port was already in use");
+      cfg.listenAddr = `${cfg.listenAddr!.replace(/:\d+$/, "")}:${next}`;
       saveState(this.state);
     }
     if (cfg.catalog.discoveryEnabled && !(await this.binder.isFree("127.0.0.1", cfg.catalog.socksPort))) {
@@ -1600,7 +1670,7 @@ export class Service {
     await this.ensureConfiguredPorts(cfg);
     await this.supervisor.start(this.etConfig(cfg));
     await this.supervisor.refresh().catch(() => this.supervisor.snapshot());
-    await this.reconcileCorePorts(cfg).catch((e) => logger.warn(`could not record port evidence: ${String(e)}`));
+    this.assertCorePortsProven(await this.reconcileCorePorts(cfg));
   }
 
   /** The EasyTier configuration that implements the plugin's state. */
@@ -2140,7 +2210,14 @@ export class Service {
         }
         await this.publishCatalogNow();
         this.catalogServerError = null;
-        await this.recordPortProof({ purpose: "catalog", host, port: cfg.catalog.port, owner: "plugin", reported: true });
+        await this.recordPortProof({
+          purpose: "catalog",
+          host,
+          port: cfg.catalog.port,
+          owner: "plugin",
+          reported: true,
+          expectedPids: [process.pid],
+        });
         return;
       } catch (e) {
         const why = String((e as Error).message ?? e);
@@ -2719,14 +2796,21 @@ export class Service {
 
       // The keyed and wrong-key dials above are the real proof that the core's
       // forward listener exists and is ours; record it before Magpie changes.
-      await this.recordPortProof({
+      const forwardProof = await this.recordPortProof({
         purpose: "forward",
         host: "127.0.0.1",
         port: localPort,
         owner: "easytier",
         reported: true,
+        expectedPids: this.supervisor.snapshot().pid ? [this.supervisor.snapshot().pid!] : [],
         detail: `forward to ${input.id}`,
       });
+      if (!forwardProof || forwardProof.state !== "stable") {
+        throw new Error(
+          `127.0.0.1:${localPort} is not provably owned by the supervised core ` +
+            `(${forwardProof?.state ?? "unverified"}: ${forwardProof?.detail ?? "no evidence"}); refusing to register it`,
+        );
+      }
 
       // 2. the provider. An entry this plugin owns is replaced; a missing one is
       //    added; anything else was refused above. Re-registering an identical
@@ -2806,6 +2890,7 @@ export class Service {
           port: localPort,
           owner: "easytier",
           reported: false,
+          expectedPids: this.supervisor.snapshot().pid ? [this.supervisor.snapshot().pid!] : [],
           detail: `forward to ${input.id} failed: ${(e as Error).message}`.slice(0, 300),
         }).catch(() => {});
       }
@@ -3618,6 +3703,30 @@ export class Service {
             : `${expected.size} loopback forward(s), all owned by a provider`,
         });
       }
+      // A forward is only usable when the OS attributes its loopback socket to
+      // the supervised core; a matching config line is not ownership.
+      const snap = this.supervisor.snapshot();
+      const owned: string[] = [];
+      const foreign: string[] = [];
+      for (const p of this.state.providers) {
+        if (!snap.pid) {
+          foreign.push(`${p.id}: no core pid`);
+          continue;
+        }
+        const found = await this.ownership.listenerPids(p.localPort);
+        if (!found.supported) foreign.push(`${p.id}: socket-owner probe unavailable`);
+        else if (!found.pids.includes(snap.pid)) foreign.push(`${p.id}: held by ${found.pids.join(",") || "nobody"}, not pid ${snap.pid}`);
+        else owned.push(p.id);
+      }
+      if (this.state.providers.length) {
+        out.push({
+          name: "forwards-owned",
+          ok: foreign.length === 0,
+          detail: foreign.length
+            ? `loopback forward(s) not proven to belong to this core: ${foreign.join("; ")}`
+            : `${owned.length} loopback forward(s) owned by the core`,
+        });
+      }
     }
     if (this.state.orphanForwards.length) {
       out.push({
@@ -4096,6 +4205,7 @@ function isCriticalCheck(name: string): boolean {
     name === "catalog-identity" ||
     name === "catalog-socks5-loopback" ||
     name === "forwards-match" ||
+    name === "forwards-owned" ||
     name === "no-orphan-forwards"
   );
 }

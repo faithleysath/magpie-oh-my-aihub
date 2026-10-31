@@ -22,7 +22,7 @@ import {
   recordPortMigration,
   verifyOwnedPort,
 } from "../src/ports.ts";
-import { FakeBinder } from "./support/fake-ports.ts";
+import { FakeBinder, FakeOwnership } from "./support/fake-ports.ts";
 
 describe("port ledger", () => {
   test("a persisted ledger is validated instead of trusted", () => {
@@ -121,61 +121,111 @@ describe("claiming a port", () => {
 });
 
 describe("proving the controlled listener owns the port", () => {
-  test("reported + in use is stable", async () => {
-    const binder = new FakeBinder();
-    binder.occupy("127.0.0.1", 17888);
+  const ownership = () => {
+    const o = new FakeOwnership();
+    o.pids.set(17888, [4242]);
+    return o;
+  };
+
+  test("the OS attributes the port to the expected live pid: stable", async () => {
     const proof = await verifyOwnedPort({
-      binder,
+      ownership: ownership(),
       purpose: "easytier-rpc",
       host: "127.0.0.1",
       port: 17888,
       owner: "easytier",
       reported: true,
+      expectedPids: [4242],
     });
-    expect(proof).toMatchObject({ state: "stable", inUse: true, reported: true });
+    expect(proof).toMatchObject({ state: "stable", ownership: "os", reported: true, pids: [4242] });
   });
 
-  test("reported + nothing listening is a conflict, never green", async () => {
-    const binder = new FakeBinder();
+  test("a foreign pid holding the port is a conflict even with a matching claim", async () => {
+    const o = new FakeOwnership();
+    o.pids.set(17888, [999]);
     const proof = await verifyOwnedPort({
-      binder,
+      ownership: o,
+      purpose: "easytier-rpc",
+      host: "127.0.0.1",
+      port: 17888,
+      owner: "easytier",
+      reported: true,
+      expectedPids: [4242],
+    });
+    expect(proof.state).toBe("conflict");
+    expect(proof.detail).toMatch(/not the supervised process/);
+  });
+
+  test("claiming a port nobody listens on is failed, not stable", async () => {
+    const o = new FakeOwnership();
+    const proof = await verifyOwnedPort({
+      ownership: o,
       purpose: "catalog",
       host: "192.0.2.5",
       port: 3426,
       owner: "plugin",
       reported: true,
+      expectedPids: [process.pid],
     });
-    expect(proof.state).toBe("conflict");
-    expect(proof.detail).toMatch(/refusing to use it/);
+    expect(proof).toMatchObject({ state: "failed", pids: [], ownership: "os" });
   });
 
-  test("the child not holding the port is a failure", async () => {
-    const binder = new FakeBinder();
+  test("an unavailable OS probe can never be stable", async () => {
+    const o = new FakeOwnership();
+    o.supported = false;
     const proof = await verifyOwnedPort({
-      binder,
+      ownership: o,
       purpose: "catalog-socks",
       host: "127.0.0.1",
       port: 13400,
       owner: "easytier",
-      reported: false,
+      reported: true,
+      expectedPids: [4242],
     });
-    expect(proof).toMatchObject({ state: "failed", reported: false });
+    expect(proof).toMatchObject({ state: "unverified", ownership: "unavailable", pids: null });
+    expect(proof.detail).toMatch(/socket-owner/);
   });
 
-  test("no evidence is unverified, not stable", async () => {
-    const binder = new FakeBinder();
-    const proof = await verifyOwnedPort({
-      binder,
+  test("no live pid or no claim is never stable", async () => {
+    const o = ownership();
+    expect(
+      (
+        await verifyOwnedPort({
+          ownership: o,
+          purpose: "forward",
+          host: "127.0.0.1",
+          port: 13425,
+          owner: "easytier",
+          reported: true,
+          expectedPids: [],
+        })
+      ).state,
+    ).toBe("unverified");
+    const childGone = await verifyOwnedPort({
+      ownership: o,
       purpose: "forward",
       host: "127.0.0.1",
       port: 13425,
       owner: "easytier",
-      reported: null,
+      reported: false,
+      expectedPids: [4242],
     });
-    expect(proof.state).toBe("unverified");
-    const evidence = proofEvidence({ purpose: "forward", host: "127.0.0.1", port: 13425, owner: "easytier", proof });
+    expect(childGone.state).toBe("failed");
+  });
+
+  test("the proof record keeps the OS verdict and reachability", async () => {
+    const proof = await verifyOwnedPort({
+      ownership: ownership(),
+      purpose: "easytier-rpc",
+      host: "127.0.0.1",
+      port: 17888,
+      owner: "easytier",
+      reported: true,
+      expectedPids: [4242],
+    });
+    const evidence = proofEvidence({ purpose: "easytier-rpc", host: "127.0.0.1", port: 17888, owner: "easytier", proof });
+    expect(evidence.state).toBe("stable");
     expect(evidence.reachability).toBe("loopback");
-    expect(evidence.state).toBe("unverified");
   });
 });
 
