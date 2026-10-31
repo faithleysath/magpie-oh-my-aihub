@@ -1607,6 +1607,22 @@ export class Provisioner {
   }
 
   /**
+   * Read-only Magpie key-management check for an interrupted approval: does a
+   * key with this consumer's deterministic plugin name exist? A missing local
+   * Provisioner record alone is not proof; this reads Magpie's management store.
+   * The gateway/remote 401 semantics are still a separate, UNKNOWN question.
+   */
+  async nativeConsumerKeyAbsent(consumerId: string): Promise<boolean> {
+    return this.withLock(consumerId, async () => {
+      const named = this.magpie.keyByName(Provisioner.keyName(consumerId));
+      if (named) return false;
+      const rec = this.find(consumerId);
+      if (rec?.keyId && this.magpie.keyById(rec.keyId)) return false;
+      return true;
+    });
+  }
+
+  /**
    * Reads the key for a control hand-over under the same per-consumer lock used
    * by approve/reissue/revoke. The caller has already run the share guard and
    * status read-back; this method re-checks the exact key generation, the native

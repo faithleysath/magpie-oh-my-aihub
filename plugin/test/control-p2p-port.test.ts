@@ -311,6 +311,18 @@ describe("B-core P2pBusinessPort mapping", () => {
       expect(none.source).toBe("journal+native");
       expect(none.consumerNodeId).toBe("nobody");
     }
+
+    // A Magpie key with the deterministic consumer name but no local record is
+    // still an unknown, not proof of no side effect.
+    const nativeOnly = "7".repeat(32);
+    const pendingNative = { ...pending, approvalId: nativeOnly, consumerNodeId: "native-only", consumerFingerprint: "7".repeat(64) };
+    writeFileSync(approvalFile, JSON.stringify({ version: 1, approvals: [pendingNative] }));
+    await magpie.addKey("ohmyaihub-native-only");
+    const ambiguous = await port.reconcileApproval!({
+      requestHash: "8".repeat(64), approvalId: nativeOnly, generation: 1,
+      consumer: { accountId: "7".repeat(64), nodeId: "native-only", hostname: "ohmyaihub-native-only", fingerprint: "7".repeat(64) }, keyId: null,
+    });
+    expect(ambiguous.state).toBe("unknown");
   });
 
   test("reconcileApproval treats a corrupt journal as unknown, not noSideEffect", async () => {

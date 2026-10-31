@@ -783,12 +783,22 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
             };
           }
           if (record.state === "pending" && !consumer) {
+            const nativeAbsent = await service.provisioner.nativeConsumerKeyAbsent(input.consumer.nodeId);
+            if (nativeAbsent) {
+              return {
+                ...binding,
+                state: "noSideEffect",
+                knownKeyId: null,
+                source: "journal+native",
+                detail: "the durable pending intent exists and Magpie's key management view has no key with this consumer's plugin name",
+              };
+            }
             return {
               ...binding,
-              state: "noSideEffect",
-              knownKeyId: null,
+              state: "unknown",
+              knownKeyId,
               source: "journal+native",
-              detail: "the durable pending intent exists and the native management view has no consumer key for it",
+              detail: "a Magpie key with this consumer's plugin name exists even though the local Provisioner record is absent",
             };
           }
           return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval exists but its native key binding cannot be proven" };
