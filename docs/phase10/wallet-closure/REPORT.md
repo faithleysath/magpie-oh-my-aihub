@@ -5,6 +5,8 @@ Status tags: **VERIFIED** (source/config/read), **REPRODUCED** (run and observed
 
 - Branch: `feature/phase10-wallet-closure`
 - Base: PR #49 `6b4d7d2f6e243b8ae8dfd074842cd71985850876` (A stop-share + B zero-file closure)
+- Final functional head (code, before this docs commit): `56370a6`
+- PR: https://github.com/faithleysath/magpie-oh-my-aihub/pull/50 (draft, not merged)
 - This report is the integration and acceptance record for this branch. The older
   `docs/phase10-c-*.md` files are their own units' reports; their integration status is
   superseded by this file.
@@ -213,6 +215,7 @@ completed no-file recharge.
 | secret-scan | PASS |
 | boot-check | PASS |
 | pack contents | 99 files, no tests/node_modules |
+| GitHub CI (head `56370a6`) | plugin Linux PASS, plugin macOS PASS, windows subset PASS, secrets (working tree) PASS, secrets (git history) PASS, package contents PASS |
 | evidence | `evidence/` with JSON + 2 screenshots |
 | cleanup | all owned processes stopped; every lab port free; lab root, seeds, private keys and the anvil token lab deleted; `evidence/lab-cleanup-proof.json` |
 
