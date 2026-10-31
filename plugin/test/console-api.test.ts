@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { consoleAction, consoleState } from "../src/console-api.ts";
 import { ConsoleInputError } from "../src/console-server.ts";
 import { registerSecret } from "../src/log.ts";
@@ -14,7 +16,7 @@ afterEach(() => {
 });
 
 function fixture() {
-  const dir = mkdtempSync("/tmp/console-api-fixture-");
+  const dir = mkdtempSync(join(tmpdir(), "console-api-fixture-"));
   temporaryDirectories.push(dir);
   process.chdir(dir);
   const calls: string[] = [];
