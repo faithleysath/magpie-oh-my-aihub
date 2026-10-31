@@ -916,6 +916,9 @@ describe("funds provenance and pending recovery", () => {
     expect(magpie.keyByName("ohmyaihub-alice")?.cap ?? capBefore).toBe(capBefore);
     await expect(provisioner.reissue("alice")).rejects.toThrow(/unknown|review|reissue/);
 
+    expect(() =>
+      ledger.reviewDepositProvenance({ id: "legacy-unknown", fundsClass: "chain", chainId: 97, assetId: `eip155:97:0x${"6".repeat(40)}`, note: "do not fabricate chain evidence" }),
+    ).toThrow(/ChainStore|chain deposit|relabel/);
     const reviewed = ledger.reviewDepositProvenance({ id: "legacy-unknown", fundsClass: "simulated", note: "legacy operator opening reviewed" });
     expect(reviewed.fundsClass).toBe("simulated");
     expect(reviewed.needsReview).toBe(false);
