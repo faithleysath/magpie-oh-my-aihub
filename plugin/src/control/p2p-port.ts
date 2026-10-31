@@ -560,6 +560,42 @@ function recoverApproval(record: ApprovalRecord, service: Service, at: string): 
   };
 }
 
+/**
+ * The provider's current accepted authorization for one consumer. Read-only and
+ * key-free; the P2P payment terms bind this exact approval generation/quote so
+ * a consumer cannot be charged under a stale or revoked authorization.
+ */
+export interface ControlConsumerAuthorization {
+  approvalId: string;
+  generation: number;
+  quoteHash: string;
+  priceVersion: string;
+  capUsd: number;
+  expiresAt: string;
+}
+
+export function controlAuthorizationForConsumer(
+  consumerNodeId: string,
+  file = statePath("control-approvals.json"),
+  now: Date = new Date(),
+): ControlConsumerAuthorization | null {
+  const at = now.getTime();
+  const rows = loadApprovals(file)
+    .approvals.filter((a) => a.consumerNodeId === consumerNodeId && a.state === "approved")
+    .filter((a) => Number.isFinite(Date.parse(a.expiresAt)) && Date.parse(a.expiresAt) > at)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    approvalId: row.approvalId,
+    generation: row.generation,
+    quoteHash: row.quoteHash,
+    priceVersion: row.priceVersion,
+    capUsd: row.capUsd,
+    expiresAt: row.expiresAt,
+  };
+}
+
 /** Read-only lookup for recovery/UI; no key material. */
 export function lookupControlApproval(approvalId: string, file = statePath("control-approvals.json")): ApprovalRecord | null {
   return loadApprovals(file).approvals.find((a) => a.approvalId === approvalId) ?? null;

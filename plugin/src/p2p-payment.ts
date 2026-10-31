@@ -175,6 +175,12 @@ export interface ProviderPaymentServiceOptions {
   store: P2pPaymentStore;
   now?: () => number;
   ttlSec?: number;
+  /**
+   * The provider's current authorization for one consumer (B approval
+   * generation and accepted quote). When present it replaces the static
+   * config binding, so terms always name the consumer's real approval.
+   */
+  authorizationFor?: (consumerNodeId: string) => { authorizationGeneration: number; quoteHash: string; priceVersion: string } | null;
 }
 
 export interface ConsumerPaymentServiceOptions {
@@ -312,6 +318,17 @@ export class ProviderPaymentService {
       lower(intent.tokenContract) !== selection.asset.contractAddress ||
       intent.expectedAmountRaw !== selection.amountRaw
     ) paymentFail("terms-mismatch", "wallet intent does not match the consumer selection");
+    const authorization = this.options.authorizationFor
+      ? this.options.authorizationFor(selection.consumerId)
+      : {
+          authorizationGeneration: this.options.config.authorizationGeneration,
+          quoteHash: this.options.config.quoteHash,
+          priceVersion: this.options.config.priceVersion,
+        };
+    if (!authorization) paymentFail("authority", "no current authorization for this consumer", "provider-authority");
+    if (!TEXT.test(authorization.quoteHash) || !TEXT.test(authorization.priceVersion) || !Number.isSafeInteger(authorization.authorizationGeneration) || authorization.authorizationGeneration < 1) {
+      paymentFail("authority", "the consumer authorization is incomplete", "provider-authority");
+    }
     const terms: PaymentTerms = validateTerms({
       requestId: input.requestId,
       invoiceId: intent.invoiceId,
@@ -319,9 +336,9 @@ export class ProviderPaymentService {
         providerId: this.options.config.providerId,
         nodeId: this.node.nodeId,
         fingerprint: this.node.fingerprint,
-        authorizationGeneration: this.options.config.authorizationGeneration,
-        quoteHash: this.options.config.quoteHash,
-        priceVersion: this.options.config.priceVersion,
+        authorizationGeneration: authorization.authorizationGeneration,
+        quoteHash: authorization.quoteHash,
+        priceVersion: authorization.priceVersion,
       },
       consumerId: selection.consumerId,
       chainId: selection.chainId,
@@ -491,6 +508,11 @@ export class ProviderPaymentService {
   status(invoiceId: string): StoredProviderRequest | null {
     return this.options.store.providerRequestByInvoice(invoiceId);
   }
+
+  /** Open/active provider requests for the console (bounded). */
+  activeRequests(): StoredProviderRequest[] {
+    return this.options.store.activeProviderRequests();
+  }
 }
 
 export class ConsumerPaymentService {
@@ -621,7 +643,7 @@ export class ConsumerPaymentService {
     paymentFail("role", "consumer cannot handle this payment frame");
   }
 
-  async sign(requestId: string): Promise<{ status: PaymentStatus; frame: PaymentFrame }> {
+  async sign(requestId: string, signer: PaymentSigner = this.options.signer): Promise<{ status: PaymentStatus; frame: PaymentFrame }> {
     if (!UUID.test(requestId)) paymentFail("invalid", "requestId must be a UUID");
     const obligation = this.options.store.obligation(requestId);
     if (!obligation) paymentFail("not-found", "no local consumer obligation");
@@ -642,7 +664,7 @@ export class ConsumerPaymentService {
     if (obligation.expiresAtMs <= this.now()) paymentFail("expired", "payment terms expired");
     let signed: { signature: string; payerAddress: string };
     try {
-      signed = await this.options.signer.sign({ intent: obligation.terms.intent, typedData: obligation.terms.typedData, digest: obligation.digest });
+      signed = await signer.sign({ intent: obligation.terms.intent, typedData: obligation.terms.typedData, digest: obligation.digest });
     } catch {
       this.options.store.updateObligation({ requestId, status: "actionneeded", error: "signer", nowMs: this.now() });
       paymentFail("signature", "local wallet did not sign", "signer");
@@ -666,6 +688,19 @@ export class ConsumerPaymentService {
 
   obligation(invoiceId: string): StoredObligation | null {
     return this.options.store.obligationByInvoice(invoiceId);
+  }
+
+  obligationByRequest(requestId: string): StoredObligation | null {
+    return this.options.store.obligation(requestId);
+  }
+
+  selection(requestId: string): StoredSelection | null {
+    return this.options.store.selection(requestId);
+  }
+
+  /** Unsigned obligations for the console, newest first (bounded). */
+  pendingObligations(): StoredObligation[] {
+    return this.options.store.pendingObligations();
   }
 
   status(invoiceId: string): { status: PaymentStatus; localStatus: PaymentStatus; peerStatus: PaymentStatus | null; source: "local" | "peer" } | null {
@@ -827,9 +862,9 @@ export class P2pPaymentCoordinator {
     return { requestId: created.requestId, status: created.selection.status, code: sent.code, detail: sent.detail ?? null };
   }
 
-  async sign(requestId: string): Promise<{ status: PaymentStatus; code: string; detail?: string | null }> {
+  async sign(requestId: string, signer?: PaymentSigner): Promise<{ status: PaymentStatus; code: string; detail?: string | null }> {
     if (!this.options.consumer) paymentFail("role", "this node is not a payment consumer");
-    const signed = await this.options.consumer.sign(requestId);
+    const signed = await this.options.consumer.sign(requestId, signer);
     const sent = await this.sendFrame(signed.frame.to, signed.frame, `signature:${requestId}`);
     return { status: signed.status, code: sent.code, detail: sent.detail ?? null };
   }

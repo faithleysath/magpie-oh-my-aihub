@@ -12,10 +12,15 @@ import {
   createStaticChainPolicy,
   WalletVault,
   WalletVaultError,
+  type PaymentRequestInput,
   type SensitiveExportKind,
   type SensitiveExportPurpose,
+  type SignedPayment,
+  type WalletTypedData,
+  type WalletTypedDataPurpose,
   type WalletSnapshot,
 } from "./wallet-vault.ts";
+import { DEPOSIT_DOMAIN_NAME, DEPOSIT_DOMAIN_VERSION, DEPOSIT_TYPES, DEPOSIT_VERIFYING_CONTRACT } from "./deposits.ts";
 import type { Service } from "./service.ts";
 
 /** Exact console action allowlist; no arbitrary operation or P2P dispatch. */
@@ -31,6 +36,25 @@ export const WALLET_VAULT_ACTIONS = [
   "wallet-vault-reveal-mnemonic",
   "wallet-vault-reveal-private-key",
 ] as const;
+
+/**
+ * Deposit-intent signing purposes. One per allowed simulation chain because the
+ * vault binds a purpose to one chain id; no mainnet purpose exists.
+ */
+const DEPOSIT_MESSAGE_TYPES = Object.freeze(
+  Object.fromEntries(DEPOSIT_TYPES.DepositIntent.map((field) => [field.name, field.type])),
+);
+function depositPurpose(chainId: 97 | 84532): WalletTypedDataPurpose {
+  return {
+    id: `deposit-intent-${chainId}`,
+    chainId,
+    primaryType: "DepositIntent",
+    domainName: DEPOSIT_DOMAIN_NAME,
+    domainVersion: DEPOSIT_DOMAIN_VERSION,
+    verifyingContracts: [DEPOSIT_VERIFYING_CONTRACT],
+    messageTypes: DEPOSIT_MESSAGE_TYPES,
+  };
+}
 
 /** Responses containing plaintext or encrypted export material bypass the result cache. */
 export const WALLET_VAULT_SENSITIVE_ACTIONS = [
@@ -154,6 +178,7 @@ export class WalletLocalService {
       // explicit isolated test constructor in the core; this adapter never
       // exposes it from UI/env/config.
       chainPolicy: createStaticChainPolicy({ 97: "testnet", 84532: "testnet" }),
+      purposes: [depositPurpose(97), depositPurpose(84532)],
     });
     // A rejected open must stay observable to status/action(), but it must not
     // become an unhandled rejection when a session-end hook touches an owner or
@@ -186,6 +211,64 @@ export class WalletLocalService {
     this.grants.clear();
     this.vaultInstance?.dispose();
     void this.vault.then((vault) => vault.dispose(), () => { /* handled open rejection */ });
+  }
+
+  /**
+   * Signs the exact EIP-712 DepositIntent the C obligation already validated.
+   * The document is server-owned; the browser never supplies typed data. The
+   * vault must be unlocked and the console session must still be active; a
+   * one-use, short-lived permit binds this exact digest.
+   */
+  async signDepositIntent(input: { typedData: WalletTypedData; digest: string }, context: WalletLocalContext): Promise<{ signature: string; address: string; digest: string }> {
+    const vault = await this.vault;
+    this.assertContext(context);
+    const chainId = Number(input.typedData?.domain?.chainId);
+    if (chainId !== 97 && chainId !== 84532) throw new WalletLocalError("wallet-operation-failed", "this deposit chain is not signable");
+    const prepared = vault.prepareTypedData({ purpose: `deposit-intent-${chainId}`, typedData: input.typedData });
+    if (prepared.digest.toLowerCase() !== input.digest.toLowerCase()) {
+      throw new WalletLocalError("wallet-operation-failed", "the deposit document does not match its digest");
+    }
+    const permit = vault.createSigningPermit({ kind: "typed-data", prepared, maxUses: 1, ttlMs: 60_000 });
+    const signed = vault.signTypedData({ prepared, permit });
+    this.assertContext(context);
+    return { signature: signed.signature, address: signed.address, digest: signed.digest };
+  }
+
+  /** Signs one already-prepared native payment. It never broadcasts by itself. */
+  async signPayment(input: PaymentRequestInput, context: WalletLocalContext): Promise<SignedPayment> {
+    const vault = await this.vault;
+    this.assertContext(context);
+    const prepared = vault.preparePayment(input);
+    const permit = vault.createSigningPermit({ kind: "payment", purpose: "payment", prepared, maxUses: 1, ttlMs: 60_000 });
+    const signed = await vault.signPayment({ prepared, permit });
+    this.assertContext(context);
+    return signed;
+  }
+
+  /**
+   * Signs one exact ERC-20 transfer. The calldata is built inside the vault from
+   * the validated recipient/amount; the caller must compare the tx hash/data to
+   * its trusted binding before broadcasting. It never broadcasts.
+   */
+  async signErc20Payment(
+    input: PaymentRequestInput & { tokenAddress: string; recipient: string; amountRaw: string; decimals: number },
+    context: WalletLocalContext,
+  ): Promise<SignedPayment> {
+    const vault = await this.vault;
+    this.assertContext(context);
+    const prepared = vault.prepareErc20Payment(input);
+    const permit = vault.createSigningPermit({ kind: "payment", purpose: "payment", prepared, maxUses: 1, ttlMs: 60_000 });
+    const signed = await vault.signPayment({ prepared, permit });
+    this.assertContext(context);
+    return signed;
+  }
+
+  private assertContext(context: WalletLocalContext | undefined): void {
+    if (!context) throw new WalletLocalError("wallet-session-required", "an authenticated console session is required");
+    const active = typeof context.assertActive === "function" ? context.assertActive : context.isActive;
+    if (typeof active !== "function" || active() !== true) {
+      throw new WalletLocalError("wallet-session-required", "the console session is no longer active");
+    }
   }
 
   async action(name: string, input: Record<string, unknown>, context?: WalletLocalContext): Promise<unknown> {

@@ -324,6 +324,22 @@ export class P2pPaymentStore {
     return row ? this.mapObligation(row) : null;
   }
 
+  /** Bounded console list; never used for admission. */
+  pendingObligations(limit = 50): StoredObligation[] {
+    const rows = this.db.query(
+      "SELECT * FROM consumer_payment_obligations WHERE status IN ('actionneeded','waitingpayment') ORDER BY updated_at_ms DESC LIMIT ?",
+    ).all(limit) as ObligationRow[];
+    return rows.map((row) => this.mapObligation(row));
+  }
+
+  /** Bounded console list of provider invoices still worth showing. */
+  activeProviderRequests(limit = 50): StoredProviderRequest[] {
+    const rows = this.db.query(
+      "SELECT * FROM provider_payment_requests WHERE status IN ('waitingpayment','confirming','actionneeded') ORDER BY updated_at_ms DESC LIMIT ?",
+    ).all(limit) as ProviderRow[];
+    return rows.map((row) => this.mapProvider(row));
+  }
+
   updateObligation(input: {
     requestId: string; status?: PaymentStatus; signature?: string | null; payerAddress?: string | null;
     binding?: PaymentBinding | null;

@@ -150,7 +150,8 @@ function publicPayment(obligation: TrustedPaymentObligation): Record<string, unk
   });
 }
 
-function expectedOperation(binding: PaymentBinding): ExternalWalletOperation {
+/** The exact external-wallet operation a trusted binding implies. Server-owned. */
+export function expectedOperation(binding: PaymentBinding): ExternalWalletOperation {
   const calldata = erc20TransferCalldata(binding.recipientAddress, binding.amountRaw);
   return Object.freeze({
     schema: EXTERNAL_WALLET_OPERATION_SCHEMA,
@@ -367,6 +368,12 @@ export class PaymentLocalService {
     this.operationJournal?.close();
     this.operationJournal = null;
     this.sessions.clear();
+  }
+
+  /** Narrow journal access for the built-in wallet executor (trusted binding only). */
+  portFor(binding: PaymentBinding): PaymentOperationPort {
+    this.assertSendable(binding);
+    return this.port(binding);
   }
 
   private journal(): PaymentOperationJournal {
@@ -660,6 +667,38 @@ export class PaymentLocalService {
 }
 
 const owners = new WeakMap<Service, PaymentLocalService>();
+/** Additional server-owned obligation sources (e.g. the authenticated P2P store). */
+const extraResolvers = new WeakMap<Service, TrustedObligationResolver>();
+
+/**
+ * Registers the C P2P authenticated-obligation resolver for this Service. It is
+ * consulted before the local intent resolver; both are server-owned and the
+ * journal still decides the send permit. Replacing it is idempotent.
+ */
+export function setPaymentObligationResolver(service: Service, resolver: TrustedObligationResolver | null): void {
+  if (resolver) extraResolvers.set(service, resolver);
+  else extraResolvers.delete(service);
+}
+
+/** The one journal-owning payment service for a Service instance. */
+export function paymentLocalServiceFor(service: Service): PaymentLocalService {
+  let owner = owners.get(service);
+  if (!owner) {
+    const local = new LocalWalletObligationResolver(service);
+    // Look up the extra source per resolve, so registration order cannot hide it.
+    owner = new PaymentLocalService({
+      service,
+      resolver: { resolve: (id) => extraResolvers.get(service)?.resolve(id) ?? local.resolve(id) },
+    });
+    owners.set(service, owner);
+  }
+  return owner;
+}
+
+/** A trusted binding gets the journal's operation port; nothing else is exposed. */
+export function paymentOperationPortFor(service: Service, binding: PaymentBinding): PaymentOperationPort {
+  return paymentLocalServiceFor(service).portFor(binding);
+}
 
 /** Production entry: one payment service/journal per Service instance. */
 export async function paymentLocalAction(
@@ -668,10 +707,5 @@ export async function paymentLocalAction(
   input: Record<string, unknown>,
   context: ConsoleActionContext | undefined,
 ): Promise<unknown> {
-  let owner = owners.get(service);
-  if (!owner) {
-    owner = new PaymentLocalService({ service });
-    owners.set(service, owner);
-  }
-  return owner.action(name, input, context);
+  return paymentLocalServiceFor(service).action(name, input, context);
 }

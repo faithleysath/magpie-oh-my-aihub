@@ -4,6 +4,7 @@ import { PAYMENT_LOCAL_ACTIONS, paymentLocalAction } from "./payment-local-servi
 import { configureInput } from "./server.ts";
 import { consoleWorkflows } from "./console-workflows.ts";
 import { NETWORK_LOCAL_ACTIONS, consoleNetworkAction, consoleNetworkState } from "./console-network.ts";
+import { PAYMENT_P2P_ACTIONS, paymentP2pAction, paymentP2pFor } from "./payment-p2p-host.ts";
 import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
 import { WALLET_VAULT_ACTIONS, walletLocalAction, walletLocalState, WalletLocalError } from "./wallet-local-service.ts";
 import { hex64, modelList, RequestValidationError } from "./connection-request.ts";
@@ -22,6 +23,7 @@ export const CONSOLE_ACTIONS = [
   ...WALLET_VAULT_ACTIONS,
   ...NETWORK_LOCAL_ACTIONS,
   ...PAYMENT_LOCAL_ACTIONS,
+  ...PAYMENT_P2P_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
   if (typeof value === "string") return redact(value) as T;
@@ -29,6 +31,14 @@ function clean<T>(value: T): T {
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key,item]) => [key,clean(item)])) as T;
   return value;
 }
+async function paymentP2pState(service: Service): Promise<unknown> {
+  try {
+    return await paymentP2pFor(service)?.state() ?? null;
+  } catch {
+    return { available: false, reason: "payment-state-unavailable", readOnly: true };
+  }
+}
+
 export async function consoleState(service: Service) {
   const snapshot = service.consoleSnapshot();
   // Polling performs only local reads, never active probes.
@@ -54,6 +64,8 @@ export async function consoleState(service: Service) {
       // The zero-file panel reads status.p2p; the control app's state object is
       // kept one level down so it can never overwrite the console schema.
       p2p,
+      // Local P2P payment projection: no RPC, no signature, only stored state.
+      paymentP2p: await paymentP2pState(service),
     }, ...workflows, wallet: consoleWalletState(service), walletVault, networkLocal: consoleNetworkState(service),
   });
 }
@@ -84,6 +96,7 @@ export async function consoleAction(
   context?: ConsoleActionContext,
 ): Promise<unknown> {
   try {
+    if ((PAYMENT_P2P_ACTIONS as readonly string[]).includes(name)) return paymentP2pAction(service, name, input, context);
     if ((PAYMENT_LOCAL_ACTIONS as readonly string[]).includes(name)) return paymentLocalAction(service, name, input, context);
     if ((WALLET_VAULT_ACTIONS as readonly string[]).includes(name)) {
       try {

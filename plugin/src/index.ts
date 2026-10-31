@@ -22,6 +22,7 @@ import { CONSOLE_ACTIONS, consoleAction, consoleState } from "./console-api.ts";
 import { readConsolePort, saveConsolePort, readOwnPluginOptions, startConsoleLauncher, publishUnavailableLauncher } from "./console-launch.ts";
 import { Service } from "./service.ts";
 import { startControlApp, type ControlApp } from "./control/app.ts";
+import { PAYMENT_P2P_ACTIONS, paymentP2pAction, startPaymentP2p, stopPaymentP2p } from "./payment-p2p-host.ts";
 import { WALLET_VAULT_SENSITIVE_ACTIONS, disposeWalletLocalService, endWalletLocalSession } from "./wallet-local-service.ts";
 import { startApi } from "./server.ts";
 import {
@@ -97,6 +98,10 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     const stopHost = async () => {
       stopped = true;
       let failure: Error | null = null;
+      if (service) {
+        try { await stopPaymentP2p(service); }
+        catch (e) { failure = e instanceof Error ? e : new Error(String(e)); logger.warn(`P2P payment stop: ${String(e)}`); }
+      }
       if (controlApp) {
         try { await controlApp.stop(); }
         catch (e) { failure = e instanceof Error ? e : new Error(String(e)); logger.error(`P2P control stop degraded: ${String(e)}`); }
@@ -223,6 +228,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
       try {
         if (!controlApp) controlApp = (await startControlApp(service!)) ?? undefined;
         else await controlApp.sync();
+        if (controlApp) await startPaymentP2p(service!, controlApp);
       } catch (e) {
         // A failed control plane degrades the P2P features, never the model
         // gateway or the console: it is reported, not silently ignored.
@@ -240,8 +246,8 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         state: () => consoleState(service!),
         action: (name: string, body: Record<string, unknown>, context: ConsoleActionContext) => consoleAction(service!, name, body, context),
         allowedActions: CONSOLE_ACTIONS,
-        sensitiveActions: ["key-reveal", ...WALLET_VAULT_SENSITIVE_ACTIONS],
-        staticModules: ["/session.js", "/providers.js", "/network.js", "/wallet.js", "/wallet-vault-ui.js", "/wallet-network-ui.js", "/external-wallet.js", "/payment-local-port.js"],
+        sensitiveActions: ["key-reveal", ...WALLET_VAULT_SENSITIVE_ACTIONS, "payment-p2p-sign", "payment-local-send"],
+        staticModules: ["/session.js", "/providers.js", "/network.js", "/wallet.js", "/wallet-vault-ui.js", "/wallet-network-ui.js", "/payment-p2p-ui.js", "/external-wallet.js", "/payment-local-port.js"],
         pairingFile: statePath("console-pairing.json"),
         onSessionEnd: (sessionId: string) => endWalletLocalSession(service!, sessionId),
       };
