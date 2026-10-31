@@ -29,6 +29,7 @@ class FakeMagpie {
   removeCalls: string[] = [];
   failReplaceOnce = false;
   failAddOnce = false;
+  failRemoveOnce = false;
 
   providersReadable() {
     return this.readable;
@@ -65,6 +66,10 @@ class FakeMagpie {
     this.providers.set(opts.id, { id: opts.id, preset: "remote-magpie", chat: `${opts.url}/v1`, key: opts.key });
   }
   async removeProvider(id: string) {
+    if (this.failRemoveOnce) {
+      this.failRemoveOnce = false;
+      throw new Error("simulated remove failure");
+    }
     this.removeCalls.push(id);
     this.providers.delete(id);
   }
@@ -323,6 +328,20 @@ describe("forward recovery for an owned Remote", () => {
     expect(rec.localPort).toBe(OLD);
     expect(keyedCalls.some((c) => c.port === OLD && c.key === KEY)).toBe(false);
     expect(loadState().state.providers.find((p) => p.id === "peer")!.status).toBe("degraded");
+  });
+
+  test("if the old registration cannot be removed, it is neutralized before aborting", async () => {
+    const svc = await service();
+    await withProvider(svc);
+    ownership.pids.set(OLD, [999_999]);
+    magpie.failRemoveOnce = true;
+    const starts = sup.starts;
+    const out = await svc.reconcileProviders({ only: "peer", quiet: true });
+    const rec = out.find((p) => p.id === "peer")!;
+    expect(rec.status).toBe("degraded");
+    expect(magpie.providers.get("peer")!.chat).toBe("http://127.0.0.1:1/v1");
+    expect(sup.starts).toBe(starts); // no restart with an unsafe old registration
+    expect(keyedCalls.some((c) => c.port === OLD && c.key === KEY)).toBe(false);
   });
 
   test("a failed recovery backs off instead of restarting the core on every reconcile", async () => {

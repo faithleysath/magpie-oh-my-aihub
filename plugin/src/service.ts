@@ -3124,8 +3124,21 @@ export class Service {
       try {
         await this.deps.magpie.removeProvider(conn.id);
       } catch (e) {
+        // Removing our entry failed. Point our own entry at a loopback port that
+        // is not served, so Magpie cannot send the stored key to the old
+        // (possibly foreign) listener; only then abort.
+        let neutralized = false;
+        try {
+          await this.deps.magpie.replaceRemoteProvider({ id: conn.id, url: "http://127.0.0.1:1", key });
+          neutralized = true;
+        } catch {
+          /* leave the failure visible below */
+        }
         conn.status = "degraded";
-        conn.detail = `forward recovery could not disable the old registration: ${(e as Error).message}`.slice(0, 300);
+        conn.detail = (
+          `forward recovery could not disable the old registration (${(e as Error).message}); ` +
+          (neutralized ? "it was pointed at a closed loopback port" : "the registration could not be neutralized")
+        ).slice(0, 300);
         conn.updatedAt = new Date().toISOString();
         this.forwardMigrationBusy = false;
         this.forwardRecoveryBackoff.set(conn.id, Date.now() + 120_000);
