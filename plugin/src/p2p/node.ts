@@ -45,6 +45,7 @@ import {
   P2P_PROTOCOL,
   P2P_VERSION,
   P2pError,
+  paymentMessageBody,
   requestHashOf,
   timeMs,
   validateEnvelope,
@@ -55,6 +56,7 @@ import {
   type P2pConnectionRequestBody,
   type P2pEnvelope,
   type P2pMessageType,
+  type P2pPaymentMessageBody,
   type P2pPeerIdentity,
   type P2pRejectionReason,
   type P2pRequestDocument,
@@ -315,6 +317,34 @@ export interface P2pTransport {
   poll?(target: P2pHelloTarget, hello: unknown): Promise<{ serverHello: unknown; frames: string[] }>;
 }
 
+/**
+ * The narrow B payment hook. B delivers one authenticated, bounded, opaque C
+ * frame and caches the C result for idempotent replay. It never reads a C
+ * field, never touches Ledger/Provisioner/Wallet and has no credit capability.
+ */
+export interface P2pPaymentHookContext {
+  type: "payment_message";
+  messageId: string;
+  /** C-provided idempotency, passed through unchanged. */
+  idempotency: string;
+  /** C-provided correlation, passed through unchanged. */
+  correlation: string | null;
+  from: { nodeId: string; fingerprint: string };
+  to: { nodeId: string; fingerprint: string };
+  sessionId: string;
+  /** Current provider catalogue quote, resolved by the host; may be null. */
+  catalogQuoteHash: string | null;
+  receivedAt: string;
+  /** Opaque C frame. */
+  body: Record<string, unknown>;
+}
+
+export interface P2pPaymentHook {
+  onPaymentMessage(ctx: P2pPaymentHookContext): Promise<{ code: string; detail?: string | null }>;
+  /** Host-owned current quote lookup; B does not parse any C field for it. */
+  quoteHashFor?(peer: { nodeId: string; fingerprint: string }): string | null;
+}
+
 export type P2pTrustLookup = (provider: { nodeId: string; fingerprint: string }) => P2pTrustVerdict;
 
 export interface P2pNodeOptions {
@@ -328,6 +358,8 @@ export interface P2pNodeOptions {
   retry?: P2pRetryPolicy;
   approvalTtlMs?: number;
   deliveryTtlMs?: number;
+  /** Optional C-owned payment hook; B refuses payment_message without it. */
+  payment?: P2pPaymentHook;
 }
 
 export type P2pResultCode =
@@ -417,6 +449,7 @@ export class P2pNode {
   private readonly store: P2pStore;
   private readonly port: P2pBusinessPort;
   private readonly transport: P2pTransport | null;
+  private paymentHook: P2pPaymentHook | null;
   private readonly trust: P2pTrustLookup;
   private readonly clock: () => Date;
   private readonly retry: P2pRetryPolicy;
@@ -436,6 +469,7 @@ export class P2pNode {
     this.store = options.store;
     this.port = options.port;
     this.transport = options.transport ?? null;
+    this.paymentHook = options.payment ?? null;
     this.trust = options.trust ?? defaultCatalogTrust;
     this.clock = options.now ?? (() => new Date());
     this.retry = options.retry ?? DEFAULT_P2P_RETRY;
@@ -612,6 +646,11 @@ export class P2pNode {
     return results;
   }
 
+  /** Whether a live, unexpired session to this peer is already open. */
+  hasLiveSession(peer: { nodeId: string; fingerprint: string }): boolean {
+    return this.newestSessionFor(peer.nodeId, peer.fingerprint) !== null;
+  }
+
   // --- inbound frames --------------------------------------------------------
 
   /**
@@ -679,9 +718,126 @@ export class P2pNode {
         return this.onRevoked(envelope as P2pEnvelope<P2pRevokedBody>);
       case "quote_changed":
         return this.onQuoteChanged(envelope as P2pEnvelope<{ quoteHash: string; priceVersion: string; models: string[] }>);
+      case "payment_message":
+        return this.onPaymentMessage(session, envelope as P2pEnvelope<P2pPaymentMessageBody>);
       default:
         return fail("unsupported_type", "the message type has no handler");
     }
+  }
+
+  /** Register the C-owned hook once. A second, different owner is a conflict. */
+  setPaymentHook(hook: P2pPaymentHook): void {
+    if (this.paymentHook && this.paymentHook !== hook) fail("conflict", "a payment hook is already installed");
+    this.paymentHook = hook;
+  }
+
+  /**
+   * B's whole payment surface: authenticated envelope/session/from/to/target/
+   * size/time/idempotency plus a bounded dedupe row. The body is opaque to B.
+   */
+  private async onPaymentMessage(
+    session: P2pSession,
+    envelope: P2pEnvelope<P2pPaymentMessageBody>,
+  ): Promise<{ code: P2pResultCode; result: Record<string, unknown> }> {
+    const hook = this.paymentHook;
+    if (!hook) return this.finishUnsupported(envelope);
+    const body = envelope.body;
+    const bodyHash = sha256Hex(canonicalJson(body));
+    const now = this.clock();
+    const inbox = this.store.enqueueInbox({
+      messageId: envelope.id,
+      idempotency: envelope.idempotency,
+      type: envelope.type,
+      fromAccountId: envelope.from.accountId,
+      fromNodeId: envelope.from.nodeId,
+      fromFingerprint: envelope.from.fingerprint,
+      correlation: body.correlation,
+      bodyHash,
+      metaJson: canonicalJson({ idempotency: body.idempotency, correlation: body.correlation }),
+      nextAttemptAt: now.toISOString(),
+      expiresAt: envelope.expires,
+      receivedAt: now.toISOString(),
+    });
+    if (!inbox.created) {
+      if (inbox.row.bodyHash !== bodyHash) fail("conflict", "payment idempotency was reused for a different frame");
+      return duplicateInbox(inbox.row);
+    }
+    this.store.recordPeerSeen(envelope.from, now);
+    let outcome: { code: string; detail?: string | null };
+    try {
+      outcome = await hook.onPaymentMessage({
+        type: "payment_message",
+        messageId: envelope.id,
+        idempotency: body.idempotency,
+        correlation: body.correlation,
+        from: { nodeId: envelope.from.nodeId, fingerprint: envelope.from.fingerprint },
+        to: { nodeId: this.identity.peer.nodeId, fingerprint: this.identity.peer.fingerprint },
+        sessionId: session.sessionId,
+        catalogQuoteHash: hook.quoteHashFor?.({ nodeId: envelope.from.nodeId, fingerprint: envelope.from.fingerprint }) ?? null,
+        receivedAt: now.toISOString(),
+        body: body.payment,
+      });
+    } catch (error) {
+      // A local store/transport failure is retryable; C keeps its own state.
+      this.store.abandonInbox(inbox.row.messageId);
+      throw error;
+    }
+    const code = typeof outcome?.code === "string" && /^[A-Za-z0-9._:-]{1,80}$/.test(outcome.code) ? outcome.code : "internal";
+    const detail = typeof outcome?.detail === "string" && /^[A-Za-z0-9._:-]{1,80}$/.test(outcome.detail) ? outcome.detail : null;
+    const result = { state: code, code, detail };
+    // The B envelope result is "ok"; the C business code stays in the cached
+    // result body and is never mistaken for a B protocol verdict.
+    this.store.finishInbox(inbox.row.messageId, "ok", canonicalJson(result), now);
+    return { code: "ok", result };
+  }
+
+  /**
+   * Queue one C frame for a peer. The C idempotency is hashed into B's 32-hex
+   * envelope key and the C correlation into B's opaque correlation, so a retry
+   * with the same key is one outbox row and one remote delivery attempt set.
+   */
+  async sendPaymentMessage(
+    to: { nodeId: string; fingerprint: string },
+    input: { idempotency: string; correlation: string | null; body: unknown; expiresAt: string },
+  ): Promise<{ code: string; detail?: string | null }> {
+    this.assertOpen();
+    if (!this.paymentHook) fail("unsupported_in_b1", "no local payment hook is installed");
+    if (typeof to?.nodeId !== "string" || typeof to?.fingerprint !== "string" || to.nodeId === this.identity.peer.nodeId) {
+      fail("target_mismatch", "the payment target is invalid");
+    }
+    const body = paymentMessageBody({ idempotency: input.idempotency, correlation: input.correlation, payment: input.body });
+    const nowMs = this.clock().getTime();
+    const expiresMs = timeMs(input.expiresAt, "payment.expiresAt");
+    if (expiresMs <= nowMs) fail("expired", "the payment frame is already expired");
+    if (expiresMs - nowMs > P2P_MAX_TTL_MS) fail("malformed", "the payment frame lifetime exceeds 30 minutes");
+    const idempotency = expectedIdempotency("payment_message", body.idempotency);
+    const correlation = body.correlation === null ? null : sha256Hex("p2p:payment-correlation:" + body.correlation).slice(0, 32);
+    const bodyHash = sha256Hex(canonicalJson(body));
+    const existing = this.store.outboxByIdempotency("payment_message", idempotency);
+    if (existing) {
+      if (existing.bodyHash !== bodyHash || existing.peerNodeId !== to.nodeId || existing.peerFingerprint !== to.fingerprint) {
+        fail("conflict", "payment idempotency was reused for a different frame");
+      }
+      return { code: "queued" };
+    }
+    this.store.enqueueOutbox({
+      messageId: id16(),
+      sessionId: null,
+      peerNodeId: to.nodeId,
+      peerFingerprint: to.fingerprint,
+      type: "payment_message",
+      idempotency,
+      correlation,
+      payloadJson: canonicalJson({ idempotency: body.idempotency, correlation: body.correlation, payment: body.payment }),
+      bodyHash,
+      state: "pending",
+      nextAttemptAt: this.clock().toISOString(),
+      expiresAt: new Date(expiresMs).toISOString(),
+      createdAt: this.clock().toISOString(),
+    });
+    const live = this.newestSessionFor(to.nodeId, to.fingerprint);
+    if (live) await this.sendDueFor(live);
+    return { code: "queued" };
   }
 
   private async finishUnsupported(envelope: P2pEnvelope): Promise<{ code: P2pResultCode; result: Record<string, unknown> }> {
@@ -2390,6 +2546,20 @@ export class P2pNode {
       }
       case "authorization_delivery":
         return this.buildDeliveryEnvelope(session, String(payload.approvalId), row.idempotency);
+      case "payment_message": {
+        return this.signEnvelope({
+          type: "payment_message",
+          to,
+          correlation: row.correlation,
+          idempotency: row.idempotency,
+          body: paymentMessageBody({
+            idempotency: payload.idempotency,
+            correlation: payload.correlation ?? null,
+            payment: payload.payment,
+          }),
+          expiresAt,
+        });
+      }
       case "ack": {
         return this.signEnvelope({
           type: "ack",
@@ -2621,6 +2791,7 @@ export function expectedIdempotency(type: P2pMessageType, id: string): string {
     payment_request: "p2p:payment:",
     status: "p2p:status:",
     credit_updated: "p2p:credit:",
+    payment_message: "p2p:payment-message:",
   };
   return sha256Hex(prefixes[type] + id).slice(0, 32);
 }
@@ -2648,6 +2819,8 @@ function expectedIdempotencyFor(envelope: P2pEnvelope): string {
       return expectedIdempotency("payment_request", String(body.paymentId));
     case "credit_updated":
       return expectedIdempotency("credit_updated", String(body.creditId));
+    case "payment_message":
+      return expectedIdempotency("payment_message", String(body.idempotency));
     default:
       return fail("unsupported_type", "no idempotency rule for this type");
   }

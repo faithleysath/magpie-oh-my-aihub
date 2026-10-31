@@ -37,6 +37,8 @@ function emptyWallet(): WalletStatus {
           chainId: n.chainId,
           displayName: n.displayName,
           networkType: n.networkType,
+          support: n.support,
+          receivable: n.receivable,
           enabled: n.enabled,
           blockExplorer: n.blockExplorer,
           finality: { mode: n.finality.mode, confirmations: n.finality.confirmations, rationale: n.finality.rationale },

@@ -1,0 +1,53 @@
+{
+  "schema": "ohmyaihub.phase10.wallet-mainnet-readonly/v1",
+  "at": "2026-10-31T11:56:00Z",
+  "platform": "macOS 26.6.2 (Darwin 25.6.0) arm64",
+  "source": "productRegistry() + ReadOnlyChainReader, bun 1.4.3",
+  "address": "0x0000000000000000000000000000000000000001",
+  "note": "Read-only public RPC. No signature, no broadcast, no funds, no wallet secrecy. This is not a payment.",
+  "results": [
+    {
+      "chainId": 56,
+      "asset": "BNB",
+      "decimals": 18,
+      "balanceRaw": "35112206951246628897",
+      "block": 130851888,
+      "creditEligible": false,
+      "usdValue": null
+    },
+    {
+      "chainId": 8453,
+      "asset": "ETH",
+      "decimals": 18,
+      "balanceRaw": "1696892697542797429",
+      "block": 53329015,
+      "creditEligible": false,
+      "usdValue": null
+    },
+    {
+      "chainId": 8453,
+      "asset": "USDC",
+      "assetId": "eip155:8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "decimals": 6,
+      "balanceRaw": "343600119",
+      "block": 53329016,
+      "creditEligible": false,
+      "usdValue": null
+    },
+    {
+      "chainId": 56,
+      "assetId": "eip155:56:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+      "refused": "asset is not registered; an unknown contract cannot be read or credited"
+    }
+  ],
+  "browserUi": {
+    "chainId": 8453,
+    "asset": "ETH",
+    "block": 53328995,
+    "raw": "1696892697542797429",
+    "readOnly": true,
+    "creditEligible": false,
+    "usdValue": "not valued (no fake $)",
+    "screenshot": "provider-wallet-locked.png (wallet page; the read-only result is recorded in this JSON, below the wallet section)"
+  }
+}

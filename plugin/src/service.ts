@@ -404,6 +404,25 @@ export function catalogQuoteUsability(peer: CatalogPeerView, now = Date.now()): 
  */
 export const CATALOG_QUOTE_TTL_MS = 120_000;
 
+/**
+ * The bounded catalogue/presence port window. Every product instance allocates
+ * inside it (default 3426), and every reader probes the whole window regardless
+ * of its own port. This is what lets two isolated instances share one LAN IP.
+ */
+export const CATALOG_PORT_WINDOW: readonly number[] = Object.freeze([3426, 3427, 3428, 3429, 3430]);
+
+/**
+ * The ordered catalogue probe list. A remembered port is tried first; the
+ * product window is always probed, so a peer that moved inside the window stays
+ * discoverable. The local legacy range is kept as a bounded fallback for a
+ * maintainer override, but it is never the only base.
+ */
+export function catalogProbePorts(remembered: number | null, localPort: number): number[] {
+  const local = [localPort, localPort + 1, localPort + 2, localPort + 3, localPort + 4].filter((p) => p >= 1 && p <= 65535);
+  const all = [...new Set([...CATALOG_PORT_WINDOW, ...local])];
+  return remembered ? [remembered, ...all.filter((p) => p !== remembered)] : all;
+}
+
 export interface CatalogStatus {
   config: CatalogConfig;
   publishing: boolean;
@@ -506,6 +525,7 @@ export class Service {
   private catalogPeers: CatalogPeerView[] = [];
   private catalogLastRefreshAt: string | null = null;
   private catalogRefreshing = false;
+  private presencePortMigrating = false;
   /** bounded supervised recovery after the supervisor stopped an unproven core */
   private coreRecovery = { attempts: 0, nextAt: 0 };
   private catalogError: string | null = null;
@@ -811,7 +831,15 @@ export class Service {
     return {
       depositIntent: (input) => {
         if (!ledger) throw new Error("a chain deposit needs the durable ledger");
-        const r = ledger.depositIntent({ id: input.id, consumerId: input.consumerId, amountNanos: input.amountNanos, source: input.source });
+        const r = ledger.depositIntent({
+          id: input.id,
+          consumerId: input.consumerId,
+          amountNanos: input.amountNanos,
+          source: input.source,
+          fundsClass: input.fundsClass,
+          chainId: input.chainId,
+          assetId: input.assetId,
+        });
         return { created: r.created };
       },
       applyDeposit: async (input) => {
@@ -2442,19 +2470,49 @@ export class Service {
       return;
     }
     if (this.presenceServer && this.presenceServer.port === cfg!.catalog.port) return;
+    if (this.presencePortMigrating) return;
     this.stopPresenceServer();
-    try {
-      this.presenceServer = this.probes.catalogServer({
-        hostname: host,
-        port: cfg!.catalog.port,
-        // No catalogue document: only the signed presence is served.
-        document: () => null,
-        presence: () => this.controlPresenceProvider?.() ?? null,
-      });
-      logger.info(`signed presence published on ${host}:${cfg!.catalog.port} (no models shared)`);
-    } catch (e) {
-      logger.error(`cannot publish the signed presence on ${host}:${cfg!.catalog.port}: ${String(e)}`);
-      this.presenceServer = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const current = this.state.config!;
+      try {
+        this.presenceServer = this.probes.catalogServer({
+          hostname: host,
+          port: current.catalog.port,
+          // No catalogue document: only the signed presence is served.
+          document: () => null,
+          presence: () => this.controlPresenceProvider?.() ?? null,
+        });
+        logger.info(`signed presence published on ${host}:${current.catalog.port} (no models shared)`);
+        return;
+      } catch (e) {
+        const why = String((e as Error).message ?? e);
+        this.presenceServer = null;
+        const portTaken = /in use|EADDRINUSE|address already in use|failed to start server/i.test(why);
+        if (!portTaken || attempt > 0) {
+          logger.error(`cannot publish the signed presence on ${host}:${current.catalog.port}: ${why}`);
+          return;
+        }
+        // The presence port is in the Forward ACL, so a collision is a config
+        // migration plus a supervised core restart, never a silent retry loop.
+        this.presencePortMigrating = true;
+        try {
+          const next = await this.choosePort("catalog", host, portRange(CATALOG_PORT_WINDOW[0], CATALOG_PORT_WINDOW.at(-1)!), [
+            this.gatewayPort(),
+            current.rpcPort,
+            current.catalog.socksPort,
+            current.catalog.port,
+          ]);
+          this.migratePort("catalog", current.catalog.port, next, `the signed-presence port was unavailable: ${why}`);
+          this.state.config = { ...current, catalog: { ...current.catalog, port: next } };
+          saveState(this.state);
+          await this.applyConfig(this.state.config);
+        } catch (migrationError) {
+          logger.error(`cannot migrate the signed-presence port: ${String((migrationError as Error)?.message ?? migrationError)}`);
+          return;
+        } finally {
+          this.presencePortMigrating = false;
+        }
+      }
     }
   }
 
@@ -2871,7 +2929,7 @@ export class Service {
           this.writeSnapshot();
           throw new Error(`the catalogue could not be published: ${why}`);
         }
-        const next = await this.choosePort("catalog", host, portRange(3426, 3460), [
+        const next = await this.choosePort("catalog", host, portRange(CATALOG_PORT_WINDOW[0], CATALOG_PORT_WINDOW.at(-1)!), [
           this.gatewayPort(),
           cfg.rpcPort,
           cfg.catalog.socksPort,
@@ -3162,11 +3220,11 @@ export class Service {
     // A remembered port is tried first, but it is not the only possibility: a
     // provider whose catalogue port was migrated must not become undiscoverable
     // forever. The fallback is the same bounded range as a first read.
-    const probeRange = [cfg.catalog.port, cfg.catalog.port + 1, cfg.catalog.port + 2, cfg.catalog.port + 3, cfg.catalog.port + 4]
-      .filter((p) => p >= 1 && p <= 65535);
-    const candidates = base.catalogPort
-      ? [base.catalogPort, ...probeRange.filter((p) => p !== base.catalogPort)]
-      : probeRange;
+    // The probe base is the product's fixed catalogue window, not this node's own
+    // port. Two isolated instances on one LAN address must be able to allocate
+    // different ports in the same window and still find each other; probing the
+    // local port would make each node blind to the other's window.
+    const candidates = catalogProbePorts(base.catalogPort, cfg.catalog.port);
     let lastDetail = "no catalogue answer";
     let lastPort = candidates[0];
     for (const port of candidates) {

@@ -368,7 +368,9 @@ describe("raw amount conversion", () => {
     decimals,
     issuerType: "mock",
     testnetOnly: true,
+    credit: true,
     enabled: true,
+    evidence: null,
     pricing: { nanosPerToken: "1000000000", version: "fixed:v1", kind: "fixed-test-rate", note: "1:1" },
   });
 

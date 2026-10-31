@@ -23,6 +23,7 @@ import {
   type CatalogTrustRecord,
   type SignedCatalog,
 } from "../src/catalog.ts";
+import { catalogProbePorts } from "../src/service.ts";
 import { catalogPriceVersion } from "../src/pricing.ts";
 
 let dir: string;
@@ -402,5 +403,14 @@ describe("price version binding", () => {
     const b = body(identity);
     b.billing = { ...b.billing, priceLocked: true as never };
     expect(() => verifySignedCatalog(signCatalog(b, identity))).toThrow(/priceLocked/);
+  });
+});
+
+
+describe("catalogue port window", () => {
+  test("every reader probes the fixed window regardless of its own port", () => {
+    expect(catalogProbePorts(null, 46273)).toEqual([3426, 3427, 3428, 3429, 3430, 46273, 46274, 46275, 46276, 46277]);
+    expect(catalogProbePorts(3428, 3427)).toEqual([3428, 3426, 3427, 3429, 3430, 3431]);
+    expect(catalogProbePorts(null, 3427).slice(0, 5)).toEqual([3426, 3427, 3428, 3429, 3430]);
   });
 });

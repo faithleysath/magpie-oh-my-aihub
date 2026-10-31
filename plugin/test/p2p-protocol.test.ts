@@ -268,7 +268,7 @@ describe("connection_request body", () => {
 });
 
 describe("the closed type allow-list", () => {
-  test("all ten types are known; payment and credit are validated then refused by B1", () => {
+  test("all types are known; legacy payment/credit are refused by B1, payment_message is a narrow hook", () => {
     expect([...P2P_MESSAGE_TYPES]).toEqual([
       "connection_request",
       "approved",
@@ -280,6 +280,7 @@ describe("the closed type allow-list", () => {
       "payment_request",
       "status",
       "credit_updated",
+      "payment_message",
     ]);
     expect(P2P_B1_UNSUPPORTED).toEqual(["payment_request", "credit_updated"]);
 
@@ -294,5 +295,21 @@ describe("the closed type allow-list", () => {
     expect(verify(credit).envelope.type).toBe("credit_updated");
     expectCode(() => verify(reseal((v) => { v.body.fundsClass = "prod"; }, "credit_updated", creditBody())), "malformed");
     expectCode(() => verify(reseal((v) => { v.body.amountUsd = -1; }, "credit_updated", creditBody())), "malformed");
+
+    // B's payment hook transports one opaque C object. B checks its own
+    // wrapper shape/size and never interprets any C field.
+    const wrapper = {
+      schema: "ohmyaihub/p2p-payment/v1",
+      idempotency: "request:0f3f8f0e-1111-4111-8111-111111111111",
+      correlation: "0f3f8f0e-1111-4111-8111-111111111111",
+      payment: { schema: "ohmyaihub/payment/v1", kind: "request", anyFutureField: { amount: "1" } },
+    };
+    const message = sign(unsignedFor("payment_message", wrapper));
+    expect(verify(message).envelope.type).toBe("payment_message");
+    expect((verify(message).envelope.body as any).payment).toEqual(wrapper.payment);
+    expect(P2P_B1_UNSUPPORTED).not.toContain("payment_message");
+    expectCode(() => verify(reseal((v) => { v.body.payment = [1, 2]; }, "payment_message", wrapper)), "malformed");
+    expectCode(() => verify(reseal((v) => { v.body.schema = "ohmyaihub/p2p-payment/v2"; }, "payment_message", wrapper)), "malformed");
+    expectCode(() => verify(reseal((v) => { v.body.idempotency = ""; }, "payment_message", wrapper)), "malformed");
   });
 });

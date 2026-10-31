@@ -6,6 +6,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { lanIPv4, statePath } from "../paths.ts";
+import { logger } from "../log.ts";
 import {
   loadOrCreateCatalogIdentity,
   socksHttpGet,
@@ -163,6 +164,7 @@ export class ControlApp {
   private readonly controlForwards = new Map<string, { localPort: number; dst: string }>();
   private readonly retiredForwards = new Map<number, string>();
   private publishedHost = "127.0.0.1";
+  private allowedHosts: string[] = [];
   private stopped = false;
   private readonly allowLanDirect: boolean;
   private constructor(
@@ -228,9 +230,7 @@ export class ControlApp {
       now: app.now,
     });
     (app as { node: P2pNode }).node = node;
-    const allowedHosts = [`${host}:${port}`];
-    if (cfg.mappedCidr) allowedHosts.push(`${mappedHost(cfg.mappedCidr)}:${port}`);
-    if (host === "127.0.0.1" || host === "localhost" || host === "::1") allowedHosts.push(`localhost:${port}`);
+    const allowedHosts = app.allowedHostsFor(cfg, host, port);
     const server = startControlServer({
       host,
       port,
@@ -278,6 +278,18 @@ export class ControlApp {
    * listener all follow the current config; nothing here creates a key or
    * changes an authorization.
    */
+  /** Keep an authenticated peer in the bounded poll set (payment relies on pull). */
+  watchPeer(nodeId: string): void {
+    if (typeof nodeId === "string" && nodeId.length > 0 && nodeId.length <= 128) this.targets.add(nodeId);
+  }
+
+  private allowedHostsFor(cfg: { mappedCidr: string | null } | null, host: string, port: number): string[] {
+    const list = [`${host}:${port}`];
+    if (cfg?.mappedCidr) list.push(`${mappedHost(cfg.mappedCidr)}:${port}`);
+    if (host === "127.0.0.1" || host === "localhost" || host === "::1") list.push(`localhost:${port}`);
+    return [...new Set(list)];
+  }
+
   async sync(): Promise<void> {
     if (this.stopped) return;
     const cfg = this.service.config();
@@ -288,6 +300,10 @@ export class ControlApp {
     }
     const sharing = cfg.sharingEnabled && cfg.mappedCidr;
     this.publishedHost = sharing ? mappedHost(cfg.mappedCidr!) : this.host;
+    // Enabling sharing creates the mapped export; the control listener must
+    // accept that exact mapped Host. Without this a consumer reaches the
+    // forward with the mapped Host and the provider answers 403.
+    this.allowedHosts = this.allowedHostsFor(cfg, this.host, this.port);
     await this.service.applyControlPublication();
     this.publishPresence();
   }
@@ -454,6 +470,23 @@ export class ControlApp {
     return target;
   }
 
+  /**
+   * Ensure a live control session to a peer exists. C payment outbound uses the
+   * same authenticated session path as a request: a queued frame must not sit in
+   * the outbox merely because the last poll session closed.
+   */
+  async ensureSession(nodeId: string, options: { force?: boolean } = {}): Promise<void> {
+    const peer = this.service.catalogStatus().peers.find((p) => p.nodeId === nodeId);
+    if (!peer?.mappedCidr) throw new Error(`no signed catalogue entry for ${nodeId}`);
+    let target: P2pHelloTarget | null = null;
+    try { target = this.targetOf(nodeId); } catch { /* no presence endpoint yet */ }
+    if (!options.force && target && this.node.hasLiveSession({ nodeId: target.nodeId, fingerprint: target.fingerprint })) return;
+    await this.discover(nodeId);
+    target = this.targetOf(nodeId);
+    if (!options.force && this.node.hasLiveSession({ nodeId: target.nodeId, fingerprint: target.fingerprint })) return;
+    await this.node.openSession(target);
+  }
+
   async request(input: ControlActionInput): Promise<{ requestId: string; state: "pending" }> {
     const nodeId = text(input.nodeId, "nodeId", 64);
     const models = modelsOf(input.models);
@@ -590,8 +623,9 @@ export class ControlApp {
         const target = this.peers.get(nodeId);
         if (!target) continue;
         await this.node.poll(target);
-      } catch {
+      } catch (error) {
         // The next bounded tick retries; no action is created from a poll error.
+        logger.warn(`control poll to ${nodeId} failed: ${String((error as Error)?.message ?? error).slice(0, 200)}`);
       }
     }
     try {
@@ -814,6 +848,8 @@ export class ControlApp {
     return {
       schema: "ohmyaihub/p2p-state/1",
       enabled: true,
+      pollTargets: [...this.targets],
+      endpoints: [...this.endpoints.keys()],
       listener: {
         state: "ready",
         host: this.host,

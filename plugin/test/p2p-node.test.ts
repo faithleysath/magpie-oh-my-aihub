@@ -10,6 +10,7 @@ import { canonicalJson, loadOrCreateCatalogIdentity, sha256Hex } from "../src/ca
 import { P2pLab, KEY, KEY_ID } from "./support/p2p-lab.ts";
 import { p2pIdentityFromCatalog, type P2pIdentity } from "../src/p2p/identity.ts";
 import { P2pError, requestHashOf } from "../src/p2p/protocol.ts";
+import { expectedIdempotency } from "../src/p2p/node.ts";
 import { QUOTE_HASH, PRICE_VERSION } from "./support/p2p-lab.ts";
 
 let lab: P2pLab | null = null;
@@ -766,3 +767,84 @@ function expectedDeliveryIdempotency(approvalId: string): string {
 function expectedRevokedIdempotency(approvalId: string): string {
   return sha256Hex("p2p:revoked:" + approvalId).slice(0, 32);
 }
+
+describe("B payment_message transport hook", () => {
+  test("delivers one authenticated opaque frame, caches the C result and refuses idempotency reuse", async () => {
+    lab = P2pLab.create();
+    const seen: Array<Record<string, unknown>> = [];
+    const quoteFor: Array<string> = [];
+    let calls = 0;
+    lab.B.setPaymentHook({
+      quoteHashFor(peer) {
+        quoteFor.push(`${peer.nodeId}:${peer.fingerprint.slice(0, 6)}`);
+        return "q".repeat(64);
+      },
+      async onPaymentMessage(ctx) {
+        calls += 1;
+        seen.push(ctx as unknown as Record<string, unknown>);
+        return { code: "terms-accepted", detail: null };
+      },
+    });
+    lab.A.setPaymentHook({ async onPaymentMessage() { return { code: "unused" }; } });
+    const sessionId = await lab.establish();
+    const frameBody = {
+      schema: "ohmyaihub/payment/v1", kind: "request", requestId: "0f3f8f0e-1111-4111-8111-111111111111",
+      invoiceId: null, from: { nodeId: "aaaa1111", fingerprint: lab.identityA.peer.fingerprint },
+      to: { nodeId: "bbbb2222", fingerprint: lab.identityB.peer.fingerprint },
+      createdAt: "2026-10-31T11:55:00.000Z", expiresAt: "2026-10-31T12:10:00.000Z",
+      body: { selection: { opaque: true } },
+    };
+    const queued = await lab.A.sendPaymentMessage(
+      { nodeId: "bbbb2222", fingerprint: lab.identityB.peer.fingerprint },
+      { idempotency: "request:0f3f8f0e-1111-4111-8111-111111111111", correlation: "0f3f8f0e-1111-4111-8111-111111111111", body: frameBody, expiresAt: "2026-10-31T12:10:00.000Z" },
+    );
+    expect(queued.code).toBe("queued");
+    await lab.A.tick();
+    expect(calls).toBe(1);
+    expect(seen[0]).toMatchObject({
+      type: "payment_message",
+      idempotency: "request:0f3f8f0e-1111-4111-8111-111111111111",
+      correlation: "0f3f8f0e-1111-4111-8111-111111111111",
+      sessionId,
+      catalogQuoteHash: "q".repeat(64),
+      from: { nodeId: "aaaa1111", fingerprint: lab.identityA.peer.fingerprint },
+      to: { nodeId: "bbbb2222", fingerprint: lab.identityB.peer.fingerprint },
+      body: frameBody,
+    });
+    expect(quoteFor).toHaveLength(1);
+
+    // A lost response is replayed as the same sealed frame: the cached C result
+    // is returned and the hook is not called a second time.
+    const sent = lab.sentFrames.at(-1)!;
+    const replay = await lab.B.handleFrame(sent.sessionId, sent.frame);
+    expect(replay.duplicate).toBe(true);
+    expect(replay.code).toBe("ok");
+    expect(replay.state).toBe("terms-accepted");
+    expect(calls).toBe(1);
+
+    // Same C idempotency, different document: refused before any second outbox.
+    await expect(lab.A.sendPaymentMessage(
+      { nodeId: "bbbb2222", fingerprint: lab.identityB.peer.fingerprint },
+      { idempotency: "request:0f3f8f0e-1111-4111-8111-111111111111", correlation: "0f3f8f0e-1111-4111-8111-111111111111", body: { ...frameBody, expiresAt: "2026-10-31T12:11:00.000Z" }, expiresAt: "2026-10-31T12:11:00.000Z" },
+    )).rejects.toBeInstanceOf(P2pError);
+    // A frame addressed to the sender itself is refused.
+    await expect(lab.A.sendPaymentMessage(
+      { nodeId: "aaaa1111", fingerprint: lab.identityA.peer.fingerprint },
+      { idempotency: "request:self", correlation: null, body: frameBody, expiresAt: "2026-10-31T12:10:00.000Z" },
+    )).rejects.toBeInstanceOf(P2pError);
+  });
+
+  test("a node without a payment hook answers unsupported and never invokes any C effect", async () => {
+    lab = P2pLab.create();
+    lab.A.setPaymentHook({ async onPaymentMessage() { return { code: "unused" }; } });
+    await lab.establish();
+    await lab.A.sendPaymentMessage(
+      { nodeId: "bbbb2222", fingerprint: lab.identityB.peer.fingerprint },
+      { idempotency: "request:no-hook", correlation: null, body: { schema: "ohmyaihub/payment/v1" }, expiresAt: "2026-10-31T12:10:00.000Z" },
+    );
+    await lab.A.tick();
+    const inbox = lab.storeB.inboxByIdempotency("payment_message", expectedIdempotency("payment_message", "request:no-hook"));
+    expect(inbox?.state).toBe("done");
+    expect(inbox?.resultCode).toBe("unsupported");
+  });
+});

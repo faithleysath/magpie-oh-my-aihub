@@ -56,6 +56,47 @@ export interface EvmClientOptions {
   /** injectable for tests */
   fetchImpl?: typeof fetch;
   now?: () => number;
+  /** refuse a JSON-RPC response body larger than this (default 8 MiB) */
+  maxResponseBytes?: number;
+}
+
+/** Reads a response body with a hard byte cap, including chunked responses. */
+async function readLimitedBody(res: Response, maxBytes: number): Promise<string> {
+  const declared = res.headers.get("content-length");
+  if (declared !== null) {
+    const n = Number(declared);
+    if (Number.isFinite(n) && n > maxBytes) throw new Error(`response body exceeds ${maxBytes} bytes`);
+  }
+  if (!res.body) {
+    const text = await res.text();
+    if (new TextEncoder().encode(text).byteLength > maxBytes) throw new Error(`response body exceeds ${maxBytes} bytes`);
+    return text;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`response body exceeds ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  const body = new Uint8Array(total);
+  let off = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, off);
+    off += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
 }
 
 export class RpcError extends Error {
@@ -75,10 +116,12 @@ export class EvmClient {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  private readonly maxResponseBytes: number;
   private health = new Map<string, RpcEndpointHealth>();
   private preferred = 0;
   private nextId = 1;
-  private verified = false;
+  /** chain verification is per endpoint, never reused across a failover */
+  private verifiedEndpoints = new Map<string, boolean>();
 
   constructor(opts: EvmClientOptions) {
     this.chainId = opts.chainId;
@@ -86,6 +129,10 @@ export class EvmClient {
     this.timeoutMs = opts.timeoutMs ?? 15_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.now = opts.now ?? (() => Date.now());
+    this.maxResponseBytes = opts.maxResponseBytes ?? 8 * 1024 * 1024;
+    if (!Number.isSafeInteger(this.maxResponseBytes) || this.maxResponseBytes < 1024) {
+      throw new Error("maxResponseBytes must be at least 1024");
+    }
     for (const url of this.endpoints) {
       this.health.set(url, { url, ok: false, lastError: null, lastOkAt: null, latencyMs: null });
     }
@@ -101,7 +148,7 @@ export class EvmClient {
 
   setEndpoints(urls: string[]): void {
     this.endpoints = [...urls];
-    this.verified = false;
+    this.verifiedEndpoints = new Map();
     this.preferred = 0;
     this.health = new Map(urls.map((url) => [url, this.health.get(url) ?? { url, ok: false, lastError: null, lastOkAt: null, latencyMs: null }]));
   }
@@ -111,12 +158,42 @@ export class EvmClient {
    * scan; a mismatch is fatal for this chain, never "close enough".
    */
   async verifyChain(): Promise<void> {
-    const id = await this.call<string>("eth_chainId", []);
-    const got = Number(BigInt(id));
-    if (got !== this.chainId) {
-      throw new Error(`the RPC for chain ${this.chainId} reports chainId ${got}; refusing to watch it`);
+    const errors: string[] = [];
+    for (const url of this.endpoints) {
+      try {
+        await this.verifyEndpoint(url);
+        return;
+      } catch (e) {
+        errors.push(`${url}: ${String((e as Error)?.message ?? e).slice(0, 200)}`);
+      }
     }
-    this.verified = true;
+    throw new RpcError(
+      `eth_chainId verification failed on every endpoint of chain ${this.chainId}: ${errors.join("; ")}`,
+      this.endpoints[0] ?? "none",
+      "eth_chainId",
+    );
+  }
+
+  /**
+   * Verifies one endpoint and records the result for that endpoint only. A
+   * second endpoint is never used for `eth_call`/`eth_getBalance` until it has
+   * answered `eth_chainId` itself.
+   */
+  private async verifyEndpoint(url: string): Promise<void> {
+    const started = this.now();
+    try {
+      const id = await this.requestAt<string>(url, "eth_chainId", []);
+      const got = Number(BigInt(id));
+      if (got !== this.chainId) {
+        throw new Error(`the RPC for chain ${this.chainId} reports chainId ${got}; refusing to watch or use it`);
+      }
+      this.verifiedEndpoints.set(url, true);
+      this.markOk(url, this.now() - started);
+    } catch (e) {
+      const message = String((e as Error)?.message ?? e).slice(0, 200);
+      this.markBad(url, message);
+      throw e;
+    }
   }
 
   async call<T>(method: string, params: unknown[], timeoutMs?: number): Promise<T> {
@@ -125,25 +202,11 @@ export class EvmClient {
     for (const url of order) {
       const started = this.now();
       try {
-        const res = await this.fetchImpl(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: this.nextId++, method, params }),
-          signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
-        });
-        const text = await res.text();
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        let body: { result?: unknown; error?: { code?: number; message?: string } };
-        try {
-          body = JSON.parse(text) as typeof body;
-        } catch {
-          throw new Error(`not JSON: ${text.slice(0, 120)}`);
-        }
-        if (body.error) throw new Error(`${body.error.code ?? "error"}: ${body.error.message ?? "unknown"}`);
-        if (body.result === undefined) throw new Error("a JSON-RPC reply without result");
+        if (method !== "eth_chainId" && this.verifiedEndpoints.get(url) !== true) await this.verifyEndpoint(url);
+        const result = await this.requestAt<T>(url, method, params, timeoutMs);
         this.markOk(url, this.now() - started);
         this.preferred = this.endpoints.indexOf(url);
-        return body.result as T;
+        return result;
       } catch (e) {
         const message = String((e as Error)?.message ?? e).slice(0, 200);
         errors.push(`${url}: ${message}`);
@@ -151,6 +214,28 @@ export class EvmClient {
       }
     }
     throw new RpcError(`${method} failed on every endpoint of chain ${this.chainId}: ${errors.join("; ")}`, this.endpoints[0] ?? "none", method);
+  }
+
+  /** One request to one endpoint. Redirects are refused; the body is bounded. */
+  private async requestAt<T>(url: string, method: string, params: unknown[], timeoutMs?: number): Promise<T> {
+    const res = await this.fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: this.nextId++, method, params }),
+      redirect: "error",
+      signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await readLimitedBody(res, this.maxResponseBytes);
+    let body: { result?: unknown; error?: { code?: number; message?: string } };
+    try {
+      body = JSON.parse(text) as typeof body;
+    } catch {
+      throw new Error(`not JSON: ${text.slice(0, 120)}`);
+    }
+    if (body.error) throw new Error(`${body.error.code ?? "error"}: ${body.error.message ?? "unknown"}`);
+    if (body.result === undefined) throw new Error("a JSON-RPC reply without result");
+    return body.result as T;
   }
 
   private markOk(url: string, latencyMs: number): void {
