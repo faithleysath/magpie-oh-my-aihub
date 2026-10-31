@@ -12,6 +12,13 @@
 // the user's explicit price, the provider's list, the maker's list, then
 // `ModelSameAs`. Nothing here invents a price; a missing or partial price is
 // refused rather than treated as zero.
+//
+// Magpie 0.1.2289 has two time-dependent price forms this snapshot cannot
+// freeze: `price.peak` (a DeepSeek/Command Code/OpenCode Go off-peak list
+// price, doubled in the vendor's peak hours) and a provider's `rateWindows`
+// (applied to the price before /v1/models answers). A static snapshot of either
+// silently under- or over-charges against Magpie's own usage ledger, so both
+// are refused here rather than dropped.
 
 import { createHash } from "node:crypto";
 
@@ -75,8 +82,45 @@ function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+/** A price form this plugin cannot snapshot; never a zero price. */
+export type UnsupportedPriceReason = "peak" | "rate-window";
+
+/**
+ * The one place that recognizes a price the plugin cannot freeze.
+ *
+ *  - `price.peak`: Magpie's 0.1.2289 `catalog.Price` keeps the off-peak
+ *    price and doubles it at the vendor's peak hours. The plugin has no
+ *    call-time multiplier, so treating this price as complete would bill
+ *    every peak call at the off-peak rate.
+ *  - `provider.rateWindows`: Magpie applies the window's rate before
+ *    answering /v1/models. The returned number is only today's window; a
+ *    snapshot of it would keep that discount/surcharge all day.
+ *
+ * An empty `peak` is what Magpie writes for a price that holds at every hour
+ * (`omitempty`), so it is accepted; any non-empty value, and any malformed
+ * value, is refused. Only an empty array of rate windows is accepted.
+ */
+export function unsupportedPriceReason(
+  price: unknown,
+  provider?: { rateWindows?: unknown } | null,
+): UnsupportedPriceReason | null {
+  if (provider && provider.rateWindows !== undefined) {
+    const windows = provider.rateWindows;
+    if (!Array.isArray(windows) || windows.length !== 0) return "rate-window";
+  }
+  if (price && typeof price === "object" && !Array.isArray(price)) {
+    const p = price as Record<string, unknown>;
+    // A price object carrying rate windows is not a shape /v1/models writes;
+    // refuse it rather than guessing which window applies.
+    if (Object.hasOwn(p, "rateWindows")) return "rate-window";
+    if (Object.hasOwn(p, "peak") && p.peak !== undefined && p.peak !== "") return "peak";
+  }
+  return null;
+}
+
 function normalizeTier(value: unknown): PriceTier | null {
   if (!value || typeof value !== "object") return null;
+  if (unsupportedPriceReason(value)) return null;
   const t = value as Record<string, unknown>;
   if (!finite(t.above) || t.above <= 0) return null;
   if (!finite(t.input) || !finite(t.output) || !finite(t.cache_read) || !finite(t.cache_write)) return null;
@@ -101,6 +145,7 @@ function normalizeTier(value: unknown): PriceTier | null {
  */
 export function normalizePrice(value: unknown): PriceParts | null {
   if (!value || typeof value !== "object") return null;
+  if (unsupportedPriceReason(value)) return null;
   const p = value as Record<string, unknown>;
   if (!finite(p.input) || !finite(p.output) || !finite(p.cache_read) || !finite(p.cache_write)) return null;
   const out: PriceParts = {
@@ -303,6 +348,7 @@ export function catalogPriceVersion(models: { id: string; pricing: unknown }[]):
     const pricing = model.pricing;
     if (!pricing || typeof pricing !== "object") return null;
     const q = pricing as Record<string, unknown>;
+    if (unsupportedPriceReason(q)) return null;
     const p = normalizePrice({
       input: q.input,
       output: q.output,
