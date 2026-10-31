@@ -79,6 +79,9 @@ export async function consoleAction(service: Service, name: string, input: Recor
           const message = String((error as Error)?.message ?? error);
           if (/not found|no such|no active consumer|not in this/i.test(message)) throw new ConsoleInputError(message, "not_found", 404);
           if (/generation|stale|current|different quote|price|identity|fingerprint|changed/i.test(message)) throw new ConsoleInputError(message, "stale_or_conflict", 409);
+          // A known lifecycle refusal, not an unknown outcome: one active
+          // authorization per consumer; the operator must revoke it first.
+          if (/already has an active approval|revoke it before/i.test(message)) throw new ConsoleInputError(message, "active_approval", 409);
           if (/tofu|untrusted|accept|trust/i.test(message)) throw new ConsoleInputError(message, "tofu_required", 403);
           if (/must|choose|required|invalid|list|amount|cap/i.test(message)) throw new ConsoleInputError(message, "invalid_input", 400);
           throw error;
