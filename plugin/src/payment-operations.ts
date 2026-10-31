@@ -205,6 +205,8 @@ export interface PaymentOperationRecord {
   reservationId: string;
   attempt: number;
   state: PaymentOperationState;
+  /** Hash of the exact operation tuple (identity/generation and payment fields). */
+  payloadHash: string;
   invoice: string;
   consumerAddress: string;
   providerIdentityFingerprint: string;
@@ -761,6 +763,7 @@ function recordOf(row: OperationRow): PaymentOperationRecord {
     reservationId: row.reservation_id,
     attempt: row.attempt,
     state: row.state,
+    payloadHash: row.payload_hash,
     invoice: row.invoice,
     consumerAddress: row.consumer_address,
     providerIdentityFingerprint: row.provider_fingerprint,
@@ -846,11 +849,21 @@ function sanitizeReference(value: unknown): string {
   return trimmed;
 }
 
+function payloadHashOf(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    fail("PAYMENT_OPERATION_INVALID_ARGUMENT", "release must name the exact 32-byte payload hash it inspected");
+  }
+  return value;
+}
+
 function observedAtOf(value: unknown, nowMs: number): string {
   if (typeof value !== "string") fail("PAYMENT_OPERATION_INVALID_ARGUMENT", "release evidence observedAt must be an ISO timestamp");
   const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed) || parsed > nowMs + 60_000 || parsed < nowMs - 24 * 60 * 60 * 1000) {
-    fail("PAYMENT_OPERATION_INVALID_ARGUMENT", "release evidence observedAt is invalid or outside the last 24 hours");
+  // Old evidence is allowed: a payment that stayed unresolved for days must
+  // still be releasable after the Service checks it. Only unparseable or
+  // future timestamps are refused.
+  if (!Number.isFinite(parsed) || parsed > nowMs + 60_000) {
+    fail("PAYMENT_OPERATION_INVALID_ARGUMENT", "release evidence observedAt is invalid or in the future");
   }
   return new Date(parsed).toISOString();
 }
@@ -1213,12 +1226,15 @@ export class PaymentOperationJournal {
   releaseUnsentReservation(input: {
     idemKey: string;
     reservationId: string;
+    /** The exact payload the Service inspected before deciding to release. */
+    payloadHash: string;
     evidence: UnsentReleaseEvidence;
   }): PaymentOperationRecord {
     this.requireOpen();
     assertPlainObject(input, "releaseUnsentReservation input");
     const idemKey = textId(input.idemKey, "idemKey", 128);
     const reservationId = textId(input.reservationId, "reservationId", 128);
+    const payloadHash = payloadHashOf(input.payloadHash);
     const evidence = input.evidence;
     assertPlainObject(evidence, "unsent release evidence");
     if (evidence.basis !== "owner-restarted-before-broadcast" && evidence.basis !== "service-recovered-unsent") {
@@ -1233,6 +1249,9 @@ export class PaymentOperationJournal {
     return this.transaction(() => {
       const row = this.row(idemKey);
       if (!row) fail("PAYMENT_OPERATION_NOT_FOUND", "no payment operation for that key");
+      if (row.payload_hash !== payloadHash) {
+        fail("PAYMENT_OPERATION_PAYLOAD_MISMATCH", "release names a different operation payload");
+      }
       if (row.state !== "reserved") {
         fail("PAYMENT_OPERATION_RELEASE_REFUSED", "only a never-broadcast reserved row can be released this way");
       }
@@ -1265,12 +1284,15 @@ export class PaymentOperationJournal {
   releaseRejectedUnknown(input: {
     idemKey: string;
     reservationId: string;
+    /** The exact payload the Service inspected before deciding to release. */
+    payloadHash: string;
     evidence: RejectedUnknownReleaseEvidence;
   }): PaymentOperationRecord {
     this.requireOpen();
     assertPlainObject(input, "releaseRejectedUnknown input");
     const idemKey = textId(input.idemKey, "idemKey", 128);
     const reservationId = textId(input.reservationId, "reservationId", 128);
+    const payloadHash = payloadHashOf(input.payloadHash);
     const evidence = input.evidence;
     assertPlainObject(evidence, "rejected unknown release evidence");
     if (evidence.basis !== "wallet-user-rejection") {
@@ -1294,6 +1316,9 @@ export class PaymentOperationJournal {
     return this.transaction(() => {
       const row = this.row(idemKey);
       if (!row) fail("PAYMENT_OPERATION_NOT_FOUND", "no payment operation for that key");
+      if (row.payload_hash !== payloadHash) {
+        fail("PAYMENT_OPERATION_PAYLOAD_MISMATCH", "release names a different operation payload");
+      }
       if (row.state !== "unknown" || row.tx_hash !== null) {
         fail("PAYMENT_OPERATION_RELEASE_REFUSED", "only an unknown row without a known hash can be released");
       }
@@ -1439,7 +1464,7 @@ export class PaymentOperationJournal {
         if (row.tx_hash === normalizedHash) return; // idempotent
         fail("PAYMENT_OPERATION_HASH_CONFLICT", "a different transaction hash is already recorded");
       }
-      if (row.state !== "broadcasting" && row.state !== "unknown") {
+      if (row.state !== "broadcasting" && row.state !== "unknown" && row.state !== "released") {
         fail("PAYMENT_OPERATION_NOT_BROADCASTING", `cannot record a hash from state ${row.state}`);
       }
       if (row.reservation_id !== reservationId) {
@@ -1451,7 +1476,7 @@ export class PaymentOperationJournal {
       const from = row.state;
       const changed = this.db
         .query(
-          "UPDATE payment_operations SET state = 'broadcast', tx_hash = ?, recovered_from_unknown = CASE WHEN state = 'unknown' THEN 1 ELSE recovered_from_unknown END, updated_at_ms = ? WHERE idem_key = ? AND state IN ('broadcasting','unknown') AND reservation_id = ? AND payload_hash = ? AND (tx_hash IS NULL OR tx_hash = ?)",
+          "UPDATE payment_operations SET state = 'broadcast', tx_hash = ?, recovered_from_unknown = CASE WHEN state = 'unknown' THEN 1 ELSE recovered_from_unknown END, updated_at_ms = ? WHERE idem_key = ? AND state IN ('broadcasting','unknown','released') AND reservation_id = ? AND payload_hash = ? AND (tx_hash IS NULL OR tx_hash = ?)",
         )
         .run(normalizedHash, nowMs, row.idem_key, reservationId, payloadHash, normalizedHash);
       if (changed.changes !== 1) {

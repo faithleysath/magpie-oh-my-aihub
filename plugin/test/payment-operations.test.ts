@@ -435,14 +435,18 @@ describe("atomic single-winner claim", () => {
       previousOwnerInstanceId: "owner-old",
     };
     expectSyncCode(
-      () => after.releaseUnsentReservation({ idemKey: record.idemKey, reservationId: "wrong", evidence }),
+      () => after.releaseUnsentReservation({ idemKey: record.idemKey, reservationId: "wrong", payloadHash: record.payloadHash, evidence }),
       "PAYMENT_OPERATION_RESERVATION_MISMATCH",
     );
     expectSyncCode(
-      () => after.releaseUnsentReservation({ idemKey: record.idemKey, reservationId, evidence: { ...evidence, previousOwnerInstanceId: "owner-new" } }),
+      () => after.releaseUnsentReservation({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence: { ...evidence, previousOwnerInstanceId: "owner-new" } }),
       "PAYMENT_OPERATION_RELEASE_REFUSED",
     );
-    const released = after.releaseUnsentReservation({ idemKey: record.idemKey, reservationId, evidence });
+    expectSyncCode(
+      () => after.releaseUnsentReservation({ idemKey: record.idemKey, reservationId, payloadHash: "0".repeat(64), evidence }),
+      "PAYMENT_OPERATION_PAYLOAD_MISMATCH",
+    );
+    const released = after.releaseUnsentReservation({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence });
     expect(released.state).toBe("released");
     expect(released.txHash).toBeNull();
     expect(released.reason).toContain("OWNER_RESTARTED");
@@ -567,19 +571,19 @@ describe("send gate and durable state machine", () => {
       noBroadcastObservation: { method: "chain-nonce", observedAt: new Date(now).toISOString(), reference: "nonce-observation-7" },
     };
     expectSyncCode(
-      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, evidence: { ...valid, userConfirmedRetry: false as true } }),
+      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence: { ...valid, userConfirmedRetry: false as true } }),
       "PAYMENT_OPERATION_RELEASE_REFUSED",
     );
     expectSyncCode(
-      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, evidence: { ...valid, providerCode: "4001", noBroadcastObservation: { ...valid.noBroadcastObservation, method: "guessed" as "chain-nonce" } } }),
+      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence: { ...valid, providerCode: "4001", noBroadcastObservation: { ...valid.noBroadcastObservation, method: "guessed" as "chain-nonce" } } }),
       "PAYMENT_OPERATION_RELEASE_REFUSED",
     );
     expectSyncCode(
-      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId: "other", evidence: valid }),
+      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId: "other", payloadHash: record.payloadHash, evidence: valid }),
       "PAYMENT_OPERATION_RESERVATION_MISMATCH",
     );
 
-    const released = j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, evidence: valid });
+    const released = j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence: valid });
     expect(released.state).toBe("released");
     expect(released.reason).toContain("WALLET_REJECTION");
 
@@ -605,6 +609,7 @@ describe("send gate and durable state machine", () => {
           j.releaseRejectedUnknown({
             idemKey: record.idemKey,
             reservationId,
+            payloadHash: record.payloadHash,
             evidence: {
               basis: "wallet-user-rejection",
               providerCode: "USER_REJECTED",
@@ -619,6 +624,52 @@ describe("send gate and durable state machine", () => {
     }
   });
 
+  test("old no-broadcast evidence is still usable, future evidence is not", async () => {
+    const j = openJournal({ dbName: "state/evidence-age.sqlite" });
+    const value = binding({ invoice: "inv_evidence_age" });
+    const { port, op, reservationId } = await reservedPort(j, value);
+    await port.markBroadcasting({ reservationId, operation: op });
+    await port.recordUnknown({ reservationId, operation: op, reason: "USER_REJECTED" });
+    const record = j.lookup({ invoice: "inv_evidence_age", consumerAddress: PAYER })!;
+    const base = {
+      basis: "wallet-user-rejection" as const,
+      providerCode: "USER_REJECTED" as const,
+      confirmedNoBroadcast: true as const,
+      userConfirmedRetry: true as const,
+    };
+    expectSyncCode(
+      () =>
+        j.releaseRejectedUnknown({
+          idemKey: record.idemKey,
+          reservationId,
+          payloadHash: record.payloadHash,
+          evidence: {
+            ...base,
+            noBroadcastObservation: {
+              method: "chain-nonce",
+              observedAt: new Date(now + 120_000).toISOString(),
+              reference: "future",
+            },
+          },
+        }),
+      "PAYMENT_OPERATION_INVALID_ARGUMENT",
+    );
+    const released = j.releaseRejectedUnknown({
+      idemKey: record.idemKey,
+      reservationId,
+      payloadHash: record.payloadHash,
+      evidence: {
+        ...base,
+        noBroadcastObservation: {
+          method: "chain-nonce",
+          observedAt: new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString(),
+          reference: "old-but-checked-nonce",
+        },
+      },
+    });
+    expect(released.state).toBe("released");
+  });
+
   test("4001 and USER_REJECTED are the same rejection class for release", async () => {
     const j = openJournal({ dbName: "state/rejection-code.sqlite" });
     const value = binding({ invoice: "inv_rejection_code" });
@@ -630,6 +681,7 @@ describe("send gate and durable state machine", () => {
     const released = j.releaseRejectedUnknown({
       idemKey: record.idemKey,
       reservationId,
+      payloadHash: record.payloadHash,
       evidence: {
         basis: "wallet-user-rejection",
         providerCode: "USER_REJECTED",
@@ -639,6 +691,36 @@ describe("send gate and durable state machine", () => {
       },
     });
     expect(released.state).toBe("released");
+  });
+
+  test("a late hash found after a release blocks the retry", async () => {
+    const j = openJournal({ dbName: "state/late-hash.sqlite" });
+    const value = binding({ invoice: "inv_late_hash" });
+    const { port, op, reservationId } = await reservedPort(j, value);
+    await port.markBroadcasting({ reservationId, operation: op });
+    await port.recordUnknown({ reservationId, operation: op, reason: "USER_REJECTED" });
+    const record = j.lookup({ invoice: "inv_late_hash", consumerAddress: PAYER })!;
+    j.releaseRejectedUnknown({
+      idemKey: record.idemKey,
+      reservationId,
+      payloadHash: record.payloadHash,
+      evidence: {
+        basis: "wallet-user-rejection",
+        providerCode: "USER_REJECTED",
+        confirmedNoBroadcast: true,
+        userConfirmedRetry: true,
+        noBroadcastObservation: { method: "chain-nonce", observedAt: new Date(now).toISOString(), reference: "nonce" },
+      },
+    });
+    expect(j.lookup({ invoice: "inv_late_hash", consumerAddress: PAYER })!.state).toBe("released");
+
+    // A hash that appears after the release is stronger evidence than the
+    // Service's "no broadcast" check: record it and refuse the retry.
+    await port.recordHash({ reservationId, operation: op, hash: HASH_A });
+    const recovered = j.lookup({ invoice: "inv_late_hash", consumerAddress: PAYER })!;
+    expect(recovered.state).toBe("broadcast");
+    expect(recovered.txHash).toBe(HASH_A);
+    expect((await port.reserve(op)).state).toBe("broadcast");
   });
 
   test("a hash cannot be recorded before the send gate, and an unknown reason is sanitized", async () => {
@@ -800,6 +882,7 @@ describe("verified intent binding and negative cases", () => {
     j.releaseUnsentReservation({
       idemKey: record.idemKey,
       reservationId,
+      payloadHash: record.payloadHash,
       evidence: {
         basis: "service-recovered-unsent",
         confirmedNoBroadcast: true,
@@ -877,6 +960,7 @@ describe("local storage safety", () => {
     j.releaseRejectedUnknown({
       idemKey: record.idemKey,
       reservationId,
+      payloadHash: record.payloadHash,
       evidence: {
         basis: "wallet-user-rejection",
         providerCode: "USER_REJECTED",

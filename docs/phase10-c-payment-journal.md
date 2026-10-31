@@ -3,7 +3,7 @@
 - 分支：`feature/phase10-c-payment-journal`
 - worktree：`/Users/laysath/.paseo/worktrees/1z728cdk/c-payment-journal`
 - base：已批准 P0-17 `49e8c0ff64c8fcaf28da472e664bee482fd5e843`（含 P0-15；`origin/main` = `8ce5c57f565fb1b835021a9b730b61014eb47d5f`）
-- 代码提交：`42589a1ec8b8f940b769a1e410060bf4c08f24e6`
+- 代码提交：`42589a1ec8b8f940b769a1e410060bf4c08f24e6`（核心）；其后的 `fix(payment)` commit 只放宽旧证据年龄并补测试；PR head 见 GitHub
 - 依赖的已批准外置模块：PR #30 head `90c32f8cfd1b98e6705c31ca6e91cfef606dc894`（单独隔离模块；本分支不把它的 JS import 进生产代码）
 - 本模块：`plugin/src/payment-operations.ts`；测试：`plugin/test/payment-operations.test.ts`、`plugin/test/support/payment-operation-race-child.ts`
 - 结论：**核心可审、可测试；未接 Service/UI，未发送真实交易，未接账本授信，主网仍 NO-GO。** 本文不把任何模拟结果写成产品 GO。
@@ -96,6 +96,7 @@ broadcasting --recordHash(hash)--> broadcast
 broadcasting --recordUnknown(reason)--> unknown
 unknown --recordHash(hash)--> broadcast          # 后来找到哈希是证据，不是重发
 unknown --releaseRejectedUnknown(evidence)--> released   # 仅 4001 类
+released --recordHash(late hash)--> broadcast    # 释放后才发现哈希：更强证据，撤销重试
 reserved --releaseUnsentReservation(evidence)--> released # 仅确定未广播
 released --reserve(new explicit try)--> reserved (attempt+1)
 ```
@@ -103,7 +104,7 @@ released --reserve(new explicit try)--> reserved (attempt+1)
 `reserve` 的原子性：先做乐观读取；真正 claim 时在 `BEGIN IMMEDIATE` 事务里再次读取/插入/更新。已存在且非 `released` 时：
 
 - payload 不一致 → `PAYMENT_OPERATION_PAYLOAD_MISMATCH`（不新建行、不发送）；
-- `reserved` → 返回 `state:"claimed"`（external 模块会拒绝）；
+- `reserved` → 返回 `state:"claimed"`（这是本模块的**非发送扩展态**：external 模块对任何非 `reserved` 值都拒绝，因此不会发送；不要把它误读成 `broadcasting`）；
 - `broadcasting` / `broadcast` / `unknown` → 返回该终态（external 模块会拒绝）；
 - 只有 `released` 才允许新 claim。
 
@@ -161,18 +162,19 @@ payloadHash = sha256("..../payload/v1\n" + canonical({
 | `recordHash` 写失败 | journal 仍 `broadcasting`；external 报 `OPERATION_JOURNAL_FAILED` 且带真实 hash | **不重发** |
 | `recordUnknown` 写失败 | journal 仍 `broadcasting`；external 进入 unknown | **不重发** |
 
-即：**发送许可只在 `markBroadcasting` 成功返回后存在**；任何异常路径都不会释放 nonce 或再发。`recordHash` 只在 `broadcasting/unknown` 上 CAS，已存在的不同哈希一律 `PAYMENT_OPERATION_HASH_CONFLICT`；`recordUnknown` 不会把已有哈希降级。
+即：**发送许可只在 `markBroadcasting` 成功返回后存在**；任何异常路径都不会释放 nonce 或再发。`recordHash` 在 `broadcasting/unknown/released` 上 CAS；`released` 只接受该行原来的 reservation id，后到的真实哈希会把行恢复成 `broadcast` 并阻止重试（比“已释放”更强）。已存在的不同哈希一律 `PAYMENT_OPERATION_HASH_CONFLICT`；`recordUnknown` 不会把已有哈希降级。
 
 ## 6. unknown / 4001 的释放语义
 
 - `4001` / `ACTION_REJECTED` / `USER_REJECTED`：external 模块同样走 `recordUnknown`，journal 先记为 `unknown`；**不是自动释放**。
 - 只有 Service（不是浏览器、不是 external 模块）能调用 `releaseRejectedUnknown`，且必须同时满足：
   - 当前状态 `unknown`、`tx_hash IS NULL`、reservation id 精确匹配；
+  - 传入 Service 检查过的精确 `payloadHash`（它折叠了 provider identity / authorization generation / invoice / local account / chain / asset / recipient / raw amount / calldata hash）；与行上 payload 不一致 → `PAYMENT_OPERATION_PAYLOAD_MISMATCH`；
   - 记录的 reason 属于钱包拒绝类；
   - evidence 里 `confirmedNoBroadcast === true`、`userConfirmedRetry === true`；
-  - 提供 `noBroadcastObservation`：`method` 只接受 `chain-nonce | provider-response | node-mempool | wallet-pending-set`，带有限时区的 `observedAt` 和 opaque reference（reference 只存 SHA-256，不存原文）。
+  - 提供 `noBroadcastObservation`：`method` 只接受 `chain-nonce | provider-response | node-mempool | wallet-pending-set`，`observedAt` 可解析且不在未来（允许较旧的观察，避免付款放几天后永久无法释放），以及 opaque reference（reference 只存 SHA-256，不存原文）。
 - 超时、RPC/500、无效哈希、`WALLET_ERROR` 等一律**不能**走这个 release；测试逐项覆盖。
-- `releaseUnsentReservation` 只接受 `reserved`，必须精确 reservation id；`owner-restarted-before-broadcast` 还要求 previous owner 与当前 owner 不同。`service-recovered-unsent` 是 Service 已确认未广播的显式判断，仍需 `confirmedNoBroadcast: true`。
+- `releaseUnsentReservation` 只接受 `reserved`，必须精确 reservation id + 精确 `payloadHash`；`owner-restarted-before-broadcast` 还要求 previous owner 与当前 owner 不同。`service-recovered-unsent` 是 Service 已确认未广播的显式判断，仍需 `confirmedNoBroadcast: true`。
 - 没有定时器、没有“N 分钟后自动释放”、没有浏览器 release API。释放后重新 claim 仍需要用户重新明确确认（external 的 `userInitiated` + `acknowledged`）。
 
 **边界（必须如实说明）**：journal 无法自己证明“链上/节点侧没有这笔交易”。`confirmedNoBroadcast` 是 Service 的显式断言；`noBroadcastObservation` 只是把 Service 用的方法和引用留痕。真实接入时，Service 必须用自己可信的链/节点/钱包证据填充它，不能把 UI 的“我没看到”当作证据。
@@ -225,7 +227,7 @@ const session = createExternalWallet({ ..., operationPort: port });
 - `bindingFromVerifiedIntent` 必须由 Service 从**本地已核验 intent** 生成；远端/P2P 输入不能改 recipient/amount/asset/price。`intentHash` 传本地 intent 的值；没有就传 `null`，不要让 UI 每次 preview 造新 hash。
 - `ownerInstanceId` 应在持有 host lock / 本地认证服务 owner 启动后生成；关闭 Service 时 `journal.close()`。`owner-restarted-before-broadcast` 只用它做“上一个进程已结束”的证据。
 - `query` 的现状：approved external 模块**目前从不调用** `query`（源码 VERIFIED）。所以恢复路径实际由 Service 的 status projection 使用：`journal.lookup({invoice, consumerAddress})`、`journal.pending()`、以及同一个 port 的 `query(operation)`；读回 `unknown` 时显示已知 `txHash`/“按哈希核对链上”，**不提供重发按钮**。`query` 是只读的，不会产生新的 send permit。
-- release 方法只在 journal 上，不在 port 上；不要把它们暴露成 HTTP 路由或浏览器 API。将来若经 localhost 控制台暴露，必须由已认证的 Service 加 CSRF + 精确 UUID/action allowlist，并保持 release 只能由本机 Service 在证据齐全时调用。本模块不创建 HTTP server，也不做 proxy。
+- release 方法只在 journal 上，不在 port 上；`lookup`/`pending` 返回的 `payloadHash` 就是 Service 在释放时必须回传的“我检查过的那一笔”。不要把它们暴露成 HTTP 路由或浏览器 API。将来若经 localhost 控制台暴露，必须由已认证的 Service 加 CSRF + 精确 UUID/action allowlist，并保持 release 只能由本机 Service 在证据齐全时调用。本模块不创建 HTTP server，也不做 proxy。
 - 构造函数里的 owner/capability 不是网络授权；它只标识本地 Service 生命周期。**未接线 = 不声称 UI/Service 可用。**
 
 后续小 commit（不在本 PR）：Service 注入 port、Service status projection 调 `query/lookup/pending`、UI 的“未知/按哈希核对”视图、真实链/扩展验证。每一步仍需单独审查。
@@ -246,10 +248,10 @@ bun test ./test/payment-operations.test.ts
 结果（本次代码 `42589a1`）：
 
 ```text
-37 pass
+39 pass
 0 fail
-243 expect() calls
-Ran 37 tests across 1 file. [~1.6s]
+254 expect() calls
+Ran 38 tests across 1 file. [~1.7s]
 ```
 
 覆盖：
@@ -295,7 +297,7 @@ cd plugin
 bun test ./test ./console ../docs/validation/lab/phase9/wallet-fixture
 ```
 
-结果：**792 pass / 0 fail / 6231 expect / 54 files / 34.55s**（macOS arm64，Bun 1.4.3，SQLite 3.50.6；包含本模块 37 个定向测试）。CI（linux/macOS, Bun 1.4.3）结果以 PR head 的 run 为准；历史并行全量曾受其它代理占用固定端口影响，本机这次全量没有出现该冲突。
+结果：**794 pass / 0 fail / 6242 expect / 54 files / 29.26s**（macOS arm64，Bun 1.4.3，SQLite 3.50.6；包含本模块 39 个定向测试）。一次中间重跑遇到过既有 `magpie.test.ts > detectVersion()` 的 3 秒进程超时（单独重跑 4/4 通过，与本模块无关）；最终在空闲机器上重跑为 794/0。CI（linux/macOS, Bun 1.4.3）结果以 PR head 的 run 为准。
 
 > 全量通过只说明本机 hermetic 测试通过，不等于真实 Magpie/EasyTier、真实扩展或真实链验收。
 
