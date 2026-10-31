@@ -113,9 +113,11 @@ be reported as `lan-reachable`; the diagnostic must not claim overlay-only.
 - `takeAuthorization` rechecks the Provisioner record (key id/name, models, cap,
   accepted quote hash, price version) before and after `Service.handover`; a changed
   quote, cap, model scope, key generation or paused consumer fails before a key is
-  returned for sealing. It does not add a second lock: approval uses the existing
-  `Service` serialization, hand-over uses the Provisioner consumer lock/read-back,
-  and the checks fail closed.
+  returned for sealing. `Service.handover` now reads the actual secret through
+  `Provisioner.readHandover` under the same per-consumer lock as approve/reissue/
+  revoke, and rechecks the exact key generation/native row there; a final
+  `confirmHandover` lock check runs before sealing. Approval still uses the existing
+  `Service` serialization; no nested lock is introduced.
 - `importAuthorization` validates the v2 document binding (provider/consumer
   identity, approvalId/requestHash, quote, models, cap, key id/name/hash), then calls
   `Service.addProvider` with a per-approval provider id. It reads the model list and
