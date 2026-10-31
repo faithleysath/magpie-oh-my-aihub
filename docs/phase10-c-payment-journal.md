@@ -165,7 +165,7 @@ payloadHash = sha256("..../payload/v1\n" + canonical({
 - **换 UUID / 新 preview / 新 tab / 新 session 仍是同一操作**：它们不影响 idemKey。
 - **provider stable id 在 key 里**：两个 provider 使用各自本地的同一 invoice 字符串时，不会互相误挡；这是主审选择的 D 方案。provider fingerprint 仍保留在 payload 里，换 provider 身份不能悄悄复用同一行。
 - **invoice 的唯一域**：Service 必须使用 Service 级唯一 obligation id，或显式 provider-namespaced invoice；consumer↔invoice 的授权由 `identityAuthority` 负责，journal 不能替代。
-- **旧库迁移 fail closed**：`user_version` 升到 3；非空 v1/v2 journal 在打开时直接拒绝，不静默重算 key、不合并、不重复。没有旧生产数据；测试/归档库需显式迁移或丢弃。
+- **旧库迁移 fail closed**：`user_version` 升到 3；非空 v1/v2 journal 在打开时直接拒绝，不静默重算 key、不合并、不重复。没有旧生产数据；非空旧库必须保留原文件并显式迁移/只读导出，**不要删除数据库后用同一 invoice 重发**。构造器在拒绝前最多新增空的 `payment_operation_attempts`/`payment_operation_hashes` 表，不改现有行、不改 `user_version`；错误可恢复。
 - **intentHash 不参与 idemKey**：避免每次 preview 造新 hash 绕过唯一约束；它仍进入 payload，第二次不同（包括 null ↔ hash）会 `PAYLOAD_MISMATCH`。
 - **报价/收款人/金额/资产/链/合约/精度/identity/generation 变化**：同一 idemKey 下 payload 不再相等 → 拒绝；报价变化必须先走释放/重新核验。
 - 固定 ERC-20 `transfer(address,uint256)` calldata 重新编码，并与 `calldataHash`、recipient、amount 交叉校验；不接受任意 calldata/selector；`amountRaw` 显式限制在 uint256 内。
