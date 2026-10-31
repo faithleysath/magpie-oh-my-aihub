@@ -91,6 +91,7 @@ import {
 } from "./catalog.ts";
 import {
   FORWARD_PORT_FROM,
+  MODELS_EVIDENCE_TTL_MS,
   FORWARD_PORT_TO,
   deleteProviderKey,
   getProviderKey,
@@ -107,6 +108,7 @@ import {
   type PluginState,
   type ProviderConnection,
   type ProviderLimitView,
+  type ProviderModelsEvidence,
   type ProviderView,
   type SharePolicy,
 } from "./state.ts";
@@ -519,7 +521,7 @@ export class Service {
   }
 
   providers(): ProviderView[] {
-    return this.state.providers.map(providerView);
+    return this.state.providers.map((p) => providerView(p, this.clock().getTime()));
   }
 
   provider(id: string): ProviderConnection | undefined {
@@ -531,16 +533,124 @@ export class Service {
    * Gateway Key. Read-only: it never re-registers, removes or re-routes this or
    * any other provider.
    */
-  async providerModels(id: string): Promise<{ id: string; models: string[]; status: string; detail: string | null; limit: ProviderLimitView | null }> {
+  async providerModels(id: string): Promise<{
+    id: string;
+    models: string[];
+    status: string;
+    detail: string | null;
+    limit: ProviderLimitView | null;
+    modelsEvidence: ProviderModelsEvidence;
+  }> {
     const rec = this.provider(id);
     if (!rec) throw new Error(`no remote provider ${id}`);
     const key = getProviderKey(id);
     if (!key) throw new Error(`provider ${id} has no stored Gateway Key; update the provider first`);
-    const models = await this.probes.remoteModelIds(rec.localPort, key, 15_000);
-    if (!models || models.length === 0) {
-      throw new Error(`provider ${id} served no model for its key (offline, revoked or a different provider)`);
+    const forwardOwner = await this.proveForwardOwner(id, rec.localPort);
+    if (forwardOwner.state !== "stable") {
+      const why =
+        `127.0.0.1:${rec.localPort} is not provably owned by the supervised core ` +
+        `(${forwardOwner.state}: ${forwardOwner.detail ?? "no evidence"}); not sending the Gateway Key`;
+      this.recordModelsEvidence(rec, [], "provider-models", why, "unknown");
+      saveState(this.state);
+      throw new Error(why);
     }
-    return { id, models, status: rec.status, detail: rec.detail, limit: rec.limit ?? null };
+    let models: string[] | null = null;
+    try {
+      models = await this.probes.remoteModelIds(rec.localPort, key, 15_000);
+      if (!models || models.length === 0) {
+        throw new Error(`provider ${id} served no model for its key (offline, revoked or a different provider)`);
+      }
+    } catch (e) {
+      const why = (e as Error)?.message ?? String(e);
+      rec.modelsEvidence = {
+        ...(rec.modelsEvidence ?? {
+          status: "unknown",
+          source: "provider-models",
+          readAt: null,
+          expiresAt: null,
+          models: [],
+          modelCount: null,
+          callable: "unknown",
+          identity: null,
+          generation: 0,
+          keyRef: rec.keyRef,
+          keyGeneration: rec.keyGeneration ?? 1,
+          error: null,
+        }),
+        status: "unknown",
+        source: "provider-models",
+        readAt: this.clock().toISOString(),
+        expiresAt: null,
+        modelCount: null,
+        callable: /401|403|revoke|unauthor/i.test(why) ? "no" : "unknown",
+        error: why.slice(0, 300),
+      };
+      rec.updatedAt = new Date().toISOString();
+      saveState(this.state);
+      throw e;
+    }
+    const at = this.clock();
+    rec.models = [...models!];
+    rec.modelsEvidence = {
+      status: "current",
+      source: "provider-models",
+      readAt: at.toISOString(),
+      expiresAt: new Date(at.getTime() + MODELS_EVIDENCE_TTL_MS).toISOString(),
+      models: [...models!],
+      modelCount: models!.length,
+      callable: "yes",
+      identity: {
+        hostname: rec.fingerprint?.hostname ?? null,
+        virtualIpv4: rec.fingerprint?.virtualIpv4 ?? null,
+        fingerprint: rec.acceptedFingerprint ?? rec.modelsEvidence?.identity?.fingerprint ?? null,
+      },
+      generation: (rec.modelsEvidence?.generation ?? 0) + 1,
+      keyRef: rec.keyRef,
+      keyGeneration: rec.keyGeneration ?? 1,
+      error: null,
+    };
+    rec.updatedAt = at.toISOString();
+    saveState(this.state);
+    return {
+      id,
+      models,
+      status: rec.status,
+      detail: rec.detail,
+      limit: rec.limit ?? null,
+      modelsEvidence: providerView(rec, this.clock().getTime()).modelsEvidence,
+    };
+  }
+
+  /** Stores one real read-back result on the provider record (never a probe by polling). */
+  private recordModelsEvidence(
+    conn: ProviderConnection,
+    models: string[],
+    source: ProviderModelsEvidence["source"],
+    error: string | null = null,
+    callable: ProviderModelsEvidence["callable"] = error ? "unknown" : "yes",
+  ): void {
+    const at = this.clock();
+    const previous = conn.modelsEvidence;
+    conn.modelsEvidence = {
+      status: error ? "unknown" : "current",
+      source,
+      readAt: at.toISOString(),
+      expiresAt: error ? null : new Date(at.getTime() + MODELS_EVIDENCE_TTL_MS).toISOString(),
+      models: error ? (previous?.models ?? []) : [...models],
+      modelCount: error ? null : models.length,
+      callable,
+      identity: {
+        hostname: conn.fingerprint?.hostname ?? previous?.identity?.hostname ?? null,
+        virtualIpv4: conn.fingerprint?.virtualIpv4 ?? previous?.identity?.virtualIpv4 ?? null,
+        fingerprint: conn.acceptedFingerprint ?? previous?.identity?.fingerprint ?? null,
+      },
+      generation: (previous?.generation ?? 0) + (error ? 0 : 1),
+      keyRef: conn.keyRef,
+      keyGeneration: conn.keyGeneration ?? 1,
+      error: error ? error.slice(0, 300) : null,
+    };
+    if (!error) conn.models = [...models];
+    conn.updatedAt = at.toISOString();
   }
 
   /** The gateway port this Magpie answers on (3425 unless told). */
@@ -2376,7 +2486,7 @@ export class Service {
       mappedCidr: peer.mappedCidr,
       key,
       providerPort: peer.quote.node.gatewayPort,
-    }, { update: false, beforeRegister: revalidate, expectedModels: opts.models });
+    }, { update: false, beforeRegister: revalidate, expectedModels: opts.models, acceptedFingerprint: opts.acceptance?.fingerprint });
     });
   }
 
@@ -2894,7 +3004,10 @@ export class Service {
     });
   }
 
-  private async connectProvider(input: ProviderInput, opts: { update: boolean; beforeRegister?: () => void; expectedModels?: string[] }): Promise<ProviderView> {
+  private async connectProvider(
+    input: ProviderInput,
+    opts: { update: boolean; beforeRegister?: () => void; expectedModels?: string[]; acceptedFingerprint?: string },
+  ): Promise<ProviderView> {
     const cfg = this.state.config;
     if (!cfg) throw new Error("configure this node as a provider or consumer first");
     if (!cfg.consumingEnabled) {
@@ -3046,6 +3159,13 @@ export class Service {
       // 4. only now commit the connection record
       const now = new Date().toISOString();
       const limit = limitView(await this.probes.remoteLimit(localPort, input.key, 8000));
+      const previousKey = prev ? getProviderKey(prev.id) : null;
+      const keyGeneration = (prev?.keyGeneration ?? 1) + (previousKey && previousKey !== input.key ? 1 : 0);
+      const identity = {
+        hostname: owner?.hostname ?? prev?.fingerprint?.hostname ?? null,
+        virtualIpv4: owner?.ipv4 ?? prev?.fingerprint?.virtualIpv4 ?? null,
+        fingerprint: opts.acceptedFingerprint ?? prev?.acceptedFingerprint ?? null,
+      };
       const rec: ProviderConnection = {
         id: input.id,
         remoteMagpieId: input.id,
@@ -3055,6 +3175,22 @@ export class Service {
         keyRef: providerKeyRef(input.id),
         fingerprint: owner ? { hostname: owner.hostname, virtualIpv4: owner.ipv4, peerId: owner.peerId } : null,
         models: [...(opts.expectedModels ?? remoteModels)],
+        keyGeneration,
+        acceptedFingerprint: identity.fingerprint,
+        modelsEvidence: {
+          status: "current",
+          source: "connect-readback",
+          readAt: this.clock().toISOString(),
+          expiresAt: new Date(this.clock().getTime() + MODELS_EVIDENCE_TTL_MS).toISOString(),
+          models: [...remoteModels],
+          modelCount: remoteModels.length,
+          callable: "yes",
+          identity,
+          generation: (prev?.modelsEvidence?.generation ?? 0) + 1,
+          keyRef: providerKeyRef(input.id),
+          keyGeneration,
+          error: null,
+        },
         status: "connected",
         detail: null,
         limit,
@@ -3634,7 +3770,7 @@ export class Service {
     if (!keyed) {
       conn.status = "degraded";
       conn.detail = "the provider does not answer with this Gateway Key (offline, revoked or a different provider)";
-      conn.updatedAt = new Date().toISOString();
+      this.recordModelsEvidence(conn, [], "reconcile", conn.detail, "no");
       return true;
     }
 
@@ -3649,15 +3785,16 @@ export class Service {
       if (!remote || remote.length === 0) {
         conn.status = "degraded";
         conn.detail = "the provider answered but served no model for this key";
-        conn.updatedAt = new Date().toISOString();
+        this.recordModelsEvidence(conn, [], "reconcile", conn.detail, "no");
         return true;
       }
       if (!(await this.waitLocalModels(conn.id, 5_000))) {
         conn.status = "degraded";
         conn.detail = `magpie does not list any ${conn.id}/ model`;
-        conn.updatedAt = new Date().toISOString();
+        this.recordModelsEvidence(conn, remote, "reconcile", conn.detail, "unknown");
         return true;
       }
+      this.recordModelsEvidence(conn, remote, "reconcile", null, "yes");
     }
 
     if (conn.status !== "connected" || conn.detail) {

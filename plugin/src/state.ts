@@ -115,6 +115,99 @@ export interface PluginConfig {
 
 export type ConnectionStatus = "connected" | "degraded" | "disabled" | "identity-mismatch";
 
+/** How long a real model read-back can be trusted without a fresh read. */
+export const MODELS_EVIDENCE_TTL_MS = 5 * 60_000;
+
+/**
+ * Real evidence of what one Remote Magpie served for this provider's Gateway
+ * Key. This is deliberately separate from the sharing authorization list: only
+ * a successful read-back with the current key/identity makes models "callable".
+ */
+export interface ProviderModelsEvidence {
+  status: "current" | "stale" | "unknown";
+  source: "connect-readback" | "provider-models" | "reconcile";
+  readAt: string | null;
+  expiresAt: string | null;
+  models: string[];
+  modelCount: number | null;
+  callable: "yes" | "no" | "unknown";
+  identity: { hostname: string | null; virtualIpv4: string | null; fingerprint: string | null } | null;
+  /** monotonic per provider; increases only on a successful real read */
+  generation: number;
+  keyRef: string;
+  keyGeneration: number;
+  error: string | null;
+}
+
+export function unknownModelsEvidence(keyRef: string, keyGeneration = 1): ProviderModelsEvidence {
+  return {
+    status: "unknown",
+    source: "connect-readback",
+    readAt: null,
+    expiresAt: null,
+    models: [],
+    modelCount: null,
+    callable: "unknown",
+    identity: null,
+    generation: 0,
+    keyRef,
+    keyGeneration,
+    error: null,
+  };
+}
+
+function identityMatches(
+  a: ProviderModelsEvidence["identity"],
+  b: ProviderConnection["fingerprint"],
+  acceptedA: string | null,
+  acceptedB: string | null,
+): boolean {
+  if (a === null && b === null) return true;
+  if (!a || !b) return false;
+  if (acceptedA && acceptedB && acceptedA !== acceptedB) return false;
+  return (a.hostname ?? "") === (b.hostname ?? "") && (a.virtualIpv4 ?? "") === (b.virtualIpv4 ?? "");
+}
+
+/**
+ * Projects stored evidence to the console. It never probes; a later poll only
+ * decides whether the stored proof is still valid.
+ */
+export function projectModelsEvidence(p: ProviderConnection, now = Date.now()): ProviderModelsEvidence {
+  const stored = p.modelsEvidence ?? null;
+  const keyGeneration = Number.isInteger(p.keyGeneration) && (p.keyGeneration ?? 0) > 0 ? p.keyGeneration! : 1;
+  if (!stored) return unknownModelsEvidence(p.keyRef, keyGeneration);
+  const currentKey = stored.keyGeneration === keyGeneration;
+  const currentIdentity = identityMatches(stored.identity, p.fingerprint, stored.identity?.fingerprint ?? null, p.acceptedFingerprint ?? null);
+  const expired = stored.expiresAt !== null && Number.isFinite(Date.parse(stored.expiresAt)) && now > Date.parse(stored.expiresAt);
+  const notServing = p.status !== "connected";
+  const status: ProviderModelsEvidence["status"] =
+    stored.status === "unknown" || !currentKey || !currentIdentity || expired || notServing ? "stale" : stored.status;
+  const current = status === "current";
+  const callable: ProviderModelsEvidence["callable"] = current
+    ? stored.models.length > 0
+      ? "yes"
+      : "no"
+    : stored.callable === "no" && stored.error !== null
+      ? "no"
+      : "unknown";
+  return {
+    ...stored,
+    status,
+    modelCount: current ? stored.models.length : null,
+    callable,
+    error:
+      status === "stale" && stored.error === null
+        ? expired
+          ? "the model read-back expired; read it again"
+          : !currentKey
+            ? "the Gateway Key changed; read the models again"
+            : !currentIdentity
+              ? "the provider identity changed; read the models again"
+              : "the provider is not serving"
+        : stored.error,
+  };
+}
+
 /** What the overlay said about the peer that owned a mapped prefix. */
 export interface PeerFingerprint {
   hostname: string;
@@ -161,6 +254,12 @@ export interface ProviderConnection {
    * success or rollback.
    */
   forwardPending?: { from: number; to: number; at: string } | null;
+  /** increments when the stored Gateway Key changes */
+  keyGeneration?: number;
+  /** the exact catalogue fingerprint the operator accepted, when there was one */
+  acceptedFingerprint?: string | null;
+  /** the latest real read-back, never the authorization allow list */
+  modelsEvidence?: ProviderModelsEvidence | null;
   status: ConnectionStatus;
   detail: string | null;
   limit: ProviderLimitView | null;
@@ -554,6 +653,9 @@ export interface ProviderView {
   fingerprint: PeerFingerprint | null;
   /** models verified at connect time; [] = none recorded, not "authorized to nothing" */
   models: string[];
+  keyGeneration: number;
+  /** projected, poll-safe model evidence; only status==="current" is callable */
+  modelsEvidence: ProviderModelsEvidence;
   /** the provider's own native limit numbers, read through its keyed forward */
   limit: ProviderLimitView | null;
   createdAt: string;
@@ -561,7 +663,7 @@ export interface ProviderView {
   lastConnectedAt: string | null;
 }
 
-export function providerView(p: ProviderConnection): ProviderView {
+export function providerView(p: ProviderConnection, now = Date.now()): ProviderView {
   return {
     id: p.id,
     remoteMagpieId: p.remoteMagpieId,
@@ -574,6 +676,8 @@ export function providerView(p: ProviderConnection): ProviderView {
     detail: p.detail,
     fingerprint: p.fingerprint,
     models: Array.isArray(p.models) ? [...p.models] : [],
+    keyGeneration: Number.isInteger(p.keyGeneration) && (p.keyGeneration ?? 0) > 0 ? p.keyGeneration! : 1,
+    modelsEvidence: projectModelsEvidence(p, now),
     limit: p.limit ?? null,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
