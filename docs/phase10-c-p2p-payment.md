@@ -70,10 +70,12 @@ signature frame is sent. A provider-side verification failure becomes
 
 The consumer's `obligationResolver()` returns a `TrustedPaymentObligation`
 (`source:"p2p-authenticated-request"`) only when the stored obligation is signed,
-`waitingpayment`, not peer-confirming/received/actionneeded, and unexpired. That
-resolver plugs into the approved `PaymentLocalService`, whose existing preview/
-reserve/mark actions and journal remain the send gate. The journal, not this module,
-decides the send permit.
+locally `waitingpayment`, the provider has acknowledged `waitingpayment` after
+verifying the signature (peer status), and it is unexpired. A local signature alone
+does not permit a send; confirming/received/actionneeded and a missing provider ack
+deny the resolver. That resolver plugs into the approved `PaymentLocalService`,
+whose existing preview/reserve/mark actions and journal remain the send gate. The
+journal, not this module, decides the send permit.
 
 ## 4. Store and status
 
@@ -87,9 +89,12 @@ different payload.
 
 Status rules:
 
-- a consumer signature only reaches `waitingpayment`;
+- a consumer signature only reaches local `waitingpayment`; the provider sends a
+  `waitingpayment` status only after it verifies the signature, and the consumer
+  resolver requires that peer ack before a send;
 - `confirming`/`received` come only from a **local** `PaymentObservation` (the
-  provider's Watcher/chain service), never from a remote message;
+  provider's Watcher/chain service), never from a remote message; peer status cannot
+  regress from confirming/received to waitingpayment;
 - the provider sends the status over P2P; the consumer stores it as `peerStatus`, not
   as local credit; its resolver denies a new payment once the peer reports
   confirming/received/actionneeded;

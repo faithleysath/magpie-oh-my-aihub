@@ -68,6 +68,15 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Peer status is informational and must not regress after confirming/received. */
+function peerStatusAcceptable(current: PaymentStatus | null, next: PaymentStatus): boolean {
+  if (current === null || current === next) return true;
+  if (current === "received") return false;
+  if (current === "confirming" && next === "waitingpayment") return false;
+  if (current === "actionneeded" && next === "waitingpayment") return false;
+  return true;
+}
+
 function makeFrame(input: {
   kind: PaymentFrame["kind"];
   from: PaymentPeer;
@@ -385,7 +394,7 @@ export class ProviderPaymentService {
       if (request.selection.consumerId !== ctx.from.nodeId || request.consumerFingerprint !== ctx.from.fingerprint) {
         paymentFail("peer-mismatch", "status sender is not the request consumer");
       }
-      if (request.peerStatus === "received" && body.status !== "received") return { code: "peer-status" };
+      if (!peerStatusAcceptable(request.peerStatus, body.status)) return { code: "peer-status" };
       this.options.store.updateProviderRequest({ requestId: request.requestId, peerStatus: body.status, nowMs: this.now() });
       return { code: "peer-status" };
     }
@@ -527,7 +536,7 @@ export class ConsumerPaymentService {
       if (ctx.from.nodeId !== obligation.provider.nodeId || ctx.from.fingerprint !== obligation.provider.fingerprint) {
         paymentFail("peer-mismatch", "status sender is not the obligation provider");
       }
-      if (obligation.peerStatus === "received" && body.status !== "received") return { code: "peer-status" };
+      if (!peerStatusAcceptable(obligation.peerStatus, body.status)) return { code: "peer-status" };
       this.options.store.updateObligation({
         requestId: obligation.requestId, peerStatus: body.status, statusSource: "peer", nowMs: this.now(),
       });
@@ -596,7 +605,10 @@ export class ConsumerPaymentService {
         const row = this.options.store.obligationByInvoice(obligationId);
         if (!row || !row.binding) return null;
         if (row.status !== "waitingpayment") return null;
-        if (row.peerStatus === "confirming" || row.peerStatus === "received" || row.peerStatus === "actionneeded") return null;
+        // Do not let the consumer send before the provider has verified the
+        // signature. The provider sends waitingpayment only after verification;
+        // confirming/received/actionneeded are not a send permit.
+        if (row.peerStatus !== "waitingpayment") return null;
         if (row.expiresAtMs <= this.now()) return null;
         return {
           obligationId: row.invoiceId,
