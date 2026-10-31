@@ -5,7 +5,10 @@ import { capLabel, checkLabel, modelEvidenceSummary, mountProviders, parseTransp
 const pricing = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 };
 const model = { id: "native/demo", displayName: "本机模型", pricing, completePrice: true, allowedByPolicy: true };
 const fingerprint = "a".repeat(64), quoteHash = "b".repeat(64);
-const peer = { nodeId: "a".repeat(16), hostname: "伙伴甲", status: "unverified", online: true, identity: { fingerprint }, quoteHash, quote: { node: { displayName: "伙伴甲" }, models: [model], publication: { version: 1 }, identity: { fingerprint } } };
+// Shaped like service.catalogStatus().peers: a neighbour fact (`online`) and a
+// publication fact (`catalog`) are separate, and only a published, unexpired
+// quote may be requested.
+const peer = { nodeId: "a".repeat(16), hostname: "伙伴甲", status: "unverified", online: true, catalog: "published", quoteFresh: true, quoteExpiresAt: "2099-01-01T00:00:00.000Z", lastQuoteAt: "2026-10-31T00:00:00.000Z", identity: { fingerprint }, quoteHash, quote: { node: { displayName: "伙伴甲" }, models: [model], publication: { version: 1 }, identity: { fingerprint } } };
 const baseState = () => ({ schema: "ohmyaihub/console/1", at: "2026-10-30T00:00:00Z", configured: true, status: { config: { sharingEnabled: true, consumingEnabled: true, catalog: {} }, catalog: { peers: [structuredClone(peer)], quote: { contentHash: quoteHash, identity: { fingerprint }, models: [model] } }, consumers: [], providers: [] }, workflows: { requests: [] }, shareCandidates: { models: [model] } });
 
 // Minimal DOM records node properties and dispatches real module listeners.
@@ -1013,6 +1016,59 @@ describe("zero-file P2P UI (assembly draft contract, mocked state)", () => {
       expect(approveCalls(r).map((call) => call.name)).toEqual(["p2p-approve"]);
       expect(r.calls.some((call) => ["connection-request", "request-import"].includes(call.name))).toBeFalse();
       expect(r.notices.at(-1)[0]).not.toContain("操作已完成");
+    } finally { r.cleanup(); }
+  });
+});
+
+describe("a network neighbour is not a published catalogue", () => {
+  const withdrawn = (over = {}) => {
+    const state = baseState();
+    const p = state.status.catalog.peers[0];
+    Object.assign(p, {
+      status: "no-catalog", online: true, catalog: "withdrawn", quote: null, quoteHash: null,
+      fetchedAt: null, quoteFresh: false, quoteExpiresAt: null, lastQuoteAt: "2026-10-31T00:00:00.000Z",
+    }, over);
+    return state;
+  };
+
+  test("a withdrawn catalogue keeps the neighbour but offers nothing to request", () => {
+    const r = runtime(withdrawn());
+    try {
+      const panel = r.roots["discovery-panel"];
+      expect(panel.textContent).toContain("已撤下目录");
+      expect(panel.textContent).toContain("网络在线");
+      expect(panel.textContent).toContain("已停止共享或撤下目录");
+      expect(panel.textContent).not.toContain("个模型");
+      // There is no quote object at all, so no request/connect action is even
+      // rendered for this neighbour.
+      expect(find(panel, "button", "申请使用（无文件）")).toBeUndefined();
+      expect(find(panel, "button", "选择模型并生成文件")).toBeUndefined();
+      expect(find(panel, "button", "已有密钥，连接此伙伴")).toBeUndefined();
+    } finally { r.cleanup(); }
+  });
+
+  test("an expired quote is still visible as last-known but cannot be requested", () => {
+    const state = baseState();
+    Object.assign(state.status.catalog.peers[0], {
+      status: "stale", catalog: "published", quoteFresh: false,
+      quoteExpiresAt: "2026-10-30T23:00:00.000Z", fetchedAt: "2026-10-30T22:58:00.000Z",
+    });
+    const r = runtime(state);
+    try {
+      const panel = r.roots["discovery-panel"];
+      expect(panel.textContent).toContain("报价已过期");
+      expect(find(panel, "button", "选择模型并生成文件").disabled).toBeTrue();
+      expect(find(panel, "button", "申请使用（无文件）").disabled).toBeTrue();
+    } finally { r.cleanup(); }
+  });
+
+  test("a published, fresh quote still enables the emergency file flow", () => {
+    const state = baseState();
+    state.status.catalog.peers[0].status = "verified";
+    const r = runtime(state);
+    try {
+      const panel = r.roots["discovery-panel"];
+      expect(find(panel, "button", "选择模型并生成文件").disabled).toBeFalse();
     } finally { r.cleanup(); }
   });
 });

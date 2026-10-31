@@ -1,5 +1,6 @@
 import { ConsoleError, consumeTicketFragment, createSessionClient, pollState, waitForPairing } from "./session.js";
 import { mountProviders, checkLabel, modelEvidenceSummary } from "./providers.js";
+import { networkFacts, neighborStatus } from "./network.js";
 import { mountWallet } from "./wallet.js";
 
 // Remove the one-use credential before any asynchronous work or page rendering.
@@ -441,15 +442,9 @@ function renderNetwork(state) {
       ? (et.running ? `网络引擎正在运行${et.coreVersion ? ` · EasyTier ${et.coreVersion}` : ""}；每一项都来自本机实际读取。` : "网络引擎当前没有运行；配置已保存不等于在线。")
       : "还没有加入网络；填好左侧三个字段后点“连接网络”。"));
 
-  const node = object(network.thisNode);
-  const facts = [
-    ["网络名称", node.networkName || c.networkName || "未配置"],
-    ["本机节点名", node.hostname || c.hostname || "等待生成"],
-    ["虚拟地址", node.virtualIpv4 || c.virtualIpv4 || "未分配"],
-    ["网络引擎", core.version || et.coreVersion ? `EasyTier ${core.version || et.coreVersion} · no-TUN` : (core.running ?? et.running ? "运行中" : "未运行")],
-    ["目录发布", typeof object(network.catalog).publishing === "boolean" ? (object(network.catalog).publishing ? `已发布 · ${object(network.catalog).modelCount ?? "未知"} 个模型` : "未发布") : (object(c.catalog).enabled ? "已发布" : "未发布")],
-    ["状态证据", evidence.readAt ? `${time(evidence.readAt)}${evidence.staleMs ? ` · ${Math.round(evidence.staleMs / 1000)} 秒前` : ""}` : (s.checksAt ? time(s.checksAt) : "尚未读取")],
-  ];
+  // A stopped core or an old read leaves the identity and neighbours as
+  // last-known facts. They are labelled, never presented as a live state.
+  const facts = networkFacts(network, et, c, time).rows;
   const factList = $("network-facts");
   factList.replaceChildren();
   for (const [label, value] of facts) {
@@ -486,9 +481,10 @@ function renderNetwork(state) {
     detail.textContent = bits.join(" · ") || "未提供地址";
     body.append(title, detail);
     li.append(avatar, body);
-    // A missing value is shown as unknown, never as zero or false.
-    if (peer.online === true) li.append(badge("在线", "good"));
-    else if (peer.online === false) li.append(badge("离线", "warn"));
+    // A missing value is shown as unknown, never as zero or false. A row from
+    // a stopped core or an old read is last-known, not "online".
+    const status = neighborStatus(peer);
+    if (status) li.append(badge(status.text, status.tone));
     if (typeof peer.latencyMs === "number") li.append(badge(`${peer.latencyMs} ms`, "info"));
     peersList.append(li);
   }

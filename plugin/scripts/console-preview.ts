@@ -111,11 +111,11 @@ function configuredState(): any {
       catalog: {
         enabled: true,
         peers: [{
-          nodeId: "a".repeat(16), hostname: "partner-harbor", status: "verified", online: true,
+          nodeId: "a".repeat(16), hostname: "partner-harbor", status: "verified", online: true, catalog: "published", quoteFresh: true, quoteExpiresAt: new Date(Date.now() + 120_000).toISOString(),
           identity: { fingerprint: "f".repeat(64) }, quoteHash: "b".repeat(64),
           quote: { node: { displayName: "Harbor Studio", contact: "harbor@example.invalid" }, publication: { version: 3, updatedAt: "2026-10-31T01:40:00.000Z" }, identity: { fingerprint: "f".repeat(64) }, models: [model("qwen/qwen3-32b", "Qwen3 32B", 0.1, 0.3)] },
         }, {
-          nodeId: "c".repeat(16), hostname: "partner-new", status: "unverified", online: true,
+          nodeId: "c".repeat(16), hostname: "partner-new", status: "unverified", online: true, catalog: "published", quoteFresh: true, quoteExpiresAt: new Date(Date.now() + 120_000).toISOString(),
           identity: { fingerprint: "e".repeat(64) }, quoteHash: "d".repeat(64),
           quote: { node: { displayName: "New Peer" }, publication: { version: 1, updatedAt: "2026-10-31T01:45:00.000Z" }, identity: { fingerprint: "e".repeat(64) }, models: [model("deepseek/deepseek-chat", "DeepSeek Chat", 0.27, 1.1)] },
         }],

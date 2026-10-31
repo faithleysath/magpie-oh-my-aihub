@@ -21,10 +21,42 @@ export function selectableModels(models, selected) {
   const chosen = new Set(selected);
   return items(models).filter((model) => chosen.has(model.id) && model.completePrice !== false && priceText(model.pricing) !== "价格不完整，不能授权").map((model) => model.id);
 }
+/**
+ * A peer is a network neighbour and a catalogue publisher at the same time, so
+ * "online" never implies "offering". Mirrors service.catalogQuoteUsability: a
+ * withdrawn catalogue or an expired quote cannot be requested or connected.
+ */
+export function peerQuoteUsability(peer, now = Date.now()) {
+  if (!peer || peer.status === "self") return { usable: false, detail: "self" };
+  if (peer.online !== true) return { usable: false, detail: "offline" };
+  if (peer.catalog === "withdrawn" || peer.status === "no-catalog") return { usable: false, detail: "withdrawn" };
+  if (peer.catalog !== "published" || !peer.quote) return { usable: false, detail: "no-quote" };
+  if (peer.status === "identity-changed") return { usable: false, detail: "identity-changed" };
+  const expires = peer.quoteExpiresAt ? Date.parse(peer.quoteExpiresAt) : NaN;
+  // `quoteFresh` comes from the service's own clock; the expiry timestamp is a
+  // fallback for snapshots written by an older plugin.
+  const fresh = typeof peer.quoteFresh === "boolean" ? peer.quoteFresh : Number.isFinite(expires) && expires > now;
+  if (!fresh) return { usable: false, detail: "expired" };
+  if (peer.status === "stale") return { usable: false, detail: "stale" };
+  return { usable: true, detail: null };
+}
+
+const QUOTE_UNUSABLE_TEXT = {
+  offline: "伙伴当前离线；目录里的是上次看到的内容，不能申请。",
+  withdrawn: "伙伴已停用共享或撤下目录；旧模型与报价不再可申请，刷新后会消失。",
+  "no-quote": "伙伴还没有发布可验证的目录报价，不能申请。",
+  expired: "伙伴的报价已过期；请刷新目录并核对当前报价后再申请。",
+  "identity-changed": "伙伴身份已变化，确认新指纹前不能申请。",
+  stale: "伙伴的报价已过期或出现回退，请刷新目录并确认最新报价。",
+};
+
 export function peerAcceptance(peer) {
   return { nodeId: peer.nodeId || peer.quote?.node?.id, fingerprint: peer.pendingFingerprint || peer.identity?.fingerprint || peer.quote?.identity?.fingerprint, quoteHash: peer.quoteHash || peer.quote?.contentHash };
 }
-export function peerNextStep(status) {
+export function peerNextStep(status, peer = null) {
+  if (peer && peer.catalog === "withdrawn") {
+    return "伙伴网络在线，但已停止共享或撤下目录；旧模型与报价不能再申请，刷新后这一步会消失。";
+  }
   const guidance = {
     unverified: "请先通过可信渠道核对完整指纹，再点击“核对并接受身份”。",
     "identity-changed": "伙伴身份已变化。请联系对方核对新指纹，再点击“核对新身份”；确认前不能申请或连接。",
@@ -377,10 +409,16 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const card = el("article", null, "card workflow-section");
       const top = toolbar(peer.quote?.node?.displayName || peer.hostname || "网络伙伴");
       top.append(badge(statusNames[peer.status] || "尚未验证", peer.status === "verified" || peer.status === "connected" ? "good" : "warn"));
-      card.append(top, paragraph(`${items(peer.quote?.models).length} 个模型 · ${peer.online ? "在线" : "离线"} · ${peer.quote?.node?.contact || "未提供联系方式"}`));
+      const catalogFact = peer.catalog === "withdrawn"
+        ? "已撤下目录"
+        : peer.catalog === "published" && peer.quote
+          ? `${items(peer.quote.models).length} 个模型`
+          : "目录未读取";
+      const networkFact = peer.online === true ? "网络在线" : peer.online === false ? "网络离线" : "在线状态未确认";
+      card.append(top, paragraph(`${catalogFact} · ${networkFact} · ${peer.quote?.node?.contact || "未提供联系方式"}`));
       const acceptance = peerAcceptance(peer);
       card.append(details("查看完整身份与报价", [["身份指纹", acceptance.fingerprint], ["报价指纹", acceptance.quoteHash], ["报价版本", peer.quote?.publication?.version], ["更新时间", peer.quote?.publication?.updatedAt], ["身份说明", "自签名 TOFU，仅证明同一密钥签名，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
-      card.append(paragraph(peerNextStep(peer.status)));
+      card.append(paragraph(peerNextStep(peer.status, peer)));
       if (peer.detail) card.append(details("查看目录技术详情", [["原始诊断", peer.detail]]));
       const models = el("div", null, "discovery-models");
       for (const model of items(peer.quote?.models).filter((model) => !query || [model.id, model.displayName, peer.hostname, peer.quote?.node?.displayName].join(" ").toLowerCase().includes(query))) {
@@ -399,14 +437,18 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         const endpointTrusted = Boolean(endpoint.host) && Number.isInteger(endpoint.controlPort) && endpoint.controlPort >= 1 && endpoint.controlPort <= 65535;
         const controlReady = Boolean(presenceEntry) && security.signature === "valid" && endpointTrusted && presenceFresh && presenceEntry.capability?.control === true;
         const providesModels = presenceEntry ? presenceEntry.capability?.providesModels !== false : false;
-        const online = peer.online !== false;
-        const trusted = ["verified", "connected"].includes(peer.status) && peer.online;
-        const allowed = controlReady && providesModels && online;
+        const online = peer.online === true;
+        const trusted = ["verified", "connected"].includes(peer.status) && online;
+        // No zero-file request without a published, unexpired quote: a peer that
+        // stopped sharing stays a neighbour and must not offer its old models.
+        const quote = peerQuoteUsability(peer);
+        const allowed = controlReady && providesModels && online && quote.usable;
         const needsIdentity = Boolean(presenceEntry) && security.tofu !== "accepted";
         const request = button(needsIdentity ? "核对身份并申请使用" : "申请使用（无文件）", () => requestUsage(peer));
         request.disabled = !allowed;
         actions.append(request);
         if (!presenceEntry) actions.append(paragraph("此伙伴还没有可用的签名控制通道；无文件申请暂不可用，可使用下方高级应急文件流程。"));
+        else if (!quote.usable && QUOTE_UNUSABLE_TEXT[quote.detail]) actions.append(paragraph(QUOTE_UNUSABLE_TEXT[quote.detail]));
         else if (security.signature === "invalid") actions.append(paragraph("此伙伴的签名无效，不能发起申请。"));
         else if (security.signature !== "valid") actions.append(paragraph("此伙伴的签名状态未知；确认签名前不会发送申请。"));
         else if (!endpointTrusted) actions.append(paragraph("此伙伴的控制端点不可信或未报告；无文件申请暂不可用。"));
@@ -425,9 +467,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         }
         const legacy = el("details", null, "workflow-details");
         legacy.append(el("summary", "高级应急：旧版文件流程"));
+        const usable = peerQuoteUsability(peer);
         const fileRequest = button("选择模型并生成文件", () => requestConnection(peer));
         const connect = button("已有密钥，连接此伙伴", () => connectPeer(peer));
-        fileRequest.disabled = !trusted; connect.disabled = !trusted;
+        fileRequest.disabled = !trusted || !usable.usable;
+        connect.disabled = !trusted || !usable.usable;
+        if (!usable.usable && QUOTE_UNUSABLE_TEXT[usable.detail]) legacy.append(paragraph(QUOTE_UNUSABLE_TEXT[usable.detail]));
         const legacyActions = el("div", null, "workflow-actions"); legacyActions.append(fileRequest, connect);
         legacy.append(paragraph("旧版需要下载/导入 JSON 或手工交付密钥；仅在没有可用的无文件连接时使用。"), legacyActions);
         card.append(legacy);

@@ -123,8 +123,13 @@ describe("five page shell", () => {
     expect(app).toContain("object(s.network)");
     expect(app).toContain("network.neighbors");
     expect(app).toContain("network.ports");
-    expect(app).toContain('peer.online === true');
-    expect(app).toContain('peer.online === false');
+    // The "unknown is never online/offline" rule lives in the pure network
+    // projection module, which the page imports.
+    const network = readFileSync(new URL("./network.js", import.meta.url), "utf8");
+    expect(app).toContain("./network.js");
+    expect(network).toContain('peer.online === true');
+    expect(network).toContain('peer.online === false');
+    expect(network).toContain('peer.stale === true');
     expect(app).not.toMatch(/latencyMs\s*\?\?/);
     expect(app).not.toContain("editable: true");
     // The topbar reports the console session, never P2P membership.

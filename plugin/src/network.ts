@@ -40,6 +40,10 @@ export interface NetworkNeighbor {
   /** only from this node's own records; "none" != "not authorized anywhere" */
   relation: "none" | "i-consume" | "unknown";
   lastCatalogReadAt: string | null;
+  /** the row comes from an old read or a stopped core; never "now" */
+  stale: boolean;
+  /** when this row's facts were last read (EasyTier peer/route read) */
+  evidenceAt: string | null;
 }
 
 export interface NetworkPortView {
@@ -69,6 +73,10 @@ export interface NetworkView {
     staleMs: number | null;
     complete: boolean;
     problems: string[];
+    /** core running and the last peer/route read is inside its window */
+    live: boolean;
+    /** the facts below are the last known ones, not a current read */
+    stale: boolean;
   };
   core: {
     running: boolean;
@@ -85,6 +93,10 @@ export interface NetworkView {
     hostname: string | null;
     virtualIpv4: string | null;
     networkName: string | null;
+    /** when the core last reported this identity; null = never read */
+    observedAt: string | null;
+    /** the identity/address is last-known or configured, not a live fact */
+    stale: boolean;
   };
   neighbors: NetworkNeighbor[];
   ports: NetworkPortView[];
@@ -315,6 +327,8 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
       modelsAuthorizedForMe: modelCounts.length ? Math.max(...modelCounts) : null,
       relation,
       lastCatalogReadAt: catalogPeer?.fetchedAt ?? null,
+      stale: !peersFresh || !et.running,
+      evidenceAt: readAt,
     });
   };
   for (const [host, peer] of peersByHost) {
@@ -472,9 +486,9 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
     state === "unconfigured"
       ? "This node has not joined a network yet."
       : state === "failed"
-        ? "The overlay core is not running; open diagnostics for the recorded error."
+        ? `The overlay core is not running${peerRead ? "; the identity, ports and neighbours below are last known" : ""}; open diagnostics for the recorded error.`
         : state === "offline"
-          ? "The overlay core is not running."
+          ? `The overlay core is not running${peerRead ? "; the identity, ports and neighbours below are last known" : ""}.`
           : state === "starting"
             ? "The overlay core is running; no peer list has been read yet."
             : state === "degraded"
@@ -497,6 +511,8 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
       staleMs,
       complete: peerRead && routeRead,
       problems: problems.slice(0, 5),
+      live: running && peersFresh,
+      stale: !running || !peersFresh,
     },
     core: {
       running,
@@ -513,6 +529,8 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
       hostname: et.hostname ?? null,
       virtualIpv4: et.virtualIpv4 ?? cfg?.virtualIpv4 ?? null,
       networkName: et.networkName ?? cfg?.networkName ?? null,
+      observedAt: readAt,
+      stale: !running || !peersFresh,
     },
     neighbors,
     ports,

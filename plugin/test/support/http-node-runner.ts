@@ -108,6 +108,15 @@ const providerPeer = {
   hostname: `ohmyaihub-${providerNodeId}`,
   status: "verified",
   online: true,
+  // The real service publishes the neighbour fact (`online`) and the
+  // publication fact (`catalog`/`quoteFresh`) separately; a fixture that omits
+  // them would be a shape the service never produces.
+  catalog: "published",
+  quoteFresh: true,
+  quoteExpiresAt: "2099-01-01T00:00:00.000Z",
+  fetchedAt: "2026-10-31T00:00:00.000Z",
+  lastQuoteAt: "2026-10-31T00:00:00.000Z",
+  lastAttemptAt: "2026-10-31T00:00:00.000Z",
   mappedCidr,
   catalogPort,
   quoteHash,

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EasytierSupervisor, type EasytierConfig, type SupervisorOptions } from "../src/easytier.ts";
+import { EasytierSupervisor, renderConfig, type EasytierConfig, type SupervisorOptions } from "../src/easytier.ts";
 
 const cfg: EasytierConfig = {
   sharingEnabled: false,
@@ -82,7 +82,9 @@ afterEach(async () => {
 });
 
 function saveNode(instanceId: string): void {
-  const config = `hostname = "x"\ninstance_id = "${instanceId}"\n[network_identity]\nnetwork_name = "ownership-lab"\n`;
+  // A real core reports the config it is running; the ACL/no_tun expectations
+  // are then satisfied exactly as they would be for the generated TOML.
+  const config = renderConfig({ ...cfg, instanceId });
   writeFileSync(nodeJson, JSON.stringify({ peer_id: 1, proxy_cidrs: [], listeners: [], config }));
 }
 
@@ -184,4 +186,70 @@ describe("RPC portal ownership", () => {
     expect(cliCalls()).toBe(0);
     expect(sup.snapshot().lastError).toMatch(/cannot prove the RPC portal/);
   });
+});
+
+describe("a starting or concurrently probed core is not struck down", () => {
+  function raceSupervisor(read: () => number[], extraProbe: NonNullable<SupervisorOptions["probe"]> = {}) {
+    const base = ownerPids(read);
+    const sup = new EasytierSupervisor(
+      { onState: () => {} },
+      {
+        binaries: bins,
+        rpcTimeoutMs: 8000,
+        probe: {
+          ...base,
+          ...extraProbe,
+          // In these fixtures the fake core binds no real TCP socket; the owner
+          // probe above is the authority under test.
+          rpcListeners: async () => ["127.0.0.1"],
+        },
+      },
+    );
+    supervisors.push(sup);
+    return sup;
+  }
+
+  test("a monitor refresh during start neither probes nor stops the new core", async () => {
+    saveNode(cfg.instanceId);
+    let seen = 0;
+    // The socket is bound by our child, but the OS table does not attribute it
+    // yet for the first several reads: exactly the stop-share restart window.
+    const sup = raceSupervisor(() => {
+      seen += 1;
+      return seen > 10 ? ownPid() : [];
+    });
+    const starting = sup.start(cfg);
+    for (let i = 0; i < 30; i += 1) {
+      await sup.refresh().catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    const state = await starting;
+    expect(state.running).toBe(true);
+    expect(state.lastError).toBeNull();
+    expect(state.aclProblems).toEqual([]);
+    expect(coreSpawns()).toBe(1);
+  }, 20_000);
+
+  test("two overlapping refreshes count one strike, not two", async () => {
+    saveNode(cfg.instanceId);
+    let owners: () => number[] = ownPid;
+    const sup = raceSupervisor(() => owners());
+    await sup.start(cfg);
+    expect(sup.snapshot().running).toBe(true);
+
+    // The portal stops being attributable (a transient OS/pid condition). One
+    // probe may strike; three concurrent probes must not add three strikes and
+    // stop a core that a single check would only warn about.
+    owners = () => [];
+    const results = await Promise.all([sup.refresh(), sup.refresh(), sup.refresh()]);
+    for (const state of results) expect(state.running).toBe(true);
+    expect(sup.snapshot().aclProblems.length).toBeGreaterThan(0);
+
+    // A second, separate read reaches the documented two-strike threshold and
+    // stops the unproven core honestly.
+    await sup.refresh();
+    expect(sup.snapshot().running).toBe(false);
+    expect(sup.snapshot().lastError).toMatch(/refusing to serve/);
+    await sup.stop();
+  }, 20_000);
 });

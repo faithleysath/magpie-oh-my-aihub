@@ -486,6 +486,8 @@ export class EasytierSupervisor {
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   /** true between spawning the core and proving its RPC belongs to it */
   private startupPending = false;
+  /** the one in-flight refresh; concurrent callers await the same probe */
+  private refreshing: Promise<SupervisorState> | null = null;
   private consecutiveFailures = 0;
   private lastStartAt = 0;
   private lastRelocateAt = 0;
@@ -1003,6 +1005,24 @@ export class EasytierSupervisor {
    * serving again.
    */
   async refresh(): Promise<SupervisorState> {
+    if (!this.state.running) return this.snapshot();
+    // start() proves the new core itself before it returns. A monitor tick or a
+    // service tick that lands inside that window must not treat "RPC not bound
+    // yet" as an unsafe runtime: a single such read used to add both "cannot read
+    // the configuration" and "RPC held by nobody" and stop the core after a
+    // supervised restart (the stop-share path). The start remains the only owner
+    // of the proof; it fails closed if the core never answers.
+    if (this.startupPending || this.stopping) return this.snapshot();
+    // One probe at a time: two overlapping refreshes could count two strikes
+    // for one transient condition.
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = this.refreshOnce().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  private async refreshOnce(): Promise<SupervisorState> {
     if (!this.state.running) return this.snapshot();
     const problems: string[] = [];
 

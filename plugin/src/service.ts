@@ -345,7 +345,61 @@ export interface CatalogPeerView extends DirectoryPeer {
   quoteHash: string | null;
   fetchedAt: string | null;
   connectedProviderId: string | null;
+  /**
+   * What the overlay currently advertises, kept separate from `online`:
+   * `online` is a network-neighbour fact, `catalog` is a publication fact. A
+   * peer that stops sharing keeps its network row but can no longer serve a
+   * quote, so it must not be presented as an applicable online offer.
+   */
+  catalog: "published" | "withdrawn" | "conflict" | "unknown";
+  /** the cached quote was read inside CATALOG_QUOTE_TTL_MS and may be applied */
+  quoteFresh: boolean;
+  /** when the quote may no longer be applied; null without a quote */
+  quoteExpiresAt: string | null;
+  /** the last time a quote was read successfully, kept after a withdrawal */
+  lastQuoteAt: string | null;
+  /** the last probe attempt; never used as quote freshness */
+  lastAttemptAt: string | null;
 }
+
+/**
+ * Whether a discovered peer's cached quote may be used to request or connect.
+ * Online-ness of the network neighbour is deliberately separate from whether a
+ * catalogue is still published: a peer that stopped sharing stays a neighbour
+ * but must not offer its last quote any more. Pure, so both the service guards
+ * and the tests use one rule.
+ */
+export function catalogQuoteUsability(peer: CatalogPeerView, now = Date.now()): { usable: boolean; detail: string | null } {
+  if (peer.status === "self") return { usable: false, detail: "is this node" };
+  if (peer.online !== true) return { usable: false, detail: "is offline; refresh the directory when it returns" };
+  if (peer.catalog === "withdrawn" || peer.status === "no-catalog") {
+    return { usable: false, detail: "is online as a neighbour but has withdrawn its catalogue (sharing stopped or the mapping is gone); refresh the directory" };
+  }
+  if (peer.catalog !== "published" || !peer.quote || !peer.quoteHash) {
+    return { usable: false, detail: "has no catalogue quote to request; refresh the directory" };
+  }
+  if (peer.status === "identity-changed") return { usable: false, detail: "changed its catalogue identity; accept the new fingerprint explicitly first" };
+  // `quoteFresh` is computed by the service from its own clock, so it is the
+  // authority here; mixing in the caller's wall clock would expire a quote
+  // that was just read under an injected clock.
+  const expires = peer.quoteExpiresAt ? Date.parse(peer.quoteExpiresAt) : Number.NaN;
+  const fresh = typeof peer.quoteFresh === "boolean"
+    ? peer.quoteFresh
+    : Number.isFinite(expires) && expires > now;
+  if (!fresh) {
+    return { usable: false, detail: "has an expired quote; refresh the directory and review the current quote before requesting or connecting" };
+  }
+  if (peer.status === "stale") return { usable: false, detail: "offered an older or replayed quote; refresh the directory first" };
+  return { usable: true, detail: null };
+}
+
+/**
+ * How long a quote read over the overlay may be applied. EasyTier discovery is
+ * polled every `catalog.refreshSec` (default 20 s); a quote this old is still
+ * suspicious after a provider withdraws its export, so the window is bounded.
+ * After it, the peer is `stale` and no request/connect may use the quote.
+ */
+export const CATALOG_QUOTE_TTL_MS = 120_000;
 
 export interface CatalogStatus {
   config: CatalogConfig;
@@ -435,6 +489,8 @@ export class Service {
   private catalogPeers: CatalogPeerView[] = [];
   private catalogLastRefreshAt: string | null = null;
   private catalogRefreshing = false;
+  /** bounded supervised recovery after the supervisor stopped an unproven core */
+  private coreRecovery = { attempts: 0, nextAt: 0 };
   private catalogError: string | null = null;
   private catalogNextQuoteAt = 0;
   private catalogNextRefreshAt = 0;
@@ -1177,6 +1233,7 @@ export class Service {
     } catch {
       /* the supervisor reports its own state */
     }
+    await this.recoverCoreIfHalted().catch((e) => logger.warn(`core recovery failed: ${String(e)}`));
     if (this.busy()) return;
     // Detect a change made to Magpie's provider list outside the plugin. This is
     // a polled check, so the protection window is bounded by this interval (15s),
@@ -1215,6 +1272,38 @@ export class Service {
         logger.warn(`catalogue rebuild failed: ${this.catalogError}`);
         this.writeSnapshot();
       });
+    }
+  }
+
+  /**
+   * A core the supervisor stopped because it could not prove it safe is not a
+   * normal stop; it stays stopped and the checks say so. Recovery is a bounded
+   * number of full supervised starts (which re-validate the TOML, ACL, owner and
+   * RPC identity), with backoff. After the budget the state stays honestly
+   * degraded until an operator acts; nothing is silently skipped.
+   */
+  async recoverCoreIfHalted(): Promise<void> {
+    const cfg = this.state.config;
+    if (!cfg) return;
+    const snap = this.supervisor.snapshot();
+    if (snap.running) {
+      this.coreRecovery.attempts = 0;
+      this.coreRecovery.nextAt = 0;
+      return;
+    }
+    if (!(snap.lastError ?? "").startsWith("refusing to serve")) return;
+    if (this.busy()) return;
+    const now = this.clock().getTime();
+    if (now < this.coreRecovery.nextAt || this.coreRecovery.attempts >= 3) return;
+    this.coreRecovery.attempts += 1;
+    this.coreRecovery.nextAt = now + Math.min(60_000, 5_000 * 2 ** (this.coreRecovery.attempts - 1));
+    logger.warn(`the core was stopped by a failed safety check; supervised restart ${this.coreRecovery.attempts}/3`);
+    try {
+      await this.applyConfig(cfg);
+      await this.applyCatalog();
+      logger.info("the supervised restart proved the core safe again");
+    } catch (e) {
+      logger.error(`supervised restart after an unsafe stop failed: ${String(e)}`);
     }
   }
 
@@ -2391,11 +2480,8 @@ export class Service {
   catalogRequest(nodeId: string, models?: string[], acceptance?: CatalogAcceptance): Record<string, unknown> {
     const peer = this.catalogPeers.find((p) => p.identity?.keyId === nodeId || p.nodeId === nodeId || p.hostname === nodeId);
     if (!peer) throw new Error(`no discovered catalogue peer ${nodeId}; refresh the directory first`);
-    if (!peer.online) throw new Error(`${peer.hostname} is offline; refresh the directory when it returns`);
-    if (peer.status === "identity-changed") {
-      throw new Error(`the identity of ${peer.hostname} changed; accept its new fingerprint locally before requesting a connection`);
-    }
-    if (peer.status === "stale") throw new Error(`${peer.hostname} offered an older or replayed quote; refresh the directory first`);
+    const usability = catalogQuoteUsability(peer);
+    if (!usability.usable) throw new Error(`${peer.hostname} ${usability.detail}`);
     if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
     assertCatalogAcceptance(peer, acceptance);
     if (models !== undefined && !Array.isArray(models)) throw new Error("models must be an array of provider/model ids");
@@ -2488,15 +2574,16 @@ export class Service {
     return this.serialize(async () => {
     const peer = this.catalogPeers.find((p) => p.identity?.keyId === nodeId || p.nodeId === nodeId || p.hostname === nodeId);
     if (!peer) throw new Error(`no discovered catalogue peer ${nodeId}; refresh the directory first`);
-    if (!peer.online) throw new Error(`${peer.hostname} is offline; refresh the directory when it returns`);
-    if (peer.status === "identity-changed") throw new Error("the provider's catalogue identity changed; trust it explicitly before connecting");
-    if (peer.status === "stale") throw new Error(`${peer.hostname} offered an older or replayed quote; refresh the directory first`);
+    const usability = catalogQuoteUsability(peer);
+    if (!usability.usable) throw new Error(`${peer.hostname} ${usability.detail}`);
     if (!peer.quote || !peer.mappedCidr) throw new Error(`no catalogue quote from ${peer.hostname} yet`);
     assertCatalogAcceptance(peer, opts.acceptance);
     const id = opts.id ?? `peer-${peer.quote.node.id.replace(/[^a-z0-9-]/gi, "").slice(0, 20)}`;
     const revalidate = () => {
       const current = this.catalogPeers.find(p => p.nodeId === peer.nodeId);
       if (!current || !current.online || !current.quote || !current.mappedCidr) throw new RequestValidationError("the provider disappeared; refresh discovery before connecting");
+      const currentUsability = catalogQuoteUsability(current);
+      if (!currentUsability.usable) throw new RequestValidationError(`the provider's quote is no longer usable: ${currentUsability.detail}`);
       assertCatalogAcceptance(current, opts.acceptance);
       if (current.mappedCidr !== peer.mappedCidr || current.quote.node.gatewayPort !== peer.quote!.node.gatewayPort) throw new RequestValidationError("the provider address changed while connecting");
       if (opts.models) {
@@ -2727,11 +2814,14 @@ export class Service {
       });
       const trust = loadCatalogTrust();
       const prev = new Map(this.catalogPeers.map((p) => [p.hostname, p]));
-      const now = new Date().toISOString();
+      // The injected clock keeps quote freshness testable without waiting.
+      const nowDate = this.clock();
+      const now = nowDate.toISOString();
       const previousViews: CatalogPeerView[] = [];
       const liveHosts = new Set<string>();
       const candidates: { entry: DirectoryPeer; view: CatalogPeerView }[] = [];
 
+      const nowMs = nowDate.getTime();
       for (const entry of classified) {
         liveHosts.add(entry.hostname);
         const earlier = prev.get(entry.hostname);
@@ -2740,6 +2830,16 @@ export class Service {
             (entry.mappedCidr && mappedHost(p.mappedCidr) === mappedHost(entry.mappedCidr)) ||
             (entry.hostname && p.fingerprint?.hostname === entry.hostname),
         );
+        const ageMs = earlier?.fetchedAt ? nowMs - Date.parse(earlier.fetchedAt) : Number.NaN;
+        const quoteFresh = Boolean(earlier?.quote) && Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= CATALOG_QUOTE_TTL_MS;
+        // A live EasyTier neighbour with no exported/mapped address has stopped
+        // publishing its catalogue. That is a publication fact, independent of
+        // whether the peer is still reachable on the overlay.
+        const withdrawn = !entry.conflict && entry.route !== "self" && !entry.mappedCidr;
+        // Warnings about identity or a replayed quote survive an unreadable
+        // peer (that is the whole point of a warning), but only while a
+        // catalogue is actually published; a withdrawal supersedes them.
+        const sticky = !withdrawn && (earlier?.status === "identity-changed" || earlier?.status === "unverified" || earlier?.status === "stale");
         const view: CatalogPeerView = {
           ...entry,
           nodeId: earlier?.nodeId ?? null,
@@ -2747,21 +2847,46 @@ export class Service {
             ? "conflict"
             : entry.route === "self"
               ? "self"
-              : earlier?.status === "identity-changed" || earlier?.status === "stale" || earlier?.status === "unverified"
-                ? earlier.status
-                : connected && earlier?.identity && catalogIdentityAccepted(earlier.nodeId, earlier.identity.fingerprint)
-                  ? "connected"
-                : entry.mappedCidr
-                  ? "unreachable"
-                  : "no-catalog",
-          detail: entry.conflict,
+              : withdrawn
+                ? "no-catalog"
+                : sticky
+                  ? earlier!.status
+                  : !earlier?.quote
+                    ? "unreachable"
+                    : !quoteFresh
+                      ? "stale"
+                      : connected && earlier.identity && catalogIdentityAccepted(earlier.nodeId, earlier.identity.fingerprint)
+                        ? "connected"
+                        : earlier.status === "connected" || earlier.status === "verified"
+                          ? earlier.status
+                          : "unreachable",
+          detail: entry.conflict
+            ?? (withdrawn
+              ? "the peer is online but no longer publishes a catalogue address (share stopped or mapping withdrawn)"
+              : sticky
+                ? earlier!.detail
+                : !earlier?.quote
+                  ? null
+                  : !quoteFresh
+                    ? "the cached quote has expired; refresh the directory before requesting or connecting"
+                    : null),
           catalogPort: earlier?.catalogPort ?? null,
           identity: earlier?.identity ?? null,
           pendingFingerprint: earlier?.pendingFingerprint ?? null,
-          quote: earlier?.quote ?? null,
-          quoteHash: earlier?.quoteHash ?? null,
-          fetchedAt: earlier?.fetchedAt ?? null,
+          // A withdrawn catalog keeps its identity as last-known metadata but
+          // never a quote that could still be requested or connected with.
+          quote: withdrawn ? null : earlier?.quote ?? null,
+          quoteHash: withdrawn ? null : earlier?.quoteHash ?? null,
+          fetchedAt: withdrawn ? null : earlier?.fetchedAt ?? null,
           connectedProviderId: connected?.id ?? null,
+          catalog: entry.conflict ? "conflict" : withdrawn ? "withdrawn" : entry.mappedCidr ? "published" : "unknown",
+          quoteFresh: withdrawn ? false : quoteFresh,
+          quoteExpiresAt:
+            withdrawn || !earlier?.fetchedAt
+              ? null
+              : new Date(Date.parse(earlier.fetchedAt) + CATALOG_QUOTE_TTL_MS).toISOString(),
+          lastQuoteAt: earlier?.fetchedAt ?? earlier?.lastQuoteAt ?? null,
+          lastAttemptAt: earlier?.lastAttemptAt ?? null,
         };
         if (view.status !== "self" && view.status !== "conflict" && entry.mappedCidr) {
           candidates.push({ entry, view });
@@ -2775,23 +2900,29 @@ export class Service {
       for (const v of fetched) byHost.set(v.hostname, v);
 
       // Offline: keep the last quote for an hour so the page can say who was
-      // seen, but never keep probing a peer EasyTier no longer lists.
+      // seen, but never keep probing a peer EasyTier no longer lists. The quote
+      // is last-known display data only; it has expired for any application.
       for (const [host, old] of prev) {
         if (liveHosts.has(host)) continue;
-        const seen = old.fetchedAt ?? old.lastSeenAt;
-        if (seen && Date.now() - Date.parse(seen) > 60 * 60_000) continue;
+        const seen = old.lastQuoteAt ?? old.fetchedAt ?? old.lastSeenAt;
+        if (seen && nowMs - Date.parse(seen) > 60 * 60_000) continue;
         byHost.set(host, {
           ...old,
           online: false,
           status: "offline",
           detail: "not present in EasyTier's current peer list",
           lastSeenAt: old.lastSeenAt,
+          catalog: "unknown",
+          quoteFresh: false,
+          quoteExpiresAt: null,
+          lastQuoteAt: old.lastQuoteAt ?? old.fetchedAt ?? null,
+          lastAttemptAt: old.lastAttemptAt ?? old.fetchedAt ?? null,
         });
       }
 
       this.catalogPeers = [...byHost.values()].sort((a, b) => a.hostname.localeCompare(b.hostname));
       this.catalogLastRefreshAt = now;
-      this.catalogNextRefreshAt = Date.now() + Math.max(10, cfg.catalog.refreshSec) * 1000;
+      this.catalogNextRefreshAt = nowMs + Math.max(10, cfg.catalog.refreshSec) * 1000;
       saveCatalogTrust(trust);
       this.writeSnapshot();
       return this.catalogPeers;
@@ -2812,7 +2943,7 @@ export class Service {
     trust: Record<string, CatalogTrustRecord>,
   ): Promise<CatalogPeerView> {
     const mapped = mappedHost(entry.mappedCidr!);
-    const now = new Date().toISOString();
+    const now = this.clock().toISOString();
     // The default port is 3426. A host that runs several isolated lab instances
     // (or an operator who changed the port) may publish on the next few; probe a
     // small bounded range only until one answers, then remember that port.
@@ -2870,15 +3001,27 @@ export class Service {
       }
       return this.finishCatalogPeer(entry, base, cfg, trust, quote, verified, parsed, port, now);
     }
+    // A failed probe is not a fresh quote: `fetchedAt` keeps the time of the
+    // last *successful* read, and the application window is derived from it.
+    const expired = Boolean(base.quote) && !base.quoteFresh;
     return {
       ...base,
       // A failed refresh cannot erase a pending identity or replay warning.
-      status: ["identity-changed", "stale", "unverified"].includes(base.status)
+      status: ["identity-changed", "unverified"].includes(base.status)
         ? base.status
-        : base.connectedProviderId && base.identity && catalogIdentityAccepted(base.nodeId, base.identity.fingerprint) ? "connected" : "unreachable",
-      detail: lastDetail.slice(0, 300),
+        : expired || base.status === "stale"
+          ? "stale"
+          : base.connectedProviderId && base.identity && catalogIdentityAccepted(base.nodeId, base.identity.fingerprint) ? "connected" : "unreachable",
+      detail: expired
+        ? "the cached quote has expired and the peer did not answer; refresh the directory before requesting or connecting"
+        : lastDetail.slice(0, 300),
       catalogPort: base.catalogPort ?? null,
-      fetchedAt: now,
+      fetchedAt: base.fetchedAt,
+      lastAttemptAt: now,
+      catalog: base.catalog,
+      quoteFresh: base.quoteFresh,
+      quoteExpiresAt: base.quoteExpiresAt,
+      lastQuoteAt: base.lastQuoteAt ?? base.fetchedAt ?? null,
     };
   }
 
@@ -2913,7 +3056,7 @@ export class Service {
         detail: `catalogue offered v${quote.publication.version}, older than the last accepted v${lastVersion}; the newer cached quote was kept`,
         online: true,
         catalogPort: port,
-        fetchedAt: now,
+        lastAttemptAt: now,
       };
     }
     if (!keyChanged && quote.publication.version === lastVersion && lastHash && verified.contentHash !== lastHash) {
@@ -2924,7 +3067,7 @@ export class Service {
         detail: `catalogue reuses v${quote.publication.version} with different content (${verified.contentHash.slice(0, 12)}… vs ${lastHash.slice(0, 12)}…); refused`,
         online: true,
         catalogPort: port,
-        fetchedAt: now,
+        lastAttemptAt: now,
       };
     }
     let rec = known;
@@ -2993,6 +3136,11 @@ export class Service {
       quote: parsed as SignedCatalog,
       quoteHash: verified.contentHash,
       fetchedAt: now,
+      catalog: "published",
+      quoteFresh: true,
+      quoteExpiresAt: new Date(Date.parse(now) + CATALOG_QUOTE_TTL_MS).toISOString(),
+      lastQuoteAt: now,
+      lastAttemptAt: now,
     };
   }
 

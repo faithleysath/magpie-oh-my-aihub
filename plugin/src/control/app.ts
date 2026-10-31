@@ -14,7 +14,7 @@ import {
 import { mappedHost } from "../addresses.ts";
 import { catalogPriceVersion } from "../pricing.ts";
 import { claimFreePort, OsSocketOwnership, portRange, SocketBinder, verifyOwnedPort } from "../ports.ts";
-import type { Service } from "../service.ts";
+import { catalogQuoteUsability, type Service } from "../service.ts";
 import { startControlServer, type ControlServerHandle } from "./http.ts";
 import { createP2pBusinessPort } from "./p2p-port.ts";
 import { PRESENCE_PATH, signPresence, verifyPresence, type PresenceBody } from "./presence.ts";
@@ -415,6 +415,10 @@ export class ControlApp {
     const quoteHash = text(input.quoteHash, "quoteHash", 64);
     const peer = this.service.catalogStatus().peers.find((p) => p.nodeId === nodeId);
     if (!peer?.quote || !peer.mappedCidr || !peer.quoteHash) throw new Error("provider catalogue is not available");
+    // A withdrawn catalogue or an expired quote is not an offer, even if the
+    // signed presence still says the peer is online.
+    const usability = catalogQuoteUsability(peer);
+    if (!usability.usable) throw new Error(`provider ${usability.detail}`);
     if (peer.identity?.fingerprint !== fingerprint || peer.quoteHash !== quoteHash) throw new Error("the accepted fingerprint/quote is not current");
     if (peer.status !== "verified" && peer.status !== "connected") throw new Error("provider identity is not accepted");
     const available = peer.quote.models.map((m) => m.id);
