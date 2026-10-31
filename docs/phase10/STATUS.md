@@ -14,15 +14,17 @@
 | 快照时间 | 2026-10-31 |
 | 基线 main | `8ce5c57f565fb1b835021a9b730b61014eb47d5f` |
 | PR13 | `#13`，MERGED，merge SHA = 上述 main；CI run `41056993038` success |
-| 开发/文档分支 | `feature/phase10-simplified-p2p-ux`（已推送；仅 docs 变更；draft PR #14） |
+| 开发/文档分支 | `feature/phase10-simplified-p2p-ux` @ `5303d38`（= PR14 head；仅 docs） |
+| 集成分支 | `feature/phase10-integration` @ `877d0bc`（worktree `/tmp/oma-phase10-integration`；仅含批准的 clock `889973f`） |
 | 盘点工作树 | `/Users/laysath/Projects/magpie-oh-my-aihub-import` |
 | 纯 main 只读工作树 | `/tmp/oma-phase10-main-8ce5c57`（detached @ `8ce5c57`） |
 | 目标运行版本（已决定） | **Magpie 0.1.2289 + EasyTier 2.6.4**；隔离副本，不改用户安装 |
 | 本机安装 | `/Applications/Magpie.app` 0.1.2289（只做只读来源/复制） |
 | 计费/峰谷价 | 0.1.2289 的 `peak` 先 **fail-closed 拒绝**；后续单独实现，不再让用户选 |
-| 本地门禁 | typecheck / boot-check / secret-scan 通过；`bun run test` 740 pass / 5 fail（固定时钟，P0-3） |
+| 本地门禁 | typecheck / boot-check / secret-scan 通过；clock 集成本地仅跑 typecheck + 4 个纯钱包测试 32/0；**未跑全量**（防旧测试访问生产网关/公共 RPC，等 PR17 guard） |
 | 参考研究 | 审查代理 `6a326f2b-2249-4123-8f35-1fe35926e107`：`/tmp/oma-research/REFERENCE-REVIEW.md` |
-| PR14 | `#14` draft；主审文档范围审查通过，作为实现前置；**内容仅计划，无 GO**；不合并 |
+| PR14 | `#14` draft，head `5303d38`；**仅 docs，未含应用代码**；内容仅计划，无 GO；不合并 |
+| P0-clock 集成 | 源 `889973f5` → 新 `877d0bc5`；独立审通过、允许本地集成；**非产品 GO** |
 | 改动前 UI 证据 | `docs/phase10/evidence/`：3 份事实报告 + 16 张实拍 + SHA256SUMS；0.1.2289 真实宿主**空网络**；可标 REPRODUCED/已审查，**不能标 Visual UX GO** |
 | 实现代理模型 | `pi/magpie/group/deepseek-v4.1-flash`（max） |
 | 真实资金 | NO-GO；D 本阶段只出 NO-GO 清单，不执行真实资金 |
@@ -54,12 +56,13 @@
 | --- | --- | --- | --- | --- | --- |
 | A-ui | `/Users/laysath/.paseo/worktrees/1z728cdk/a-ui` | `ccb08749-badc-4512-9604-e93ce7bd76b9` | PR #25 head `cbce7004` | REVIEW | fixture 截图非真实 Magpie；66 前端测试/0；CI 5 既有 clock 失败；视觉审 `6a326f2b…` 进行中；主审阻断项待 fix；**不能 Visual GO** |
 | A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | PR #22 head `77d71b2`（完整 SHA 待 handoff） | BLOCKED | 主审发现 reported+bind 占用不能证明 PID ownership、RPC 先用后验；review `84ba711e…` + 实现者修；未集成 |
-| B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | PR #26 head `fdc7d4c4` base `8ce5c57`（draft） | REVIEW | 47 模块测试；**REVIEW 不叫 reviewed**；handoff `/tmp/oma-research/B-CORE-REVIEW-HANDOFF.md`；预审项待冻结 SHA 核验 |
-| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #19 head `0988c85a` / PR #20 head `277ed665` | BLOCKED | 独立审 `5d386756` 判不可集成（超时放槽/后台继续、旧接口/内存 generation/旧授权覆盖）；19fix 在做 |
+| B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | PR #26 head `fdc7d4c4`（冻结）base `8ce5c57` | BLOCKED | 独立审 `5d386756` 判 BLOCKED：B1 未认证 seq 关闭合法 session；B2 TOFU 换钥不更新 accepted；B3 uncertain 撤销死胡同/下一代不可达；core 三项小 fix 中 | 跨 messageId 幂等、请求/选中价格版本已验证修复；不能写整个 core 通过 |
+| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #19 head `7bcf7e0` / PR #20 head `277ed66` | BLOCKED | PR19 超时放槽/slowbody 取消经 `5d386756` 真 socket 复核，仅批准作 PR20 技术 base，不合并；PR20 旧 head 仍 BLOCKED，允许更新到 19 base 并小修持久 generation/旧授权覆盖/enforced | 不把 B 整体或正式运行写 DONE |
 | C-registry | `/Users/laysath/.paseo/worktrees/1z728cdk/c-registry` | `0c94d106-6442-470f-8f14-374c38ea20f7` | PR #21 head `5ef4430`（完整 SHA 待 handoff） | REVIEW | 真实只读主网余额 REPRODUCED；主网资金仍 NO-GO；未集成 |
 | C-wallet | `/Users/laysath/.paseo/worktrees/1z728cdk/c-wallet` | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | `feature/phase10-c-wallet-vault` / draft PR 待记录 | DOING | 主审明确 commit + 安全评审 |
 | C-external | `/Users/laysath/.paseo/worktrees/1z728cdk/c-external-wallet` | `3820537e-5840-4926-ba00-5975805b2df6` | `feature/phase10-c-external-wallet` / draft PR 待记录 | DOING | 主审明确 commit + 安全评审；真实扩展验收 BLOCKED/UNKNOWN |
-| P0-clock | `/Users/laysath/Projects/magpie-oh-my-aihub-clock-fix` | `f63b644e-40df-4174-afd4-c4f43da87927` | `fix/phase10-validation-clock` @ `889973f5` / PR #15 (draft) | REVIEW | 独立审代理 `27dcd09b-8ab1-4989-aecd-aa5d70e530ac`；未集成 |
+| P0-clock | `/Users/laysath/Projects/magpie-oh-my-aihub-clock-fix` | `f63b644e-40df-4174-afd4-c4f43da87927` | `fix/phase10-validation-clock` @ `889973f5` / PR #15 (draft) | DONE（集成） | 独立审通过；本地集成到 `feature/phase10-integration` @ `877d0bc5`；PR14 仍 docs-only |
+| P0-integration | `/tmp/oma-phase10-integration` | INTEGRATION | `feature/phase10-integration` @ `877d0bc5` | DONE（集成） | 只接已批准 15；17/16/18/其它未接；非产品 GO |
 | P0-peak | `/Users/laysath/Projects/magpie-oh-my-aihub-p0` | `187ccdcb-8f0b-40f3-8276-939334de4412` | `fix/phase10-unsupported-pricing-guard` @ `0661bede` / PR #16 (draft) | REVIEW | 独立审 `27dcd09b…` 排队 15→17→16→18；未集成 |
 | P0-hermetic | 独立 worktree（待补） | P0 测试代理（待补） | PR #17 head `3ce22ee7` base `889973f` | REVIEW | CI `41158230737` 双平台绿；未集成 |
 | P0-pin | 独立 worktree（待补） | P0 测试代理（待补） | PR #18 head `3826fad1` base `889973f` | REVIEW | 明确 **LAN-direct ET not started**；仅原生 LAN 实测；未集成 |
@@ -85,7 +88,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | P0-1 | 0.1.2289 + EasyTier 2.6.4 隔离副本 | P0 | TODO | — | 版本/哈希/平台；隔离 data dir；不改 `/Applications` | 已决定，不再选版本 |
 | P0-2 | `peak` fail-closed | P0-peak `187ccdcb…` + C | REVIEW | P0-1 | 目标 48 pass/0 fail + typecheck/secret/boot stub PASS；CI `41157220963` linux/mac **753 pass/1 skip/5 fail（既有 clock）**；报告 `/tmp/oma-research/P0-PRICING-GUARD-REPORT.md` | **REVIEW**；不可写 CI 全绿，不可 DONE；未集成 |
-| P0-3 | 测试时钟 | P0-clock `f63b644e…` | REVIEW | — | 本地 746/0；CI `41156933911` linux/macos success；PR #15 draft | 独立审另派；**REVIEW 不是 DONE**；未集成 |
+| P0-3 | 测试时钟 | P0-clock `f63b644e…` | DONE（集成） | — | 独立审通过 `889973f5`；集成 `877d0bc5`；typecheck 通过；4 个纯钱包测试 32/0 | 非产品 GO；PR14 不含代码；其他 P0 未接 |
 | P0-6 | hermetic tests（隔离旧测试对生产网关/公共 RPC 的访问） | P0 测试代理 | REVIEW | P0-3 | PR #17 head `3ce22ee7` base `889973f`；CI `41158230737` 双平台绿 | 未集成 |
 | P0-7 | 精确 pin 支持 0.1.2289 实际实验 | P0 测试代理 | REVIEW | P0-1 | PR #18 head `3826fad1` base `889973f`；明确 LAN-direct ET not started | 未集成；不能 P0-overlay DONE |
 | P0-8 | 真实 no-TUN EasyTier overlay/forward | P0 测试代理 | REVIEW | P0-7 | PR #27 docs-only；同机两节点回环 TCP noTUN overlay 401/401/200/429/topup/Remote/revoke/restart/ACL 拒管理端口 REPRODUCED（开发方报告） | **不是跨主机 NAT/relay/WAN；不是浏览器无文件 GO**；独立审待核；不能总 P0 DONE |
@@ -111,7 +114,7 @@
 
 | ID | 单元 | 负责 | 状态 | 依赖 | 验收/证据 | 禁止 |
 | --- | --- | --- | --- | --- | --- | --- |
-| B1 | 所有节点独立有限控制服务 | B-core | REVIEW | P0 | PR #26 head `fdc7d4c4`，47 模块测试；handoff 已交 | 未集成；需冻结 SHA 核验 |
+| B1 | 所有节点独立有限控制服务 | B-core | BLOCKED | P0 | PR #26 冻结 `fdc7d4c4`；独立审 `5d386756` 判 BLOCKED（B1/B2/B3） | core 三项 fix 待审；未集成 |
 | B2 | `connection_request` 结构化消息 | B-core | TODO | B1 | schema/限长/字段白名单；无 Key/无文件 | 不落文件 |
 | B3 | 提供方人工批准 | B-core | TODO | B2 | 选模型+正额度+明确勾选；审计 | 不自动批准 |
 | B4 | E2E 加密授权 | B-core | TODO | B3 | 密文/解密/错身份负向 | 提供方不持久化明文 |
@@ -121,7 +124,7 @@
 | B8 | 首次/变化 TOFU 人工 | B-core | TODO | B2 | 未接受/身份变化禁止 | 不跳过 |
 | B9 | 重放/篡改/过期 | B-core | TODO | B1..B7 | 负向测试 | 不自动文件回退 |
 | B10 | 紧急文件兼容 | B-core + 审查 | TODO | B9 | 显式选择/警告；默认关 | 不作为目标/验收替代 |
-| B11 | 有限 HTTP transport + 业务集成接口 | B-service | BLOCKED | B1,B3 + A-service stacked base | PR #19/#20；独立审 `5d386756` 判不可集成；19fix 在做 | 超时放槽/后台继续、旧接口/内存 generation/旧授权覆盖；无真实双节点 GO |
+| B11 | 有限 HTTP transport + 业务集成接口 | B-service | BLOCKED | B1,B3 + A-service stacked base | PR #19 `7bcf7e0` 仅作 PR20 base；PR20 `277ed66` 仍 BLOCKED；允许小修持久 generation/旧授权覆盖/enforced | 无真实双节点 GO；不合并 |
 
 ### C — 钱包与主网准备
 
@@ -194,8 +197,10 @@
 | 2026-10-31 | P0-pin/LAN 交付待审 | PR #18 head `3826fad1` base `889973f`；**LAN-direct ET not started**；仅原生 LAN 通过 | PR #18 | REVIEW；不能 P0-overlay DONE |
 | 2026-10-31 | P0-overlay 同机回环实验 | PR #27 draft head `af3098d` base `test/phase10-harness-pin`（#18）；docs-only 无 CI；同机两节点回环 TCP noTUN 401/401/200/429/topup/Remote/revoke/restart/ACL 拒管理端口 REPRODUCED（开发方报告） | PR #27 | REVIEW；非跨主机/NAT/relay/WAN；非浏览器无文件 GO；独立审待核 |
 | 2026-10-31 | A-service 集成阻断 | PR #22 head `77d71b2`；PID ownership 不能证明、RPC 先用后验；review `84ba711e…` + 修复中 | PR #22 | BLOCKED；未集成 |
-| 2026-10-31 | B-service 不可集成 | PR #19 `0988c85a` / #20 `277ed665`；独立审 `5d386756` 判不可集成；19fix 在做 | PR #19/#20 | BLOCKED；未集成 |
-| 2026-10-31 | B-core 待审 | PR #26 draft head `fdc7d4c4` base `8ce5c57`；47 模块测试；handoff 已交 | PR #26 / handoff | REVIEW；未集成 |
+| 2026-10-31 | B-service 19 复审 | PR #19 `7bcf7e0` 超时放槽/slowbody 取消经真 socket 复核；仅批准作 PR20 技术 base，不合并 | PR #19 | 技术 base 通过；B 整体未完 |
+| 2026-10-31 | B-service 20 仍阻 | PR #20 `277ed66` 旧 head BLOCKED；允许更新到 19 base 并小修持久 generation/旧授权覆盖/enforced | PR #20 | BLOCKED |
+| 2026-10-31 | B-core 复审阻断 | PR #26 冻结 `fdc7d4c4`；独立审 `5d386756` BLOCKED（B1/B2/B3）；cross-message idem/价格版本已修复；core fix 中 | PR #26 | BLOCKED；未集成 |
+| 2026-10-31 | P0-clock 集成 | 源 `889973f5` → `877d0bc5`；独立审通过；仅本地 integration 分支；PR14 仍 docs-only | `feature/phase10-integration` | 非产品 GO |
 | 2026-10-31 | A-ui 待审/阻断 | PR #25 head `cbce7004`；fixture 截图非真实 Magpie；66 前端测试/0；CI 5 既有 clock 失败；4 项主审阻断待 fix | PR #25 | REVIEW；不能 Visual GO |
 | 2026-10-31 | P0-clock 独立审 | 精确 `889973f5` 无产品/安全阻断；746/0；CI 双绿；boot 32 次未复现 flake；主审批准仅该 commit 本地集成 | PR #15 / 独立审报告 | 通过（非产品 GO） |
 | 2026-10-31 | C-registry 待审 | PR #21 head `5ef4430`；真实只读主网余额 REPRODUCED；完整 SHA 待 handoff | PR #21 | REVIEW；主网资金 NO-GO；未集成 |
