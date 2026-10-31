@@ -16,8 +16,9 @@ a real local control endpoint and wires it to the existing plugin service:
 - a bounded HTTP transport with three exact routes, no CORS, no browser origins, an
   exact Host allow-list, pre-authentication rate limits, body/time/concurrency caps
   and sanitised error codes (`plugin/src/control/http.ts`);
-- a narrow `P2pApprovalPort` adapter over the existing Service/Provisioner paths
-  (`plugin/src/control/service-port.ts`):
+- a narrow `P2pBusinessPort` adapter (the reviewed B-core PR #26 shape, mirrored
+  locally; `plugin/src/control/p2p-port.ts`) over the existing Service/Provisioner
+  paths. The earlier `service-port.ts` remains the shared helper layer:
   - quote/policy validation and human approval reuse
     `Service.approveConnectionRequest` (which itself calls
     `validateRequestApproval`, `assertShareable`, `shareCandidates` and the consumer
@@ -27,7 +28,12 @@ a real local control endpoint and wires it to the existing plugin service:
   - consumer registration uses `Service.addProvider` (overlay probe → native Remote
     Magpie registration → model read-back) and `Service.providerModels` for the
     model/cap read-back;
-  - revoke uses `Service.revokeConsumer`.
+  - revoke uses `Provisioner.revokeEnforced`: remove, then rotate as fallback;
+    only a measured keyRevoked/secretRotated is reported as revoked, never a
+    cap-only stop;
+  - consumer Remote ownership (provider/approval/generation/keyId) is persisted
+    atomically in `control-remotes.json` (0600, no key), so a restart removes only
+    the revoked approval's Remote and never replaces a newer one.
 - B-core still owns every cryptographic operation, envelope, handshake, session,
   SQLite replay/idempotency/outbox row and business transition. B-service does not
   add a crypto or identity module.
@@ -117,8 +123,16 @@ be reported as `lan-reachable`; the diagnostic must not claim overlay-only.
   node id. It reads the model list and `costLimit` back with
   `Service.providerModels`. A mismatch removes only that Remote and throws; no ACK is
   produced.
-- `revokeConsumer` calls `Service.revokeConsumer`. A vanished consumer is idempotent;
-  a real Magpie failure propagates so B-core must not send a “revoked” claim.
+- `revoke` calls `Provisioner.revokeEnforced`. Removal is the strong stop; if
+  removal fails, rotation makes the old secret 401; a $0.0001 cap is not treated as
+  a stop. If neither removal nor rotation works, the port returns
+  `{revoked:false, detail}` and B-core must keep the approval uncertain/action-needed
+  without sending a “revoked” notice.
+- `importAuthorization`/`dropAuthorization` use a persistent, non-secret ownership
+  record keyed by provider/approval/generation/keyId/providerId. While a provider has
+  a live Remote, a different approval for the same provider is refused; an old
+  authorization cannot replace a newer Remote. Revocation after restart removes only
+  the matching approval; a stale revocation for a superseded approval is ignored.
 - The Gateway Key is passed to B-core only for sealing. It is not written to
   `p2p.sqlite`, not logged, not placed in a generic response cache, and not included
   in the action API.
@@ -192,6 +206,18 @@ second approval layer.
 - per-peer and global rate limit before the node call; global/per-peer concurrency;
 - timeout; wildcard bind and false loopback claims refused.
 
+`plugin/test/control-p2p-port.test.ts` (6 pass):
+
+- requested-set vs selected-subset price version;
+- approval/hand-over through the real Service;
+- persistent Remote ownership across a restart;
+- a different approval cannot replace a live Remote; the same approval with another
+  generation is refused;
+- stale revocation does not remove a newer Remote;
+- corrupt ownership file fails closed before any Remote call;
+- enforced revoke: remove success, rotation fallback, and both-fail returns
+  `revoked:false` with the key/record still active.
+
 `plugin/test/control-service-port.test.ts` (12 pass):
 
 - approval reuses the real Service/Provisioner and creates exactly one key;
@@ -208,7 +234,7 @@ Commands:
 ```
 cd plugin
 bun run typecheck
-bun test test/control-http.test.ts test/control-service-port.test.ts
+bun test test/control-http.test.ts test/control-service-port.test.ts test/control-p2p-port.test.ts
 ```
 
 ## 7. Evidence and remaining gates
@@ -217,7 +243,9 @@ bun test test/control-http.test.ts test/control-service-port.test.ts
 | --- | --- | --- |
 | HTTP transport policy and limits | VERIFIED (unit) | 13 pass, typecheck |
 | Approval/handover/import adapter reuses Service | VERIFIED (unit with fake Magpie / loopback gateway) | 12 pass |
-| Full `bun run test` | PASS in a **temporary verification copy**, not integrated | 778 pass / 0 fail with PR #15 `889973f55ca3a72da99ae0091e50ecd5ea428207` + PR #17 `60d0d04`/`3ce22ee7358ef6f3817b7d4957c4696fbd9a4144`; temp worktree deleted; no P0 commit is part of this branch |
+| PR #19 transport | PASS (reviewed 7bcf7e0, rebased on approved PR #15) | 20 real/unit tests; see PR #19 |
+| PR #20 adapter targeted | PASS (local, rebased branch) | 32 pass (12 old adapter + 20 transport) plus 6 new port tests = 38 total |
+| Full `bun run test` on the rebased PR #20 head | UNKNOWN / host contention | Not claimed after rebase; shared host port collisions; PR #19 previously ran 773/0 in a temp PR #15+#17 copy |
 | Real B-core `P2pService` stacked and compiled | UNKNOWN | B-core has not committed a reviewed base |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
 | Real EasyTier 2.6.4 two-node hello/frame/TOFU | UNKNOWN | no two-node overlay run |
@@ -225,10 +253,12 @@ bun test test/control-http.test.ts test/control-service-port.test.ts
 | Control port from A-service | PLANNED | A-service `reservePort`/`verifyOwnedPort`; no fixed 3427/user port |
 | Real funds / mainnet | **NO-GO** | out of scope; no wallet or real asset used |
 
-The 778/0 full-suite run was made in an isolated `/tmp` worktree that combined this
-branch's head with the two P0 review branches; the temporary worktree and branch were
-deleted afterwards. It is evidence that this branch does not regress the hermetic
-suite, not an approval to integrate P0 or a claim that the guard is part of B.
+The earlier 773/0 full-suite run was for the PR #19 transport head in an isolated
+`/tmp` worktree that combined it with the two P0 review branches; the temporary
+worktree and branch were deleted afterwards. It is evidence that transport does not
+regress the hermetic suite, not an approval to integrate P0 or a claim that the guard
+is part of B. The rebased PR #20 full suite has not been rerun successfully in this
+shared host because other agents' test processes collide on the fixed test ports.
 No real two-node pass is claimed. The next gates are: B-core's
 reviewed commit + contract confirmation, explicit stacked base approval, A-service's
 port API, then an isolated Magpie/EasyTier two-node run with sanitised logs. The full
