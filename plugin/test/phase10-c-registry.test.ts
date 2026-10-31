@@ -338,7 +338,7 @@ describe("C1 migration from the version-1 testnet document", () => {
     const path = join(TMP(), "networks.json");
     const old = {
       version: 1,
-      networks: [v1Network(97, false), v1Network(84532, true), v1Network(31337, false)],
+      networks: [v1Network(97, false), v1Network(84532, true), v1Network(31337, true)],
       assets: [v1Asset(97, "0x5FbDB2315678afecb367f032d93F642f64180aa3")],
     };
     writeFileSync(path, JSON.stringify(old));
@@ -346,7 +346,11 @@ describe("C1 migration from the version-1 testnet document", () => {
     expect(r.network(97)!.enabled).toBe(false);
     expect(r.network(97)!.support).toBe("credit");
     expect(r.network(84532)!.enabled).toBe(true);
+    // A historical local lab may load for audit/config inspection, but its
+    // automatic credit is disabled and it cannot enter production credit.
     expect(r.network(31337)!.enabled).toBe(false);
+    expect(r.network(31337)!.notes).toContain("simulation-import-required");
+    expect(r.creditableNetworks().map((n) => n.chainId)).toEqual([84532]);
     expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([84532]);
 
     for (const chainId of MAINNET_CHAIN_IDS) {
@@ -387,6 +391,21 @@ describe("C1 migration from the version-1 testnet document", () => {
     expect(r.network(56)!.receivable).toBe(true);
     expect(r.network(56)!.evidence?.url).toMatch(/^https:\/\//);
     expect(r.network(8453)!.enabled).toBe(false);
+  });
+
+  test("a version-2 local lab enabled record loads read-only and cannot be credited", () => {
+    const path = join(TMP(), "networks.json");
+    const doc: RegistryDocument = {
+      version: 2,
+      networks: [{ ...v1Network(31337, true), notes: "local lab config" }],
+      assets: [],
+    };
+    writeFileSync(path, JSON.stringify(doc));
+    const r = loadRegistry(path);
+    expect(r.network(31337)!.enabled).toBe(false);
+    expect(r.network(31337)!.notes).toContain("simulation-import-required");
+    expect(r.creditableNetworks()).toEqual([]);
+    expect(() => r.setNetworkEnabled(31337, true)).toThrow(/credit allowlist/);
   });
 
   test("a version-2 document cannot smuggle chain 1 in as an enabled testnet", () => {
@@ -624,7 +643,7 @@ describe("C9 ledger defence in depth", () => {
       openingNanos: usdToNanos(1),
       capNanos: usdToNanos(1),
     });
-    expect(ledger.depositIntent({ id: "d-97", consumerId: "alice", amountNanos: 1, source: "chain:97" }).created).toBe(true);
+    expect(ledger.depositIntent({ id: "d-97", consumerId: "alice", amountNanos: 1, source: "chain:97", fundsClass: "chain", chainId: 97, assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3" }).created).toBe(true);
     expect(ledger.depositIntent({ id: "d-sim", consumerId: "alice", amountNanos: 1, source: "simulated" }).created).toBe(true);
     for (const source of ["Chain:56", " chain : 56 ", "evm:56", "chain:0x38"]) {
       expect(() =>
@@ -643,9 +662,53 @@ describe("funds provenance and pending recovery", () => {
       await expect(provisioner.topUp("alice", 1, id)).rejects.toThrow(/reserved|local top-up/);
     }
     expect(ledger.deposit("chain:synthetic")).toBeNull();
-    const chain = ledger.depositIntent({ id: "dep-chain", consumerId: "alice", amountNanos: usdToNanos(1), source: "chain:97", fundsClass: "chain", chainId: 97 });
+    const chain = ledger.depositIntent({
+      id: "dep-chain",
+      consumerId: "alice",
+      amountNanos: usdToNanos(1),
+      source: "chain:97",
+      fundsClass: "chain",
+      chainId: 97,
+      assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+    });
     expect(chain.deposit.fundsClass).toBe("chain");
     await expect(provisioner.topUp("alice", 1, "dep-chain")).rejects.toThrow(/chain deposit|local top-up/);
+    ledger.close();
+  });
+
+  test("actual money refuses chain 1 and a cross-chain asset before any cap write", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    expect(() =>
+      ledger.depositIntent({
+        id: "chain:evt-1",
+        consumerId: "alice",
+        amountNanos: usdToNanos(1),
+        source: "chain:1",
+        fundsClass: "chain",
+        chainId: 1,
+        assetId: "eip155:84532:0x0000000000000000000000000000000000000001",
+      }),
+    ).toThrow(/credit allowlist/);
+    expect(() =>
+      ledger.depositIntent({
+        id: "chain:evt-cross",
+        consumerId: "alice",
+        amountNanos: usdToNanos(1),
+        source: "chain:97",
+        fundsClass: "chain",
+        chainId: 97,
+        assetId: "eip155:84532:0x0000000000000000000000000000000000000001",
+      }),
+    ).toThrow(/belongs to chain 84532/);
+    expect(ledger.deposit("chain:evt-1")).toBeNull();
+    expect(ledger.deposit("chain:evt-cross")).toBeNull();
+    const before = magpie.keyByName("ohmyaihub-alice")!.cap;
+    await expect(provisioner.applyChainDeposit({ id: "chain:evt-1", consumerId: "alice", amountNanos: usdToNanos(1) })).rejects.toThrow(/not booked/);
+    expect(magpie.keyByName("ohmyaihub-alice")!.cap).toBe(before);
+    expect(() =>
+      ledger.depositIntent({ id: "bad-class", consumerId: "alice", amountNanos: 1, source: "simulated", fundsClass: "bogus" as never }),
+    ).toThrow(/known funds class/);
     ledger.close();
   });
 
@@ -683,6 +746,104 @@ describe("funds provenance and pending recovery", () => {
     rec.pending = { capUsd: 2, depositId: "pending-conflict", usd: 1, fundsClass: "chain", chainId: 97, assetId: null, source: "chain:97" };
     await expect(provisioner.reconcile(rec)).rejects.toThrow(/provenance|disagrees/);
     expect(rec.pending).not.toBeNull();
+    ledger.close();
+  });
+
+  test("reconcile refuses asset/amount mismatches before crediting or raising a cap", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec = provisioner.find("alice")!;
+    magpie.keys.get(view.keyId)!.cap = 2;
+    ledger.depositIntent({
+      id: "chain:mismatch",
+      consumerId: "alice",
+      amountNanos: usdToNanos(1),
+      source: "chain:97",
+      fundsClass: "chain",
+      chainId: 97,
+      assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+    });
+    rec.pending = {
+      capUsd: 2,
+      depositId: "chain:mismatch",
+      usd: 1,
+      fundsClass: "chain",
+      chainId: 97,
+      assetId: "eip155:97:0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0",
+      source: "chain:97",
+    };
+    await expect(provisioner.reconcile(rec)).rejects.toThrow(/provenance|asset/);
+    expect(rec.creditedUsd).toBe(0);
+    expect(rec.pending).not.toBeNull();
+
+    ledger.close();
+
+    // amount mismatch with the same class/chain/asset, on a fresh consumer/key
+    const second = provisionerLab();
+    const view2 = await second.provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec2 = second.provisioner.find("alice")!;
+    second.magpie.keys.get(view2.keyId)!.cap = 2;
+    second.ledger.depositIntent({
+      id: "chain:amount",
+      consumerId: "alice",
+      amountNanos: usdToNanos(1),
+      source: "chain:97",
+      fundsClass: "chain",
+      chainId: 97,
+      assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+    });
+    rec2.pending = {
+      capUsd: 2,
+      depositId: "chain:amount",
+      usd: 2,
+      fundsClass: "chain",
+      chainId: 97,
+      assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      source: "chain:97",
+    };
+    await expect(second.provisioner.reconcile(rec2)).rejects.toThrow(/amount/);
+    expect(rec2.creditedUsd).toBe(0);
+    expect(rec2.pending).not.toBeNull();
+    second.ledger.close();
+  });
+
+  test("a legacy unknown-source deposit stays auditable, pauses credit and can be reviewed without rewriting history", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const window = ledger.openWindowFor("alice")!;
+    const db = (ledger as unknown as { db: { query: (sql: string) => { run: (...args: unknown[]) => void } } }).db;
+    db.query("INSERT INTO deposits(id,consumer_id,amount_nanos,source,funds_class,chain_id,asset_id,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "legacy-unknown",
+      "alice",
+      usdToNanos(1),
+      "operator",
+      null,
+      null,
+      null,
+      "applied",
+      window.id,
+      window.priceVersion,
+      usdToNanos(1),
+      "2026-10-30T00:00:00.000Z",
+      "2026-10-30T00:00:00.000Z",
+      null,
+    );
+    const row = ledger.deposit("legacy-unknown")!;
+    expect(row.fundsClass).toBe("unknown");
+    expect(ledger.depositsFor("alice").some((d) => d.id === "legacy-unknown")).toBe(true);
+    const before = ledger.balance("alice");
+    expect(before.depositedNanos).toBe(usdToNanos(2));
+    expect(before.unreviewedNanos).toBe(usdToNanos(1));
+    expect(before.creditableAvailableNanos).toBe(usdToNanos(1));
+    const capBefore = magpie.keyByName("ohmyaihub-alice")!.cap;
+    await expect(provisioner.topUp("alice", 1)).rejects.toThrow(/unknown|review/);
+    expect(magpie.keyByName("ohmyaihub-alice")?.cap ?? capBefore).toBe(capBefore);
+
+    const reviewed = ledger.reviewDepositProvenance({ id: "legacy-unknown", fundsClass: "simulated", note: "legacy operator opening reviewed" });
+    expect(reviewed.fundsClass).toBe("simulated");
+    expect(reviewed.amountNanos).toBe(usdToNanos(1));
+    expect(ledger.balance("alice").depositedNanos).toBe(before.depositedNanos);
+    expect(ledger.balance("alice").unreviewedNanos).toBe(0);
     ledger.close();
   });
 

@@ -23,6 +23,7 @@ import { dirname, join, resolve } from "node:path";
 import { magpieDataDir, statePath } from "./paths.ts";
 import { costNanos, parsePriceSnapshot, type PriceSnapshot, type UsageTokens } from "./pricing.ts";
 import { assertCreditSourceNotMainnet } from "./mainnet-gate.ts";
+import { CREDIT_CHAIN_ALLOWLIST } from "./networks.ts";
 
 export type AccountStatus = "active" | "paused" | "revoked";
 export type WindowStatus = "open" | "draining" | "closed";
@@ -33,7 +34,31 @@ export type DepositStatus = "intent" | "applied" | "failed";
  * row may back a chain retry, a local top-up or an account opening. Legacy rows
  * are classified from their existing source without rewriting it.
  */
-export type FundsClass = "chain" | "manual" | "simulated" | "opening";
+export type FundsClass = "chain" | "manual" | "simulated" | "opening" | "unknown";
+export type KnownFundsClass = Exclude<FundsClass, "unknown">;
+
+export const KNOWN_FUNDS_CLASSES: readonly KnownFundsClass[] = ["chain", "manual", "simulated", "opening"];
+
+export function isKnownFundsClass(value: unknown): value is KnownFundsClass {
+  return typeof value === "string" && (KNOWN_FUNDS_CLASSES as readonly string[]).includes(value);
+}
+
+/** The chain id encoded by an exact `eip155:<chain>:0x<40>` asset id. */
+export function assetIdChainId(assetId: unknown): number | null {
+  if (typeof assetId !== "string") return null;
+  const match = /^eip155:(\d+):0x[0-9a-f]{40}$/.exec(assetId);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/** Actual money may only move for a registry credit chain. */
+export function assertCreditChainAllowed(chainId: number): void {
+  if (!Number.isSafeInteger(chainId) || chainId <= 0) throw new Error(`chain ${String(chainId)} is not a valid credit chain`);
+  if (!(CREDIT_CHAIN_ALLOWLIST as readonly number[]).includes(chainId)) {
+    throw new Error(`chain ${chainId} is not on the credit allowlist (${CREDIT_CHAIN_ALLOWLIST.join(", ")}); refusing actual money movement`);
+  }
+}
 
 /** Classify the historical/current source text; null means unclassified. */
 export function classifyDepositSource(source: unknown): FundsClass | null {
@@ -92,6 +117,7 @@ export interface LedgerDeposit {
   consumerId: string;
   amountNanos: number;
   source: string;
+  /** `unknown` is an audit state for legacy rows, never creditable */
   fundsClass: FundsClass;
   /** chain id for chain-derived rows; null otherwise */
   chainId: number | null;
@@ -107,11 +133,16 @@ export interface LedgerDeposit {
 }
 
 export interface LedgerBalance {
+  /** historical fact: all applied deposits, including unknown-provenance rows */
   depositedNanos: number;
   consumedNanos: number;
   balanceNanos: number;
   overdraftNanos: number;
   availableNanos: number;
+  /** applied deposits whose class is unknown and need local review */
+  unreviewedNanos: number;
+  /** known-provenance deposits minus consumption; never includes unknown rows */
+  creditableAvailableNanos: number;
 }
 
 export interface ConsumptionHistoryRow {
@@ -347,17 +378,23 @@ function mapWindow(r: WindowRow): LedgerWindow {
   };
 }
 
+function storedFundsClass(r: Pick<DepositRow, "source" | "funds_class">): FundsClass {
+  if (r.funds_class !== null && r.funds_class !== undefined) {
+    return isKnownFundsClass(r.funds_class) ? r.funds_class : "unknown";
+  }
+  return classifyDepositSource(r.source) ?? "unknown";
+}
+
 function mapDeposit(r: DepositRow): LedgerDeposit {
-  const fundsClass = (r.funds_class as FundsClass | null) ?? classifyDepositSource(r.source);
-  if (!fundsClass) throw new Error(`deposit ${r.id} has an unclassified source ${JSON.stringify(r.source)}; refusing to guess its funds class`);
+  const fundsClass = storedFundsClass(r);
   return {
     id: r.id,
     consumerId: r.consumer_id,
     amountNanos: r.amount_nanos,
     source: r.source,
     fundsClass,
-    chainId: r.chain_id ?? (fundsClass === "chain" ? classifyChainSource(r.source) : null),
-    assetId: r.asset_id ?? null,
+    chainId: fundsClass === "chain" ? r.chain_id ?? classifyChainSource(r.source) : null,
+    assetId: fundsClass === "chain" ? r.asset_id ?? null : null,
     status: r.status,
     windowId: r.window_id,
     priceVersion: r.price_version,
@@ -638,7 +675,7 @@ export class Ledger {
     consumerId: string;
     amountNanos: number;
     source: string;
-    fundsClass?: FundsClass;
+    fundsClass?: KnownFundsClass;
     chainId?: number | null;
     assetId?: string | null;
     at?: string;
@@ -647,19 +684,27 @@ export class Ledger {
     // `chain:56` or `chain:8453` credit even if it reaches the ledger directly.
     assertCreditSourceNotMainnet(input.source);
     if (!Number.isInteger(input.amountNanos) || input.amountNanos <= 0) throw new Error("a deposit must be a positive integer amount");
-    const fundsClass = input.fundsClass ?? classifyDepositSource(input.source);
+    const derived = classifyDepositSource(input.source);
+    if (input.fundsClass !== undefined && !isKnownFundsClass(input.fundsClass)) {
+      throw new Error(`fundsClass ${JSON.stringify(input.fundsClass)} is not a known funds class`);
+    }
+    const fundsClass = input.fundsClass ?? derived;
     if (!fundsClass) throw new Error(`deposit source ${JSON.stringify(input.source)} has no trusted funds class`);
     if (fundsClass === "opening") throw new Error("an opening balance is written only by the account-opening transaction");
     const sourceChainId = classifyChainSource(input.source);
     const chainId = input.chainId ?? sourceChainId;
     if (fundsClass === "chain") {
       if (chainId === null || !Number.isSafeInteger(chainId) || chainId <= 0) throw new Error("a chain deposit needs a positive chain id");
+      assertCreditChainAllowed(chainId);
       if (input.source !== `chain:${chainId}`) throw new Error("a chain deposit source must be exactly chain:<chainId>");
+      if (input.assetId === undefined || input.assetId === null) throw new Error("a chain deposit needs the registry asset id");
+      const assetChain = assetIdChainId(input.assetId);
+      if (assetChain === null) throw new Error("a chain deposit asset id must be eip155:<chain>:0x<contract>");
+      if (assetChain !== chainId) throw new Error(`asset ${input.assetId} belongs to chain ${assetChain}, not ${chainId}`);
     } else if (chainId !== null || input.chainId !== undefined && input.chainId !== null) {
       throw new Error(`a ${fundsClass} deposit cannot name a chain`);
-    }
-    if (input.assetId !== undefined && input.assetId !== null && !/^eip155:\d+:0x[0-9a-f]{40}$/.test(input.assetId)) {
-      throw new Error("a deposit asset id must be eip155:<chain>:<contract>");
+    } else if (input.assetId !== undefined && input.assetId !== null) {
+      throw new Error(`a ${fundsClass} deposit cannot name an asset`);
     }
     return this.tx(() => {
       const existing = this.deposit(input.id);
@@ -731,14 +776,69 @@ export class Ledger {
     const con = this.db
       .query("SELECT COALESCE(SUM(amount_nanos),0) AS n FROM consumption WHERE consumer_id=?")
       .get(consumerId) as { n: number };
+    const applied = this.db
+      .query("SELECT id,source,funds_class,amount_nanos FROM deposits WHERE consumer_id=? AND status='applied'")
+      .all(consumerId) as { id: string; source: string; funds_class: string | null; amount_nanos: number }[];
+    const unreviewedNanos = applied
+      .filter((r) => storedFundsClass({ source: r.source, funds_class: r.funds_class }) === "unknown")
+      .reduce((sum, r) => sum + r.amount_nanos, 0);
     const balanceNanos = dep.n - con.n;
+    const creditableAvailableNanos = Math.max(dep.n - unreviewedNanos - con.n, 0);
     return {
       depositedNanos: dep.n,
       consumedNanos: con.n,
       balanceNanos,
       overdraftNanos: Math.max(-balanceNanos, 0),
       availableNanos: Math.max(balanceNanos, 0),
+      unreviewedNanos,
+      creditableAvailableNanos,
     };
+  }
+
+  /**
+   * Minimal local recovery for a legacy row whose source is unknown. It changes
+   * only provenance metadata, never amount/source/status, and records an audit
+   * event. It is the operator's explicit review, not an automatic reclassification.
+   */
+  reviewDepositProvenance(input: {
+    id: string;
+    fundsClass: KnownFundsClass;
+    chainId?: number | null;
+    assetId?: string | null;
+    note: string;
+  }): LedgerDeposit {
+    if (!isKnownFundsClass(input.fundsClass)) throw new Error(`fundsClass ${JSON.stringify(input.fundsClass)} is not a known funds class`);
+    if (!input.note.trim()) throw new Error("reviewing a legacy deposit needs an audit note");
+    return this.tx(() => {
+      const row = this.db.query("SELECT * FROM deposits WHERE id=?").get(input.id) as DepositRow | null;
+      if (!row) throw new Error(`deposit ${input.id} does not exist`);
+      const current = mapDeposit(row);
+      if (current.fundsClass !== "unknown") throw new Error(`deposit ${input.id} is already ${current.fundsClass}; it does not need provenance review`);
+      let chainId: number | null = null;
+      let assetId: string | null = null;
+      if (input.fundsClass === "chain") {
+        chainId = input.chainId ?? null;
+        if (chainId === null) throw new Error("a chain deposit review needs a chain id");
+        assertCreditChainAllowed(chainId);
+        assetId = input.assetId ?? null;
+        if (assetId === null || assetIdChainId(assetId) !== chainId) throw new Error("a chain deposit review needs an asset id on the same chain");
+      } else if (input.chainId !== undefined && input.chainId !== null) {
+        throw new Error(`a ${input.fundsClass} deposit review cannot name a chain`);
+      } else if (input.assetId !== undefined && input.assetId !== null) {
+        throw new Error(`a ${input.fundsClass} deposit review cannot name an asset`);
+      }
+      this.db
+        .query("UPDATE deposits SET funds_class=?,chain_id=?,asset_id=? WHERE id=?")
+        .run(input.fundsClass, chainId, assetId, input.id);
+      this.event(row.consumer_id, "deposit-provenance-reviewed", {
+        depositId: input.id,
+        fundsClass: input.fundsClass,
+        chainId,
+        assetId,
+        note: input.note.slice(0, 500),
+      });
+      return mapDeposit(this.db.query("SELECT * FROM deposits WHERE id=?").get(input.id) as DepositRow);
+    });
   }
 
   /** The models a window was issued for, from its frozen price document. */

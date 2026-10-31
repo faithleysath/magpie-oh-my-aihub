@@ -4,7 +4,7 @@ import { stateDir, statePath } from "./paths.ts";
 import { logger, registerSecret } from "./log.ts";
 import type { Magpie, LimitStatus } from "./magpie.ts";
 import { readJsonWithBackup, writeJsonAtomic } from "./store.ts";
-import { Ledger, classifyChainSource, classifyDepositSource, usageLogPath, type FundsClass, type LedgerWindow } from "./ledger.ts";
+import { Ledger, assetIdChainId, assertCreditChainAllowed, classifyChainSource, classifyDepositSource, isKnownFundsClass, usageLogPath, type KnownFundsClass, type LedgerWindow } from "./ledger.ts";
 import { assertCreditSourceNotMainnet } from "./mainnet-gate.ts";
 import {
   GRID_NANOS,
@@ -57,7 +57,7 @@ export interface PendingDeposit {
   capUsd: number;
   depositId: string;
   usd: number;
-  fundsClass?: FundsClass;
+  fundsClass?: KnownFundsClass;
   chainId?: number | null;
   assetId?: string | null;
   source?: string;
@@ -172,6 +172,10 @@ export interface ConsumerView {
     balanceUsd: number;
     overdraftUsd: number;
     unsettledUsd: number;
+    /** legacy/unknown-provenance deposits still included in the historical balance */
+    unreviewedUsd: number;
+    /** known-provenance available credit; unknown rows are excluded */
+    creditableAvailableUsd: number;
     unpricedCalls: number;
     /** windows that can still be billed against, so not proven settled */
     openSettlements: number;
@@ -197,15 +201,16 @@ export function roundCap(usd: number): number {
  * simulated top-up can; treating it as permanently failed would strand a real
  * payment with no operator path back.
  */
-export function isChainDerivedDeposit(deposit: { id: string; source: string; fundsClass?: FundsClass }): boolean {
+export function isChainDerivedDeposit(deposit: { id: string; source: string; fundsClass?: KnownFundsClass }): boolean {
   return deposit.fundsClass === "chain" || classifyDepositSource(deposit.source) === "chain" || /^chain[:._-]/i.test(deposit.id.trim());
 }
 
 /** The provenance of a pending intent, or null when it cannot be trusted. */
-function pendingProvenance(pending: PendingDeposit): { fundsClass: FundsClass; chainId: number | null; assetId: string | null; source: string } | null {
+function pendingProvenance(pending: PendingDeposit): { fundsClass: KnownFundsClass; chainId: number | null; assetId: string | null; source: string } | null {
   const source = pending.source ?? (pending.fundsClass === "simulated" ? "simulated" : pending.fundsClass === "manual" ? "manual" : pending.fundsClass === "chain" && pending.chainId !== null && pending.chainId !== undefined ? `chain:${pending.chainId}` : null);
+  if (pending.fundsClass !== undefined && !isKnownFundsClass(pending.fundsClass)) return null;
   const fundsClass = pending.fundsClass ?? (source ? classifyDepositSource(source) : null);
-  if (!fundsClass || !source) return null;
+  if (!fundsClass || !isKnownFundsClass(fundsClass) || !source) return null;
   const chainId = pending.chainId ?? (fundsClass === "chain" ? classifyChainSource(source) : null);
   if (fundsClass === "chain" && (chainId === null || !Number.isSafeInteger(chainId) || chainId <= 0)) return null;
   if (fundsClass !== "chain" && chainId !== null && chainId !== undefined) return null;
@@ -312,6 +317,8 @@ function view(c: ConsumerRecord, status: LimitStatus | null, ledger?: Ledger): C
         balanceUsd: nanosToUsd(balance.balanceNanos),
         overdraftUsd: nanosToUsd(balance.overdraftNanos),
         unsettledUsd: nanosToUsd(unsettledNanos),
+        unreviewedUsd: nanosToUsd(balance.unreviewedNanos),
+        creditableAvailableUsd: nanosToUsd(balance.creditableAvailableNanos),
         unpricedCalls: unpriced,
         openSettlements: unsettled.length,
         uncertain: c.ledgerUncertain ?? null,
@@ -635,6 +642,8 @@ export class Provisioner {
     unverified: string | null;
   }> {
     if (!this.ledger) return { window: null, status: null, reason: null, verified: true, unverified: null };
+    const unknown = await this.blockUnknownProvenance(rec);
+    if (unknown) return { window: null, status: null, reason: "unreviewed-provenance", verified: true, unverified: unknown };
     if (rec.paused) {
       // A paused consumer has no live key, but a request that was in flight when
       // it was stopped still settles. Import it, or the charge is lost; the
@@ -894,8 +903,32 @@ export class Provisioner {
    *    stays `intent` and the watcher retries the same id (after re-proving
    *    canonicality and finality). Nothing is credited and no row is deleted.
    */
+  /**
+   * Unknown-provenance deposits stay in the historical balance but may not
+   * grant new credit. The consumer is paused/uncertain until a local review
+   * assigns provenance; no amount or row is changed here.
+   */
+  private async blockUnknownProvenance(rec: ConsumerRecord): Promise<string | null> {
+    const balance = this.ledger?.balance(rec.consumerId);
+    if (!balance || balance.unreviewedNanos <= 0) return null;
+    const detail = `${nanosToUsd(balance.unreviewedNanos).toFixed(9)} USD of deposit provenance is unknown; local review is required before new credit`;
+    rec.ledgerUncertain = detail;
+    if (!rec.paused) await this.pause(rec, "manual", detail, true);
+    this.persist();
+    return detail;
+  }
+
+  private async uncertainPending(rec: ConsumerRecord, detail: string): Promise<never> {
+    rec.ledgerUncertain = detail;
+    await this.pause(rec, "manual", detail, true);
+    this.persist();
+    throw new Error(detail);
+  }
+
   async reconcile(c: ConsumerRecord): Promise<void> {
     if (!c.pending || !c.secret) return;
+    const blocked = await this.blockUnknownProvenance(c);
+    if (blocked) throw new Error(`pending deposit ${c.pending.depositId} cannot be reconciled: ${blocked}`);
     let status: LimitStatus;
     try {
       status = await this.magpie.limitStatus(c.secret);
@@ -907,6 +940,25 @@ export class Provisioner {
     const pending = c.pending;
     const dep = this.ledger?.deposit(pending.depositId) ?? null;
     const provenance = pendingProvenance(pending);
+    if (dep) {
+      const expectedAmount = usdToNanos(pending.usd);
+      if (dep.amountNanos !== expectedAmount) {
+        await this.uncertainPending(
+          c,
+          `pending deposit ${pending.depositId} says ${pending.usd} USD but its ledger row is ${nanosToUsd(dep.amountNanos)} USD; refusing to credit`,
+        );
+      }
+      if (provenance) {
+        const assetMismatch = (dep.assetId ?? null) !== (provenance.assetId ?? null);
+        if (dep.fundsClass !== provenance.fundsClass || dep.chainId !== provenance.chainId || assetMismatch) {
+          await this.uncertainPending(
+            c,
+            `pending deposit ${pending.depositId} provenance (${provenance.fundsClass}/${String(provenance.chainId)}/${provenance.assetId ?? "no-asset"}) ` +
+              `disagrees with its ledger row (${dep.fundsClass}/${String(dep.chainId)}/${dep.assetId ?? "no-asset"}); refusing to credit`,
+          );
+        }
+      }
+    }
     if (cap !== undefined && Math.abs(cap - pending.capUsd) < 1e-9) {
       if (this.ledger) {
         const window = this.ledger.openWindowFor(c.consumerId);
@@ -1121,7 +1173,7 @@ export class Provisioner {
    * after the read-back, so a failed verification never leaves this file saying
    * a cap that Magpie may not hold.
    */
-  private async setCap(rec: ConsumerRecord, capUsd: number, expected?: { depositId: string; fundsClass: FundsClass }): Promise<number> {
+  private async setCap(rec: ConsumerRecord, capUsd: number, expected?: { depositId: string; fundsClass: KnownFundsClass }): Promise<number> {
     const cap = assertCap(capUsd);
     if (expected) {
       const pending = rec.pending;
@@ -1136,6 +1188,10 @@ export class Provisioner {
         const chainId = pending.chainId ?? (pending.source ? classifyChainSource(pending.source) : null);
         if (chainId === null || !Number.isSafeInteger(chainId) || chainId <= 0) {
           throw new Error(`chain cap write ${expected.depositId} has no trustworthy chain id; refusing to apply it`);
+        }
+        assertCreditChainAllowed(chainId);
+        if (!pending.assetId || assetIdChainId(pending.assetId) !== chainId) {
+          throw new Error(`chain cap write ${expected.depositId} has no asset id on chain ${chainId}; refusing to apply it`);
         }
       }
     }
@@ -1259,6 +1315,8 @@ export class Provisioner {
       const rec = this.find(consumerId);
       if (!rec || rec.revokedAt) throw new Error(`no active consumer ${consumerId}`);
       await this.reconcile(rec);
+      const unknown = await this.blockUnknownProvenance(rec);
+      if (unknown) throw new Error(`top-up refused: ${unknown}`);
       const id = depositId?.trim() || randomUUID();
       if (isReservedDepositId(id)) {
         throw new Error(`deposit id ${JSON.stringify(id)} is reserved for chain/opening funds; a local top-up must use its own id`);
@@ -1426,6 +1484,8 @@ export class Provisioner {
       const rec = this.find(input.consumerId);
       if (!rec || rec.revokedAt) throw new Error(`no active consumer ${input.consumerId}`);
       await this.reconcile(rec);
+      const unknown = await this.blockUnknownProvenance(rec);
+      if (unknown) throw new Error(`chain deposit refused: ${unknown}`);
       const ledger = this.ledger!;
       const booked = ledger.deposit(input.id);
       if (!booked) throw new Error(`deposit ${input.id} was not booked before it was applied`);
@@ -1436,6 +1496,10 @@ export class Provisioner {
       const bookedChainId = booked.chainId ?? classifyChainSource(booked.source);
       if (bookedChainId === null || !Number.isSafeInteger(bookedChainId) || bookedChainId <= 0) {
         throw new Error(`chain deposit ${input.id} has no trustworthy chain id`);
+      }
+      assertCreditChainAllowed(bookedChainId);
+      if (!booked.assetId || assetIdChainId(booked.assetId) !== bookedChainId) {
+        throw new Error(`chain deposit ${input.id} has no asset id on chain ${bookedChainId}; refusing actual money movement`);
       }
       assertCreditSourceNotMainnet(booked.source);
       if (booked.consumerId !== input.consumerId) throw new Error(`deposit ${input.id} belongs to ${booked.consumerId}`);

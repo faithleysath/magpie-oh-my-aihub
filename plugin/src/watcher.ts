@@ -32,7 +32,7 @@ import { assetIdOf, type AssetRecord, type NetworkRecord, type NetworkRegistry }
 import { matchesTransfer, isExpired, type DepositIntent } from "./deposits.ts";
 import { keccak256Hex } from "./keccak.ts";
 import { usdToNanos, type PriceParts } from "./pricing.ts";
-import type { FundsClass } from "./ledger.ts";
+import type { KnownFundsClass } from "./ledger.ts";
 
 /** `Transfer(address,address,uint256)` — the only event this phase watches. */
 export const TRANSFER_TOPIC = keccak256Hex("Transfer(address,address,uint256)");
@@ -184,7 +184,7 @@ export interface CreditSink {
     consumerId: string;
     amountNanos: number;
     source: string;
-    fundsClass?: FundsClass;
+    fundsClass?: KnownFundsClass;
     chainId?: number | null;
     assetId?: string | null;
   }): { created: boolean };

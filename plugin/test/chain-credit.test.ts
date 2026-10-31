@@ -174,7 +174,15 @@ beforeEach(() => {
 function sink(): CreditSink {
   return {
     depositIntent: (input) => {
-      const r = ledger.depositIntent({ id: input.id, consumerId: input.consumerId, amountNanos: input.amountNanos, source: input.source });
+      const r = ledger.depositIntent({
+        id: input.id,
+        consumerId: input.consumerId,
+        amountNanos: input.amountNanos,
+        source: input.source,
+        fundsClass: input.fundsClass,
+        chainId: input.chainId,
+        assetId: input.assetId,
+      });
       return { created: r.created };
     },
     applyDeposit: async (input) => {
