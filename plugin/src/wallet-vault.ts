@@ -680,7 +680,11 @@ export class WalletVault {
 
   async restore(input: RestoreBackupInput): Promise<WalletSnapshot> {
     assertNewPassword(input.password);
-    if (typeof input.keystore !== "string" || byteLength(input.keystore) > MAX_KEYSTORE_BYTES) {
+    if (
+      typeof input.keystore !== "string" ||
+      input.keystore.length > MAX_KEYSTORE_BYTES ||
+      byteLength(input.keystore) > MAX_KEYSTORE_BYTES
+    ) {
       fail("keystore-invalid", "encrypted backup is missing or too large");
     }
     return this.serial(async () => {
@@ -1343,7 +1347,9 @@ function assertNewPassword(password: string): void {
   if (typeof password !== "string" || password.length < 12) {
     fail("password-policy", "wallet password must have at least 12 characters");
   }
-  if (byteLength(password) > 1024) fail("password-policy", "wallet password must be at most 1024 UTF-8 bytes");
+  if (password.length > 1024 || byteLength(password) > 1024) {
+    fail("password-policy", "wallet password must be at most 1024 UTF-8 bytes");
+  }
   if (password.trim().length === 0) fail("password-policy", "wallet password must not be blank");
 }
 
@@ -1351,7 +1357,9 @@ function assertPasswordInput(password: string): void {
   if (typeof password !== "string" || password.length === 0) {
     fail("password-invalid", "wallet password is required");
   }
-  if (byteLength(password) > 1024) fail("password-invalid", "wallet password is too long");
+  if (password.length > 1024 || byteLength(password) > 1024) {
+    fail("password-invalid", "wallet password is too long");
+  }
 }
 
 function boundedTtl(value: number | undefined, fallback: number, maximum: number): number {
@@ -1422,7 +1430,7 @@ async function decryptWallet(parsed: ParsedKeystore, password: string): Promise<
 }
 
 function validateKeystore(text: string): ParsedKeystore {
-  if (typeof text !== "string" || byteLength(text) > MAX_KEYSTORE_BYTES) {
+  if (typeof text !== "string" || text.length > MAX_KEYSTORE_BYTES || byteLength(text) > MAX_KEYSTORE_BYTES) {
     fail("keystore-invalid", "keystore is missing or too large");
   }
   let raw: unknown;
@@ -1524,7 +1532,9 @@ async function readKeystoreFile(path: string): Promise<ParsedKeystore | null> {
 }
 
 async function writeKeystoreAtomic(path: string, text: string, replace: boolean): Promise<void> {
-  if (byteLength(text) > MAX_KEYSTORE_BYTES) fail("wallet-io", "keystore is too large to write");
+  if (text.length > MAX_KEYSTORE_BYTES || byteLength(text) > MAX_KEYSTORE_BYTES) {
+    fail("wallet-io", "keystore is too large to write");
+  }
   const dir = dirname(path);
   const existed = await pathExists(dir);
   try {
