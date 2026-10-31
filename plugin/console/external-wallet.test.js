@@ -161,16 +161,63 @@ function defaultProvider(overrides = {}) {
   };
 }
 
-function sessionFixture({ provider = defaultProvider(), registry = registryFixture(), allowMainnetRead = false, timeouts = {}, now = () => NOW, info = walletInfo("Test Wallet") } = {}) {
+/** Simulated durable journal; tests only. Not a Service implementation. */
+function memoryOperationPort() {
+  const entries = new Map();
+  const calls = [];
+  let sequence = 0;
+  const keyOf = (operation) => JSON.stringify(Object.fromEntries(Object.entries(operation).sort()));
+  const api = {
+    calls,
+    get state() { return entries.size === 1 ? [...entries.values()][0].state : null; },
+    get entry() { return entries.size === 1 ? [...entries.values()][0] : null; },
+    reserve(operation) {
+      calls.push({ name: "reserve", operation: structuredClone(operation) });
+      const key = keyOf(operation);
+      let entry = entries.get(key);
+      if (!entry) {
+        entry = { id: `op-${++sequence}`, state: "reserved", hash: null, operation };
+        entries.set(key, entry);
+      }
+      return { reservationId: entry.id, state: entry.state, hash: entry.hash };
+    },
+    markBroadcasting({ reservationId, operation }) {
+      calls.push({ name: "markBroadcasting", reservationId, operation: structuredClone(operation) });
+      const entry = [...entries.values()].find((value) => value.id === reservationId);
+      if (!entry || entry.state !== "reserved") throw new Error("journal reservation is not reserved");
+      entry.state = "broadcasting";
+    },
+    recordHash({ reservationId, operation, hash }) {
+      calls.push({ name: "recordHash", reservationId, operation: structuredClone(operation), hash });
+      const entry = [...entries.values()].find((value) => value.id === reservationId);
+      if (!entry) throw new Error("journal reservation missing");
+      entry.state = "broadcast"; entry.hash = hash;
+    },
+    recordUnknown({ reservationId, operation, reason }) {
+      calls.push({ name: "recordUnknown", reservationId, operation: structuredClone(operation), reason });
+      const entry = [...entries.values()].find((value) => value.id === reservationId);
+      if (!entry) throw new Error("journal reservation missing");
+      entry.state = "unknown"; entry.reason = reason;
+    },
+    query(operation) {
+      calls.push({ name: "query", operation: structuredClone(operation) });
+      const entry = entries.get(keyOf(operation));
+      return entry ? { state: entry.state, hash: entry.hash } : null;
+    },
+  };
+  return api;
+}
+
+function sessionFixture({ provider = defaultProvider(), registry = registryFixture(), allowMainnetRead = false, timeouts = {}, now = () => NOW, info = walletInfo("Test Wallet"), operationPort = null } = {}) {
   const wallet = { info, provider: provider.provider };
   const { discovery } = discoveryFixture({ wallets: [wallet] });
   const selection = discovery.list()[0];
-  const session = createExternalWallet({ discovery, selectionId: selection.id, registry, allowMainnetRead, timeouts, now });
+  const session = createExternalWallet({ discovery, selectionId: selection.id, registry, allowMainnetRead, timeouts, now, operationPort });
   return { provider, session, discovery, wallet };
 }
 
 async function connectedFixture(options = {}) {
-  const fixture = sessionFixture(options);
+  const fixture = sessionFixture({ ...options, operationPort: options.operationPort === undefined ? memoryOperationPort() : options.operationPort });
   const state = await fixture.session.connect({ userInitiated: true });
   return { ...fixture, state };
 }
@@ -493,26 +540,28 @@ describe("EIP-712 signing: exact document, local recovery and invalidation", () 
     }
   });
 
-  test("requires a locally registered asset by default; verified remote request needs explicit opt-in", async () => {
+  test("unknown asset/issuer/disabled/not-creditable are always refused; the old bool bypass is gone", async () => {
     const { session, provider } = await connectedFixture();
     const unknown = depositDocument({ assetId: "eip155:97:0x" + "6".repeat(40), contractAddress: "0x" + "6".repeat(40) });
     provider.provider.calls.length = 0;
     await expectCode(session.signDeposit(unknown, { userInitiated: true }), WALLET_ERROR.UNKNOWN_TOKEN);
+    // Kept in the options only to prove the former escape hatch no longer works.
+    await expectCode(session.signDeposit(unknown, { userInitiated: true, allowUnregisteredAsset: true }), WALLET_ERROR.UNKNOWN_TOKEN);
     expect(provider.provider.calls.some((call) => call.method === "eth_signTypedData_v4")).toBe(false);
-    const signed = await session.signDeposit(unknown, { userInitiated: true, allowUnregisteredAsset: true });
-    expect(signed.payerAddress.toLowerCase()).toBe(TEST_PAYER.toLowerCase());
 
     const mystery = depositDocument({ assetId: "eip155:97:0x" + "8".repeat(40), contractAddress: "0x" + "8".repeat(40) });
-    await expectCode(session.signDeposit(mystery, { userInitiated: true, allowUnregisteredAsset: true }), WALLET_ERROR.UNKNOWN_ISSUER);
+    await expectCode(session.signDeposit(mystery, { userInitiated: true }), WALLET_ERROR.UNKNOWN_ISSUER);
     const disabled = depositDocument({ assetId: "eip155:97:0x" + "7".repeat(40), contractAddress: "0x" + "7".repeat(40) });
-    await expectCode(session.signDeposit(disabled, { userInitiated: true, allowUnregisteredAsset: true }), WALLET_ERROR.UNKNOWN_TOKEN);
+    await expectCode(session.signDeposit(disabled, { userInitiated: true }), WALLET_ERROR.UNKNOWN_TOKEN);
+    const notCreditable = depositDocument({ assetId: "eip155:97:0x" + "a".repeat(40), contractAddress: "0x" + "a".repeat(40) });
+    await expectCode(session.signDeposit(notCreditable, { userInitiated: true }), WALLET_ERROR.ASSET_NOT_CREDITABLE);
   });
 
-  test("signing requires a local network registry even for an unregistered remote asset", async () => {
+  test("signing requires a local network registry; a missing registry is not an escape hatch", async () => {
     const noRegistry = sessionFixture({ registry: null });
     await noRegistry.session.connect({ userInitiated: true });
     const document = depositDocument({ assetId: "eip155:97:0x" + "6".repeat(40), contractAddress: "0x" + "6".repeat(40) });
-    await expectCode(noRegistry.session.signDeposit(document, { userInitiated: true, allowUnregisteredAsset: true }), WALLET_ERROR.UNKNOWN_CHAIN);
+    await expectCode(noRegistry.session.signDeposit(document, { userInitiated: true }), WALLET_ERROR.UNKNOWN_CHAIN);
     expect(noRegistry.provider.provider.calls.some((call) => call.method === "eth_signTypedData_v4")).toBe(false);
   });
 
@@ -533,8 +582,10 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
   test("previews exact token/native balances, gas, calldata and blockers without sending", async () => {
     const { session, provider } = await connectedFixture();
     provider.provider.calls.length = 0;
-    const preview = await session.prepareTransfer({ userInitiated: true, ...transfer });
+    const preview = await session.prepareTransfer({ userInitiated: true, ...transfer, intentHash: HASH });
     expect(preview.chainId).toBe(97);
+    expect(preview.intentHash).toBe(HASH);
+    expect(preview.calldataHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(preview.account.toLowerCase()).toBe(TEST_PAYER.toLowerCase());
     expect(preview.amountRaw).toBe("1000001");
     expect(preview.amountTokens).toBe("1.000001");
@@ -554,6 +605,57 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     expect(provider.provider.calls.map((call) => call.method)).toEqual(["eth_accounts", "eth_chainId", "eth_call", "eth_getBalance", "eth_estimateGas", "eth_gasPrice"]);
     expect(provider.provider.calls.some((call) => call.method === "eth_sendTransaction")).toBe(false);
     expect(provider.provider.calls[0].params).toEqual([]);
+    await expectCode(session.prepareTransfer({ userInitiated: true, ...transfer, intentHash: "0x1234" }), WALLET_ERROR.INVALID_INTENT_HASH);
+  });
+
+  test("refuses to send without an injected Service operation journal; no provider call is made", async () => {
+    const { session, provider } = await connectedFixture({ operationPort: null });
+    const preview = await session.prepareTransfer({ userInitiated: true, ...transfer });
+    provider.provider.calls.length = 0;
+    await expectCode(session.confirmTransfer(preview, { userInitiated: true, acknowledged: true, previewId: preview.previewId }), WALLET_ERROR.OPERATION_JOURNAL_REQUIRED);
+    expect(provider.provider.calls).toHaveLength(0);
+    expect(preview.canSend).toBe(true);
+  });
+
+  test("reserves, marks broadcasting before send, and records the hash after", async () => {
+    const port = memoryOperationPort();
+    let duringSend = null;
+    const provider = defaultProvider({ eth_sendTransaction: async () => {
+      duringSend = { state: port.entry?.state, calls: port.calls.map((call) => call.name) };
+      return TX_HASH;
+    } });
+    const { session } = await connectedFixture({ provider, operationPort: port });
+    const preview = await session.prepareTransfer({ userInitiated: true, ...transfer, intentHash: HASH });
+    const result = await session.confirmTransfer(preview, { userInitiated: true, acknowledged: true, previewId: preview.previewId });
+    expect(result.transferVerified).toBe(false);
+    expect(duringSend.state).toBe("broadcasting");
+    expect(duringSend.calls).toEqual(["reserve", "markBroadcasting", "recordHash"] .slice(0, 2));
+    expect(port.calls.map((call) => call.name)).toEqual(["reserve", "markBroadcasting", "recordHash"]);
+    const operation = port.calls.find((call) => call.name === "reserve").operation;
+    expect(operation).toMatchObject({
+      schema: "ohmyaihub.external-wallet.operation/v1",
+      intentHash: HASH,
+      chainId: 97,
+      assetId: ASSET_97,
+      contractAddress: CONTRACT,
+      recipientAddress: RECIPIENT,
+      amountRaw: "1000001",
+      calldataHash: preview.calldataHash,
+      calldata: preview.call.data,
+    });
+    expect(operation.account.toLowerCase()).toBe(TEST_PAYER.toLowerCase());
+    expect(operation.previewId).toBeUndefined();
+    expect(port.entry.state).toBe("broadcast");
+  });
+
+  test("a journal that refuses markBroadcasting prevents the provider call", async () => {
+    const port = memoryOperationPort();
+    port.markBroadcasting = () => { throw new Error("journal down"); };
+    const provider = defaultProvider();
+    const { session } = await connectedFixture({ provider, operationPort: port });
+    const preview = await session.prepareTransfer({ userInitiated: true, ...transfer });
+    await expectCode(session.confirmTransfer(preview, { userInitiated: true, acknowledged: true, previewId: preview.previewId }), WALLET_ERROR.OPERATION_JOURNAL_FAILED);
+    expect(provider.provider.calls.some((call) => call.method === "eth_sendTransaction")).toBe(false);
   });
 
   test("requires one explicit per-transfer confirmation and sends exactly the previewed call", async () => {
@@ -767,11 +869,30 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     expect(badHash.provider.calls.filter((call) => call.method === "eth_sendTransaction")).toHaveLength(1);
   });
 
-  test("user rejection is safe to retry explicitly; no hidden automatic resend", async () => {
+  test("user rejection is recorded unknown after broadcasting; no automatic or same-preview resend", async () => {
     const provider = defaultProvider({ eth_sendTransaction: async () => { throw Object.assign(new Error("rejected"), { code: 4001 }); } });
-    const { session } = await connectedFixture({ provider });
+    const port = memoryOperationPort();
+    const { session } = await connectedFixture({ provider, operationPort: port });
     const preview = await session.prepareTransfer({ userInitiated: true, ...transfer });
     await expectCode(session.confirmTransfer(preview, { userInitiated: true, acknowledged: true, previewId: preview.previewId }), WALLET_ERROR.USER_REJECTED);
+    expect(provider.provider.calls.filter((call) => call.method === "eth_sendTransaction")).toHaveLength(1);
+    expect(port.entry.state).toBe("unknown");
+    await expectCode(session.confirmTransfer(preview, { userInitiated: true, acknowledged: true, previewId: preview.previewId }), WALLET_ERROR.UNKNOWN_BROADCAST);
+    expect(provider.provider.calls.filter((call) => call.method === "eth_sendTransaction")).toHaveLength(1);
+  });
+
+  test("a fresh session sharing the journal does not resend an operation already marked unknown", async () => {
+    const port = memoryOperationPort();
+    const provider = defaultProvider({ eth_sendTransaction: async () => new Promise(() => {}) });
+    const first = await connectedFixture({ provider, operationPort: port, timeouts: { sendMs: 20 } });
+    const p1 = await first.session.prepareTransfer({ userInitiated: true, ...transfer, intentHash: HASH });
+    await expectCode(first.session.confirmTransfer(p1, { userInitiated: true, acknowledged: true, previewId: p1.previewId }), WALLET_ERROR.WALLET_TIMEOUT);
+    expect(port.entry.state).toBe("unknown");
+
+    const second = await connectedFixture({ provider, operationPort: port, timeouts: { sendMs: 20 } });
+    const p2 = await second.session.prepareTransfer({ userInitiated: true, ...transfer, intentHash: HASH });
+    const error = await expectCode(second.session.confirmTransfer(p2, { userInitiated: true, acknowledged: true, previewId: p2.previewId }), WALLET_ERROR.OPERATION_UNKNOWN);
+    expect(error.hash).toBeNull();
     expect(provider.provider.calls.filter((call) => call.method === "eth_sendTransaction")).toHaveLength(1);
   });
 
@@ -782,7 +903,7 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     expect((await session.getReceipt(TX_HASH)).state).toBe("pending");
     provider.setReceipt({ transactionHash: TX_HASH, status: "0x1", blockNumber: "0x10" });
     const success = await session.getReceipt(TX_HASH);
-    expect(success).toMatchObject({ state: "success", credited: false, finality: "unknown", blockNumber: "0x10" });
+    expect(success).toMatchObject({ state: "success", credited: false, transferVerified: false, evidence: "chain-receipt", finality: "unknown", blockNumber: "0x10" });
     provider.setReceipt({ transactionHash: TX_HASH, status: "0x0", blockNumber: "0x11" });
     expect((await session.getReceipt(TX_HASH)).state).toBe("reverted");
     provider.setReceipt({ transactionHash: TX_HASH, status: "0x2", blockNumber: "0x12" });
