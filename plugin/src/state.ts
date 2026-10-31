@@ -154,6 +154,13 @@ export interface ProviderConnection {
   fingerprint: PeerFingerprint | null;
   /** models verified at connect time; [] = none recorded (never an authorization claim) */
   models: string[];
+  /**
+   * A forward move that was persisted before the core/Magpie were touched. It
+   * lets a crash between the restart/registration and the state commit recover
+   * the plugin's own URL without mistaking an edited entry for ours. Cleared on
+   * success or rollback.
+   */
+  forwardPending?: { from: number; to: number; at: string } | null;
   status: ConnectionStatus;
   detail: string | null;
   limit: ProviderLimitView | null;
@@ -451,6 +458,13 @@ export function loadState(): LoadedState {
         keyRef: p.keyRef ?? providerKeyRef(p.id),
         fingerprint: p.fingerprint ?? null,
         models: Array.isArray(p.models) ? p.models.map(String) : [],
+        forwardPending:
+          p.forwardPending &&
+          Number.isInteger(p.forwardPending.from) &&
+          Number.isInteger(p.forwardPending.to) &&
+          typeof p.forwardPending.at === "string"
+            ? { from: p.forwardPending.from, to: p.forwardPending.to, at: p.forwardPending.at }
+            : null,
         status: p.status ?? "degraded",
         detail: p.detail ?? null,
         limit: p.limit ?? null,
@@ -474,6 +488,7 @@ export function loadState(): LoadedState {
       keyRef: providerKeyRef(wiring.id),
       fingerprint: null,
       models: [],
+      forwardPending: null,
       status: "degraded",
       detail: "migrated from the phase-3 provider wiring; not verified since",
       limit: null,
