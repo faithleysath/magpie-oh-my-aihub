@@ -4,6 +4,8 @@
 //
 // This file is executed with a per-node cwd (state dir) by the test harness.
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { keyIdOf, loadCatalogTrust, loadOrCreateCatalogIdentity, saveCatalogTrust, type CatalogModel } from "../../src/catalog.ts";
 import { providerIdFor } from "../../src/control/service-port.ts";
 import { startControlApp } from "../../src/control/app.ts";
@@ -38,6 +40,22 @@ const MODEL: CatalogModel = {
 };
 
 const magpie = new HttpFixtureMagpie();
+const magpieFile = join(process.cwd(), "fake-magpie.json");
+function loadMagpie(): void {
+  if (!existsSync(magpieFile)) return;
+  try {
+    const raw = JSON.parse(readFileSync(magpieFile, "utf8")) as { keys?: any[]; providers?: any[] };
+    for (const key of raw.keys ?? []) magpie.keys.set(key.id, key);
+    for (const provider of raw.providers ?? []) magpie.providers.set(provider.id, provider);
+    (magpie as unknown as { n: number }).n = (raw.keys ?? []).reduce((max, key) => Math.max(max, Number(String(key.id).replace(/\D/g, "")) || 0), 0);
+  } catch {
+    /* a corrupt test fixture starts empty */
+  }
+}
+function saveMagpie(): void {
+  writeFileSync(magpieFile, JSON.stringify({ keys: [...magpie.keys.values()], providers: [...magpie.providers.values()] }), { mode: 0o600 });
+}
+loadMagpie();
 const sup = new HttpFixtureSupervisor();
 const identity = loadOrCreateCatalogIdentity();
 let currentQuoteHash = quoteHash;
@@ -293,7 +311,9 @@ testServer = Bun.serve({
     }
     if (url.pathname === "/action" && req.method === "POST") {
       const body = (await req.json()) as { name?: string; input?: Record<string, unknown> };
-      return action(String(body.name ?? ""), body.input ?? {});
+      const result = await action(String(body.name ?? ""), body.input ?? {});
+      saveMagpie();
+      return result;
     }
     return new Response("not found", { status: 404 });
   },

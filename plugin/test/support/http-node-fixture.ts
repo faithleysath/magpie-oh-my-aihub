@@ -92,7 +92,11 @@ export class HttpFixtureMagpie {
   }
   async limitStatus(secret: string) {
     const k = [...this.keys.values()].find((x) => x.secret === secret);
-    if (!k) throw new Error("no such key");
+    if (!k) {
+      const error = new Error("HTTP 401: the key is not accepted") as Error & { status: number };
+      error.status = 401;
+      throw error;
+    }
     const used = 0;
     const noLimit = k.cap === 0;
     return {
