@@ -24,6 +24,10 @@ export type {
   P2pTakeAuthorizationInput,
   P2pAckRecord,
   P2pRevokeRequest,
+  P2pRevokeOutcome,
+  P2pRevokeConfirmed,
+  P2pRevokeRefused,
+  P2pRevokeEnforcement,
   P2pInboundApproval,
   P2pResultCode,
 } from "./node.ts";

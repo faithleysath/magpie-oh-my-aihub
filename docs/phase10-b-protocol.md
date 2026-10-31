@@ -183,9 +183,12 @@ requested → approved → delivered → acked
   The core never compares these two for equality. Only the selected-subset
   version is delivered.
 - **Revoke ordering and recovery:** the native key is revoked through the port
-  *before* any `revoked` wire message can be queued. A port failure (throw or
-  `{revoked:false}`) leaves the approval `uncertain`, surfaces
-  `action-needed`, and sends nothing. A later explicit retry of the **same
+  *before* any `revoked` wire message can be queued. Only an explicit typed
+  result with `revoked:true`, `enforcement:"keyRevoked"|"secretRotated"` and
+  bindings equal to this approval's consumer, approval id, key id and generation
+  is success. A throw, `{revoked:false}`, `void`/missing result, a non-binding
+  enforcement (cap/network/safety) or any binding mismatch leaves the approval
+  `uncertain`, surfaces `action-needed`, and sends nothing. A later explicit retry of the **same
   approval/generation** is allowed: if the port then confirms the key is gone,
   the approval converges to `revoked`, the authorization is tombstoned, the
   request becomes `revoked`, and only then is the notice queued. A restart never
@@ -270,7 +273,12 @@ interface P2pBusinessPort {
   approve(input): Promise<P2pApprovedMaterials>;   // selected models/cap/key
   takeAuthorization(input): Promise<P2pAuthorizationDocument>; // key in memory only
   recordAck(input): Promise<void>;
-  revoke(input): Promise<void | { revoked: boolean; detail: string | null }>;
+  revoke(input: { consumerNodeId, approvalId, keyId, generation, reason }): Promise<
+    | { revoked: true; enforcement: "keyRevoked" | "secretRotated";
+        consumerNodeId; approvalId; keyId; generation; detail: string | null }
+    | { revoked: false; enforcement: "none" | "capRestricted" | "networkWithdrawn" | "safetyUncertain" | "failed";
+        detail: string | null }
+  >; // void/null is not success; the core marks the approval uncertain
   recordApproval(input): Promise<void>;
   importAuthorization(input): Promise<{ models; capUsd }>; // register before ACK
   dropAuthorization(input): Promise<void>;
@@ -358,7 +366,7 @@ The tests use a temp directory, a fixed clock and an in-process overlay; they do
 not resolve the LAN IP, open a port, read the production Magpie state or call a
 public RPC.
 
-Expected result at this commit: `54 pass / 0 fail`, typecheck clean.
+Expected result at this commit: `63 pass / 0 fail`, typecheck clean.
 
 ## 12. Not verified (UNKNOWN)
 

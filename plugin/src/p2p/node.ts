@@ -189,9 +189,39 @@ export interface P2pAckRecord {
 
 export interface P2pRevokeRequest {
   consumerNodeId: string;
-  approvalId: string | null;
+  approvalId: string;
+  /** the key id recorded for this approval; null when it was never confirmed */
+  keyId: string | null;
+  generation: number;
   reason: P2pRevokeReason;
 }
+
+/** Only these two enforcement modes prove the native key can no longer be used. */
+export type P2pRevokeEnforcement = "keyRevoked" | "secretRotated";
+
+export interface P2pRevokeConfirmed {
+  revoked: true;
+  enforcement: P2pRevokeEnforcement;
+  /** bindings the adapter must read back from the real Provisioner/Magpie */
+  consumerNodeId: string;
+  approvalId: string;
+  keyId: string;
+  generation: number;
+  detail: string | null;
+}
+
+export interface P2pRevokeRefused {
+  revoked: false;
+  enforcement: "none" | "capRestricted" | "networkWithdrawn" | "safetyUncertain" | "failed";
+  detail: string | null;
+}
+
+/**
+ * A revoke is confirmed only by an explicit typed result. void, null, a missing
+ * enforcement, or a non-binding enforcement (cap/network/safety) is not success:
+ * the approval stays uncertain and can be retried.
+ */
+export type P2pRevokeOutcome = P2pRevokeConfirmed | P2pRevokeRefused;
 
 export interface P2pInboundApproval {
   approvalId: string;
@@ -220,7 +250,7 @@ export interface P2pBusinessPort {
   takeAuthorization(input: P2pTakeAuthorizationInput): Promise<P2pAuthorizationDocument>;
   recordAck(input: P2pAckRecord): Promise<void>;
   /** Must actually revoke the native key. Resolving means "the key is gone". */
-  revoke(input: P2pRevokeRequest): Promise<void | { revoked: boolean; detail: string | null }>;
+  revoke(input: P2pRevokeRequest): Promise<P2pRevokeOutcome>;
   recordApproval(input: P2pInboundApproval): Promise<void>;
   importAuthorization(input: { document: P2pAuthorizationDocument; approval: P2pInboundApproval; session: { sessionId: string; peer: P2pPeerIdentity } }): Promise<{ models: string[]; capUsd: number }>;
   dropAuthorization(input: { approvalId: string; consumerNodeId: string; providerNodeId: string | null; providerFingerprint: string | null; reason: P2pRevokeReason }): Promise<void>;
@@ -1195,18 +1225,25 @@ export class P2pNode {
       const approval = this.store.getApproval(approvalId);
       if (!approval) fail("not_found", "no such approval");
       if (approval.state === "revoked") return;
-      let outcome: void | { revoked: boolean; detail: string | null };
+      let outcome: P2pRevokeOutcome | null | undefined;
       try {
-        outcome = await this.port.revoke({ consumerNodeId: approval.consumerNodeId, approvalId, reason });
+        outcome = await this.port.revoke({
+          consumerNodeId: approval.consumerNodeId,
+          approvalId,
+          keyId: approval.keyId,
+          generation: approval.generation,
+          reason,
+        });
       } catch (e) {
         // The native key is not proven gone: keep the approval actionable and do
         // not send a revocation that claims otherwise.
         this.store.transitionApproval(approvalId, [...ACTIVE_APPROVAL_STATES], "uncertain", { error: `revoke failed: ${e instanceof Error ? e.message.slice(0, 240) : "unknown"}` });
         throw e;
       }
-      if (outcome && outcome.revoked === false) {
-        this.store.transitionApproval(approvalId, [...ACTIVE_APPROVAL_STATES], "uncertain", { error: `revoke failed: ${outcome.detail ?? "the key is still usable"}`.slice(0, 300) });
-        fail("conflict", "the provisioner key is still usable; no revocation notice was sent");
+      const confirmation = this.revokeConfirmation(outcome, approval);
+      if (!confirmation.ok) {
+        this.store.transitionApproval(approvalId, [...ACTIVE_APPROVAL_STATES], "uncertain", { error: `revoke not enforced: ${confirmation.reason}`.slice(0, 300) });
+        fail("conflict", `the native key is not confirmed gone (${confirmation.reason}); no revocation notice was sent`);
       }
       // An uncertain approval is still revocable: the port just confirmed that
       // the native key is gone, so the state must be allowed to converge.
@@ -1456,10 +1493,15 @@ export class P2pNode {
     for (const approval of this.store.listApprovals(nodeId)) {
       if (approval.consumerFingerprint !== oldPeer.fingerprint) continue;
       if (![...REVOCABLE_STATES].includes(approval.state as (typeof REVOCABLE_STATES)[number])) continue;
-      let confirmed = false;
+      let outcome: P2pRevokeOutcome | null | undefined;
       try {
-        const outcome = await this.port.revoke({ consumerNodeId: nodeId, approvalId: approval.approvalId, reason: "account-closed" });
-        confirmed = !outcome || outcome.revoked !== false;
+        outcome = await this.port.revoke({
+          consumerNodeId: nodeId,
+          approvalId: approval.approvalId,
+          keyId: approval.keyId,
+          generation: approval.generation,
+          reason: "account-closed",
+        });
       } catch (e) {
         this.store.transitionApproval(approval.approvalId, [...REVOCABLE_STATES], "uncertain", {
           error: `identity change revoke failed: ${e instanceof Error ? e.message.slice(0, 200) : "unknown"}`,
@@ -1467,8 +1509,9 @@ export class P2pNode {
         result.uncertain.push(approval.approvalId);
         continue;
       }
-      if (!confirmed) {
-        this.store.transitionApproval(approval.approvalId, [...REVOCABLE_STATES], "uncertain", { error: "identity change: the native key is still usable" });
+      const confirmation = this.revokeConfirmation(outcome, approval);
+      if (!confirmation.ok) {
+        this.store.transitionApproval(approval.approvalId, [...REVOCABLE_STATES], "uncertain", { error: `identity change revoke not enforced: ${confirmation.reason}`.slice(0, 300) });
         result.uncertain.push(approval.approvalId);
         continue;
       }
@@ -1483,6 +1526,32 @@ export class P2pNode {
     // removed (that is the per-approval tombstone above).
     this.store.putTombstone("identity", `${nodeId}:${oldPeer.fingerprint}`, `replaced by ${nextPeer.fingerprint}`, this.clock());
     return result;
+  }
+
+  /**
+   * A result is accepted only if it is typed, explicitly enforced and bound to
+   * this exact approval and key generation. Everything else is uncertain.
+   */
+  private revokeConfirmation(outcome: P2pRevokeOutcome | null | undefined, approval: P2pApprovalRow): { ok: true } | { ok: false; reason: string } {
+    if (!outcome || typeof outcome !== "object") return { ok: false, reason: "the port returned no enforceable result" };
+    if (outcome.revoked !== true) {
+      const enforcement = (outcome as { enforcement?: unknown }).enforcement;
+      return { ok: false, reason: `the port refused (${typeof enforcement === "string" ? enforcement : "unknown"})` };
+    }
+    if (outcome.enforcement !== "keyRevoked" && outcome.enforcement !== "secretRotated") {
+      return { ok: false, reason: "the enforcement mode does not prove the key is unusable" };
+    }
+    if (outcome.consumerNodeId !== approval.consumerNodeId) return { ok: false, reason: "consumer binding mismatch" };
+    if (outcome.approvalId !== approval.approvalId) return { ok: false, reason: "approval binding mismatch" };
+    if (!approval.keyId || outcome.keyId !== approval.keyId) return { ok: false, reason: "key binding mismatch" };
+    if (outcome.generation !== approval.generation) return { ok: false, reason: "generation binding mismatch" };
+    if (outcome.detail !== null && typeof outcome.detail !== "string") return { ok: false, reason: "the detail field is not a string" };
+    try {
+      assertNoSecretMaterial({ detail: outcome.detail ?? null }, "revoke detail");
+    } catch {
+      return { ok: false, reason: "the detail field contains credential material" };
+    }
+    return { ok: true };
   }
 
   private assertRequestAgainstContext(request: P2pRequestDocument, context: P2pProviderContext): void {

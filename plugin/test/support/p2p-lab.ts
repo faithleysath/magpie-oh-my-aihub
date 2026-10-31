@@ -39,6 +39,11 @@ export interface LabFaults {
   failRegister?: boolean;
   failRevoke?: boolean;
   revokeUnconfirmed?: boolean;
+  revokeVoid?: boolean;
+  revokeWrongKey?: boolean;
+  revokeWrongGeneration?: boolean;
+  revokeCapRestricted?: boolean;
+  revokeEnforcement?: string;
   narrowModels?: string[] | null;
   approveKeyId?: string;
   readbackModels?: string[] | null;
@@ -265,11 +270,50 @@ export class P2pLab {
       async recordAck() {
         self.calls.recordAck += 1;
       },
-      async revoke(input: { consumerNodeId: string; approvalId: string | null; reason: P2pRevokeReason }) {
+      async revoke(input: { consumerNodeId: string; approvalId: string; keyId: string | null; generation: number; reason: P2pRevokeReason }) {
         self.calls.revoke += 1;
         if (self.faults.failRevoke) throw new Error("magpie did not confirm the key removal");
-        if (self.faults.revokeUnconfirmed) return { revoked: false, detail: "key still present" };
-        return { revoked: true, detail: null };
+        if (self.faults.revokeVoid) return undefined as never;
+        if (self.faults.revokeUnconfirmed || self.faults.revokeCapRestricted) {
+          return {
+            revoked: false as const,
+            enforcement: self.faults.revokeCapRestricted ? ("capRestricted" as const) : ("none" as const),
+            detail: "key still present",
+          };
+        }
+        const approval = self.storeB.getApproval(input.approvalId);
+        const keyId = input.keyId ?? approval?.keyId ?? "";
+        if (self.faults.revokeWrongKey) {
+          return {
+            revoked: true as const,
+            enforcement: "keyRevoked" as const,
+            consumerNodeId: input.consumerNodeId,
+            approvalId: input.approvalId,
+            keyId: "some-other-key",
+            generation: input.generation,
+            detail: null,
+          };
+        }
+        if (self.faults.revokeWrongGeneration) {
+          return {
+            revoked: true as const,
+            enforcement: "keyRevoked" as const,
+            consumerNodeId: input.consumerNodeId,
+            approvalId: input.approvalId,
+            keyId,
+            generation: input.generation + 1,
+            detail: null,
+          };
+        }
+        return {
+          revoked: true as const,
+          enforcement: (self.faults.revokeEnforcement ?? "keyRevoked") as "keyRevoked" | "secretRotated",
+          consumerNodeId: input.consumerNodeId,
+          approvalId: input.approvalId,
+          keyId,
+          generation: input.generation,
+          detail: null,
+        };
       },
       async recordApproval() {
         self.calls.recordApproval += 1;

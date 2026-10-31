@@ -228,7 +228,7 @@ describe("TOFU key change", () => {
     const alien = alienIdentity();
     lab.storeB.recordPeerSeen(alien.peer, lab.clock.now);
 
-    lab.faults.revokeUnconfirmed = true;
+    lab.faults.revokeVoid = true;
     const invalidation = await lab.B.acceptConsumer("aaaa1111", alien.peer.fingerprint);
     expect(invalidation.revoked).toEqual([]);
     expect(invalidation.uncertain).toEqual([approval.approvalId]);
@@ -238,7 +238,7 @@ describe("TOFU key change", () => {
     expect(lab.storeB.getPeer("aaaa1111")?.fingerprint).toBe(alien.peer.fingerprint);
 
     // A later confirmed revoke of the same approval converges and tombstones.
-    lab.faults.revokeUnconfirmed = false;
+    lab.faults.revokeVoid = false;
     await lab.B.revoke(approval.approvalId, "operator-revoked");
     expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("revoked");
     expect(lab.storeB.getDelivery(approval.approvalId)?.state).toBe("revoked");
@@ -311,6 +311,44 @@ describe("uncertain revoke and generations", () => {
     expect(lab.calls.register).toBe(2);
     expect((await lab.B.approvalView(generation2.approvalId))?.ackState).toBe("acked");
   });
+});
+
+describe("revoke enforcement result", () => {
+  const failures: Array<[string, (l: P2pLab) => void]> = [
+    ["void", (l) => { l.faults.revokeVoid = true; }],
+    ["typed false", (l) => { l.faults.revokeUnconfirmed = true; }],
+    ["throw", (l) => { l.faults.failRevoke = true; }],
+    ["wrong key id", (l) => { l.faults.revokeWrongKey = true; }],
+    ["wrong generation", (l) => { l.faults.revokeWrongGeneration = true; }],
+    ["capRestricted", (l) => { l.faults.revokeCapRestricted = true; }],
+    ["revoked:true with a non-enforcing mode", (l) => { l.faults.revokeEnforcement = "safetyUncertain"; }],
+  ];
+
+  for (const [name, apply] of failures) {
+    test(name + " is uncertain: no tombstone and no notice", async () => {
+      lab = P2pLab.create();
+      const { approval } = await lab.deliver(); // no ACK, so no ack tombstone
+      apply(lab);
+      await expect(lab.B.revoke(approval.approvalId, "operator-revoked")).rejects.toThrow();
+      expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("uncertain");
+      expect(lab.storeB.getDelivery(approval.approvalId)?.state).not.toBe("revoked");
+      expect(lab.storeB.hasTombstone("authorization", approval.approvalId)).toBe(false);
+      expect(lab.storeB.outboxByIdempotency("revoked", expectedRevokedIdempotency(approval.approvalId))).toBeNull();
+    });
+  }
+
+  for (const mode of ["keyRevoked", "secretRotated"] as const) {
+    test("typed " + mode + " is accepted: revoked + tombstone + notice", async () => {
+      lab = P2pLab.create();
+      const { approval } = await lab.deliver();
+      lab.faults.revokeEnforcement = mode;
+      await lab.B.revoke(approval.approvalId, "operator-revoked");
+      expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("revoked");
+      expect(lab.storeB.getDelivery(approval.approvalId)?.state).toBe("revoked");
+      expect(lab.storeB.hasTombstone("authorization", approval.approvalId)).toBe(true);
+      expect(lab.storeB.outboxByIdempotency("revoked", expectedRevokedIdempotency(approval.approvalId))).not.toBeNull();
+    });
+  }
 });
 
 describe("no secrets and no powerful imports", () => {
