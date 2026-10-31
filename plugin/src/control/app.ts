@@ -308,6 +308,19 @@ export class ControlApp {
     // accept that exact mapped Host. Without this a consumer reaches the
     // forward with the mapped Host and the provider answers 403.
     this.allowedHosts = this.allowedHostsFor(cfg, this.host, this.port);
+    // The B handshake binds the hello to this node's published catalogue quote.
+    // A node that starts unshared has null there; sharing afterwards changes
+    // the quote, and every client hello would be refused as a quote mismatch
+    // until the whole host restarted. Keep the binding on the live node.
+    const quote = this.service.catalogStatus().quote;
+    this.node.setBinding({
+      nodeId: cfg.nodeId,
+      hostname: `ohmyaihub-${cfg.nodeId}`,
+      mappedCidr: cfg.mappedCidr,
+      controlPort: this.port,
+      gatewayPort: this.service.gatewayPort(),
+      catalogQuoteHash: quote?.contentHash ?? null,
+    });
     await this.service.applyControlPublication();
     this.publishPresence();
   }
