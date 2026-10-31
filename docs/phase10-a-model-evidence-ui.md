@@ -13,6 +13,8 @@
 
 **VERIFIED（语义边界）**：`callable:"yes"` 只证明当前 Key 成功读到了远端 `/v1/models` 清单，**不代表推理可用或额度充足**。因此首页计数文案是「N 个当前可见模型」，详情明确“推理额度与 429 另计，不代表可调用”；`limit.spent` / `costLeft<=0` / 429 仍用既有 `provider.limit` 单独显示“额度已用尽（原生 429）”，不会被清单的 current 覆盖，也不会把 paused/revoked 洗成可用。
 
+**旧 head 回归证据**：`6388e6f` 的 `modelEvidenceSummary` 对“未来 `readAt` + `paused`”返回 `current / 1 个当前可见模型`（本轮实际运行旧文件得到），新 head 返回 `unknown` 或 `inactive`，对应用例见 §4。
+
 **REPRODUCED（fixture）**：current → 首页显示「2 个当前可见模型」，展开可见 `qwen/qwen3-32b`、`deepseek/deepseek-chat`，每行带读回来源/时间与“额度上限 $2.5000 · 已用 $0.4200 · 剩余 $2.0800”；stale → 「模型清单已过期」+“到「发现 → 我的连接」重新读取可用模型；过期清单不算可用。”，列表入口隐藏。
 
 **UNKNOWN**：真实 Magpie 0.1.2289 的读回、真实 `provider-models`/`provider-check` 响应、TTL 失效后的实际表现。PR #36 未合并，本分支没有接真实后端。
@@ -53,8 +55,10 @@ status.providers[].modelsEvidence = {
    - `modelsEvidence.status === "current"`
    - `modelsEvidence.callable === "yes"`
    - `modelCount` 是有限非负数
-   - 未过期且可证明：`expiresAt` 可解析且 `Date.parse(expiresAt) > now`（页面长时间停留的兜底；后端仍拥有 freshness 定义）。`expiresAt` 缺失或不可解析 → 保守视为 `unknown`，不计入，并给“重新读取”的下一步。
+   - **时间可证明**：`readAt` 与 `expiresAt` 都存在、可解析；`readAt <= now`（未来 `readAt` 一律 unknown，即使后端容忍 +60s 时钟偏差）；`expiresAt >= readAt`；`expiresAt > now`；有效窗口 `expiresAt - readAt <= 5min`（与后端 TTL 契约一致，正好 5 分钟算有效）。任一条不满足 → `unknown`，不计入，并给“重新读取”的下一步。未来 `expiresAt` 只是正常 TTL，允许计数。
+   - **连接状态**：只有 `provider.status === "connected"` 才计数。`paused` / `degraded` / `disabled` / `identity-mismatch` / `revoked` 一律不计；它们的最近清单只作为诊断显示，并标注“仅诊断，不计入当前可见模型”。恢复连接后需要新的有效读回才重新计数；`limit.spent` 不抹掉清单（额度维度单独显示）。
 3. 有可用 → `current`，标题「N 个当前可见模型」，详情「M 个伙伴服务 · 最近真实读回；推理额度与 429 另计，不代表可调用」，可展开列表；额度状态单独标注（正常/已用尽/待确认）。`modelCount === 0` 时为 `empty`：「已连接，但没有发现模型」+ 核对模型范围与额度。
+3b. 有当前证据但连接不是 `connected` → `inactive`：「0 个当前可见模型」+“恢复连接并重新读取后再计入，历史清单只作诊断”，列表展示历史清单并逐条标 `仅诊断`。
 4. 有证据但 `callable === "no"`（401/撤销）→ `denied`：「授权未通过」+ 核验密钥与额度，不用 0 代替；若同时 stale 则显示过期。
 5. 无可用但存在 `stale` 或已过期 → 「模型清单已过期」+ 下一步“到「发现 → 我的连接」重新读取可用模型；过期清单不算可用。”
 6. 其余 → 「尚未确认」+ 下一步“到「发现 → 我的连接」读取可用模型；读取前不会计入可用数。”
@@ -82,7 +86,7 @@ status.providers[].modelsEvidence = {
 
 ```bash
 cd plugin
-bun test ./console     # 83 pass / 0 fail / 632 assertions
+bun test ./console     # 84 pass / 0 fail / 662 assertions
 bun run typecheck      # clean
 bun run secret-scan    # PASS
 ```
@@ -94,7 +98,9 @@ bun run secret-scan    # PASS
   - legacy `provider.models` 存在但无 evidence → `unknown`、0；evidence 非 current / callable 非 yes / count null 同样不计；
   - stale → 「模型清单已过期」+ 下一步文案；
   - 一个 stale + 一个 current → 只计 current；
-  - 页面停留超过 `expiresAt` → 自动转为 stale；`expiresAt` 缺失/不可解析 → `unknown` 不计；未来时间 → 正常计数；
+  - 页面停留超过 `expiresAt` → 自动转为 stale；`expiresAt` 缺失/不可解析 → `unknown` 不计；未来 `expiresAt` → 正常计数；
+  - `readAt` 在未来 / 非法 / 缺失 → `unknown` 不计；`expiresAt < readAt` → `unknown`；窗口 > 5min → `unknown`；正好 5min → 计数；
+  - `paused/disabled/degraded/identity-mismatch/revoked` → `inactive`、计数 0、历史清单只诊断；恢复后需新的 current 读回；
   - current + `limit.spent` / `costLeft<=0` → 仍显示清单数，但额度行明确“额度已用尽（原生 429）”；未读额度 → “额度待确认”；
   - current 但 `modelCount === 0` → “已连接，但没有发现模型”；`callable:"no"`（401/撤销）→ “授权未通过”，不用 0；
   - 换 Key（`keyGeneration` 变化）→ `stale` 不计，只有新的 current 读回才重新计数；
@@ -110,8 +116,9 @@ bun run secret-scan    # PASS
 
 `docs/phase10-a-model-evidence-ui/`：
 
-- `current-1440-light.png`：展开的可用模型列表（来源 `provider-models`、读回时间）；
+- `current-1440-light.png`：展开的可用模型列表（来源 `provider-models`、读回时间、额度行）；
 - `stale-1440-light.png`：过期态与下一步；
+- `paused-1440-light.png`：连接暂停时“0 个当前可见模型”，历史清单标注“仅诊断”；
 - `current-390-light.png`：窄屏展开列表。
 
 复现：`bun run plugin/scripts/console-preview.ts --scenario configured --port 61392` / `--scenario stale --port 61393`（预览服务器是开发夹具，合成数据，不是真实节点）。

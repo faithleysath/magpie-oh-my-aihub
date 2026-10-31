@@ -61,6 +61,9 @@ const statusNames = { connected: "已连接", verified: "身份已接受", unver
  * Only a current, unexpired evidence record for the current key/identity is
  * shown; quota is reported separately (native 429 / unknown / not read).
  */
+/** Mirrors the backend's 5 minute evidence TTL; the client only narrows trust. */
+const EVIDENCE_TTL_MS = 5 * 60 * 1000;
+
 function quotaEvidence(provider) {
   const limit = record(provider?.limit);
   const knownCap = typeof limit.costLimit === "number" && Number.isFinite(limit.costLimit);
@@ -75,36 +78,53 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
   const rows = items(providers).map((provider) => {
     const evidence = record(provider?.modelsEvidence);
     const hostname = provider?.fingerprint?.hostname || provider?.hostname || provider?.id || "伙伴服务";
-    // The backend owns freshness; this guard only stops a page that has been
-    // open past expiresAt from showing an old list as current.
-    const rawExpiry = typeof evidence.expiresAt === "string" ? Date.parse(evidence.expiresAt) : NaN;
-    // A current record without a usable expiry cannot be proven fresh; stay
-    // conservative instead of trusting it forever.
-    const freshness = Number.isFinite(rawExpiry) ? (rawExpiry <= now ? "expired" : "fresh") : "unknown";
-    return { hostname, evidence, freshness, quota: quotaEvidence(provider) };
+    // The backend promises a 5 minute TTL. A record can only be trusted when
+    // both timestamps exist, are ordered, are not in the future and fit that
+    // window; everything else stays unknown rather than guessing freshness.
+    const readMs = typeof evidence.readAt === "string" ? Date.parse(evidence.readAt) : NaN;
+    const expMs = typeof evidence.expiresAt === "string" ? Date.parse(evidence.expiresAt) : NaN;
+    let freshness = "unknown";
+    if (Number.isFinite(readMs) && readMs <= now && Number.isFinite(expMs) && expMs >= readMs) {
+      if (expMs - readMs > EVIDENCE_TTL_MS) freshness = "unknown";
+      else freshness = expMs <= now ? "expired" : "fresh";
+    }
+    return {
+      hostname,
+      evidence,
+      freshness,
+      status: typeof provider?.status === "string" ? provider.status : "unknown",
+      quota: quotaEvidence(provider),
+    };
   });
   if (!rows.length) {
     return { state: "none", count: 0, providers: 0, entries: [], label: "尚未连接", detail: "还没有连接伙伴服务；在“发现”核对身份后申请模型。" };
   }
-  const usable = rows.filter((row) => row.evidence.status === "current" && row.freshness === "fresh" && row.evidence.callable === "yes" && typeof row.evidence.modelCount === "number" && Number.isFinite(row.evidence.modelCount) && row.evidence.modelCount >= 0);
-  const denied = rows.some((row) => row.evidence.callable === "no" && row.evidence.status !== "stale");
+  const eligible = rows.filter((row) => row.evidence.status === "current" && row.freshness === "fresh" && row.evidence.callable === "yes" && typeof row.evidence.modelCount === "number" && Number.isFinite(row.evidence.modelCount) && row.evidence.modelCount >= 0);
+  // A paused, disabled, degraded or identity-mismatched connection keeps its
+  // historical list for diagnosis, but it is not a current usable model source.
+  const usable = eligible.filter((row) => row.status === "connected");
+  const inactive = eligible.filter((row) => row.status !== "connected");
+  const entry = (row, counted) => ({
+    hostname: row.hostname,
+    count: row.evidence.modelCount,
+    models: items(row.evidence.models).filter((model) => typeof model === "string"),
+    readAt: typeof row.evidence.readAt === "string" ? row.evidence.readAt : null,
+    source: typeof row.evidence.source === "string" ? row.evidence.source : null,
+    quota: row.quota.state,
+    quotaText: row.quota.text,
+    counted,
+    status: row.status,
+  });
   if (usable.length) {
     const count = usable.reduce((total, row) => total + row.evidence.modelCount, 0);
     const spent = usable.some((row) => row.quota.state === "spent");
     const unknownQuota = usable.some((row) => row.quota.state === "unknown");
     const quotaNote = spent ? "；有伙伴额度已用尽（原生 429）" : unknownQuota ? "；额度待确认" : "";
-    const entries = usable.map((row) => ({
-      hostname: row.hostname,
-      count: row.evidence.modelCount,
-      models: items(row.evidence.models).filter((model) => typeof model === "string"),
-      readAt: typeof row.evidence.readAt === "string" ? row.evidence.readAt : null,
-      source: typeof row.evidence.source === "string" ? row.evidence.source : null,
-      quota: row.quota.state,
-      quotaText: row.quota.text,
-    }));
+    const pausedNote = inactive.length ? `；另有 ${inactive.length} 个伙伴连接已暂停或降级，仅诊断` : "";
     if (count === 0) {
       return {
-        state: "empty", count: 0, providers: usable.length, entries,
+        state: "empty", count: 0, providers: usable.length,
+        entries: [...usable.map((row) => entry(row, true)), ...inactive.map((row) => entry(row, false))],
         label: "已连接，但没有发现模型",
         detail: "真实读回成功但清单为空；请在共享方核对模型范围与额度，或稍后重新读取。",
       };
@@ -114,10 +134,21 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
       count,
       providers: usable.length,
       label: `${count} 个当前可见模型`,
-      detail: `${usable.length} 个伙伴服务 · 最近真实读回；推理额度与 429 另计，不代表可调用${quotaNote}`,
-      entries,
+      detail: `${usable.length} 个伙伴服务 · 最近真实读回；推理额度与 429 另计，不代表可调用${quotaNote}${pausedNote}`,
+      entries: [...usable.map((row) => entry(row, true)), ...inactive.map((row) => entry(row, false))],
     };
   }
+  if (inactive.length) {
+    return {
+      state: "inactive",
+      count: 0,
+      providers: inactive.length,
+      entries: inactive.map((row) => entry(row, false)),
+      label: "0 个当前可见模型",
+      detail: "伙伴连接已暂停、降级或身份不匹配；恢复连接并重新读取后再计入，历史清单只作诊断。",
+    };
+  }
+  const denied = rows.some((row) => row.evidence.callable === "no" && row.evidence.status !== "stale");
   if (denied) {
     const stale = rows.some((row) => row.evidence.status === "stale" || row.freshness === "expired");
     return {
