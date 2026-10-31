@@ -1,6 +1,7 @@
 import { ConsoleError, consumeTicketFragment, createSessionClient, pollState, waitForPairing } from "./session.js";
 import { mountProviders, checkLabel } from "./providers.js";
 import { mountWallet } from "./wallet.js";
+import { mountWalletVault } from "./wallet-vault-ui.js";
 
 // Remove the one-use credential before any asynchronous work or page rendering.
 let ticket = consumeTicketFragment(window.location, window.history);
@@ -99,6 +100,7 @@ function sessionEnded(reason = "expired") {
   stopPairing();
   providers.clearSecrets();
   wallet.clearSecrets();
+  walletVault.reset();
   client.reset();
   initialized = false;
   lastUpdate = null;
@@ -126,6 +128,7 @@ function sessionEnded(reason = "expired") {
 const client = createSessionClient({ onExpired: () => sessionEnded(everAuthenticated ? "expired" : "unauthorized") });
 const providers = mountProviders({ client, getState: () => consoleState, onState: renderState, notice, setBusy, refreshState: () => poller?.refresh() });
 const wallet = mountWallet({ client, getState: () => consoleState, onState: renderState, notice, setBusy, refreshState: () => poller?.refresh() });
+const walletVault = mountWalletVault({ client, getState: () => consoleState, notice, refreshState: () => poller?.refresh(), windowTarget: window });
 
 function setBusy(value) {
   busy = value;
@@ -137,6 +140,7 @@ function setBusy(value) {
 
 function navigate(page) {
   if (!PAGES[page] || !authenticated) return;
+  if (currentPage === "wallet" && page !== "wallet") walletVault.clearSecrets();
   currentPage = page;
   for (const panel of ALL_PANELS) show(panel, PAGES[page].sections.includes(panel));
   for (const name of Object.keys(PAGES)) {
@@ -148,6 +152,7 @@ function navigate(page) {
   }
   if (page === "network") renderNetwork(consoleState);
   if (page === "home") renderHome(consoleState);
+  if (page === "wallet") walletVault.onShow();
   window.scrollTo({ top: 0, behavior: "auto" });
   $("main")?.focus({ preventScroll: true });
 }
@@ -493,6 +498,7 @@ function renderState(value) {
   $("nav-network").disabled = false;
   providers.render(value);
   wallet.render(value);
+  walletVault.render(value);
   connection("控制台已连接", "good");
   updated();
   if (!busy) notice();
@@ -743,7 +749,7 @@ $("logout")?.addEventListener("click", async () => {
   if (!complete) setText("session-detail", "未能确认服务器退出。本页已清除会话信息，请关闭此页；需要继续时从 Magpie 重新打开。");
 });
 
-window.addEventListener("pagehide", () => { poller?.stop(); stopPairing(); providers.clearSecrets(); wallet.clearSecrets(); client.dispose(); });
+window.addEventListener("pagehide", () => { poller?.stop(); stopPairing(); providers.clearSecrets(); wallet.clearSecrets(); walletVault.dispose(); client.dispose(); });
 window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
 
 applyTheme(storedTheme());

@@ -77,7 +77,7 @@
               <section class="home-row" aria-labelledby="home-wallet-title">
                 <h2 id="home-wallet-title">钱包</h2>
                 <p class="status-line" id="home-wallet-assets">资产余额尚未查询</p>
-                <p class="muted" id="home-wallet-detail">测试环境；这里只读，不发起任何资金操作。</p>
+                <p class="muted" id="home-wallet-detail">测试环境；资产余额需服务接入后查询，这里不发起任何资金操作。</p>
                 <h3 class="subhead">提供者信用（按伙伴）</h3>
                 <ul class="credit-list" id="home-wallet-credit"><li class="muted">尚未读取</li></ul>
                 <button type="button" class="text-button" data-goto="wallet">查看钱包 →</button>
@@ -109,8 +109,9 @@
 
           <section id="wallet-page" aria-labelledby="wallet-title" hidden>
             <div class="page-heading">
-              <div><h1 id="wallet-title">钱包</h1><p>测试网环境；本应用不持有私钥，不执行转账。</p></div>
+              <div><h1 id="wallet-title">钱包</h1><p>测试网环境；本地钱包密钥加密保存在本机，不执行主网或自动付款。</p></div>
             </div>
+            <div id="wallet-vault-panel"></div>
             <div id="wallet-panel"></div>
             <details class="advanced-recovery" id="advanced-recovery">
               <summary>高级恢复 · 账本与离线账单</summary>
