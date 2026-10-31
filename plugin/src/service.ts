@@ -444,6 +444,19 @@ export class Service {
 
   constructor(private deps: ServiceDeps) {
     this.state = loadState().state;
+    // A proof belongs to the process that made it. After a restart nothing has
+    // been re-proven yet, so persisted "stable" entries become "unverified"
+    // until this instance checks the listeners again (H1: no stale green).
+    if (this.state.ports && this.state.ports.evidence.length) {
+      this.state.ports = {
+        ...this.state.ports,
+        evidence: this.state.ports.evidence.map((e) => ({
+          ...e,
+          state: "unverified" as const,
+          detail: "not re-proven since this host started",
+        })),
+      };
+    }
     this.binder = deps.ports?.binder ?? new SocketBinder();
     this.ownership = deps.ports?.ownership ?? new OsSocketOwnership();
     this.clock = deps.ports?.now ?? (() => new Date());
@@ -1344,6 +1357,9 @@ export class Service {
       networkName: input.networkName,
       networkSecret: secret || prev?.networkSecret || "",
       peers: initialNode ? [initialNode] : (prev?.peers ?? []),
+      // A first join selects no models: sharing anything later still needs an
+      // explicit native-model choice. An existing policy is kept on edit.
+      shareModels: prev?.share.models ?? [],
       listenAddr,
       // All nodes discover and consume. Sharing stays a separate human action.
       sharingEnabled: prev?.sharingEnabled ?? false,
@@ -1368,6 +1384,12 @@ export class Service {
    * the existing `share.models` allow list is the only switch.
    */
   async shareNativeModels(input: { models: string[]; confirm: boolean }): Promise<StatusSnapshot> {
+    // One transaction at a time: a concurrent tick/share must not see or roll
+    // back half of another operator's change.
+    return this.serialize(() => this.shareNativeModelsLocked(input));
+  }
+
+  private async shareNativeModelsLocked(input: { models: string[]; confirm: boolean }): Promise<StatusSnapshot> {
     if (input.confirm !== true) throw new Error("refusing to share: the human confirmation (confirm: true) is required");
     const cfg = this.state.config;
     if (!cfg) throw new Error("configure this node first");
@@ -1408,15 +1430,26 @@ export class Service {
     this.state.config = next;
     saveState(this.state);
     try {
+      // The guard runs BEFORE the export is opened: it re-checks every issued
+      // key against this node's own native models and the exact selection. A
+      // suspension therefore never happens after the ACL already allowed the
+      // gateway; it either passes here or the transaction fails.
+      const guard = await this.guardSharedKeys();
+      if (guard.suspended || !this.sharingActive()) {
+        const reason = this.state.shareSuspended?.reason ?? "the share guard did not confirm the export";
+        throw new Error(`the share guard withdrew sharing: ${reason}`);
+      }
       await this.applyConfig(next);
       const et = this.supervisor.snapshot();
       if (!et.running) {
         throw new Error(`the overlay core is not running after the restart: ${et.lastError ?? "no error was recorded"}`);
       }
       await this.applyCatalog();
-      // Never republish blindly: the guard can withdraw the export instead.
-      await this.guardSharedKeys().catch((e) => logger.warn(`share guard after sharing models: ${String(e)}`));
+      this.lastProviderFingerprint = this.providerFingerprint();
       await this.publishCatalogNow();
+      if (!this.catalogPublishing() || !this.catalogServer || !this.catalogQuote) {
+        throw new Error("the catalogue server is not running or no signed quote was published");
+      }
       logger.info(`sharing ${selected.length} native model(s); the catalogue is published`);
       return this.status();
     } catch (e) {
@@ -1430,9 +1463,12 @@ export class Service {
       } catch (restoreError) {
         const restoreWhy = (restoreError as Error)?.message ?? String(restoreError);
         logger.error(`sharing models failed (${why}) and restoring the previous configuration failed (${restoreWhy})`);
+        // The core may still be running the half-applied export: stop it, so a
+        // failed rollback can never leave the gateway published.
+        await this.supervisor.stop().catch(() => {});
         throw new Error(
           `share failed: ${why}; restoring the previous configuration also failed: ${restoreWhy}. ` +
-            `The previous config is retained on disk; run checks before retrying.`,
+            `The overlay core was stopped; the previous config is retained on disk; run checks before retrying.`,
         );
       }
       throw new Error(`share failed: ${why}; the previous configuration was restored`);
@@ -1441,16 +1477,25 @@ export class Service {
 
   /** The separate, explicit stop: withdraws the export and the catalogue. */
   async stopSharing(input: { confirm: boolean }): Promise<StatusSnapshot> {
-    if (input.confirm !== true) throw new Error("refusing to stop sharing without confirm: true");
-    const cfg = this.state.config;
-    if (!cfg) throw new Error("configure this node first");
-    const next: PluginConfig = { ...cfg, sharingEnabled: false, catalog: { ...cfg.catalog, enabled: false } };
-    this.state.config = next;
-    saveState(this.state);
-    await this.applyConfig(next);
-    await this.applyCatalog();
-    logger.info("sharing stopped: the export and the catalogue were withdrawn; keys and records were kept");
-    return this.status();
+    return this.serialize(async () => {
+      if (input.confirm !== true) throw new Error("refusing to stop sharing without confirm: true");
+      const cfg = this.state.config;
+      if (!cfg) throw new Error("configure this node first");
+      const next: PluginConfig = { ...cfg, sharingEnabled: false, catalog: { ...cfg.catalog, enabled: false } };
+      this.state.config = next;
+      saveState(this.state);
+      try {
+        await this.applyConfig(next);
+        await this.applyCatalog();
+      } catch (e) {
+        // Never leave a config that says "not sharing" while the core still
+        // publishes the old export: stop it and report the failure.
+        await this.supervisor.stop().catch(() => {});
+        throw new Error(`stopping sharing failed: ${(e as Error).message}; the overlay core was stopped`);
+      }
+      logger.info("sharing stopped: the export and the catalogue were withdrawn; keys and records were kept");
+      return this.status();
+    });
   }
 
   /** Read-only network diagnostics; never probes, never edits a port. */
@@ -1574,6 +1619,33 @@ export class Service {
    * Proves the supervised core really holds the ports its configuration names.
    * Recorded as evidence, never trusted from the config alone.
    */
+  /**
+   * Proves the supervised core owns a loopback forward socket. This runs BEFORE
+   * any request carrying the Gateway Key: a foreign listener on that port would
+   * otherwise receive the key. A proof that is not `stable` is a hard failure.
+   */
+  private async proveForwardOwner(id: string, localPort: number): Promise<PortProof> {
+    const snap = this.supervisor.snapshot();
+    const proof = await this.recordPortProof({
+      purpose: "forward",
+      host: "127.0.0.1",
+      port: localPort,
+      owner: "easytier",
+      reported: true,
+      expectedPids: snap.pid ? [snap.pid] : [],
+      detail: `forward to ${id}`,
+    });
+    return (
+      proof ?? {
+        state: "unverified",
+        detail: "no forward proof was produced",
+        pids: null,
+        ownership: "none",
+        reported: null,
+      }
+    );
+  }
+
   private async reconcileCorePorts(cfg: PluginConfig): Promise<PortProof[]> {
     const snap = this.supervisor.snapshot();
     const running = Boolean(snap.running);
@@ -1719,6 +1791,15 @@ export class Service {
     return this.serialize(async () => {
       const cfg = this.state.config;
       if (!cfg) throw new Error("configure this node first");
+      if (enabled && cfg.share.models.length === 0) {
+        throw new Error("choose at least one native model with share-native-models before enabling sharing");
+      }
+      if (enabled && cfg.share.models.some((m) => m.includes("*"))) {
+        throw new Error(
+          "refusing to share with a wildcard model policy: choose the exact native models with share-native-models " +
+            "so future models are never shared without consent",
+        );
+      }
       const next: PluginConfig = {
         ...cfg,
         sharingEnabled: enabled,
@@ -2182,7 +2263,7 @@ export class Service {
       this.catalogServerError = "no usable LAN address to bind the catalogue";
       this.stopCatalogServer();
       logger.error(this.catalogServerError);
-      return;
+      throw new Error(this.catalogServerError);
     }
     // A catalogue port held by another process is migrated, not "tried again":
     // the Forward ACL names the port, so this is a config change and a restart.
@@ -2213,7 +2294,10 @@ export class Service {
         this.catalogServerError = why;
         this.stopCatalogServer();
         const portTaken = /in use|EADDRINUSE|address already in use|failed to start server/i.test(why);
-        if (!portTaken) break;
+        if (!portTaken) {
+          this.writeSnapshot();
+          throw new Error(`the catalogue could not be published: ${why}`);
+        }
         const next = await this.choosePort("catalog", host, portRange(3426, 3460), [
           this.gatewayPort(),
           cfg.rpcPort,
@@ -2227,8 +2311,10 @@ export class Service {
         await this.applyConfig(this.state.config);
       }
     }
-    logger.error(`the catalogue could not be published: ${this.catalogServerError}`);
+    const why = this.catalogServerError ?? "no free catalogue port";
+    logger.error(`the catalogue could not be published: ${why}`);
     this.writeSnapshot();
+    throw new Error(`the catalogue could not be published: ${why}`);
   }
 
   /**
@@ -2758,6 +2844,15 @@ export class Service {
       //    announced prefix can take a moment to accept forwarded connections,
       //    so the probe is retried for a few seconds before giving up.
       addedForward = await this.supervisor.addPortForward(bind, dst);
+      // No Gateway Key touches the wire before the OS attributes this loopback
+      // listener to the supervised core.
+      const forwardProof = await this.proveForwardOwner(input.id, localPort);
+      if (forwardProof.state !== "stable") {
+        throw new Error(
+          `127.0.0.1:${localPort} is not provably owned by the supervised core ` +
+            `(${forwardProof.state}: ${forwardProof.detail ?? "no evidence"}); refusing to send the Gateway Key`,
+        );
+      }
       if (!(await this.waitForStatus("127.0.0.1", localPort, 401))) {
         throw new Error(
           `127.0.0.1:${localPort} did not answer 401 without a key: ` +
@@ -2781,24 +2876,6 @@ export class Service {
       }
       if (opts.expectedModels && !sameSet(remoteModels, opts.expectedModels)) {
         throw new RequestValidationError("the key's actual model scope differs from the authorization file; ask the provider for a matching authorization");
-      }
-
-      // The keyed and wrong-key dials above are the real proof that the core's
-      // forward listener exists and is ours; record it before Magpie changes.
-      const forwardProof = await this.recordPortProof({
-        purpose: "forward",
-        host: "127.0.0.1",
-        port: localPort,
-        owner: "easytier",
-        reported: true,
-        expectedPids: this.supervisor.snapshot().pid ? [this.supervisor.snapshot().pid!] : [],
-        detail: `forward to ${input.id}`,
-      });
-      if (!forwardProof || forwardProof.state !== "stable") {
-        throw new Error(
-          `127.0.0.1:${localPort} is not provably owned by the supervised core ` +
-            `(${forwardProof?.state ?? "unverified"}: ${forwardProof?.detail ?? "no evidence"}); refusing to register it`,
-        );
       }
 
       // 2. the provider. An entry this plugin owns is replaced; a missing one is
@@ -3098,6 +3175,16 @@ export class Service {
         conn.updatedAt = new Date().toISOString();
         return true;
       }
+    }
+
+    const forwardOwner = await this.proveForwardOwner(conn.id, conn.localPort);
+    if (forwardOwner.state !== "stable") {
+      conn.status = "degraded";
+      conn.detail =
+        `127.0.0.1:${conn.localPort} is not provably owned by the supervised core ` +
+        `(${forwardOwner.state}: ${forwardOwner.detail ?? "no evidence"}); not sending the Gateway Key`;
+      conn.updatedAt = new Date().toISOString();
+      return true;
     }
 
     const keyed = await this.probes.statusWith("127.0.0.1", conn.localPort, 200, key);
@@ -3693,7 +3780,8 @@ export class Service {
         });
       }
       // A forward is only usable when the OS attributes its loopback socket to
-      // the supervised core; a matching config line is not ownership.
+      // the supervised core; a matching config line is not ownership. An
+      // injected test supervisor has no real PID, so the check is not asserted.
       const snap = this.supervisor.snapshot();
       const owned: string[] = [];
       const foreign: string[] = [];
@@ -3962,7 +4050,9 @@ function configHostname(cfg: PluginConfig): string {
 
 function normalizeShareModels(models: string[]): string[] {
   const cleaned = models.map((m) => m.trim()).filter(Boolean);
-  if (cleaned.length === 0) return ["*"];
+  // An explicit empty policy shares nothing. Only legacy documents may still
+  // carry "*"; a new selection must name native models.
+  if (cleaned.length === 0) return [];
   for (const m of cleaned) {
     if (!/^(\*|[A-Za-z0-9._-]+\/(\*|[A-Za-z0-9._*,/-]+))$/.test(m)) {
       throw new Error(`share model must be "*", "provider/*" or "provider/model": ${m}`);

@@ -6,6 +6,7 @@ import { Service, type SupervisorLike } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { ProviderRecord } from "../src/magpie.ts";
 import { getProviderKey } from "../src/state.ts";
+import { fakePortOwnership } from "./support/fake-ports.ts";
 
 // A unit test for the multi-provider service: a fake Magpie (providers +
 // Gateway Keys), a fake EasyTier supervisor that behaves like 2.6.4 (a forward
@@ -238,6 +239,7 @@ async function service(opts: { sharing?: boolean; consuming?: boolean; fresh?: b
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
+    ports: { ownership: fakePortOwnership() },
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 400,
   });
@@ -261,6 +263,7 @@ async function serviceSim(portKeys: Map<number, string>, opts: { sharing?: boole
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
+    ports: { ownership: fakePortOwnership() },
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 400,
     probes: {
@@ -654,6 +657,8 @@ describe("the two capabilities are independent", () => {
     expect(magpie.nativeProviderIds().has("alpha")).toBe(true);
     expect(magpie.providers_().map((p) => p.id)).toEqual(["my-own-vendor"]);
 
+    // Re-enabling sharing needs an exact selection, not the wildcard default.
+    await s.setShareModels(["alpha/native-model"]);
     await s.setSharing(true);
     expect(sup.cfg!.proxyCidr).toBe("127.0.0.1/32");
     expect(s.config()!.mappedCidr).toBe(mapped);
@@ -855,7 +860,7 @@ describe("the share guard reacts to changes made outside the plugin", () => {
 
     magpie.native.delete("alpha");
     magpie.providers.set("alpha", { id: "alpha", preset: "remote-magpie", chat: "http://127.0.0.1:1/v1", key: "sk-test-foreign" });
-    const restarted = new Service({ magpie: magpie as never, magpieVersion: "magpie 0.1.2038", supervisor: sup, lanIp: () => "127.0.0.1", probeTimeoutMs: 400 });
+    const restarted = new Service({ magpie: magpie as never, magpieVersion: "magpie 0.1.2038", supervisor: sup, lanIp: () => "127.0.0.1", probeTimeoutMs: 400, ports: { ownership: fakePortOwnership() } });
     services.push(restarted);
     await restarted.start();
     await restarted.stop();

@@ -8,6 +8,7 @@ import { costNanos, priceSnapshot, usdToNanos, type PriceParts } from "../src/pr
 import { Service, type SupervisorLike } from "../src/service.ts";
 import type { EasytierConfig, PortForward, RouteRow, Peer, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta, ProviderRecord } from "../src/magpie.ts";
+import { fakePortOwnership } from "./support/fake-ports.ts";
 
 // Review-patch tests. Each one is written against the reported failure, so it
 // fails on the reviewed HEAD and passes only when the defect is really fixed.
@@ -576,6 +577,7 @@ describe("A — the accounting check runs without any page or status call", () =
       magpie: fake as never,
       magpieVersion: "magpie 0.1.2038",
       supervisor: sup,
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 200,
       accountingTickMs: 40,
@@ -612,6 +614,7 @@ describe("A — the accounting check runs without any page or status call", () =
       magpie: fake as never,
       magpieVersion: "magpie 0.1.2038",
       supervisor: sup,
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 200,
       accountingTickMs: 30,

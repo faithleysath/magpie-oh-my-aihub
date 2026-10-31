@@ -59,3 +59,10 @@ export class FakeOwnership implements SocketOwnershipProbe {
     return { supported: true, pids: [...(this.pids.get(port) ?? this.defaultPids)], detail: null };
   }
 }
+
+/** A test harness's core pid: every fake supervisor in this repo reports 4242. */
+export function fakePortOwnership(): FakeOwnership {
+  const ownership = new FakeOwnership();
+  ownership.defaultPids = [4242, process.pid];
+  return ownership;
+}

@@ -9,8 +9,8 @@ import type { Service } from "./service.ts";
 /** Explicit browser product actions; no arbitrary path or CLI dispatch. */
 export const CONSOLE_ACTIONS = [
   "join-network", "share-native-models", "stop-sharing", "network-refresh",
-  "configure", "checks", "share-candidates", "share-models", "share-toggle", "consume-toggle",
-  "catalog-publish", "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer", "connection-request",
+  "configure", "checks", "share-candidates", "share-models", "consume-toggle",
+  "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer", "connection-request",
   "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
   ...WALLET_CONSOLE_ACTIONS,
@@ -94,11 +94,25 @@ export async function consoleAction(service: Service, name: string, input: Recor
       }
       case "configure": {
         const parsed=configureInput(input); if(typeof parsed === "string") return refuse(parsed);
+        // The public console may not turn sharing on with a wildcard allow list:
+        // that would also share models added later without a new consent.
+        if (Array.isArray(input.shareModels) && input.shareModels.some((m) => typeof m === "string" && m.includes("*"))) {
+          return refuse("choose the exact native models with share-native-models; a wildcard shares future models without consent");
+        }
+        if (parsed.sharingEnabled === true && !parsed.shareModels && !service.config()?.share.models.length) {
+          return refuse("sharing requires an explicit native model selection (share-native-models)");
+        }
         await service.configure(parsed); return consoleState(service);
       }
       case "checks": fields(input,[]); await service.checks(); return consoleState(service);
       case "share-candidates": fields(input,[]); return clean(await w().shareCandidates());
-      case "share-models": fields(input,["models"]); await service.setConsoleShareModels(modelList(input.models)); return consoleState(service);
+      case "share-models": {
+        fields(input,["models"]);
+        const models = modelList(input.models);
+        if (models.some((m) => m.includes("*"))) return refuse("a wildcard shares future models without consent; choose exact native models");
+        await service.setConsoleShareModels(models);
+        return consoleState(service);
+      }
       case "share-toggle": fields(input,["enabled"]); await service.setSharing(bool(input.enabled)); return consoleState(service);
       case "consume-toggle": fields(input,["enabled"]); await service.setConsuming(bool(input.enabled)); return consoleState(service);
       case "catalog-publish": fields(input,["enabled"]); await service.setCatalogPublishing(bool(input.enabled)); return consoleState(service);

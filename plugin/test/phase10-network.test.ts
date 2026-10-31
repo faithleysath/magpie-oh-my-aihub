@@ -13,6 +13,7 @@ import { consoleAction, CONSOLE_ACTIONS } from "../src/console-api.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta } from "../src/magpie.ts";
 import { emptyPortLedger, SocketBinder } from "../src/ports.ts";
+import { projectNetwork } from "../src/network.ts";
 import { loadState } from "../src/state.ts";
 import { ConsoleInputError } from "../src/console-server.ts";
 import { FakeBinder, FakeOwnership } from "./support/fake-ports.ts";
@@ -38,6 +39,11 @@ class FakeMagpie {
   }
   providerById(id: string) {
     return this.providers.get(id);
+  }
+  async modelIds() {
+    const ids = [...this.native].map((p) => `${p}/native-model`);
+    for (const p of this.providers.values()) if (p.preset === "remote-magpie") ids.push(`${p.id}/peer-model`);
+    return ids;
   }
   keyById() {
     return undefined;
@@ -212,6 +218,9 @@ async function service(opts: Opts = {}): Promise<Service> {
     probes: {
       catalogModels: async () => catalogModels(),
       statusWith: async () => true,
+      remoteModelIds: async () => ["peer-model"],
+      localModelIds: async () => ["peer/alpha/peer-model"],
+      remoteLimit: async () => null,
       catalogServer: ({ port }) => ({
         port,
         stop: () => {},
@@ -483,6 +492,145 @@ describe("share-native-models: one explicit transaction", () => {
   });
 });
 
+describe("sharing is a bounded, explicit transaction", () => {
+  test("a first join selects no models; a wildcard cannot be re-enabled from the console", async () => {
+    const svc = await service({ config: false });
+    await svc.joinNetwork({ networkName: "omp-lab", networkSecret: "omp-lab-secret" });
+    expect(svc.config()!.share.models).toEqual([]);
+    await expect(svc.setSharing(true)).rejects.toThrow(/wildcard|share-native-models/);
+    await expect(consoleAction(svc, "share-models", { models: ["alpha/*"] })).rejects.toBeInstanceOf(ConsoleInputError);
+    expect(CONSOLE_ACTIONS).not.toContain("share-toggle" as never);
+    expect(CONSOLE_ACTIONS).not.toContain("catalog-publish" as never);
+  });
+
+  test("a guard suspension after the restart rolls the share back", async () => {
+    // Read candidates while the provider list is still readable, then make the
+    // guard's later read fail: that is the race the transaction must catch.
+    let reads = 0;
+    const svc = new Service({
+      magpie: magpie as never,
+      magpieVersion: "magpie 0.1.2289",
+      supervisor: sup,
+      lanIp: () => "127.0.0.1",
+      probeTimeoutMs: 100,
+      ports: { binder, ownership },
+      probes: {
+        catalogModels: async () => {
+          reads += 1;
+          // become unreadable right after the candidate read: the guard must
+          // catch it before the export is opened
+          if (reads > 0) magpie.providerReadable = false;
+          return catalogModels();
+        },
+        statusWith: async () => true,
+        remoteModelIds: async () => ["peer-model"],
+        localModelIds: async () => ["peer/alpha/peer-model"],
+        remoteLimit: async () => null,
+        catalogHttpGet: async () => ({ status: 404, body: "" }),
+        catalogServer: ({ port }) => ({ port, stop: () => {} }),
+      },
+    });
+    services.push(svc);
+    await svc.configure({ sharingEnabled: false, consumingEnabled: true, networkName: "phase10-lab", networkSecret: "phase10-lab-secret" });
+    await expect(svc.shareNativeModels({ models: [PRICED], confirm: true })).rejects.toThrow(/withdrew sharing|previous configuration was restored/);
+    expect(svc.config()!.sharingEnabled).toBe(false);
+    expect(svc.statusSnapshotForTest().config.sharingActive).toBe(false);
+    magpie.providerReadable = true;
+  });
+
+  test("a catalogue bind failure that is not a port conflict fails the share", async () => {
+    const svc = new Service({
+      magpie: magpie as never,
+      magpieVersion: "magpie 0.1.2289",
+      supervisor: sup,
+      lanIp: () => "127.0.0.1",
+      probeTimeoutMs: 100,
+      ports: { binder, ownership },
+      probes: {
+        catalogModels: async () => catalogModels(),
+        statusWith: async () => true,
+        catalogHttpGet: async () => ({ status: 404, body: "" }),
+        catalogServer: () => {
+          throw new Error("permission denied binding the catalogue");
+        },
+      },
+    });
+    services.push(svc);
+    await svc.configure({ sharingEnabled: false, consumingEnabled: true, networkName: "phase10-lab", networkSecret: "phase10-lab-secret" });
+    await expect(svc.shareNativeModels({ models: [PRICED], confirm: true })).rejects.toThrow(/previous configuration was restored/);
+    expect(svc.config()!.sharingEnabled).toBe(false);
+    expect(svc.statusSnapshotForTest().catalog.publishing).toBe(false);
+  });
+});
+
+describe("no Gateway Key is sent before the forward is proven ours", () => {
+  class KeyedGateway {
+    server: ReturnType<typeof Bun.serve>;
+    authHeaders: string[] = [];
+    constructor(readonly port: number, readonly key: string) {
+      this.server = Bun.serve({
+        hostname: "127.0.0.1",
+        port,
+        fetch: (req) => {
+          const auth = req.headers.get("authorization") ?? "";
+          this.authHeaders.push(auth);
+          if (!auth.includes(this.key)) return new Response("no", { status: 401 });
+          return Response.json({ object: "list", data: [{ id: "peer-model", object: "model" }] });
+        },
+      });
+    }
+    stop() {
+      this.server.stop(true);
+    }
+  }
+
+  test("a foreign listener on the forward port never sees a key", async () => {
+    const gateway = new KeyedGateway(0, "sk-labcap12");
+    const realPort = (gateway.server as unknown as { port: number }).port;
+    try {
+      const svc = await service();
+      sup.routeRows = [{ ipv4: "10.66.1.2/32", hostname: "peer-host", proxyCidrs: "192.0.2.84->10.66.1.2", nextHop: "DIRECT", pathLen: 1 }];
+      // The fake supervisor claims pid 4242, but the socket belongs to a foreign pid.
+      ownership.pids.set(realPort, [999_999]);
+      await expect(
+        svc.addProvider({ id: "peer", mappedCidr: "10.66.1.2/32", key: "sk-labcap12", providerPort: 3425, localPort: realPort }),
+      ).rejects.toThrow(/not provably owned|refusing to send the Gateway Key/);
+      expect(gateway.authHeaders).toEqual([]);
+    } finally {
+      gateway.stop();
+    }
+  });
+
+  test("reconcile does not re-send the key once the forward owner is foreign", async () => {
+    const gateway = new KeyedGateway(0, "sk-labcap12");
+    const realPort = (gateway.server as unknown as { port: number }).port;
+    try {
+      const svc = new Service({
+        magpie: magpie as never,
+        magpieVersion: "magpie 0.1.2289",
+        supervisor: sup,
+        lanIp: () => "127.0.0.1",
+        probeTimeoutMs: 500,
+        ports: { binder, ownership },
+        probes: { catalogModels: async () => catalogModels() },
+      });
+      services.push(svc);
+      await svc.configure({ sharingEnabled: false, consumingEnabled: true, networkName: "phase10-lab", networkSecret: "phase10-lab-secret" });
+      sup.routeRows = [{ ipv4: "10.66.1.2/32", hostname: "peer-host", proxyCidrs: "192.0.2.84->10.66.1.2", nextHop: "DIRECT", pathLen: 1 }];
+      ownership.pids.set(realPort, [4242]);
+      await svc.addProvider({ id: "peer", mappedCidr: "10.66.1.2/32", key: "sk-labcap12", providerPort: 3425, localPort: realPort });
+      const afterConnect = gateway.authHeaders.length;
+      expect(afterConnect).toBeGreaterThan(0);
+      ownership.pids.set(realPort, [999_999]);
+      await svc.reconcileProviders({ only: "peer", verifyModels: true });
+      expect(gateway.authHeaders.length).toBe(afterConnect);
+      expect(svc.provider("peer")!.detail).toMatch(/not provably owned|not sending the Gateway Key/);
+    } finally {
+      gateway.stop();
+    }
+  });
+});
+
 describe("network projection: evidence, not assumptions", () => {
   function neighbour(id: string, hostname: string, cost: string, latency: string, ipv4: string): Peer {
     return { id, hostname, cost, latencyMs: latency, loss: "0.0%", tunnel: "tcp", nat: "Symmetric", ipv4 };
@@ -570,6 +718,76 @@ describe("network projection: evidence, not assumptions", () => {
     const migration = state.ports.migrations.find((m) => m.purpose === "easytier-rpc");
     expect(migration).toMatchObject({ purpose: "easytier-rpc", from: rpc, to: cfg.rpcPort });
     expect(state.ports.version).toBe(1);
+  });
+});
+
+describe("stale port evidence never hides a live failure", () => {
+  test("a failed live listener wins over a persisted stable proof", () => {
+    const ledger = {
+      version: 1 as const,
+      migrations: [],
+      evidence: [
+        {
+          purpose: "easytier-rpc" as const,
+          port: 17888,
+          host: "127.0.0.1",
+          owner: "easytier" as const,
+          state: "stable" as const,
+          verifiedAt: "2026-10-30T00:00:00.000Z",
+          detail: null,
+        },
+      ],
+    };
+    const view = projectNetwork({
+      config: null,
+      supervisor: { running: false, pid: null, rpcPort: 17888, peers: [], aclOk: false } as never,
+      catalog: { peers: [], publishing: false, server: { running: false, port: null, address: null, error: null } } as never,
+      providers: [],
+      gatewayPort: 3425,
+      ledger,
+    });
+    const rpc = view.ports.find((p) => p.purpose === "easytier-rpc")!;
+    expect(rpc.state).toBe("failed");
+  });
+
+  test("a restart marks persisted proofs unverified until this host re-proves them", async () => {
+    const first = await service({ config: false });
+    await first.joinNetwork({ networkName: "omp-lab", networkSecret: "omp-lab-secret" });
+    const saved = loadState().state;
+    expect(saved.ports.evidence.some((e) => e.purpose === "easytier-rpc" && e.state === "stable")).toBe(true);
+    const restarted = new Service({
+      magpie: magpie as never,
+      magpieVersion: "magpie 0.1.2289",
+      supervisor: new FakeSupervisor(),
+      lanIp: () => "127.0.0.1",
+      probeTimeoutMs: 100,
+      ports: { binder, ownership },
+      probes: { catalogModels: async () => catalogModels(), statusWith: async () => true },
+    });
+    services.push(restarted);
+    const persisted = (restarted as unknown as { state: { ports: { evidence: { purpose: string; state: string }[] } } }).state.ports.evidence.find(
+      (e) => e.purpose === "easytier-rpc",
+    )!;
+    expect(persisted.state).toBe("unverified");
+    const rpc = restarted.networkView().ports.find((p) => p.purpose === "easytier-rpc")!;
+    // The core is not running in this fresh instance, so the live verdict is
+    // "failed": either way the old "stable" never survives the restart.
+    expect(rpc.state).not.toBe("stable");
+  });
+
+  test("console and API ports are not claimed stable by a fallback", async () => {
+    const svc = await service();
+    const view = projectNetwork({
+      config: svc.config(),
+      supervisor: { running: true, pid: 4242, rpcPort: svc.config()!.rpcPort, peers: [], aclOk: true } as never,
+      catalog: { peers: [], publishing: false, server: { running: false, port: null, address: null, error: null } } as never,
+      providers: [],
+      gatewayPort: 3425,
+      consolePort: 39001,
+      apiPort: 34517,
+    });
+    expect(view.ports.find((p) => p.purpose === "console")!.state).toBe("unverified");
+    expect(view.ports.find((p) => p.purpose === "api")!.state).toBe("unverified");
   });
 });
 

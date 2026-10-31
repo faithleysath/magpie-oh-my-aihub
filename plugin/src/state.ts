@@ -332,7 +332,7 @@ function normalizeConfig(raw: LegacyConfig, wiring: LegacyWiring | null): Plugin
     publishedPorts: Array.isArray(raw.publishedPorts) ? raw.publishedPorts.map(Number).filter(Number.isFinite) : [],
     secureMode: raw.secureMode ?? true,
     secureIdentity: raw.secureIdentity ?? null,
-    share: normalizeShare(raw.share),
+    share: normalizeShare(raw.share, sharingEnabled),
     // A phase-4 document has no catalogue yet: both switches stay off, so an
     // upgrade never starts a listener or publishes anything by itself.
     catalog: normalizeCatalogConfig(raw.catalog),
@@ -343,9 +343,13 @@ function normalizeConfig(raw: LegacyConfig, wiring: LegacyWiring | null): Plugin
   };
 }
 
-function normalizeShare(share: SharePolicy | undefined): SharePolicy {
-  const models = Array.isArray(share?.models) ? share.models.map(String).filter(Boolean) : ["*"];
-  return { models: models.length ? models : ["*"] };
+function normalizeShare(share: SharePolicy | undefined, sharingEnabled: boolean): SharePolicy {
+  const models = Array.isArray(share?.models) ? share.models.map(String).filter(Boolean) : [];
+  // A legacy document that shared before the allow list existed keeps the old
+  // "everything" meaning; a new node starts with nothing selected, so no future
+  // model is shared without an explicit choice.
+  if (!models.length && sharingEnabled) return { models: ["*"] };
+  return { models };
 }
 
 function portIn(value: unknown, fallback: number): number {
