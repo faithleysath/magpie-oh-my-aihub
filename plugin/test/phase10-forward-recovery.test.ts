@@ -453,3 +453,67 @@ describe("forward recovery for an owned Remote", () => {
     expect(keyedCalls).toEqual([]);
   });
 });
+
+describe("control forward retirement", () => {
+  test("a removed config entry with a live socket is not reported closed", async () => {
+    const svc = await service();
+    binder.occupy("127.0.0.1", 13620);
+    sup.forwards = [{ protocol: "tcp", bindAddr: "127.0.0.1:13620", dstAddr: "10.66.1.2:41651" }];
+    // 2.6.4 can remove the list entry while the actual listener stays.
+    ;(sup as any).removePortForward = async () => { sup.forwards = []; };
+    const result = await svc.retireControlForward("127.0.0.1:13620", "10.66.1.2:41651");
+    expect(result.closed).toBe(false);
+    expect(result.orphan).toBe(true);
+    expect(loadState().state.orphanForwards.some((o) => o.localPort === 13620)).toBe(true);
+  });
+
+  test("multiple owned control forwards are not treated as manual/foreign", async () => {
+    const svc = await service();
+    binder.occupy("127.0.0.1", 13620);
+    const originalStart = sup.start.bind(sup);
+    sup.start = async (cfg) => { const state = await originalStart(cfg); binder.free("127.0.0.1", 13620); return state; };
+    sup.forwards = [
+      { protocol: "tcp", bindAddr: "127.0.0.1:13620", dstAddr: "10.66.1.2:41651" },
+      { protocol: "tcp", bindAddr: "127.0.0.1:13621", dstAddr: "10.66.1.3:41651" },
+    ];
+    ;(sup as any).removePortForward = async (bind: string) => { sup.forwards = sup.forwards.filter((f) => f.bindAddr !== bind); };
+    const result = await svc.retireControlForward("127.0.0.1:13620", "10.66.1.2:41651", ["127.0.0.1:13621"]);
+    expect(result.closed).toBe(true);
+    expect(result.restarted).toBe(true);
+    expect(sup.forwards.some((f) => f.bindAddr === "127.0.0.1:13621")).toBe(true);
+  });
+
+  test("a listener owned by another process is never restarted around", async () => {
+    const svc = await service();
+    binder.occupy("127.0.0.1", 13620);
+    ownership.pids.set(13620, [999]);
+    sup.forwards = [{ protocol: "tcp", bindAddr: "127.0.0.1:13620", dstAddr: "10.66.1.2:41651" }];
+    ;(sup as any).removePortForward = async () => { sup.forwards = []; };
+    const result = await svc.retireControlForward("127.0.0.1:13620", "10.66.1.2:41651");
+    expect(result.closed).toBe(false);
+    expect(result.restarted).toBe(false);
+    const orphan = loadState().state.orphanForwards.find((o) => o.localPort === 13620);
+    expect(orphan?.pids).toEqual([999]);
+  });
+
+  test("remove that leaves a live listener forces a supervised restart and keeps other forwards", async () => {
+    const svc = await service();
+    (svc as any).state.providers = [provider("peer2", 13621, "10.66.1.3", KEY2, MODELS, "peer2-host")];
+    binder.occupy("127.0.0.1", 13620);
+    const originalStart = sup.start.bind(sup);
+    sup.start = async (cfg) => { const state = await originalStart(cfg); binder.free("127.0.0.1", 13620); return state; };
+    sup.forwards = [
+      { protocol: "tcp", bindAddr: "127.0.0.1:13620", dstAddr: "10.66.1.2:41651" },
+      { protocol: "tcp", bindAddr: "127.0.0.1:13621", dstAddr: "10.66.1.3:41651" },
+    ];
+    // 2.6.4 semantics: remove does not close the listener; only start() rebuilds.
+    const result = await svc.retireControlForward("127.0.0.1:13620", "10.66.1.2:41651");
+    expect(result.closed).toBe(true);
+    expect(result.restarted).toBe(true);
+    expect(sup.starts).toBeGreaterThanOrEqual(2);
+    expect(sup.forwards.some((f) => f.bindAddr === "127.0.0.1:13620")).toBe(false);
+    // The app removed only its named bind; the supervised restart rebuilt the
+    // provider forward that is still recorded in Service state.
+    expect(sup.forwards.some((f) => f.bindAddr === "127.0.0.1:13621")).toBe(true);
+  });
+});

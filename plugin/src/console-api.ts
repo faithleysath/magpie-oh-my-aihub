@@ -14,7 +14,7 @@ export const CONSOLE_ACTIONS = [
   "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer", "connection-request",
   "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
-  "p2p-request", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
+  "p2p-request", "p2p-quote-preview", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
   ...WALLET_CONSOLE_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
@@ -64,25 +64,40 @@ export async function consoleAction(service: Service, name: string, input: Recor
     const w = () => consoleWorkflows(service);
     if (name.startsWith("p2p-")) {
       const app = controlAppFor(service);
-      if (!app) throw new ConsoleInputError("the local P2P control service is not running");
+      if (!app) throw new ConsoleInputError("the local P2P control service is not running", "not_running", 503);
+      const p2p = async <T>(fn: () => Promise<T>): Promise<T> => {
+        try {
+          return await fn();
+        } catch (error) {
+          const message = String((error as Error)?.message ?? error);
+          if (/not found|no such|no active consumer|not in this/i.test(message)) throw new ConsoleInputError(message, "not_found", 404);
+          if (/generation|stale|current|different quote|price|identity|fingerprint|changed/i.test(message)) throw new ConsoleInputError(message, "stale_or_conflict", 409);
+          if (/tofu|untrusted|accept|trust/i.test(message)) throw new ConsoleInputError(message, "tofu_required", 403);
+          if (/must|choose|required|invalid|list|amount|cap/i.test(message)) throw new ConsoleInputError(message, "invalid_input", 400);
+          throw error;
+        }
+      };
       switch (name) {
         case "p2p-request":
           fields(input, ["nodeId", "fingerprint", "quoteHash", "models"]);
-          return clean(await app.request(input));
+          return clean(await p2p(() => app.request(input)));
+        case "p2p-quote-preview":
+          fields(input, ["requestId", "models"]);
+          return clean(await p2p(() => app.quotePreview(input)));
         case "p2p-approve":
           fields(input, ["requestId", "consumerFingerprint", "quoteHash", "priceVersion", "generation", "models", "capUsd", "acceptFingerprint"]);
-          return clean(await app.approve(input));
+          return clean(await p2p(() => app.approve(input)));
         case "p2p-reject":
           fields(input, ["requestId", "note"]);
-          await app.reject(input);
+          await p2p(() => app.reject(input));
           return { state: "rejected" };
         case "p2p-revoke":
           fields(input, ["approvalId"]);
-          await app.revoke(input);
+          await p2p(() => app.revoke(input));
           return { state: "revoked" };
         case "p2p-recover":
           fields(input, ["approvalId"]);
-          return clean(await app.recover(input));
+          return clean(await p2p(() => app.recover(input)));
         default:
           return refuse("unsupported P2P operation");
       }

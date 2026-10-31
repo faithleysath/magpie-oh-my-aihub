@@ -301,6 +301,12 @@ export interface P2pTransport {
   /** POST one sealed frame to the peer of the session. */
   frame(session: { sessionId: string; peer: P2pPeerIdentity }, frame: Buffer): Promise<void>;
   /**
+   * Whether a push to this peer is currently possible. Returning false leaves
+   * outbox rows pending for an authenticated poll instead of exhausting their
+   * retry budget to dead.
+   */
+  canPush?(peer: P2pPeerIdentity): boolean;
+  /**
    * Pull-style transport: send a signed hello and receive the server_hello plus
    * a bounded list of sealed frames already addressed to this consumer. This
    * avoids requiring a reverse consumer endpoint; authentication is the hello
@@ -417,6 +423,7 @@ export class P2pNode {
   private readonly approvalTtlMs: number;
   private readonly deliveryTtlMs: number;
   private readonly sessions = new Map<string, P2pSession>();
+  private readonly pollAuthorized = new Set<string>();
   private readonly helloCache = new Map<string, { clientHelloId: string; serverHello: P2pServerHello; session: P2pSession }>();
   private recoveryReport: P2pRecoveryReport | null = null;
   private readonly recoveredAtBoot: boolean;
@@ -459,11 +466,12 @@ export class P2pNode {
   // --- handshake -------------------------------------------------------------
 
   /** Provider side: validate + answer a signed hello and open a session. */
-  async acceptHello(raw: unknown): Promise<{ serverHello: P2pServerHello; sessionId: string; trust: P2pTrustVerdict }> {
+  async acceptHello(raw: unknown, opts: { rejectReplay?: boolean } = {}): Promise<{ serverHello: P2pServerHello; sessionId: string; trust: P2pTrustVerdict }> {
     this.assertOpen();
     const hello = validateClientHello(raw, { now: this.clock(), local: { identity: this.identity, binding: this.identity.binding } });
     const cached = this.helloCache.get(hello.sessionId);
     if (cached) {
+      if (opts.rejectReplay) fail("replay", "a poll hello cannot be replayed");
       if (cached.clientHelloId !== hello.id) fail("replay", "this session id was already used by another hello");
       this.store.recordPeerSeen(hello.from, this.clock());
       return { serverHello: cached.serverHello, sessionId: hello.sessionId, trust: this.verdictFor(hello.from) };
@@ -476,12 +484,14 @@ export class P2pNode {
     const serverHello = buildServerHello({ hello, identity: this.identity, ephemeral, now: this.clock() });
     const material = completeHandshake({ role: "provider", clientHello: hello, serverHello, ephemeral, now: this.clock() });
     const session = P2pSession.establish({ material, store: this.store, now: this.clock });
+    if (opts.rejectReplay) this.pollAuthorized.add(session.sessionId);
     this.store.putTombstone("hello-nonce", hello.clientNonce, "consumed hello nonce", this.clock(), 2 * 60 * 60_000);
     this.helloCache.set(hello.sessionId, { clientHelloId: hello.id, serverHello, session });
     if (this.helloCache.size > 32) {
       const oldest = this.helloCache.keys().next().value;
       if (oldest) this.helloCache.delete(oldest);
     }
+    this.pruneSessions();
     this.sessions.set(session.sessionId, session);
     return { serverHello, sessionId: hello.sessionId, trust: trustVerdict(trustRowToLike(peer), hello.from) };
   }
@@ -530,6 +540,11 @@ export class P2pNode {
     });
     const session = this.sessions.get(sessionId);
     if (!session || session.closedReason) fail("session_closed", "the poll session is not open");
+    if (!this.pollAuthorized.has(sessionId)) fail("untrusted_peer", "this session was not opened by an authenticated poll hello");
+    // A lost HTTP poll response must not permanently consume the approval. The
+    // next authenticated poll re-arms the same generation's still-unacked rows;
+    // this is safe because approval/delivery are idempotent by generation/hash.
+    await this.rearmUnackedForPoll(session.peer);
     const out: Buffer[] = [];
     for (const row of this.dueForSession(session, Math.max(1, Math.min(limit, 20)))) {
       if (row.type === "authorization_delivery" && !this.approvedWasSent(row)) continue;
@@ -550,6 +565,25 @@ export class P2pNode {
    * The session is a normal P2pSession; seq/AEAD/recipient/expiry/replay checks
    * are the same as the push path. ACKs are queued normally and sent by tick().
    */
+  /** Bounds in-memory poll sessions; persistent rows are never trusted for keys. */
+  private pruneSessions(max = 32): void {
+    const now = this.clock().getTime();
+    for (const [id, session] of [...this.sessions]) {
+      if (session.closedReason || Date.parse(session.expiresAt) <= now) {
+        if (!session.closedReason) session.close("pruned");
+        this.sessions.delete(id);
+        this.pollAuthorized.delete(id);
+      }
+    }
+    if (this.sessions.size <= max) return;
+    const oldest = [...this.sessions.entries()].sort((a, b) => Date.parse(a[1].expiresAt) - Date.parse(b[1].expiresAt));
+    for (const [id, session] of oldest.slice(0, oldest.length - max)) {
+      if (!session.closedReason) session.close("pruned");
+      this.sessions.delete(id);
+      this.pollAuthorized.delete(id);
+    }
+  }
+
   async poll(target: P2pHelloTarget): Promise<P2pFrameResult[]> {
     this.assertOpen();
     if (!this.transport?.poll) fail("internal", "the transport does not support pull/poll");
@@ -566,6 +600,7 @@ export class P2pNode {
     const material = completeHandshake({ role: "consumer", clientHello: client.hello, serverHello, ephemeral: client.ephemeral, now: this.clock() });
     const session = P2pSession.establish({ material, store: this.store, now: this.clock });
     this.sessions.set(session.sessionId, session);
+    this.pruneSessions();
     const results: P2pFrameResult[] = [];
     for (const encoded of response.frames) {
       if (typeof encoded !== "string" || encoded.length > P2P_MAX_FRAME_BYTES * 2) fail("malformed", "poll frame is invalid");
@@ -1741,6 +1776,8 @@ export class P2pNode {
       const recovered: P2pRecoveryReport | null = this.recoveryReport;
       this.recoveryReport = null;
       const sessionsExpired = this.store.expireSessions(at);
+      this.store.purgeSessions?.(at, 0);
+      this.store.purgeTombstones(at);
       for (const session of this.sessions.values()) {
         if (!session.closedReason && Date.parse(session.expiresAt) <= at.getTime()) session.close("expired");
       }
@@ -1754,6 +1791,7 @@ export class P2pNode {
           if (row.type === "authorization_delivery" && !this.approvedWasSent(row)) continue;
           const session = this.sessionForRow(row);
           if (!session) continue;
+          if (this.transport.canPush && !this.transport.canPush(session.peer)) continue;
           if (!this.store.markOutboxSending(row.messageId, at)) continue;
           try {
             const frame = await this.materialize(row, session);
@@ -1771,6 +1809,7 @@ export class P2pNode {
         if (approval.state === "uncertain") actionNeeded.add(`approval:${approval.approvalId}`);
         if (approval.state === "delivered" && approval.expiresAt && Date.parse(approval.expiresAt) <= at.getTime()) actionNeeded.add(`ack-expired:${approval.approvalId}`);
       }
+      this.pruneSessions();
       return {
         recovered,
         sessionsExpired,
@@ -2195,8 +2234,22 @@ export class P2pNode {
     });
   }
 
+  private async rearmUnackedForPoll(peer: P2pPeerIdentity): Promise<void> {
+    const now = this.clock();
+    for (const approval of this.store.listApprovals(peer.nodeId)) {
+      if (!["approved", "delivering", "delivered"].includes(approval.state)) continue;
+      if (approval.consumerFingerprint !== peer.fingerprint) continue;
+      for (const type of ["approved", "authorization_delivery"] as const) {
+        const id = expectedIdempotency(type, approval.approvalId);
+        const row = this.store.outboxByIdempotency(type, id);
+        if (row?.state === "sent") this.store.rearmOutbox(row.messageId, now.toISOString(), now);
+      }
+    }
+  }
+
   private async sendDueFor(session: P2pSession): Promise<void> {
     if (!this.transport) return;
+    if (this.transport.canPush && !this.transport.canPush(session.peer)) return;
     for (const row of this.dueForSession(session)) {
       if (row.type === "authorization_delivery" && !this.approvedWasSent(row)) continue;
       if (!this.store.markOutboxSending(row.messageId, this.clock())) continue;

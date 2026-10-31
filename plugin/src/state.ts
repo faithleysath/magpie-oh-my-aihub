@@ -335,6 +335,9 @@ export interface OrphanForward {
   localPort: number;
   dstAddr: string;
   since: string;
+  /** observed owner evidence; no secret */
+  pids?: number[];
+  detail?: string | null;
 }
 
 export interface ShareSuspension {

@@ -713,6 +713,25 @@ export class P2pStore {
     return this.db.query("UPDATE p2p_sessions SET state = 'expired', updated_at = ? WHERE state = 'open' AND expires_at <= ?").run(now.toISOString(), now.toISOString()).changes;
   }
 
+  /**
+   * Deletes old session/message rows (never keys) so a long-running poll loop
+   * cannot grow SQLite without bound. Only rows past their expiry plus the
+   * caller's grace are removed; tombstones retain replay protection.
+   */
+  purgeSessions(now: Date, graceMs = 24 * 60 * 60_000, limit = 500): number {
+    const cutoff = new Date(now.getTime() - Math.max(0, graceMs)).toISOString();
+    return this.db.transaction(() => {
+      const ids = this.db
+        .query("SELECT session_id FROM p2p_sessions WHERE state IN ('closed','expired') AND expires_at <= ? ORDER BY expires_at LIMIT ?")
+        .all(cutoff, limit) as { session_id: string }[];
+      if (ids.length === 0) return 0;
+      const placeholders = ids.map(() => "?").join(",");
+      this.db.query(`DELETE FROM p2p_messages WHERE session_id IN (${placeholders})`).run(...ids.map((r) => r.session_id));
+      this.db.query(`DELETE FROM p2p_sessions WHERE session_id IN (${placeholders})`).run(...ids.map((r) => r.session_id));
+      return ids.length;
+    })();
+  }
+
   // --- messages --------------------------------------------------------------
 
   recordInbound(input: {

@@ -85,6 +85,7 @@ export class P2pLab {
   readonly importedApprovals: string[] = [];
   readonly approveInputs: Array<{ approvalId: string; generation: number }> = [];
   readonly sentFrames: Array<{ sessionId: string; from: "A" | "B"; frame: Buffer }> = [];
+  readonly pollHellos: unknown[] = [];
   readonly registeredSessions: Array<{ approvalId: string; providerNodeId: string; providerFingerprint: string }> = [];
 
   private constructor() {
@@ -131,9 +132,10 @@ export class P2pLab {
     const transport = (self: "A" | "B"): P2pTransport => ({
       hello: async (target, hello) => {
         const targetNode = self === "A" ? this.B : this.A;
-        const result = await targetNode.acceptHello(hello);
+        const result = await targetNode.acceptHello(hello, { rejectReplay: true });
         return result.serverHello;
       },
+      canPush: (peer) => !(self === "B" && this.faults.disableProviderPush),
       frame: async (session, frame) => {
         this.sentFrames.push({ sessionId: session.sessionId, from: self, frame: Buffer.from(frame) });
         if (self === "B" && this.faults.disableProviderPush) throw new Error("provider push disabled for poll test");
@@ -141,8 +143,9 @@ export class P2pLab {
         await targetNode.handleFrame(session.sessionId, frame);
       },
       poll: async (target, hello) => {
+        this.pollHellos.push(hello);
         const targetNode = self === "A" ? this.B : this.A;
-        const result = await targetNode.acceptHello(hello);
+        const result = await targetNode.acceptHello(hello, { rejectReplay: true });
         const frames = await targetNode.pullFrames(result.sessionId);
         return { serverHello: result.serverHello, frames: frames.map((f) => f.toString("base64")) };
       },
