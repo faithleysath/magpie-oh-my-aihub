@@ -12,6 +12,13 @@ import {
   verifyTypedData,
 } from "ethers";
 import {
+  DEPOSIT_DOMAIN_NAME,
+  DEPOSIT_DOMAIN_VERSION,
+  DEPOSIT_TYPES,
+  DEPOSIT_VERIFYING_CONTRACT,
+} from "../src/deposits.ts";
+import { typedDataDigest as legacyTypedDataDigest } from "../src/eip712.ts";
+import {
   BIP44_EVM_PATH,
   DEFAULT_KDF,
   MAX_KEYSTORE_BYTES,
@@ -317,6 +324,65 @@ describe("BIP39/BIP44 and keystore format", () => {
     await writeFile(path, `${JSON.stringify(original)}\n`, { mode: 0o600 });
     await expect(vault.unlock(PASSWORD)).resolves.toMatchObject({ status: "unlocked" });
     expect(crypto.kdf).toBe("scrypt");
+  });
+});
+
+describe("x-ethers metadata and mnemonic integrity", () => {
+  test("path/locale/client/geth filename tampering is refused before unlock", async () => {
+    const { path, vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    const original = JSON.parse(await readFile(path, "utf8"));
+    const mutate = async (change: (x: Record<string, unknown>) => void) => {
+      const copy = structuredClone(original);
+      change(copy["x-ethers"] as Record<string, unknown>);
+      await writeFile(path, `${JSON.stringify(copy)}\n`, { mode: 0o600 });
+    };
+
+    await mutate((x) => { x.path = "m/44'/60'/0'/0/1"; });
+    await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toMatchObject({ code: "keystore-invalid" });
+
+    await mutate((x) => { x.locale = "fr"; });
+    await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toMatchObject({ code: "keystore-invalid" });
+
+    await mutate((x) => { x.client = "ethers/not-pinned"; });
+    await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toMatchObject({ code: "keystore-invalid" });
+
+    await mutate((x) => {
+      const name = String(x.gethFilename);
+      x.gethFilename = `${name.slice(0, -40)}${"0".repeat(40)}`;
+    });
+    await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toMatchObject({ code: "keystore-invalid" });
+  });
+
+  test("tampered mnemonic ciphertext, address or KDF number fails closed", async () => {
+    const { path, vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    const original = JSON.parse(await readFile(path, "utf8"));
+    const write = async (copy: Record<string, unknown>) => {
+      await writeFile(path, `${JSON.stringify(copy)}\n`, { mode: 0o600 });
+    };
+
+    const mnemonicTamper = structuredClone(original);
+    const xethers = mnemonicTamper["x-ethers"] as Record<string, unknown>;
+    const blob = String(xethers.mnemonicCiphertext);
+    xethers.mnemonicCiphertext = `${blob[0] === "0" ? "1" : "0"}${blob.slice(1)}`;
+    await write(mnemonicTamper);
+    const mnemonicVault = await WalletVault.open({ path, kdf: TEST_KDF });
+    await expect(mnemonicVault.unlock(PASSWORD)).rejects.toBeInstanceOf(WalletVaultError);
+    expect(mnemonicVault.snapshot().status).toBe("locked");
+
+    const addressTamper = structuredClone(original);
+    addressTamper.address = VECTOR_24_ADDRESS.slice(2).toLowerCase();
+    (addressTamper["x-ethers"] as Record<string, unknown>).gethFilename = `UTC--2026-10-31T00-00-00.0Z--${VECTOR_24_ADDRESS.slice(2).toLowerCase()}`;
+    await write(addressTamper);
+    const addressVault = await WalletVault.open({ path, kdf: TEST_KDF });
+    await expect(addressVault.unlock(PASSWORD)).rejects.toBeInstanceOf(WalletVaultError);
+    expect(addressVault.snapshot().status).toBe("locked");
+
+    const kdfTamper = structuredClone(original);
+    (kdfTamper.crypto ?? kdfTamper.Crypto).kdfparams.n = "32768";
+    await write(kdfTamper);
+    await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toBeInstanceOf(WalletVaultError);
   });
 });
 
@@ -654,6 +720,65 @@ describe("EIP-712 preview and scoped signing", () => {
     expect(preview.reason).toBe("preview-only");
     const mailTypes = Object.fromEntries(Object.entries(mail.types).map(([name, fields]) => [name, [...fields]]));
     expect(TypedDataEncoder.hash(mail.domain, mailTypes, mail.message)).toBe(preview.digest);
+  });
+
+  test("the real DepositIntent schema is already primitive-only and is supported without a manual-file detour", async () => {
+    const depositPurpose: WalletTypedDataPurpose = {
+      id: "deposit-intent-97",
+      chainId: 97,
+      primaryType: "DepositIntent",
+      domainName: DEPOSIT_DOMAIN_NAME,
+      domainVersion: DEPOSIT_DOMAIN_VERSION,
+      verifyingContracts: [DEPOSIT_VERIFYING_CONTRACT],
+      messageTypes: Object.fromEntries(DEPOSIT_TYPES.DepositIntent.map((field) => [field.name, field.type])),
+    };
+    const domain = {
+      name: DEPOSIT_DOMAIN_NAME,
+      version: DEPOSIT_DOMAIN_VERSION,
+      chainId: 97,
+      verifyingContract: DEPOSIT_VERIFYING_CONTRACT,
+    };
+    const message = {
+      invoiceId: "inv_00000000-0000-4000-8000-000000000000",
+      consumerId: "alice",
+      providerId: "provider-1",
+      chainId: 97,
+      assetId: `eip155:97:${PAYEE}`,
+      tokenContract: PAYEE,
+      recipient: PAYEE,
+      expectedAmountRaw: "1000000",
+      nonce: `0x${"11".repeat(16)}`,
+      requestedAt: 1_700_000_000,
+      expiresAt: 1_700_000_600,
+    };
+    const typedData: WalletTypedData = {
+      domain,
+      types: DEPOSIT_TYPES as unknown as WalletTypedData["types"],
+      primaryType: "DepositIntent",
+      message,
+    };
+    const legacyDigest = legacyTypedDataDigest({
+      types: DEPOSIT_TYPES,
+      primaryType: "DepositIntent",
+      domain,
+      message,
+    });
+
+    const { vault } = await openVault({ purposes: [depositPurpose] });
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    const prepared = vault.prepareTypedData({ purpose: depositPurpose.id, typedData });
+    expect(prepared.digest).toBe(legacyDigest);
+    const permit = vault.createSigningPermit({ kind: "typed-data", prepared });
+    const signed = vault.signTypedData({ prepared, permit });
+    expect(
+      verifyTypedData(
+        domain,
+        { DepositIntent: [...DEPOSIT_TYPES.DepositIntent] },
+        message,
+        signed.signature,
+      ),
+    ).toBe(VECTOR_12_ADDRESS);
   });
 
   test("a prepared purpose can sign, and the signature verifies against the vault address", async () => {

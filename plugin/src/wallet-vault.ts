@@ -65,6 +65,8 @@ export const MAX_AUTO_RECHARGE_TTL_MS = 5 * 60_000;
 export const MAX_KEYSTORE_BYTES = 128 * 1024;
 export const MAX_PAYMENT_DATA_BYTES = 16 * 1024;
 const UINT256_MAX = (1n << 256n) - 1n;
+const EXPECTED_KEYSTORE_CLIENT = "ethers/6.17.0";
+const GETH_FILENAME_RE = /^UTC--\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+Z--[0-9a-f]{40}$/;
 
 export interface WalletKdfParams {
   /** scrypt N; must be a power of two in [MIN_KDF_N, MAX_KDF_N] */
@@ -1436,6 +1438,27 @@ async function decryptWallet(parsed: ParsedKeystore, password: string): Promise<
   if (wallet.address.toLowerCase() !== parsed.address.toLowerCase()) {
     fail("keystore-invalid", "the decrypted key does not match the declared address");
   }
+  // The V3 MAC authenticates the private-key ciphertext and password; the
+  // x-ethers mnemonic ciphertext is not separately MAC'd. Re-parse the phrase,
+  // re-derive the fixed path, and compare address/private key before exposing
+  // the wallet. A wordlist-valid phrase alone is not treated as integrity.
+  let reparsed: Mnemonic;
+  try {
+    reparsed = Mnemonic.fromPhrase(wallet.mnemonic.phrase);
+  } catch {
+    fail("keystore-invalid", "the decrypted mnemonic failed BIP39 checksum validation");
+  }
+  if (reparsed.entropy.toLowerCase() !== wallet.mnemonic.entropy.toLowerCase()) {
+    fail("keystore-invalid", "the mnemonic phrase and encrypted entropy disagree");
+  }
+  const derived = HDNodeWallet.fromMnemonic(reparsed, BIP44_EVM_PATH);
+  if (
+    derived.address.toLowerCase() !== wallet.address.toLowerCase() ||
+    derived.privateKey.toLowerCase() !== wallet.privateKey.toLowerCase() ||
+    derived.address.toLowerCase() !== parsed.address.toLowerCase()
+  ) {
+    fail("keystore-invalid", "the mnemonic, path, address and private key are inconsistent");
+  }
   return wallet;
 }
 
@@ -1494,6 +1517,14 @@ function validateKeystore(text: string): ParsedKeystore {
   if (xethers.version !== "0.1") fail("keystore-invalid", "unsupported x-ethers metadata version");
   if (xethers.path !== BIP44_EVM_PATH) fail("keystore-invalid", "keystore uses an unexpected BIP44 path");
   if (xethers.locale !== "en") fail("keystore-invalid", "only the English BIP39 wordlist is supported");
+  if (xethers.client !== EXPECTED_KEYSTORE_CLIENT) fail("keystore-invalid", "keystore client metadata is not the pinned ethers version");
+  if (
+    typeof xethers.gethFilename !== "string" ||
+    !GETH_FILENAME_RE.test(xethers.gethFilename) ||
+    !xethers.gethFilename.toLowerCase().endsWith(address.slice(2).toLowerCase())
+  ) {
+    fail("keystore-invalid", "keystore geth filename is missing or does not belong to the declared address");
+  }
   if (hexByteLength(xethers.mnemonicCounter) !== 16) fail("keystore-invalid", "mnemonic counter must be 16 bytes");
   const entropyBytes = hexByteLength(xethers.mnemonicCiphertext);
   if (entropyBytes === null || ![16, 20, 24, 28, 32].includes(entropyBytes)) {
