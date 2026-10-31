@@ -284,7 +284,7 @@ describe("TOFU key change", () => {
     expect((await lab.B.approvalView(bad.approvalId))?.state).toBe("revoked");
 
     lab.faults.approveKeyId = "key-new-0001";
-    lab.faults.takeKey = "new-gateway-secret-0001";
+    lab.faults.takeKey = freshFixture();
     const fresh = await lab.B.approve(requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true });
     expect(fresh.keyId).toBe("key-new-0001");
     expect(fresh.generation).toBe(2);
@@ -309,7 +309,7 @@ describe("uncertain revoke and generations", () => {
     expect((await lab.B.listRequests()).find((r) => r.requestHash === requestHash)?.state).toBe("revoked");
 
     lab.faults.approveKeyId = "key-2";
-    lab.faults.takeKey = "secret-two-0123456789";
+    lab.faults.takeKey = freshFixture();
     const generation2 = await lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true });
     expect(generation2.generation).toBe(2);
     expect(generation2.approvalId).not.toBe(approval.approvalId);
@@ -432,6 +432,20 @@ describe("reconcile evidence and same-identity gate", () => {
     expect((await lab.B.listApprovals())[0]?.state).toBe("uncertain");
   });
 
+  test("noSideEffect without an explicit nativeKeyIds array is refused", async () => {
+    lab = P2pLab.create();
+    const sessionId = await lab.establish();
+    const { requestHash } = await lab.sendRequest(sessionId);
+    lab.faults.failApprove = true;
+    await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true })).rejects.toThrow();
+    lab.faults.failApprove = false;
+    lab.faults.reconcileMode = "noSideEffect";
+    lab.faults.reconcileDropNativeKeys = true;
+    const before = lab.calls.approve;
+    await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2 })).rejects.toBeInstanceOf(P2pError);
+    expect(lab.calls.approve).toBe(before);
+  });
+
   test("stale reconcile evidence does not authorize a retry", async () => {
     lab = P2pLab.create();
     const sessionId = await lab.establish();
@@ -463,7 +477,7 @@ describe("reconcile evidence and same-identity gate", () => {
     lab.faults.reconcileMode = "keyReady";
     await lab.B.approve(first.requestHash, { models: ["alpha/x"], capUsd: 2 });
     lab.faults.approveKeyId = "key-b";
-    lab.faults.takeKey = "secret-b";
+    lab.faults.takeKey = freshFixture();
     const view = await lab.B.approve(second.requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true });
     expect(view.state).not.toBe("rejected");
   });
@@ -494,7 +508,7 @@ describe("historic identity gate", () => {
     // Only a typed, confirmed revocation of the old key unlocks the new identity.
     lab.faults.revokeVoid = false;
     lab.faults.approveKeyId = "key-new-0001";
-    lab.faults.takeKey = "new-gateway-secret-0001";
+    lab.faults.takeKey = freshFixture();
     await lab.B.revoke(approval.approvalId, "operator-revoked");
     const view = await lab.B.approve(requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true });
     expect(view.state).not.toBe("rejected");
@@ -512,7 +526,7 @@ describe("historic identity gate", () => {
     const requestHash = insertAlienRequest(lab, alien, ["beta/y"]);
 
     lab.faults.approveKeyId = "key-new-0001";
-    lab.faults.takeKey = "new-gateway-secret-0001";
+    lab.faults.takeKey = freshFixture();
     lab.advance(31 * 60_000);
     lab.restart();
     expect(lab.storeB.hasTombstone("authorization", approval.approvalId)).toBe(false);
@@ -543,6 +557,99 @@ describe("pending identity rejection", () => {
     lab = P2pLab.create();
     await expect(lab.B.acceptHello({ version: 1 })).rejects.toBeInstanceOf(P2pError);
     expect(lab.storeB.getPeer("aaaa1111")).toBeNull();
+  });
+});
+
+describe("legacy enforcement evidence", () => {
+  test("a legacy revoked approval without durable enforcement blocks a new identity until reconfirmed", async () => {
+    lab = P2pLab.create();
+    lab.storeB.recordPeerSeen(lab.identityA.peer, lab.clock.now);
+    lab.storeB.acceptPeer(lab.identityA.peer, lab.clock.now);
+    const legacyId = "7".repeat(32);
+    lab.storeB.insertApproval({
+      approvalId: legacyId,
+      requestHash: "8".repeat(64),
+      generation: 1,
+      providerNodeId: "bbbb2222",
+      providerFingerprint: lab.identityB.peer.fingerprint,
+      consumerAccountId: lab.identityA.peer.accountId,
+      consumerNodeId: "aaaa1111",
+      consumerFingerprint: lab.identityA.peer.fingerprint,
+      quoteHash: QUOTE_HASH,
+      priceVersion: PRICE_VERSION,
+      modelsJson: JSON.stringify(["alpha/x"]),
+      capUsd: 2,
+      memo: null,
+      state: "revoked",
+      createdAt: lab.clock.now.toISOString(),
+      approvedAt: lab.clock.now.toISOString(),
+      expiresAt: new Date(lab.clock.now.getTime() + 10 * 60_000).toISOString(),
+      keyId: KEY_ID,
+      keyName: "legacy-name",
+      authorizationHash: null,
+      deliveredAt: null,
+      error: null,
+      enforcedAt: null,
+      enforcement: null,
+      enforcedKeyId: null,
+    });
+    const alien = alienIdentity();
+    lab.storeB.recordPeerSeen(alien.peer, lab.clock.now);
+    const invalidation = await lab.B.acceptConsumer("aaaa1111", alien.peer.fingerprint);
+    expect(invalidation.uncertain).toEqual([]);
+    const requestHash = insertAlienRequest(lab, alien, ["beta/y"]);
+    lab.restart();
+    const before = lab.calls.approve;
+    await expect(lab.B.approve(requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true })).rejects.toBeInstanceOf(P2pError);
+    expect(lab.calls.approve).toBe(before);
+
+    // Reconfirmation is explicit and durable; the historical row is not assumed revoked.
+    await lab.B.revoke(legacyId, "operator-revoked");
+    const enforced = lab.storeB.getApproval(legacyId);
+    expect(enforced?.enforcedAt).not.toBeNull();
+    expect(enforced?.enforcement).toBe("keyRevoked");
+    expect(enforced?.enforcedKeyId).toBe(KEY_ID);
+
+    lab.faults.approveKeyId = "key-c";
+    lab.faults.takeKey = freshFixture();
+    const view = await lab.B.approve(requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true });
+    expect(view.state).not.toBe("rejected");
+  });
+
+  test("a same-identity revoked row without enforcement blocks another request", async () => {
+    lab = P2pLab.create();
+    const sessionId = await lab.establish();
+    const { requestHash } = await lab.sendRequest(sessionId);
+    lab.storeB.insertApproval({
+      approvalId: "6".repeat(32),
+      requestHash: "5".repeat(64),
+      generation: 1,
+      providerNodeId: "bbbb2222",
+      providerFingerprint: lab.identityB.peer.fingerprint,
+      consumerAccountId: lab.identityA.peer.accountId,
+      consumerNodeId: "aaaa1111",
+      consumerFingerprint: lab.identityA.peer.fingerprint,
+      quoteHash: QUOTE_HASH,
+      priceVersion: PRICE_VERSION,
+      modelsJson: JSON.stringify(["alpha/x"]),
+      capUsd: 2,
+      memo: null,
+      state: "revoked",
+      createdAt: lab.clock.now.toISOString(),
+      approvedAt: lab.clock.now.toISOString(),
+      expiresAt: new Date(lab.clock.now.getTime() + 10 * 60_000).toISOString(),
+      keyId: KEY_ID,
+      keyName: "legacy-name",
+      authorizationHash: null,
+      deliveredAt: null,
+      error: null,
+      enforcedAt: null,
+      enforcement: null,
+      enforcedKeyId: null,
+    });
+    const before = lab.calls.approve;
+    await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true })).rejects.toBeInstanceOf(P2pError);
+    expect(lab.calls.approve).toBe(before);
   });
 });
 
@@ -601,6 +708,12 @@ describe("no secrets and no powerful imports", () => {
     }
   });
 });
+
+let fixtureCounter = 0;
+function freshFixture(): string {
+  fixtureCounter += 1;
+  return "fixture-" + String(fixtureCounter).padStart(4, "0") + "-" + "x".repeat(12);
+}
 
 function alienIdentity(): P2pIdentity {
   const dir = mkdtempSync(join(tmpdir(), "p2p-alien-"));

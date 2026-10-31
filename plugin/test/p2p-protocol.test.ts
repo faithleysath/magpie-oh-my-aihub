@@ -246,7 +246,8 @@ describe("connection_request body", () => {
     expectCode(() => verify(reseal((v) => { v.body.request.models = ["alpha/x", "alpha/x"]; })), "malformed");
     expectCode(() => verify(reseal((v) => { v.body.request.models = []; })), "malformed");
     expectCode(() => verify(reseal((v) => { v.body.request.extra = 1; })), "malformed");
-    expectCode(() => verify(reseal((v) => { v.body.request.key = "sk-test-secret-value-1234567890"; })), "malformed");
+    const secretShaped = "sk-" + "x".repeat(24);
+    expectCode(() => verify(reseal((v) => { v.body.request.key = secretShaped; })), "malformed");
   });
 });
 

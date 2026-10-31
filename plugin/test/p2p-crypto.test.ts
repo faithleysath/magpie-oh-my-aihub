@@ -170,10 +170,10 @@ describe("authorization sealing", () => {
     models: ["alpha/x"],
     capUsd: 2,
     quote: { contentHash: "c".repeat(64), identityFingerprint: "f".repeat(64), priceVersion: "d".repeat(64), priceLocked: false },
-    keyId: "key-lab-1",
+    keyId: "fixture-id-0001",
     keyName: "ohmyaihub-bbbb2222",
-    keyHash: keyHashOf("sk-ohmy-" + "a".repeat(32)),
-    key: "sk-ohmy-" + "a".repeat(32),
+    keyHash: keyHashOf("fixture-gateway-0001-" + "a".repeat(24)),
+    key: "fixture-gateway-0001-" + "a".repeat(24),
   };
   const hash = authorizationHashOf(document, document.keyHash);
   const ctx = {
@@ -201,13 +201,13 @@ describe("authorization sealing", () => {
   test("the authorization hash ignores createdAt/key but covers the key hash and scope", () => {
     const later = { ...document, createdAt: "2026-10-31T12:30:00.000Z" };
     expect(authorizationHashOf(later, document.keyHash)).toBe(hash);
-    expect(authorizationHashOf(document, keyHashOf("sk-ohmy-" + "b".repeat(32)))).not.toBe(hash);
+    expect(authorizationHashOf(document, keyHashOf("fixture-gateway-0001-" + "b".repeat(24)))).not.toBe(hash);
     expect(authorizationHashOf({ ...document, capUsd: 3 }, document.keyHash)).not.toBe(hash);
     expect(authorizationHashOf({ ...document, models: ["alpha/x", "beta/y"] }, document.keyHash)).not.toBe(hash);
   });
 
   test("the document validation refuses a key that does not match keyHash", () => {
-    const wrongHash = keyHashOf("sk-ohmy-" + "b".repeat(32));
+    const wrongHash = keyHashOf("fixture-gateway-0001-" + "b".repeat(24));
     const doc2 = { ...document, keyHash: wrongHash };
     const hash2 = authorizationHashOf(doc2, wrongHash);
     const ctx2 = { ...ctx, authorizationHash: hash2 };

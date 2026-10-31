@@ -30,8 +30,8 @@ import {
 import type { P2pAuthorizationDocument, P2pPeerIdentity, P2pRequestDocument, P2pRevokeReason } from "../../src/p2p/protocol.ts";
 import type { P2pHelloTarget } from "../../src/p2p/handshake.ts";
 
-export const KEY = "sk-ohmy-" + "ab".repeat(32);
-export const KEY_ID = "key-lab-1";
+export const KEY = "fixture-gateway-0001-" + "a".repeat(24);
+export const KEY_ID = "fixture-id-0001";
 export const KEY_NAME = "ohmyaihub-bbbb2222";
 export const QUOTE_HASH = "aa".repeat(32);
 export const PRICE_VERSION = "bb".repeat(32);
@@ -53,6 +53,7 @@ export interface LabFaults {
   reconcileMode?: "unknown" | "keyReady" | "noSideEffect";
   reconcileBadBinding?: boolean;
   reconcileStale?: boolean;
+  reconcileDropNativeKeys?: boolean;
   readbackModels?: string[] | null;
   readbackCapUsd?: number | null;
 }
@@ -274,7 +275,13 @@ export class P2pLab {
           consumerFingerprint: input.consumer.fingerprint,
         };
         if (mode === "noSideEffect") {
-          return { state: "noSideEffect", ...bindings, keyId: input.keyId, evidence, detail: null };
+          return {
+            state: "noSideEffect",
+            ...bindings,
+            keyId: input.keyId,
+            evidence: self.faults.reconcileDropNativeKeys ? { ...evidence, nativeKeyIds: undefined } : evidence,
+            detail: null,
+          } as P2pApprovalReconcile;
         }
         const keyId = self.faults.approveKeyId ?? KEY_ID;
         return {

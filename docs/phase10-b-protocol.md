@@ -410,7 +410,7 @@ The tests use a temp directory, a fixed clock and an in-process overlay; they do
 not resolve the LAN IP, open a port, read the production Magpie state or call a
 public RPC.
 
-Expected result at this commit: `75 pass / 0 fail`, typecheck clean.
+Expected result at this commit: `78 pass / 0 fail`, typecheck clean.
 
 ## 12. Not verified (UNKNOWN)
 

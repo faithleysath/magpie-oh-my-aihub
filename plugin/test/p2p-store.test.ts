@@ -122,7 +122,7 @@ describe("outbox", () => {
       JSON.stringify({ secret: "x" }),
       JSON.stringify({ authorization: { key: "x" } }),
       JSON.stringify({ note: "Bearer " + "a".repeat(32) }),
-      JSON.stringify({ note: "sk-ohmy-" + "a".repeat(48) }),
+      JSON.stringify({ note: "sk-" + "x".repeat(48) }),
       JSON.stringify({ nested: { privateKeyPem: "x" } }),
     ]) {
       expect(() => store.enqueueOutbox(outbox({ payloadJson: payload }))).toThrow(P2pError);
@@ -227,7 +227,7 @@ describe("database hygiene", () => {
     store.enqueueOutbox(outbox({ type: "authorization_delivery", idempotency: "f".repeat(32), payloadJson: JSON.stringify({ approvalId: "5".repeat(32) }) }));
     store.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     const bytes = readFileSync(join(dir, "p2p.sqlite")).toString("latin1");
-    for (const marker of ["sk-ohmy-", "BEGIN PRIVATE KEY", "mnemonic", "seedPhrase"]) {
+    for (const marker of ["fixture-gateway-0001-", "BEGIN PRIVATE KEY", "mnemonic", "seedPhrase"]) {
       expect(bytes.includes(marker)).toBe(false);
     }
     expect(bytes).toContain("authorization_delivery");

@@ -1368,7 +1368,9 @@ export class P2pNode {
       for (const field of ["journal", "keys"]) {
         if (!evidence.checked.includes(field)) return "noSideEffect evidence did not read " + field;
       }
-      if (approval.keyId && evidence.nativeKeyIds?.includes(approval.keyId)) return "noSideEffect contradicts the native key list";
+      // [] is valid and meaningful; an omitted list is not evidence.
+      if (!Array.isArray(evidence.nativeKeyIds)) return "noSideEffect needs an explicit nativeKeyIds array";
+      if (approval.keyId && evidence.nativeKeyIds.includes(approval.keyId)) return "noSideEffect contradicts the native key list";
     }
     try {
       assertNoSecretMaterial(evidence, "reconcile evidence");
@@ -1476,9 +1478,9 @@ export class P2pNode {
     await this.serial(async () => {
       const approval = this.store.getApproval(approvalId);
       if (!approval) fail("not_found", "no such approval");
-      // A revoked row with a durable enforcement record is done. A revoked row
-      // without one (old data) is re-confirmed so the gate cannot dead-end.
-      if (approval.state === "revoked" && approval.enforcedAt) return;
+      // A revoked row is done only with valid durable enforcement. A legacy
+      // revoked row without it is re-confirmed through the port (never assumed).
+      if (this.revokeEnforced(approval)) return;
       let outcome: P2pRevokeOutcome | null | undefined;
       try {
         outcome = await this.port.revoke({
@@ -1804,15 +1806,33 @@ export class P2pNode {
    * Any approval for this consumer node from a different (historic) identity
    * whose native key is not confirmed revoked blocks new approvals/deliveries.
    */
+  /**
+   * The single durable "the native key was confirmed gone" predicate used by
+   * both revoke idempotence and the historic-identity gate. A legacy revoked
+   * row with missing/mismatched enforcement evidence is NOT resolved.
+   */
+  private revokeEnforced(approval: P2pApprovalRow): boolean {
+    if (approval.state !== "revoked") return false;
+    if (approval.enforcement !== "keyRevoked" && approval.enforcement !== "secretRotated") return false;
+    if (!approval.keyId || approval.enforcedKeyId !== approval.keyId) return false;
+    if (!approval.enforcedAt) return false;
+    const at = Date.parse(approval.enforcedAt);
+    if (!Number.isFinite(at)) return false;
+    const now = this.clock().getTime();
+    if (at - now > 2 * 60_000) return false;
+    const created = Date.parse(approval.createdAt);
+    if (Number.isFinite(created) && at < created - 2 * 60_000) return false;
+    return true;
+  }
+
   private unresolvedLegacyIdentity(nodeId: string, currentFingerprint: string): P2pApprovalRow | null {
     for (const approval of this.store.listApprovals(nodeId)) {
       if (approval.consumerFingerprint === currentFingerprint) continue;
       if (approval.state === "rejected" && !approval.keyId) continue;
       if (approval.state === "expired" && !approval.keyId) continue;
-      // Positive typed enforcement is recorded durably (enforced_at/method/key);
-      // state=revoked is only reachable after that check, and the TTL-purged
-      // tombstone must not re-open the gate.
-      if (approval.state === "revoked") continue;
+      // Only a revoked row with a valid durable enforcement record is resolved.
+      // A legacy revoked row without method/key/time evidence stays unresolved.
+      if (this.revokeEnforced(approval)) continue;
       return approval;
     }
     return null;
@@ -1827,14 +1847,22 @@ export class P2pNode {
     );
   }
 
-  /** Same identity, another request: an unconfirmed key blocks a new key too. */
+  /** Whether this approval still represents a key whose end state is unknown. */
+  private approvalNeedsReconcile(approval: P2pApprovalRow): boolean {
+    if (approval.state === "approving" || approval.state === "uncertain") return true;
+    if (approval.state === "revoked") return !this.revokeEnforced(approval);
+    if (approval.state === "rejected" || approval.state === "expired") return Boolean(approval.keyId);
+    return false; // an active delivered key is a legitimate other request
+  }
+
+  /** Same identity, another request: an unresolved key blocks a new key too. */
   private assertNoOtherUnresolvedApproval(nodeId: string, requestHash: string): void {
     for (const approval of this.store.listApprovals(nodeId)) {
       if (approval.requestHash === requestHash) continue;
-      if (approval.state === "approving" || approval.state === "uncertain") {
+      if (this.approvalNeedsReconcile(approval)) {
         fail(
           "conflict",
-          `another approval for this consumer (${approval.approvalId}) has an unconfirmed key; reconcile or revoke it first`,
+          `another approval for this consumer (${approval.approvalId}, ${approval.state}) has an unconfirmed key; reconcile or revoke it first`,
         );
       }
     }
