@@ -18,6 +18,8 @@ import { P2pPaymentStore } from "../src/p2p-payment-store.ts";
 import {
   PaymentProtocolError,
   paymentErrorCode,
+  validateSelection,
+  validateTerms,
   type PaymentPeer,
   type PaymentSelection,
   type P2pAuthenticatedPaymentContext,
@@ -26,6 +28,7 @@ import {
   type PaymentSigner,
 } from "../src/p2p-payment-protocol.ts";
 import { randomUUID } from "node:crypto";
+import { getAddress } from "ethers";
 
 const RECIPIENT = "0x3d80c477021e3fa568e91c73baec8e806518d9a6";
 const CONTRACT = "0x5fbdb2315678afecb367f032d93f642f64180aa3";
@@ -77,7 +80,7 @@ class MemoryPort implements P2pPaymentMessagePort {
     if (!target?.handler) return { code: "transport", detail: null };
     if (to.nodeId !== target.local.nodeId || to.fingerprint !== target.local.fingerprint) return { code: "peer-mismatch", detail: null };
     const ctx: P2pAuthenticatedPaymentContext = {
-      type: "payment_message", messageId: randomUUID(), idempotency: input.idempotency, correlation: input.correlation,
+      type: "payment_message", messageId: randomUUID().replace(/-/g, ""), idempotency: input.idempotency, correlation: input.correlation,
       from: this.local, to: target.local, sessionId: "test-session", catalogQuoteHash: this.quoteHash,
       receivedAt: new Date(clock).toISOString(), body: input.body,
     };
@@ -253,6 +256,25 @@ describe("P2P payment terms and signature", () => {
     const after = f.provider.status(firstInvoice)!;
     expect(after.signature).not.toBeNull();
     expect(f.store.obligation(requestId)!.status).toBe("waitingpayment");
+  });
+
+  test("a checksummed EIP-712 document hashes and validates like its lowercase form", async () => {
+    const f = await paidFixture();
+    const terms = structuredClone(f.obligation.terms);
+    (terms.typedData.message as Record<string, unknown>).recipient = getAddress(terms.recipientAddress);
+    (terms.typedData.message as Record<string, unknown>).tokenContract = getAddress(terms.asset.contractAddress);
+    (terms.intent as unknown as Record<string, unknown>).recipientAddress = getAddress(terms.recipientAddress);
+    (terms.intent as unknown as Record<string, unknown>).tokenContract = getAddress(terms.asset.contractAddress);
+    expect(() => validateTerms(terms)).not.toThrow();
+  });
+
+  test("checksummed addresses from the wallet/registry are accepted and normalized", () => {
+    const checksummed = "0xF91D6aDC07a240B8663f965C17eEbb5C5e3436b9";
+    const normalized = validateSelection(selection({
+      asset: { assetId: `eip155:97:${checksummed.toLowerCase()}`, contractAddress: checksummed, decimals: 6 },
+    }));
+    expect(normalized.asset.contractAddress).toBe(checksummed.toLowerCase());
+    expect(normalized.asset.assetId).toBe(`eip155:97:${checksummed.toLowerCase()}`);
   });
 
   test("a fresh request id for the same payment adopts the one open invoice instead of minting another", async () => {

@@ -66,6 +66,19 @@ function request(
   } as RequestInit);
 }
 
+describe("control HTTP host policy", () => {
+  test("the mapped Host becomes accepted after sharing creates the export", async () => {
+    const { node } = fakeNode();
+    const mapped = `10.66.9.9:${PORT}`;
+    let hosts: string[] = [HOST];
+    const { h } = handler(node, { allowedHosts: () => hosts });
+    expect((await h.handle(request("/p2p/v1/health"))).status).toBe(200);
+    expect((await h.handle(request("/p2p/v1/health", { headers: { host: mapped } }))).status).toBe(403);
+    hosts = [HOST, mapped];
+    expect((await h.handle(request("/p2p/v1/health", { headers: { host: mapped } }))).status).toBe(200);
+  });
+});
+
 describe("control HTTP surface", () => {
   test("health is the only unauthenticated read and carries no identity or secret", async () => {
     const { node } = fakeNode();

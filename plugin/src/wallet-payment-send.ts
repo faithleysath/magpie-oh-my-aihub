@@ -30,6 +30,7 @@ const MAX_PREVIEWS_PER_SESSION = 4;
 const HEX32 = /^0x[0-9a-f]{64}$/;
 const ADDRESS = /^0x[0-9a-f]{40}$/;
 const SELECTOR = "0xa9059cbb";
+const BALANCE_OF_SELECTOR = "0x70a08231";
 
 interface LocalContext {
   sessionId: string;
@@ -181,7 +182,7 @@ export class WalletPaymentSender {
         data: `${SELECTOR}${b.recipientAddress.slice(2).padStart(64, "0")}${BigInt(b.amountRaw).toString(16).padStart(64, "0")}`,
       }]);
       nativeHex = await client.call<string>("eth_getBalance", [b.consumerAddress, "latest"]);
-      const data = `${SELECTOR}${b.consumerAddress.slice(2).padStart(64, "0")}`;
+      const data = `${BALANCE_OF_SELECTOR}${b.consumerAddress.slice(2).padStart(64, "0")}`;
       tokenHex = await client.call<string>("eth_call", [{ to: b.contractAddress, data }, "latest"]);
       block = await client.call<unknown>("eth_getBlockByNumber", ["latest", false]);
       tipHex = await client.call<string>("eth_maxPriorityFeePerGas", []).catch(() => null);
@@ -271,7 +272,7 @@ export class WalletPaymentSender {
     if (required > BigInt(record.preview.maxFeePerGas)) throw new WalletSendError("fee-changed", "the required fee is above the previewed ceiling; preview again");
     const nativeHex = await client.call<string>("eth_getBalance", [b.consumerAddress, "latest"]);
     if (quantity(nativeHex, "eth_getBalance") < BigInt(record.preview.maxGasCostWei)) throw new WalletSendError("insufficient", "the wallet no longer has the previewed gas balance");
-    const data = `${SELECTOR}${b.consumerAddress.slice(2).padStart(64, "0")}`;
+    const data = `${BALANCE_OF_SELECTOR}${b.consumerAddress.slice(2).padStart(64, "0")}`;
     const tokenHex = await client.call<string>("eth_call", [{ to: b.contractAddress, data }, "latest"]);
     if (quantity(tokenHex, "token balanceOf") < BigInt(b.amountRaw)) throw new WalletSendError("insufficient", "the wallet no longer holds the exact token amount");
 

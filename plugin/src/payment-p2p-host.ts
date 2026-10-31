@@ -31,6 +31,7 @@ import { PAYMENT_PRODUCT_CHAIN_IDS, PAYMENT_SIMULATION_CHAIN_IDS, paymentFail } 
 import { setPaymentObligationResolver, type TrustedObligationResolver } from "./payment-local-service.ts";
 import { WalletPaymentSender, WalletSendError, type WalletSendPreview } from "./wallet-payment-send.ts";
 import { walletLocalService } from "./wallet-local-service.ts";
+import { ConsoleInputError } from "./console-server.ts";
 import type { ConsoleActionContext } from "./console-server.ts";
 import { isMainnetChainId } from "./mainnet-gate.ts";
 
@@ -181,10 +182,15 @@ function createNodePaymentPort(app: ControlApp): P2pPaymentMessagePort & { stop(
   return {
     onPaymentMessage(next) { handler = next; },
     async sendPaymentMessage(to, input) {
+      app.watchPeer(to.nodeId);
       // Open the authenticated control session first; the B outbox only sends
       // due frames on a live session, so a closed poll session must not strand
       // a payment request/status.
-      await app.ensureSession(to.nodeId);
+      // Open a fresh authenticated session when the peer publishes a catalogue
+      // endpoint. A control-only consumer has no catalogue entry; the B outbox
+      // is still the delivery path (its authenticated poll pulls these frames),
+      // so a discovery failure must not drop the terms/status.
+      try { await app.ensureSession(to.nodeId, { force: true }); } catch { /* pull-only peer */ }
       return app.node.sendPaymentMessage(to, input);
     },
     stop() { /* the node owns the hook lifetime */ },
@@ -304,6 +310,11 @@ export class PaymentP2pHost {
     const host = new PaymentP2pHost(service, app, node, wallet, store, provider, consumer, coordinator, sender, port);
     setPaymentObligationResolver(service, consumer.obligationResolver() as TrustedObligationResolver);
     coordinator.start();
+    // A host restart loses the in-memory poll set. Rebuild it from the durable
+    // obligations/invoices so a pending terms/status frame is pulled without
+    // requiring a new user send.
+    for (const obligation of consumer.pendingObligations()) app.watchPeer(obligation.provider.nodeId);
+    for (const request of provider.activeRequests()) app.watchPeer(request.selection.consumerId);
     host.startObservationTick();
     logger.info(`payment-p2p host started for node ${node.nodeId} (provider assets ${assets.length}, networks ${allowedNetworks.join(",") || "none"})`);
     return host;
@@ -649,9 +660,13 @@ export async function paymentP2pAction(
         return reject("unsupported payment action");
     }
   } catch (error) {
-    if (error instanceof PaymentP2pError) throw error;
-    if (error instanceof WalletSendError) throw new PaymentP2pError(error.code, error.message);
+    // Known payment refusals must reach the browser as a stable message, not a
+    // generic 500; an unknown internal failure is logged and still fails closed.
+    if (error instanceof ConsoleInputError) throw error;
+    if (error instanceof PaymentP2pError) throw new ConsoleInputError(error.message, error.code, 400);
+    if (error instanceof WalletSendError) throw new ConsoleInputError(error.message, error.code, 400);
     const message = String((error as Error)?.message ?? error);
-    throw new PaymentP2pError("operation-failed", message.slice(0, 300));
+    logger.warn(`payment action ${name} failed: ${message.slice(0, 500)}`);
+    throw new ConsoleInputError(message.slice(0, 300), "payment-failed", 500);
   }
 }

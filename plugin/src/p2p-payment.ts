@@ -9,6 +9,7 @@
 // remains the only send gate; the Watcher/Ledger remain the only credit authority.
 
 import { randomUUID } from "node:crypto";
+import { logger } from "./log.ts";
 import type { Wallet } from "./wallet.ts";
 import type { DepositIntent } from "./deposits.ts";
 import { type PaymentBinding, erc20TransferCalldataHash } from "./payment-operations.ts";
@@ -797,7 +798,11 @@ export class P2pPaymentCoordinator {
       if (to.nodeId !== this.options.node.nodeId || to.fingerprint !== this.options.node.fingerprint) {
         paymentFail("peer-mismatch", "payment message is not addressed to this node");
       }
-      if (typeof ctx.messageId !== "string" || !UUID.test(ctx.messageId) || typeof ctx.idempotency !== "string" || !ctx.idempotency || ctx.idempotency.length > 200) {
+      // The B envelope id is 32 lowercase hex, not a UUID. The synthetic port in
+      // the first C unit used a UUID; accept both real wire ids and the test id,
+      // but nothing else.
+      const messageIdOk = typeof ctx.messageId === "string" && (UUID.test(ctx.messageId) || /^[0-9a-f]{32}$/.test(ctx.messageId));
+      if (!messageIdOk || typeof ctx.idempotency !== "string" || !ctx.idempotency || ctx.idempotency.length > 200) {
         paymentFail("invalid", "payment envelope id/idempotency is invalid");
       }
       if (typeof ctx.sessionId !== "string" || !ctx.sessionId || ctx.sessionId.length > 256) paymentFail("invalid", "payment session is invalid");
@@ -851,6 +856,8 @@ export class P2pPaymentCoordinator {
       });
       return { code, detail };
     } catch (error) {
+      if (error instanceof PaymentProtocolError) logger.warn(`payment frame rejected (${error.code}): ${error.message}`);
+      else logger.warn(`payment frame failed: ${String((error as Error)?.message ?? error).slice(0, 300)}`);
       return { code: paymentErrorCode(error), detail: error instanceof PaymentProtocolError ? error.detail : null };
     }
   }

@@ -35,7 +35,7 @@ export type PaymentFrameKind = (typeof PAYMENT_FRAME_KINDS)[number];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const INVOICE = /^inv_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const ADDRESS = /^0x[0-9a-f]{40}$/;
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HEX32 = /^0x[0-9a-f]{64}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const UINT = /^(?:0|[1-9][0-9]{0,77})$/;
@@ -372,7 +372,21 @@ export function validateTerms(raw: unknown): PaymentTerms {
   if (intent.providerId !== provider.providerId) paymentFail("terms-mismatch", "provider id mismatch");
   const consumerId = nodeId(value.consumerId, "terms.consumerId");
   if (intent.consumerId !== consumerId) paymentFail("terms-mismatch", "consumer id mismatch");
-  const typedData = plain(value.typedData, "terms.typedData") as unknown as TypedData;
+  const rawTypedData = plain(value.typedData, "terms.typedData") as unknown as TypedData;
+  // EIP-712 addresses are 20-byte values: a checksummed spelling and a lowercase
+  // spelling hash identically. The wallet normally returns checksummed values
+  // while the terms normalize; compare normalized fields, not strings.
+  const rawMessage = plain(rawTypedData.message, "terms.typedData.message");
+  const rawDomain = plain(rawTypedData.domain, "terms.typedData.domain");
+  const typedData = {
+    ...rawTypedData,
+    domain: { ...rawDomain, verifyingContract: address(rawDomain.verifyingContract, "terms.typedData.domain.verifyingContract") },
+    message: {
+      ...rawMessage,
+      tokenContract: address(rawMessage.tokenContract, "terms.typedData.message.tokenContract"),
+      recipient: address(rawMessage.recipient, "terms.typedData.message.recipient"),
+    },
+  } as unknown as TypedData;
   const digest = text(value.digest, "terms.digest", 66).toLowerCase();
   if (!HEX32.test(digest)) paymentFail("invalid", "terms.digest must be 32-byte hex");
   const expected: TypedData = {

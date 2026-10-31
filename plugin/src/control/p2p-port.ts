@@ -580,9 +580,13 @@ export function controlAuthorizationForConsumer(
   now: Date = new Date(),
 ): ControlConsumerAuthorization | null {
   const at = now.getTime();
+  // `expiresAt` is the one-time key-delivery window, not the lifetime of the
+  // consumer relationship. A delivered/acked approval remains the provider's
+  // accepted generation and quote until it is revoked; a payment request that
+  // arrives after the delivery window must still bind that same authorization.
+  // Revocation changes the state, which is checked here.
   const rows = loadApprovals(file)
     .approvals.filter((a) => a.consumerNodeId === consumerNodeId && a.state === "approved")
-    .filter((a) => Number.isFinite(Date.parse(a.expiresAt)) && Date.parse(a.expiresAt) > at)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const row = rows[0];
   if (!row) return null;

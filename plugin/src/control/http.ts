@@ -85,8 +85,8 @@ export const DEFAULT_CONTROL_LIMITS: Readonly<ControlLimits> = Object.freeze({
 
 export interface ControlHttpOptions {
   node: ControlNode;
-  /** Exact Host header values, including the port. Never a substring match. */
-  allowedHosts: readonly string[];
+  /** Exact Host header values, including the port. Never a substring match. A function lets a topology change add the newly exported mapped host without a second listener. */
+  allowedHosts: readonly string[] | (() => readonly string[]);
   /** The truth about the socket; the diagnostic must not claim more. */
   listener: ControlListenerKind;
   limits?: Partial<ControlLimits>;
@@ -435,7 +435,10 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
   const limits: ControlLimits = { ...DEFAULT_CONTROL_LIMITS, ...(options.limits ?? {}) };
   const now = options.now ?? (() => Date.now());
   const buckets = new TokenBuckets(now);
-  const allowedHosts = options.allowedHosts.map((h) => h.trim()).filter(Boolean);
+  const allowedHosts = (): string[] => {
+    const values = typeof options.allowedHosts === "function" ? options.allowedHosts() : options.allowedHosts;
+    return values.map((h) => h.trim()).filter(Boolean);
+  };
   let active = 0;
   const activePerPeer = new Map<string, number>();
 
@@ -459,7 +462,7 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
     async handle(req: Request, peer = "unknown"): Promise<Response> {
       // Host is checked before anything expensive; it is not authentication, it
       // only stops DNS-rebinding/absolute-URL confusion.
-      if (!controlHostAllowed(req.headers.get("host"), allowedHosts)) return errorResponse(403, "forbidden");
+      if (!controlHostAllowed(req.headers.get("host"), allowedHosts())) return errorResponse(403, "forbidden");
       if (browserOrigin(req)) return errorResponse(403, "forbidden");
 
       // Global rate limit first, so unknown routes cannot be used as an oracle
@@ -600,7 +603,8 @@ export function startControlServer(options: ControlServerOptions): ControlServer
   if (listener === "loopback-only" && !loopback) {
     throw new Error("a non-loopback control listener cannot be reported as loopback-only");
   }
-  if (!options.allowedHosts.length) throw new Error("control listener needs at least one exact allowed Host value");
+  const initialHosts = typeof options.allowedHosts === "function" ? options.allowedHosts() : options.allowedHosts;
+  if (!initialHosts.length) throw new Error("control listener needs at least one exact allowed Host value");
   const handler = createControlHandler({ ...options, listener });
   let bound = options.port;
   const server = Bun.serve({

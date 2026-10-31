@@ -570,9 +570,11 @@ function renderState(value) {
   $("nav-network").disabled = false;
   providers.render(value);
   wallet.render(value);
-  walletVault.render(value);
-  walletNetwork.render(value);
-  paymentP2p.render(value);
+  // One panel failing to render must not starve the others (for example a
+  // read-only network projection error must not leave the payment panel empty).
+  for (const [name, panel] of [["walletVault", walletVault], ["walletNetwork", walletNetwork], ["paymentP2p", paymentP2p]]) {
+    try { panel.render(value); } catch (error) { console.error(`console panel ${name} failed to render`, error); }
+  }
   connection("控制台已连接", "good");
   updated();
   if (!busy) notice();

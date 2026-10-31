@@ -9,6 +9,7 @@ import { Service } from "../src/service.ts";
 import { FakeMagpie, LAB_MODEL, LAB_PRICE } from "./support/fake-magpie.ts";
 import { ControlServiceRefusal } from "../src/control/service-port.ts";
 import {
+  controlAuthorizationForConsumer,
   controlRemotes,
   createP2pBusinessPort,
   lookupControlApproval,
@@ -989,5 +990,24 @@ describe("enforced revoke port", () => {
     expect(result && result.enforcement).toBe("safetyUncertain");
     expect(svc.provisioner.find("dave")!.revokedAt).toBeNull();
     expect(magpie.keyById(approved.keyId)).toBeDefined();
+  });
+});
+
+describe("payment authorization lifetime", () => {
+  test("a delivered approval's key-delivery expiry does not revoke the payment authorization", () => {
+    const file = join(process.cwd(), "expired-approvals.json");
+    const now = new Date("2026-10-31T12:00:00Z");
+    const record = {
+      approvalId: "a".repeat(32), requestHash: "b".repeat(64), generation: 3,
+      consumerNodeId: "consumer-1", consumerFingerprint: "c".repeat(64), models: ["lab/model"],
+      capUsd: 0.05, quoteHash: "d".repeat(64), priceVersion: "e".repeat(64),
+      expiresAt: "2026-10-31T11:50:00.000Z", keyId: "key-1", keyName: "name-1", memo: null,
+      state: "approved", error: null, createdAt: "2026-10-31T11:40:00.000Z", updatedAt: "2026-10-31T11:40:00.000Z",
+    };
+    writeFileSync(file, JSON.stringify({ version: 1, approvals: [record] }));
+    expect(controlAuthorizationForConsumer("consumer-1", file, now)).toMatchObject({ generation: 3, quoteHash: "d".repeat(64), priceVersion: "e".repeat(64) });
+    const revoked = { ...record, state: "revoked" };
+    writeFileSync(file, JSON.stringify({ version: 1, approvals: [revoked] }));
+    expect(controlAuthorizationForConsumer("consumer-1", file, now)).toBeNull();
   });
 });
