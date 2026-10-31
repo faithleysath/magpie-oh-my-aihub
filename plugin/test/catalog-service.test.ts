@@ -679,6 +679,39 @@ describe("peer discovery", () => {
   });
 });
 
+describe("a migrated catalogue port stays discoverable", () => {
+  test("a remembered port that no longer answers falls back to the bounded range", async () => {
+    const idB = identity();
+    const docFor = (port: number) =>
+      JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3", { catalogPort: port }));
+    let livePort = 3427;
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({
+      discovery: true,
+      extra: {
+        catalogHttpGet: async ({ host, port }) => {
+          if (host !== "10.66.1.3") return { status: 404, body: "" };
+          return port === livePort ? { status: 200, body: docFor(port) } : { status: 404, body: "" };
+        },
+      },
+    });
+    let peers = await s.refreshCatalog();
+    const first = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(first.status).toBe("unverified");
+    expect(first.catalogPort).toBe(3427);
+
+    // The provider migrated its catalogue to 3428. The remembered 3427 keeps
+    // answering 404; discovery must not be stuck on it forever.
+    livePort = 3428;
+    peers = await s.refreshCatalog();
+    const moved = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(moved.catalogPort).toBe(3428);
+    expect(moved.catalog).toBe("published");
+    expect(moved.quoteFresh).toBe(true);
+  });
+});
+
 describe("a withdrawn or expired catalogue is never an offer", () => {
   test("stopping the export keeps the neighbour but withdraws the quote and blocks request/connect", async () => {
     const idB = identity();

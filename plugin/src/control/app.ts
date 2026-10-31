@@ -647,7 +647,13 @@ export class ControlApp {
     const cfg = this.service.config();
     if (!cfg) throw new Error("configure this node first");
     let lastDetail = "no presence answer";
-    for (const port of [basePort, basePort + 1, basePort + 2, basePort + 3, basePort + 4].filter((p) => p <= 65535)) {
+    // Same bounded compatibility window as the catalogue read, widened by two
+    // lower ports: two isolated lab nodes share one host and cannot bind the
+    // same port, and a node's presence port is its own configured catalogue
+    // port. Every candidate is one HTTP GET; no port sweep.
+    const candidates = [basePort, ...[1, 2, 3, 4].map((d) => basePort + d), basePort - 1, basePort - 2]
+      .filter((p) => p >= 1 && p <= 65535);
+    for (const port of [...new Set(candidates)]) {
       let res: { status: number; body: string };
       try {
         res = await this.presenceHttpGet({

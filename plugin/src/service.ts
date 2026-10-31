@@ -3086,9 +3086,14 @@ export class Service {
     // The default port is 3426. A host that runs several isolated lab instances
     // (or an operator who changed the port) may publish on the next few; probe a
     // small bounded range only until one answers, then remember that port.
+    // A remembered port is tried first, but it is not the only possibility: a
+    // provider whose catalogue port was migrated must not become undiscoverable
+    // forever. The fallback is the same bounded range as a first read.
+    const probeRange = [cfg.catalog.port, cfg.catalog.port + 1, cfg.catalog.port + 2, cfg.catalog.port + 3, cfg.catalog.port + 4]
+      .filter((p) => p >= 1 && p <= 65535);
     const candidates = base.catalogPort
-      ? [base.catalogPort]
-      : [cfg.catalog.port, cfg.catalog.port + 1, cfg.catalog.port + 2, cfg.catalog.port + 3, cfg.catalog.port + 4].filter((p) => p <= 65535);
+      ? [base.catalogPort, ...probeRange.filter((p) => p !== base.catalogPort)]
+      : probeRange;
     let lastDetail = "no catalogue answer";
     let lastPort = candidates[0];
     for (const port of candidates) {
