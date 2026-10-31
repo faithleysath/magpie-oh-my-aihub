@@ -260,6 +260,13 @@ async function handle(req: Request, svc: Service, token: string, port: number): 
 
     switch (path) {
       case "/configure": {
+        const requestedModels = (body as { shareModels?: unknown }).shareModels;
+        if (Array.isArray(requestedModels) && requestedModels.some((m) => typeof m === "string" && m.includes("*"))) {
+          return json(
+            { error: "a wildcard shareModels is refused; choose exact native models with reviewed prices (`share models --confirm-exact` after reviewing)" },
+            400,
+          );
+        }
         const input = configureInput(body);
         if (typeof input === "string") return json({ error: input }, 400);
         return json(await svc.configure(input));
@@ -275,11 +282,14 @@ async function handle(req: Request, svc: Service, token: string, port: number): 
         return json(await svc.setConsuming(enabled));
       }
       case "/share/models": {
-        const { models } = body;
+        const { models, confirmExact } = body as { models?: unknown; confirmExact?: unknown };
         if (!Array.isArray(models) || models.some((m) => typeof m !== "string")) {
           return json({ error: "models must be an array of strings" }, 400);
         }
-        return json(await svc.setShareModels(models));
+        if (confirmExact !== undefined && typeof confirmExact !== "boolean") {
+          return json({ error: "confirmExact must be a boolean" }, 400);
+        }
+        return json(await svc.setShareModels(models as string[], { confirmExact: confirmExact === true, strict: true }));
       }
       case "/catalog/publish": {
         const { enabled } = body as { enabled?: unknown };
