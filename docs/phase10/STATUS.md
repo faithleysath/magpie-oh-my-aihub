@@ -22,7 +22,7 @@
 | next integration（28+23+35） | `feature/phase10-integration-next` @ `162d599`（worktree `/tmp/oma-phase10-integration-next`；28 + 23 + 35 + BIP39 fixture 窄修；**与 cc0 证据分开**） |
 | A-lab（22+33+34+32+36+37） | `feature/phase10-a-integration-lab` @ `1c14ec4`（实验已收口，无活动环境；协议 PASS / F1F2 UX NO-GO） |
 | A-share-fix（37 fa20+46） | `feature/phase10-a-share-fix-lab` @ `58645bb`（worktree `/tmp/oma-phase10-a-share-fix-lab`；从 1c14 建；controls 修） |
-| C-wallet-lab（23+38+21+41+39） | `feature/phase10-c-wallet-lab` @ `5dff451`（worktree `/tmp/oma-phase10-c-wallet-lab`；39 UI 已接；43 待 rebase；**隔离**） |
+| C-wallet-lab | `feature/phase10-c-wallet-lab` @ `5863baf`（worktree `/tmp/oma-phase10-c-wallet-lab`；39 UI + 43 rebase；**隔离**） |
 | 盘点工作树 | `/Users/laysath/Projects/magpie-oh-my-aihub-import` |
 | 纯 main 只读工作树 | `/tmp/oma-phase10-main-8ce5c57`（detached @ `8ce5c57`） |
 | 目标运行版本（已决定） | **Magpie 0.1.2289 + EasyTier 2.6.4**；隔离副本，不改用户安装 |
@@ -64,7 +64,7 @@
 | A-ui | `/tmp/oma-phase10-integration`（集成） | `ccb08749-badc-4512-9604-e93ce7bd76b9` | PR #25 `b1a4838d` base `8ce5c57` → `f6c329e` | DONE（UI 单元集成） | 六项独立 PASS；73 console/0；console-security+api 36/0；typecheck；旧 `cbce700` 阻断留历史 | 非 Visual GO；ProviderView 无 models 字段→模型计数分支不可达（未知非虚报）；真实 host 746de60 五文件同 hash，但 b1a4838 干净安装/真实 join/share UNKNOWN |
 | A-lab | `1c14ec4`（环境已清理） | A-service 系列 | 22 `56d05f7` + 33 `e5b364d` + 34 `b1946b8` + 32 `f9c75bb` + 36 `0efc0ea` + 37 `40b829f` | DONE（实验收口） | 协议 PASS；三字段 join/目录/ACL/401/200/429/migration/evidence gen3；8 PID/9 ports free/root 删除 | **F1/F2 分享 UX FAIL → A 总 UX NO-GO**；synthetic Remote 非 B/ZeroFile；同机 loopback 非 WAN |
 | A-share-fix | `/tmp/oma-phase10-a-share-fix-lab` | A-ui + 46 | 37 `fa20a02` + 46 `4fecc920` → `58645bb` | DONE（controls） | typecheck；providers+shell 50/0；secret；diff 仅 37 docs/注释 + 46 controls；clean | 待 f63b+6a 最小真实 2-node share/stop；非 Visual GO |
-| C-wallet-lab | `/tmp/oma-phase10-c-wallet-lab` | C 系列 | 38 `635bf4` + 21 `d96ac56` + 41 `59d73bf` + 39 `23c9480` → `5dff451` | DONE（wallet UI 后端） | wallet-ui 19/0；app/shell 13/0；local/security/api 51/0；typecheck/pack/secret；clean | 43 不能无旧39 base 应用，待 rebase；44 未接；无资金 |
+| C-wallet-lab | `/tmp/oma-phase10-c-wallet-lab` | C 系列 | 38 `635bf4` + 21 `d96ac56` + 41 `59d73bf` + 39 `23c9480` + 43 `012c486` + fixture fix → `5863baf` | DONE（wallet UI lab） | walletUI 19/0；networkUI 11/0；local/network/auth 59/0；typecheck/pack/secret；gitleaks 0；clean | 44 已批准未接；真实资金/主网 UI 未验；无 send |
 | B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | PR #26 `eccb1440` | DONE（仅 20 技术依赖） | 独立最终 PASS；主审批准仅作 20 技术依赖 | **不是整个 B/默认产品 GO**；旧 cdee/4304/d2d 历史 |
 | B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #20 `93be01d` | BLOCKED | unknown used + half state fix 复审；旧 9f adopt 已过，不当前 | 旧 7c/f779/715 历史；未集成 |
 | C-wallet | `/tmp/oma-phase10-integration-next`（核心集成） | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | PR #23 `8fdc3cdf` → `7b46bd4` | DONE（wallet core） | 独立 PASS；已接 next；56 wallet/0 | **wallet usability 未验**；UI/真实资金 NO-GO |
@@ -104,9 +104,9 @@
 | 41 | `59d73bf` | DONE（C-wallet-lab） | 接 21 d96 后；console-network 12/0；receiver/read-only 窄动作 | 未接 UI 43；真实只读 RPC/UI 未验 |
 | 42 | `9cd74b3` | REVIEW | 首次 TOFU/selected preview 适配在做；后端 presence+pull | mock 截图不算 ZeroFile GO；未集成 |
 | 35 | `fdb4383` | DONE（next 集成） | 源 fdb → next `162d599`；payment 40/0；external 52/0；typecheck/pack/secret；gitleaks 0 | 未接 A-lab/C-lab UI；真实发送 default off |
-| 39 | `23c94804` | DONE（C-wallet-lab） | 已接 C-lab `5dff451`；U9/first-poll/late5/public locked PASS | 未接 A-lab；无资金 |
-| 44 | `a50e0688` | DONE（批准，待接） | local 11/0 + port 2/0 + 112 PASS；仅 local paymentService | 先 39+43 配对；未接；无真实链 |
-| 43 | `afdca78` | BLOCKED | delta 依赖旧 39 base 的 `wallet-network-ui.js` | 待实现者显式 rebase 到新 39 23c9480；不重放旧 39 |
+| 39 | `23c94804` | DONE（C-wallet-lab） | 已接 `5863baf`；U9/first-poll/late5/public locked PASS | 未接 A-lab；无资金 |
+| 44 | `a50e0688` | DONE（批准，待接） | local 11/0 + port 2/0 + 112 PASS；仅 local paymentService | 39+43 已配对；仍未接；无真实链/P2P resolver |
+| 43 | `012c4868` | DONE（C-wallet-lab） | 显式 rebase 到 23c9480；7 network files +553/−3 与旧 afdca78 delta 等价；networkUI 11/0；console auth PASS | 旧 afdca78 archive；未接 A-lab |
 | 45 | `f39975c8` | DONE（B assembly base） | 独立代码 98/0、F1-F6 PASS；含 40 修复增量 | 非 P2P/ET GO；B 自行组合，不混 A/C-lab |
 | 46 | `4fecc920` | DONE（A-share-fix） | 已接 `58645bb`；fixture 10/10；providers/shell 50/0 | 待真实 2-node share/stop 复验 |
 | 31 | `ac7bfd0`+`659d8b3` | DONE（测试） | 已集成；service 41/0 | — |
@@ -262,7 +262,7 @@
 | 2026-10-31 | C23 gitleaks false positives | `plugin/test/wallet-vault.test.ts:47/363`：public BIP-39 runtime-derived variable assignments；不扩路径 allowlist；feedback 实现者运行时构造/精确语义识别 | PR #23 | 2 findings；非真 secret；不影响 wallet core PASS，但扫描未清零 |
 | 2026-10-31 | 23 兼容修 | 加 ethers 后 @types/node 降至 22，preview Response Buffer 类型不兼容；改 `Uint8Array`，无行为变化 | `plugin/scripts/console-preview.ts` | 集成兼容修；非产品行为 |
 | 2026-10-31 | A-lab E2E 收口 | 1c14ec4 协议 PASS：双 join/目录/ACL/401-401-200/原生429/forward 13425→13426/restart/evidence gen3；8 PID/9 ports free/root 删；F1/F2 share UX fail；synthetic non-B | `docs/phase10/evidence/2026-10-31-a-lab-1c14ec4-e2e.md` + `a-lab-1c14ec4/` | 同机 loopback；A 总 UX NO-GO；无活动环境 |
-| 2026-10-31 | C-wallet-lab 后端集成 | 38 `635bf418` + 21 `d96ac561` + 41 `59d73bf` → `cd91dfd`；console-network 12/0；C-registry 54/0；local/security/api 51/0；typecheck/pack/secret | `feature/phase10-c-wallet-lab` | 隔离；未接 43/39 UI；无主网 send |
+| 2026-10-31 | C-wallet-lab UI 集成 | 38 `635bf4` + 21 `d96ac56` + 41 `59d73bf` + 39 `23c9480` + 43 `012c486` + fixture fix → `5863baf`；walletUI 19/0；networkUI 11/0；local/network/auth 59/0；typecheck/pack/secret/gitleaks0 | `feature/phase10-c-wallet-lab` | 43 rebase 等价；44 未接；无资金 |
 | 2026-10-31 | A-lab 成套联调 | 源 22 `56d05f7`、33 `e5b364d`、34 `b1946b8`、32 `f9c75bb`、36 `0efc0ea`、37 `40b829f` → `1c14ec4`；typecheck；phase10 91/0；console 88/0；pack/secret PASS；state 三处冲突保留 forwardPending+keyGeneration/acceptedFingerprint/modelsEvidence | `feature/phase10-a-integration-lab` | 隔离联调；非真实 E2E/非产品 GO |
 | 2026-10-31 | C30 隔离模块集成 | 行为 `90c32f8c`；PR head `ae596c3` 仅 docs 2 行 → `6440876`；external 52/0；console 73/0；security/api 36/0；typecheck；default send off | PR #30 / integration | 非 WalletGO；未接 Service journal/UI；资金 NO-GO |
 | 2026-10-31 | Windows 子集集成 | PR #24 `ed60ce19` → `6440876`；workflow explicit 22 files，MIN 380 未放宽；typecheck；platform/loopback 48/0 | PR #24 / integration | 非 Windows 产品支持；真实 Windows job 未在本机重跑 |
