@@ -349,6 +349,26 @@ function peer(host: string, ip: string): Peer {
   return { ipv4: ip, hostname: host, cost: "p2p", latencyMs: "1.2", loss: "0.0%", tunnel: "tcp", nat: "PortRestricted", id: "2" };
 }
 
+describe("catalogue request pricing", () => {
+  test("a peer quote without a complete static price cannot become a request", async () => {
+    const idB = identity();
+    const unpriced = { ...model("alpha/b"), pricing: null };
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [unpriced], "10.77.0.3")));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    await s.refreshCatalog();
+    const first = s.peersInDirectory().find((p) => p.nodeId === "bbbbbbbb")!;
+    await s.trustCatalogPeer("bbbbbbbb", first.identity!.fingerprint);
+    await s.refreshCatalog();
+    const trusted = s.peersInDirectory().find((p) => p.nodeId === "bbbbbbbb")!;
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, {
+      fingerprint: trusted.identity!.fingerprint,
+      quoteHash: trusted.quoteHash!,
+    })).toThrow(/static price|unpriced/);
+  });
+});
+
 describe("catalogue publication", () => {
   test("publishes only native models in the allow list, with prices and no secrets", async () => {
     sup.peerRows = [selfPeer()];
@@ -381,6 +401,19 @@ describe("catalogue publication", () => {
     expect(text).not.toContain("peer-b");
     expect(sup.cfg!.publishedPorts).toContain(3426);
     expect(sup.cfg!.publishedPorts.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a tier-level dynamic marker is not published as a priced model", async () => {
+    const dynamic = meta("alpha/a", true);
+    dynamic.price = {
+      input: 1, output: 2, cache_read: 0.1, cache_write: 0.2,
+      tiers: [{ above: 100, input: 1, output: 2, cache_read: 0.1, cache_write: 0.2, peak: "deepseek" }],
+    } as never;
+    magpie.metas = [dynamic];
+    sup.peerRows = [selfPeer()];
+    const s = await service();
+    const model = s.localCatalog()!.models.find((m) => m.id === "alpha/a")!;
+    expect(model.pricing).toBeNull();
   });
 
   test("unpublishing stops the listener and removes the Forward port", async () => {

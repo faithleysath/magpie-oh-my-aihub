@@ -37,6 +37,25 @@ describe("unsupported dynamic price forms", () => {
     const tier = { above: 100_000, ...P, peak: "deepseek" };
     expect(normalizePrice({ ...P, tiers: [tier] })).toBeNull();
     expect(unsupportedPriceReason(tier)).toBe("peak");
+    expect(unsupportedPriceReason({ ...P, tiers: [tier] })).toBe("peak");
+  });
+
+  test("tier-level peak and rateWindows are refused by the canonical price version", () => {
+    const tierPeak = { above: 100, ...P, peak: "deepseek" };
+    const tierWindow = { above: 100, ...P, rateWindows: [{ start: "09:00", end: "12:00", rate: 2 }] };
+    expect(catalogPriceVersion([{ id: "a/m", pricing: { ...PRICE, tiers: [tierPeak] } }])).toBeNull();
+    expect(catalogPriceVersion([{ id: "a/m", pricing: { ...PRICE, tiers: [tierWindow] } }])).toBeNull();
+    expect(unsupportedPriceReason({ ...P, tiers: [tierWindow] })).toBe("rate-window");
+  });
+
+  test("the tier walk is finite and rejects an over-limit or cyclic-looking shape", () => {
+    const many = Array.from({ length: 11 }, (_, i) => ({ above: (i + 1) * 1000, ...P }));
+    expect(unsupportedPriceReason({ ...P, tiers: many })).toBe("tier-limit");
+    expect(normalizePrice({ ...P, tiers: many })).toBeNull();
+    const cyclic: Record<string, unknown> = { ...P, tiers: [] };
+    (cyclic.tiers as unknown[]).push(cyclic);
+    expect(() => normalizePrice(cyclic)).not.toThrow();
+    expect(normalizePrice(cyclic)).toBeNull();
   });
 
   test("a snapshot and a catalogue price version cannot be built from a peak price", () => {
@@ -77,6 +96,19 @@ describe("Magpie catalogue marks dynamic prices unsupported", () => {
     expect(meta.priceUnsupported).toBe("rate-window");
   });
 
+  test("tier-level peak and rateWindows survive raw magpie_price into catalogModels", async () => {
+    const tierPeak = { above: 100, ...P, peak: "deepseek" };
+    const tierWindow = { above: 100, ...P, rateWindows: [{ start: "09:00", end: "12:00", rate: 2 }] };
+    const [peak] = await metas({ ...P, tiers: [tierPeak] }, [{ id: "lab" }]);
+    const [window] = await metas({ ...P, tiers: [tierWindow] }, [{ id: "lab" }]);
+    expect(peak.price).toBeNull();
+    expect(peak.priceUnsupported).toBe("peak");
+    expect(window.price).toBeNull();
+    expect(window.priceUnsupported).toBe("rate-window");
+    expect(priceSnapshot([peak], ["lab/m"])).toBeNull();
+    expect(priceSnapshot([window], ["lab/m"])).toBeNull();
+  });
+
   test("a settings fallback on a known 0.1.2289 peak vendor is refused too", async () => {
     const m = new Magpie("/does/not/exist/magpie");
     (m as unknown as { modelIds: () => Promise<string[]> }).modelIds = async () => ["deepseek/deepseek-chat"];
@@ -86,6 +118,21 @@ describe("Magpie catalogue marks dynamic prices unsupported", () => {
     });
     (m as unknown as { providers: () => unknown[] }).providers = () => [
       { id: "deepseek", chat: "https://api.deepseek.com/v1" },
+    ];
+    const [meta] = await m.catalogModels();
+    expect(meta.price).toBeNull();
+    expect(meta.priceUnsupported).toBe("peak");
+  });
+
+  test("a trailing-dot host is normalized only for the known-vendor fallback", async () => {
+    const m = new Magpie("/does/not/exist/magpie");
+    (m as unknown as { modelIds: () => Promise<string[]> }).modelIds = async () => ["custom/deepseek-chat"];
+    (m as unknown as { localModelList: () => Promise<Record<string, unknown>[]> }).localModelList = async () => [];
+    (m as unknown as { settings: () => Record<string, unknown> }).settings = () => ({
+      modelPrices: { "custom/deepseek-chat": P },
+    });
+    (m as unknown as { providers: () => unknown[] }).providers = () => [
+      { id: "custom", chat: "https://api.deepseek.com./v1" },
     ];
     const [meta] = await m.catalogModels();
     expect(meta.price).toBeNull();

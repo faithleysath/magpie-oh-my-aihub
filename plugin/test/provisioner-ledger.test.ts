@@ -336,6 +336,19 @@ describe("ledger-backed issuance", () => {
     await expect(p.reissue("nina-peak")).rejects.toThrow(/complete effective price/);
   });
 
+  test("a tier-level peak pauses, blocks top-up and blocks reissue", async () => {
+    const v = await p.ensure("nina-tier", { models: [MODEL], capUsd: 1 });
+    fake.setPrice({ ...BASE, tiers: [{ above: 1000, ...BASE, peak: "deepseek" }] } as never);
+    const paused = await p.status("nina-tier");
+    expect(paused.paused?.reason).toBe("unpriced");
+    expect(paused.paused?.enforced).toBe(true);
+    expect(fake.keys.has(v.keyId)).toBe(false);
+    const topped = await p.topUp("nina-tier", 1, "tier-dep");
+    expect(topped.paused?.reason).toBe("unpriced");
+    expect(fake.keys.size).toBe(0);
+    await expect(p.reissue("nina-tier")).rejects.toThrow(/complete effective price/);
+  });
+
   test("a key deleted outside the plugin pauses instead of looking usable", async () => {
     const v = await p.ensure("peter", { models: [MODEL], capUsd: 1 });
     await fake.removeKey(v.keyId);

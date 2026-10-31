@@ -99,7 +99,9 @@ function knownPeakVendor(p: ProviderRecord | undefined): boolean {
     } catch {
       continue;
     }
-    const host = url.hostname.toLowerCase();
+    // A trailing dot is the same DNS host but not the same string upstream's
+    // HostOf() compares. Strip it so the settings fallback stays conservative.
+    const host = url.hostname.toLowerCase().replace(/\.$/, "");
     if (host === "api.deepseek.com" || host === "api.commandcode.ai") return true;
     if (host === "opencode.ai" || host.endsWith(".opencode.ai")) {
       if (/\/go(?:\/|$)/.test(url.pathname)) return true;
