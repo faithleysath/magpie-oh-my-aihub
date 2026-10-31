@@ -119,7 +119,10 @@ describe("resolveMagpieBin — no silent fallback to another installation", () =
     ).toThrow(/cannot be resolved/);
   });
 
-  test("a relative parent path is resolved against the parent's own cwd", () => {
+  // On win32 the resolver's host path module is win32, so a POSIX parent path
+  // cannot be simulated; the real win32 discovery is fail-closed and is probed
+  // by scripts/platform-report.ts. Reported as a platform gap, not a pass.
+  test.skipIf(process.platform === "win32")("a relative parent path is resolved against the parent's own cwd", () => {
     const exists = (p: string) => p === "/Users/x/p3/provider/Magpie.app/Contents/MacOS/magpie";
     const path = resolveMagpieBin({
       platform: "darwin",

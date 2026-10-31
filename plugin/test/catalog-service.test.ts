@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Service, type Probes } from "../src/service.ts";
+import { CATALOG_QUOTE_TTL_MS, Service, type Probes } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta, ProviderRecord } from "../src/magpie.ts";
 import { loadCatalogTrust, loadOrCreateCatalogIdentity, signCatalog, verifySignedCatalog, type CatalogIdentity, type CatalogModel, type CatalogQuoteBody, type SignedCatalog } from "../src/catalog.ts";
@@ -11,6 +11,7 @@ import { getProviderKey } from "../src/state.ts";
 import { priceSnapshot, catalogPriceVersion } from "../src/pricing.ts";
 import { consoleAction } from "../src/console-api.ts";
 import { ConsoleWorkflows } from "../src/console-workflows.ts";
+import { fakePortOwnership } from "./support/fake-ports.ts";
 
 // Service-level catalogue tests: a fake Magpie, a fake supervisor, a fake
 // read-only HTTP server and an in-memory peer. No overlay, no real Magpie and
@@ -113,10 +114,15 @@ class FakeSupervisor {
   routeRows: RouteRow[] = [];
   peerRows: Peer[] = [];
   starts = 0;
+  /** a core the supervisor stopped because it could not prove it safe */
+  haltedError: string | null = null;
+  failStart = false;
 
   async start(cfg: EasytierConfig): Promise<SupervisorState> {
-    this.cfg = { ...cfg, portForwards: cfg.portForwards.map((f) => ({ ...f })) };
     this.starts += 1;
+    if (this.failStart) throw new Error("simulated start failure");
+    this.cfg = { ...cfg, portForwards: cfg.portForwards.map((f) => ({ ...f })) };
+    this.haltedError = null;
     this.forwards = cfg.portForwards.map((f: ForwardSpec) => ({ protocol: "tcp", bindAddr: f.bindAddr, dstAddr: f.dstAddr }));
     return this.snapshot();
   }
@@ -133,11 +139,11 @@ class FakeSupervisor {
       sharingEnabled: cfg?.sharingEnabled ?? false,
       consumingEnabled: cfg?.consumingEnabled ?? false,
       hostname: cfg ? `ohmyaihub-${cfg.nodeId}` : null,
-      running: Boolean(cfg),
+      running: Boolean(cfg) && this.haltedError === null,
       pid: cfg ? 4242 : null,
       startedAt: cfg ? "2026-10-30T00:00:00.000Z" : null,
       restarts: 0,
-      lastError: null,
+      lastError: this.haltedError,
       coreVersion: "2.6.4-fake",
       rpcPort: cfg?.rpcPort ?? null,
       networkName: cfg?.networkName ?? null,
@@ -183,6 +189,8 @@ interface FakeServer {
   started: number;
   stopped: number;
   doc: SignedCatalog | null;
+  presence: (() => unknown | null) | null;
+  document: () => SignedCatalog | null;
   stop: () => void;
 }
 
@@ -308,7 +316,15 @@ function probes(extra: Partial<Probes> = {}): Partial<Probes> {
     },
     catalogServer: (opts) => {
       serverStarts += 1;
-      fakeServer = { port: opts.port, started: 1, stopped: 0, doc: null, stop: () => { fakeServer!.stopped += 1; } };
+      fakeServer = {
+        port: opts.port,
+        started: 1,
+        stopped: 0,
+        doc: null,
+        presence: opts.presence ?? null,
+        document: opts.document,
+        stop: () => { fakeServer!.stopped += 1; },
+      };
       const handle = {
         port: opts.port,
         stop: () => fakeServer?.stop(),
@@ -319,11 +335,12 @@ function probes(extra: Partial<Probes> = {}): Partial<Probes> {
   };
 }
 
-async function service(opts: { catalog?: boolean; discovery?: boolean; sharing?: boolean; consuming?: boolean; extra?: Partial<Probes> } = {}): Promise<Service> {
+async function service(opts: { catalog?: boolean; discovery?: boolean; sharing?: boolean; consuming?: boolean; extra?: Partial<Probes>; now?: () => Date } = {}): Promise<Service> {
   const s = new Service({
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
+    ports: { ownership: fakePortOwnership(), ...(opts.now ? { now: opts.now } : {}) },
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 200,
     probes: probes(opts.extra),
@@ -334,6 +351,10 @@ async function service(opts: { catalog?: boolean; discovery?: boolean; sharing?:
     consumingEnabled: opts.consuming ?? true,
     networkName: "catalog-lab",
     networkSecret: "catalog-lab-secret",
+    // Pinned away from the 10.77.0.3/10.77.0.4 peer fixtures: a random local
+    // address colliding with a peer would classify that peer as "self" and is a
+    // 1/254 test flake (seen on one Windows run), not a product condition.
+    virtualIpv4: "10.77.0.99/24",
     catalogEnabled: opts.catalog ?? true,
     catalogDiscovery: opts.discovery ?? false,
     catalogPort: 3426,
@@ -348,6 +369,26 @@ function selfPeer(): Peer {
 function peer(host: string, ip: string): Peer {
   return { ipv4: ip, hostname: host, cost: "p2p", latencyMs: "1.2", loss: "0.0%", tunnel: "tcp", nat: "PortRestricted", id: "2" };
 }
+
+describe("catalogue request pricing", () => {
+  test("a peer quote without a complete static price cannot become a request", async () => {
+    const idB = identity();
+    const unpriced = { ...model("alpha/b"), pricing: null };
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [unpriced], "10.77.0.3")));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    await s.refreshCatalog();
+    const first = s.peersInDirectory().find((p) => p.nodeId === "bbbbbbbb")!;
+    await s.trustCatalogPeer("bbbbbbbb", first.identity!.fingerprint);
+    await s.refreshCatalog();
+    const trusted = s.peersInDirectory().find((p) => p.nodeId === "bbbbbbbb")!;
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, {
+      fingerprint: trusted.identity!.fingerprint,
+      quoteHash: trusted.quoteHash!,
+    })).toThrow(/static price|unpriced/);
+  });
+});
 
 describe("catalogue publication", () => {
   test("publishes only native models in the allow list, with prices and no secrets", async () => {
@@ -381,6 +422,19 @@ describe("catalogue publication", () => {
     expect(text).not.toContain("peer-b");
     expect(sup.cfg!.publishedPorts).toContain(3426);
     expect(sup.cfg!.publishedPorts.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a tier-level dynamic marker is not published as a priced model", async () => {
+    const dynamic = meta("alpha/a", true);
+    dynamic.price = {
+      input: 1, output: 2, cache_read: 0.1, cache_write: 0.2,
+      tiers: [{ above: 100, input: 1, output: 2, cache_read: 0.1, cache_write: 0.2, peak: "deepseek" }],
+    } as never;
+    magpie.metas = [dynamic];
+    sup.peerRows = [selfPeer()];
+    const s = await service();
+    const model = s.localCatalog()!.models.find((m) => m.id === "alpha/a")!;
+    expect(model.pricing).toBeNull();
   });
 
   test("unpublishing stops the listener and removes the Forward port", async () => {
@@ -626,6 +680,242 @@ describe("peer discovery", () => {
     expect(peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!.status).toBe("conflict");
     expect(peers.find((p) => p.hostname === "ohmyaihub-cccccccc")!.status).toBe("conflict");
     expect(probed).toHaveLength(0);
+  });
+});
+
+describe("a signed presence can withdraw the display catalogue", () => {
+  test("the quote is cleared at once, not only after the TTL", async () => {
+    const idB = identity();
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3")));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    let peers = await s.refreshCatalog();
+    const before = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    await s.trustCatalogPeer("bbbbbbbb", before.identity!.fingerprint);
+    peers = await s.refreshCatalog();
+    const published = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(published.quote).not.toBeNull();
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, { fingerprint: published.identity!.fingerprint, quoteHash: published.quoteHash! })).not.toThrow();
+
+    // The presence node id may be unknown to a fresh consumer (no catalogue
+    // read yet); the overlay hostname is the fallback selector.
+    s.markCatalogWithdrawn("ffffffff", undefined, "ohmyaihub-bbbbbbbb");
+    const withdrawn = s.peersInDirectory().find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(withdrawn.quote).toBeNull();
+    expect(withdrawn.quoteHash).toBeNull();
+    expect(withdrawn.catalog).toBe("withdrawn");
+    expect(withdrawn.status).toBe("no-catalog");
+    expect(withdrawn.lastQuoteAt).toBe(published.fetchedAt);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, { fingerprint: published.identity!.fingerprint, quoteHash: published.quoteHash! })).toThrow(/withdrawn/);
+
+    // A real catalogue read restores the offer (the provider shared again).
+    peers = await s.refreshCatalog();
+    const restored = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(restored.catalog).toBe("published");
+    expect(restored.quoteFresh).toBe(true);
+  });
+});
+
+describe("a migrated catalogue port stays discoverable", () => {
+  test("a remembered port that no longer answers falls back to the bounded range", async () => {
+    const idB = identity();
+    const docFor = (port: number) =>
+      JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3", { catalogPort: port }));
+    let livePort = 3427;
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({
+      discovery: true,
+      extra: {
+        catalogHttpGet: async ({ host, port }) => {
+          if (host !== "10.66.1.3") return { status: 404, body: "" };
+          return port === livePort ? { status: 200, body: docFor(port) } : { status: 404, body: "" };
+        },
+      },
+    });
+    let peers = await s.refreshCatalog();
+    const first = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(first.status).toBe("unverified");
+    expect(first.catalogPort).toBe(3427);
+
+    // The provider migrated its catalogue to 3428. The remembered 3427 keeps
+    // answering 404; discovery must not be stuck on it forever.
+    livePort = 3428;
+    peers = await s.refreshCatalog();
+    const moved = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(moved.catalogPort).toBe(3428);
+    expect(moved.catalog).toBe("published");
+    expect(moved.quoteFresh).toBe(true);
+  });
+});
+
+describe("a withdrawn or expired catalogue is never an offer", () => {
+  test("stopping the export keeps the neighbour but withdraws the quote and blocks request/connect", async () => {
+    const idB = identity();
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3")));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true });
+    let peers = await s.refreshCatalog();
+    const first = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    await s.trustCatalogPeer("bbbbbbbb", first.identity!.fingerprint);
+    peers = await s.refreshCatalog();
+    const published = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    const accepted = { fingerprint: published.identity!.fingerprint, quoteHash: published.quoteHash! };
+    expect(published.status).toBe("verified");
+    expect(published.catalog).toBe("published");
+    expect(published.quoteFresh).toBe(true);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, accepted)).not.toThrow();
+
+    // The provider stops sharing: its EasyTier peer row stays, its exported
+    // mapped address disappears. The neighbour is online, the catalogue is not.
+    sup.routeRows = sup.routeRows.filter((r) => r.hostname !== "ohmyaihub-bbbbbbbb");
+    peers = await s.refreshCatalog();
+    const withdrawn = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(withdrawn.online).toBe(true);
+    expect(withdrawn.status).toBe("no-catalog");
+    expect(withdrawn.catalog).toBe("withdrawn");
+    expect(withdrawn.quote).toBeNull();
+    expect(withdrawn.quoteHash).toBeNull();
+    expect(withdrawn.quoteFresh).toBe(false);
+    expect(withdrawn.fetchedAt).toBeNull();
+    // The identity stays as last-known metadata, never as a current offer.
+    expect(withdrawn.identity!.fingerprint).toBe(idB.summary.fingerprint);
+    expect(withdrawn.lastQuoteAt).toBe(published.fetchedAt);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, accepted)).toThrow(/withdrawn/);
+    await expect(s.catalogConnect("bbbbbbbb", "sk-test-provider-0001", { acceptance: accepted })).rejects.toThrow(/withdrawn/);
+
+    // It republishes: the same accepted identity is read again and the offer
+    // returns without a second explicit trust step.
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    peers = await s.refreshCatalog();
+    const back = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(back.catalog).toBe("published");
+    expect(back.status).toBe("verified");
+    expect(back.quoteFresh).toBe(true);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, accepted)).not.toThrow();
+  });
+
+  test("an expired quote is last-known only and a failed probe does not renew it", async () => {
+    let nowMs = Date.parse("2026-10-31T00:00:00.000Z");
+    const idB = identity();
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3")));
+    sup.peerRows = [selfPeer(), peer("ohmyaihub-bbbbbbbb", "10.77.0.3")];
+    sup.route("10.66.1.3", "ohmyaihub-bbbbbbbb", "10.77.0.3");
+    const s = await service({ discovery: true, now: () => new Date(nowMs) });
+    let peers = await s.refreshCatalog();
+    const first = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    await s.trustCatalogPeer("bbbbbbbb", first.identity!.fingerprint);
+    peers = await s.refreshCatalog();
+    const fresh = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    const accepted = { fingerprint: fresh.identity!.fingerprint, quoteHash: fresh.quoteHash! };
+    expect(fresh.quoteFresh).toBe(true);
+
+    // The peer stops answering but stays in the peer list: the quote is kept
+    // for display only and its window is not renewed by the failed probe.
+    nowMs += CATALOG_QUOTE_TTL_MS + 1_000;
+    fetchMap.delete("10.66.1.3");
+    peers = await s.refreshCatalog();
+    const expired = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(expired.status).toBe("stale");
+    expect(expired.quote).not.toBeNull();
+    expect(expired.quoteFresh).toBe(false);
+    expect(expired.fetchedAt).toBe(fresh.fetchedAt);
+    expect(expired.lastAttemptAt).not.toBe(fresh.fetchedAt);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, accepted)).toThrow(/expired/);
+    await expect(s.catalogConnect("bbbbbbbb", "sk-test-provider-0001", { acceptance: accepted })).rejects.toThrow(/expired/);
+
+    // A real re-read renews the window.
+    fetchMap.set("10.66.1.3", JSON.stringify(quote("bbbbbbbb", idB, "10.66.1.3/32", [model("alpha/b")], "10.77.0.3", { version: 2 })));
+    peers = await s.refreshCatalog();
+    const renewed = peers.find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
+    expect(renewed.quoteFresh).toBe(true);
+    expect(() => s.catalogRequest("bbbbbbbb", undefined, { fingerprint: renewed.identity!.fingerprint, quoteHash: renewed.quoteHash! })).not.toThrow();
+  });
+});
+
+describe("a core stopped by a failed safety check is degraded and recoverable", () => {
+  test("a bounded supervised restart re-proves the core and clears the failure", async () => {
+    const s = await service({});
+    expect(s.supervisor.snapshot().running).toBe(true);
+    sup.haltedError = "refusing to serve: the RPC portal on port 27999 is held by pid nobody";
+    expect(s.consoleSnapshot().network.core.running).toBe(false);
+    expect(s.consoleSnapshot().network.core.lastError).toMatch(/refusing to serve/);
+    await s.recoverCoreIfHalted();
+    expect(sup.starts).toBe(2);
+    expect(s.consoleSnapshot().network.core.running).toBe(true);
+    expect(s.consoleSnapshot().network.core.lastError).toBeNull();
+  });
+
+  test("the recovery budget is bounded, backs off and never hides the failure", async () => {
+    let nowMs = Date.parse("2026-10-31T00:00:00.000Z");
+    const s = await service({ now: () => new Date(nowMs) });
+    sup.haltedError = "refusing to serve: simulated unproven core";
+    sup.failStart = true;
+    const before = sup.starts;
+    for (let i = 0; i < 6; i += 1) {
+      nowMs += 61_000;
+      await s.recoverCoreIfHalted();
+    }
+    // Three attempts, then the state stays honestly degraded.
+    expect(sup.starts - before).toBe(3);
+    expect(s.consoleSnapshot().network.core.running).toBe(false);
+    expect(s.consoleSnapshot().network.core.lastError).toMatch(/refusing to serve/);
+    // A normal stop is not a safety stop and never triggers a restart.
+    sup.failStart = false;
+    sup.haltedError = null;
+    const after = sup.starts;
+    await s.recoverCoreIfHalted();
+    expect(sup.starts).toBe(after);
+  });
+});
+
+describe("sharing notifies the control plane", () => {
+  test("the one explicit share re-syncs the P2P endpoint publication", async () => {
+    const s = await service({ sharing: false, catalog: false });
+    s.setControlActive(true);
+    await s.ensureControlPort();
+    let synced = 0;
+    s.setTopologyListener(async () => { synced += 1; });
+    await s.shareNativeModels({ models: ["beta/c"], confirm: true });
+    expect(s.config()!.sharingEnabled).toBe(true);
+    expect(synced).toBeGreaterThan(0);
+  });
+});
+
+describe("control-only publication for a node that shares no models", () => {
+  test("exports exactly the presence and control ports, never the gateway", async () => {
+    const s = await service({ sharing: false, catalog: false });
+    s.setControlActive(true);
+    const port = await s.ensureControlPort();
+    expect(port).toBeGreaterThan(0);
+    s.setControlPresence(() => ({ schema: "ohmyaihub.presence/v1", marker: "signed-presence" }));
+    await s.applyControlPublication();
+
+    const cfg = s.config()!;
+    expect(cfg.sharingEnabled).toBe(false);
+    expect(cfg.mappedCidr).not.toBeNull();
+    expect(cfg.proxyCidr).not.toBeNull();
+    const et = sup.cfg!;
+    expect(et.sharingEnabled).toBe(false);
+    expect(et.publishedPorts.sort((a, b) => a - b)).toEqual([cfg.catalog.port, port!].sort((a, b) => a - b));
+    // The gateway port is never forwarded by a control-only node.
+    expect(et.publishedPorts).not.toContain(3425);
+    // The presence listener serves only the signed presence, never a catalogue.
+    expect(fakeServer).not.toBeNull();
+    expect(fakeServer!.document()).toBeNull();
+    expect(fakeServer!.presence?.()).toEqual({ schema: "ohmyaihub.presence/v1", marker: "signed-presence" });
+    // No quote, key or model list is published by this path.
+    expect(s.catalogStatus().quote).toBeNull();
+    expect(JSON.stringify(s.catalogStatus())).not.toContain("sk-");
+
+    // Starting to share replaces the control-only set with the real one.
+    s.setControlActive(false);
+    await s.applyControlPublication();
+    expect(sup.cfg!.publishedPorts).toEqual([]);
+    expect(sup.cfg!.proxyCidr).toBeNull();
+    expect(fakeServer!.stopped).toBeGreaterThan(0);
   });
 });
 

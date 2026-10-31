@@ -224,9 +224,13 @@ function printCatalogPeers(peers: any[]): void {
 const cmd = rest[0];
 // Phase-8 journeys. They are separate modules so the legacy switch below stays
 // small; each journey owns its own file and tests.
-if (cmd === "setup") process.exit(await runSetup(rest.slice(1), dataDir));
-if (cmd === "resume") process.exit(await runSetup(["--resume", ...rest.slice(1)], dataDir));
-if (cmd === "preflight" || cmd === "doctor") process.exit(await runSetup(["--check", ...rest.slice(1)], dataDir));
+// `OH_MY_AIHUB_PREFLIGHT_LAN=none` is for isolated fixtures: it skips the
+// best-effort LAN gateway probe so a test process never opens a socket to a real
+// gateway. It changes a warning only; it never relaxes an enforcement check.
+const preflightDeps = { preflight: { lan: process.env.OH_MY_AIHUB_PREFLIGHT_LAN === "none" ? null : undefined } };
+if (cmd === "setup") process.exit(await runSetup(rest.slice(1), dataDir, undefined, preflightDeps));
+if (cmd === "resume") process.exit(await runSetup(["--resume", ...rest.slice(1)], dataDir, undefined, preflightDeps));
+if (cmd === "preflight" || cmd === "doctor") process.exit(await runSetup(["--check", ...rest.slice(1)], dataDir, undefined, preflightDeps));
 if (cmd === "connect") process.exit(await runConnect(rest.slice(1), dataDir));
 if (cmd === "remote") process.exit(await runRemote(rest.slice(1), dataDir));
 if (
@@ -345,7 +349,12 @@ switch (cmd) {
         const s = await call("GET", "/status");
         console.log((s.config?.share?.models ?? []).join("\n"));
       } else {
-        const s = await call("POST", "/share/models", { models });
+        if (models.some((m) => m.includes("*")) && !has("confirm-exact")) {
+          throw new Error(
+            "a wildcard share policy must be expanded first: rerun with --confirm-exact after reviewing the native model prices",
+          );
+        }
+        const s = await call("POST", "/share/models", { models, confirmExact: has("confirm-exact") });
         console.log(JSON.stringify({ ok: true, shareModels: s.config.share.models }, null, 2));
       }
     } else {

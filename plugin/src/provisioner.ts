@@ -113,6 +113,8 @@ export interface ConsumerRecord {
   ledgerUncertain?: string | null;
   createdAt: string;
   revokedAt: string | null;
+  /** true only for a record reconstructed from an interrupted native key */
+  adoptedFromNative?: boolean;
   lastCheck: {
     at: string;
     usedUsd: number;
@@ -420,7 +422,14 @@ export class Provisioner {
     return { start: new Date(y, m, d).toISOString(), reset: new Date(y, m, d + 1).toISOString() };
   }
 
-  private async seedLedger(rec: ConsumerRecord): Promise<LedgerWindow | null> {
+  private async seedLedger(
+    rec: ConsumerRecord,
+    opts: { requireKnownUsage?: boolean; status?: LimitStatus | null } = {},
+  ): Promise<LedgerWindow | null> {
+    // An adopted native key must never take the legacy "unknown used = 0"
+    // fallback from status/ensure/reissue paths. Route every seed through the
+    // strict repair path instead.
+    if (rec.adoptedFromNative) return this.seedAdoptedLedger(rec, opts.status);
     if (!this.ledger) return null;
     const existing = this.ledger.account(rec.consumerId);
     if (existing) {
@@ -428,11 +437,19 @@ export class Provisioner {
       if (open) return open;
       return null;
     }
-    let status: LimitStatus | null = null;
-    try {
-      status = await this.magpie.limitStatus(rec.secret);
-    } catch {
-      status = null;
+    let status: LimitStatus | null = opts.status !== undefined ? opts.status : null;
+    if (opts.status === undefined) {
+      try {
+        status = await this.magpie.limitStatus(rec.secret);
+      } catch {
+        status = null;
+      }
+    }
+    // Every seed path (new key, status, ensure, reissue, hand-over) must prove
+    // the native used cost before writing an opening credit. A missing/unknown
+    // value is not zero. lastCheck is a display cache, never a seed source.
+    if (!status || typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
+      throw new Error("native used cost is unknown; refusing to seed an opening balance");
     }
     // A price source that cannot be read must not seed a window: an "unpriced"
     // window would make every later charge free. The accounting check turns
@@ -444,7 +461,7 @@ export class Provisioner {
         models: [...rec.models].sort(),
         prices: {},
       };
-    const usedNanos = usdToNanos(status?.limit?.cost ?? rec.lastCheck?.usedUsd ?? 0);
+    const usedNanos = usdToNanos(status.limit.cost);
     const capNanos = usdToNanos(rec.capUsd);
     const bounds = this.windowBounds(rec.window);
     const window = this.ledger.ensureAccount({
@@ -478,6 +495,123 @@ export class Provisioner {
       this.ledger.seedCursor(this.usageLog(), rec.keyId, size);
     } catch {
       /* an unreadable log leaves the offset at 0; the unique ids still guard */
+    }
+    rec.priceVersion = snap.version;
+    this.persist();
+    return window;
+  }
+
+  /**
+   * Strict Ledger seed for a native-key adoption. Unlike the legacy seed path,
+   * this requires a known native used cost and repairs an existing account only
+   * when the one migration adjustment is absent and no other consumption has
+   * been recorded. It never reseeds an already-seeded account and never treats
+   * an unknown/failed read as used=0.
+   */
+  private async seedAdoptedLedger(rec: ConsumerRecord, knownStatus?: LimitStatus | null): Promise<LedgerWindow | null> {
+    if (!this.ledger) return null;
+    const account = this.ledger.account(rec.consumerId);
+    if (account) {
+      if (account.keyId && account.keyId !== rec.keyId) throw new Error("the existing Ledger account belongs to another key");
+      const open = this.ledger.openWindowFor(rec.consumerId);
+      if (!open) throw new Error("the existing Ledger account has no open window; refusing to reopen it");
+      const adjustmentId = `migration:${rec.consumerId}:${open.id}`;
+      if (this.ledger.consumptionAmount(adjustmentId) !== null) {
+        // Already adopted/seeded. Native usage may have grown since; do not
+        // rewrite the historical adjustment or add a second opening. Only
+        // repair a missing usage cursor; never move an existing one.
+        try {
+          const log = this.usageLog();
+          if (this.ledger.cursorFor(log, rec.keyId) === 0 && existsSync(log)) {
+            this.ledger.seedCursor(log, rec.keyId, statSync(log).size);
+          }
+        } catch {
+          /* unique ids still guard a later import */
+        }
+        return open;
+      }
+      if (this.ledger.windowConsumptionCount(open.id) > 0) {
+        throw new Error("the Ledger window has consumption but no adoption adjustment; refusing to guess used cost");
+      }
+      let status = knownStatus;
+      if (status === undefined) {
+        try {
+          status = await this.magpie.limitStatus(rec.secret);
+        } catch {
+          status = null;
+        }
+      }
+      if (!status || typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
+        throw new Error("native used cost is unknown; refusing to repair the adoption ledger");
+      }
+      const usedNanos = usdToNanos(status.limit.cost);
+      if (usedNanos > 0) {
+        this.ledger.recordAdjustment({
+          id: adjustmentId,
+          consumerId: rec.consumerId,
+          windowId: open.id,
+          keyId: rec.keyId,
+          amountNanos: usedNanos,
+          reason: "legacy-consumers.json-used-cost",
+        });
+      }
+      try {
+        const size = existsSync(this.usageLog()) ? statSync(this.usageLog()).size : 0;
+        this.ledger.seedCursor(this.usageLog(), rec.keyId, size);
+      } catch {
+        /* unique ids still guard a later import */
+      }
+      this.persist();
+      return open;
+    }
+
+    let status = knownStatus;
+    if (status === undefined) {
+      try {
+        status = await this.magpie.limitStatus(rec.secret);
+      } catch {
+        status = null;
+      }
+    }
+    if (!status || typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
+      throw new Error("native used cost is unknown; refusing to create an adoption opening credit");
+    }
+    const snap =
+      (await this.snapshotFor(rec.models).catch(() => null)) ?? {
+        version: "unpriced",
+        body: JSON.stringify({ models: [...rec.models].sort(), prices: {} }),
+        models: [...rec.models].sort(),
+        prices: {},
+      };
+    const usedNanos = usdToNanos(status.limit.cost);
+    const capNanos = usdToNanos(rec.capUsd);
+    const bounds = this.windowBounds(rec.window);
+    const window = this.ledger.ensureAccount({
+      consumerId: rec.consumerId,
+      keyId: rec.keyId,
+      keyName: rec.keyName,
+      price: snap,
+      windowSpec: rec.window,
+      startAt: status.limit?.start ?? bounds.start,
+      resetAt: status.limit?.reset ?? bounds.reset,
+      openingNanos: capNanos,
+      capNanos,
+    });
+    if (usedNanos > 0) {
+      this.ledger.recordAdjustment({
+        id: `migration:${rec.consumerId}:${window.id}`,
+        consumerId: rec.consumerId,
+        windowId: window.id,
+        keyId: rec.keyId,
+        amountNanos: usedNanos,
+        reason: "legacy-consumers.json-used-cost",
+      });
+    }
+    try {
+      const size = existsSync(this.usageLog()) ? statSync(this.usageLog()).size : 0;
+      this.ledger.seedCursor(this.usageLog(), rec.keyId, size);
+    } catch {
+      /* unique ids still guard a later import */
     }
     rec.priceVersion = snap.version;
     this.persist();
@@ -1603,6 +1737,311 @@ export class Provisioner {
         logger.info(`revoked gateway key ${rec.keyName} (${rec.keyId})`);
       }
       return view(rec, null, this.ledger);
+    });
+  }
+
+  /**
+   * Read-only native key-management snapshot for reconcileApproval. It returns
+   * only ids/names/models/limit values, never secrets. `target` is the key with
+   * the deterministic consumer name, or the recorded key id when present.
+   */
+  async nativeKeySnapshot(consumerId: string): Promise<{
+    nativeKeyIds: string[];
+    target: { keyId: string; keyName: string; models: string[]; costLimit: number | null } | null;
+  }> {
+    return this.withLock(consumerId, async () => {
+      const keys = this.magpie.keyList();
+      if (keys.length > 100) {
+        throw new Error("Magpie has more than 100 keys; refusing an incomplete reconcile evidence snapshot");
+      }
+      const rec = this.find(consumerId);
+      const named = this.magpie.keyByName(Provisioner.keyName(consumerId));
+      const targetKey = named ?? (rec?.keyId ? this.magpie.keyById(rec.keyId) : undefined);
+      const cost = targetKey?.limit?.cost;
+      return {
+        nativeKeyIds: keys.map((k) => String(k.id)),
+        target: targetKey
+          ? {
+              keyId: String(targetKey.id),
+              keyName: String(targetKey.name),
+              models: Array.isArray(targetKey.models) ? targetKey.models.map(String) : [],
+              costLimit: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
+            }
+          : null,
+      };
+    });
+  }
+
+  /**
+   * Read-only Magpie key-management check for an interrupted approval: does a
+   * key with this consumer's deterministic plugin name exist? A missing local
+   * Provisioner record alone is not proof; this reads Magpie's management store.
+   * The gateway/remote 401 semantics are still a separate, UNKNOWN question.
+   */
+  async nativeConsumerKeyAbsent(consumerId: string): Promise<boolean> {
+    return this.withLock(consumerId, async () => {
+      const named = this.magpie.keyByName(Provisioner.keyName(consumerId));
+      if (named) return false;
+      const rec = this.find(consumerId);
+      if (rec?.keyId && this.magpie.keyById(rec.keyId)) return false;
+      return true;
+    });
+  }
+
+  /**
+   * Reconstructs the local Provisioner record/ledger for a native key that a
+   * previous approval created before the local consumer write. This is an
+   * adoption, not ensure: it never creates, rotates, removes, recaps or rewrites
+   * the native key. It requires the exact native id/name/models/cap and seeds the
+   * ledger through the existing seed path. Failure leaves the key unrecovered
+   * (the caller stays uncertain); it never manufactures a second key.
+   */
+  async adoptControlKey(input: {
+    consumerId: string;
+    keyId: string;
+    keyName: string;
+    models: string[];
+    capUsd: number;
+    quoteHash: string;
+    priceVersion: string;
+  }): Promise<void> {
+    return this.withLock(input.consumerId, async () => {
+      const expectedName = Provisioner.keyName(input.consumerId);
+      if (input.keyName !== expectedName) throw new Error("the native key name does not match this consumer");
+      const existing = this.find(input.consumerId);
+      if (existing) {
+        const existingModelsMatch =
+          existing.models.length === input.models.length && existing.models.every((m) => input.models.includes(m));
+        if (existing.revokedAt || existing.keyId !== input.keyId || existing.keyName !== input.keyName || !existingModelsMatch || Math.abs(existing.capUsd - input.capUsd) > 1e-9) {
+          throw new Error("the local Provisioner record does not match the native adoption binding");
+        }
+        // Crash after the consumer write but before the Ledger seed: finish the
+        // existing seed path. It is a no-op when the account/window already
+        // exists; an unknown native used cost stays unresolved.
+        await this.seedAdoptedLedger(existing);
+        return;
+      }
+      const key = this.magpie.keyByName(expectedName) ?? this.magpie.keyById(input.keyId);
+      if (!key || key.id !== input.keyId || key.name !== expectedName) throw new Error("the native key is not present under the expected id/name");
+      const models = Array.isArray(key.models) ? key.models.map(String) : [];
+      const modelsMatch = models.length === input.models.length && models.every((m) => input.models.includes(m));
+      if (models.length === 0 || !modelsMatch) throw new Error("the native key's model list does not match the approval");
+      let status: LimitStatus;
+      try {
+        status = await this.magpie.limitStatus(key.secret);
+      } catch (e) {
+        throw new Error(`the native key's cap could not be read back: ${String((e as Error)?.message ?? e)}`);
+      }
+      const held = status.limit?.costLimit;
+      if (typeof held !== "number" || Math.abs(held - input.capUsd) > 1e-9) throw new Error("the native key's cap does not match the approval");
+      if (
+        typeof status.limit?.cost !== "number" ||
+        !Number.isFinite(status.limit.cost) ||
+        status.limit.cost < 0 ||
+        Math.abs(Math.round(status.limit.cost * 1e9) / 1e9 - status.limit.cost) > 1e-9
+      ) {
+        throw new Error("native used cost is invalid/unknown; refusing to create an adoption record/opening credit");
+      }
+      if (typeof status.limit?.days === "number" && status.limit.days !== 3650) {
+        throw new Error("the native key window does not match the adoption window");
+      }
+      const rec: ConsumerRecord = {
+        consumerId: input.consumerId,
+        keyName: input.keyName,
+        keyId: input.keyId,
+        secret: key.secret,
+        models: [...models],
+        window: "3650d",
+        capUsd: input.capUsd,
+        creditedUsd: 0,
+        deposits: [],
+        pending: null,
+        paused: null,
+        priceVersion: input.priceVersion,
+        acceptedQuoteHash: input.quoteHash,
+        createdAt: new Date().toISOString(),
+        revokedAt: null,
+        adoptedFromNative: true,
+        lastCheck: null,
+      };
+      this.list.push(rec);
+      try {
+        this.persist();
+      } catch (e) {
+        const idx = this.list.findIndex((c) => c.consumerId === input.consumerId);
+        if (idx >= 0) this.list.splice(idx, 1);
+        throw e;
+      }
+      await this.seedAdoptedLedger(rec, status);
+      logger.info(`adopted native gateway key ${rec.keyName} (${rec.keyId}) for ${input.consumerId} without creating a key`);
+    });
+  }
+
+  /**
+   * Reads the key for a control hand-over under the same per-consumer lock used
+   * by approve/reissue/revoke. The caller has already run the share guard and
+   * status read-back; this method re-checks the exact key generation, the native
+   * key row and the model list, and returns the secret only while holding the
+   * lock. No new secret is written.
+   */
+  async readHandover(consumerId: string, expectedKeyId: string): Promise<{
+    key: string;
+    keyId: string;
+    keyName: string;
+    models: string[];
+    capUsd: number;
+  }> {
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec || rec.revokedAt || !rec.secret || rec.keyId !== expectedKeyId) {
+        throw new Error(`consumer ${consumerId} changed while its key was being prepared; do not hand it over`);
+      }
+      if (!this.magpie.keyById(rec.keyId)) throw new Error(`the key of ${consumerId} is no longer in Magpie; do not hand it over`);
+      const held = this.magpie.keyById(rec.keyId);
+      const models = Array.isArray(held?.models) ? held.models.map(String) : [];
+      if (models.length === 0) throw new Error(`the key of ${consumerId} has no model whitelist in Magpie; refusing to hand it over`);
+      this.validateModels(models);
+      return { key: rec.secret, keyId: rec.keyId, keyName: rec.keyName, models, capUsd: rec.capUsd };
+    });
+  }
+
+  /**
+   * Final lock-held check before a control hand-over: the consumer still owns
+   * exactly the expected key/secret and Magpie still holds that key. It does
+   * not read or persist a new secret; a concurrent reissue after this check
+   * remains a caller-serialization concern, but the key read back for delivery
+   * cannot silently be a different generation that already existed.
+   */
+  async confirmHandover(consumerId: string, expectedKeyId: string, expectedSecret: string): Promise<void> {
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec || rec.revokedAt || rec.keyId !== expectedKeyId || rec.secret !== expectedSecret) {
+        throw new Error(`consumer ${consumerId} changed while its key was being handed over; do not deliver it`);
+      }
+      if (!this.magpie.keyById(rec.keyId)) throw new Error(`the key of ${consumerId} is no longer in Magpie; do not deliver it`);
+    });
+  }
+
+  /**
+   * Revokes a key for the control plane and reports how far the stop actually
+   * went. Resolving with `revoked: true` means the old secret is no longer
+   * accepted (removed, or rotated so the old secret is 401). A minimum cap is
+   * recorded but is never treated as a hard stop. If neither removal nor
+   * rotation works, the record is left active and `revoked: false` is returned;
+   * the caller must surface action-needed and must not send a "revoked" notice.
+   */
+  async revokeEnforced(consumerId: string, expectedKeyId?: string | null): Promise<{
+    revoked: boolean;
+    enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain" | "failed";
+    detail: string | null;
+  }> {
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec) throw new Error(`no consumer ${consumerId}`);
+      if (expectedKeyId && rec.keyId !== expectedKeyId) {
+        return { revoked: false, enforcement: "failed", detail: "the current Provisioner key is not the target approval's key" };
+      }
+      if (rec.revokedAt) return { revoked: true, enforcement: "keyRevoked", detail: null };
+
+      let enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain" | "failed" = "safetyUncertain";
+      let detail: string | null = null;
+      let rotatedSecret: string | null = null;
+      const oldSecret = rec.secret;
+      /**
+       * Only an explicit 401/403 (or a verified missing key plus this) proves
+       * the old secret is refused. ECONNREFUSED/timeout/500/bad JSON is UNKNOWN,
+       * never evidence of invalidity. A loopback gateway may trust its caller,
+       * so even "accepted" is not evidence about a remote caller.
+       */
+      const oldSecretVerdict = async (): Promise<"rejected" | "accepted" | "unknown"> => {
+        if (!oldSecret) return "unknown";
+        try {
+          await this.magpie.limitStatus(oldSecret);
+          return "accepted";
+        } catch (error) {
+          const status = (error as { status?: unknown })?.status;
+          if (status === 401 || status === 403) return "rejected";
+          const message = String((error as Error)?.message ?? error);
+          return /\bHTTP (401|403)\b/.test(message) ? "rejected" : "unknown";
+        }
+      };
+      if (this.magpie.keyById(rec.keyId)) {
+        try {
+          await this.magpie.removeKey(rec.keyId);
+          if (!this.magpie.keyById(rec.keyId)) {
+            const verdict = await oldSecretVerdict();
+            if (verdict === "rejected") enforcement = "keyRevoked";
+            else if (verdict === "accepted") detail = "remove completed but the old secret is still accepted";
+            else detail = "remove completed but the old secret's refusal could not be proven (unknown error)";
+          } else {
+            detail = "remove returned but Magpie still lists the key";
+          }
+        } catch (e) {
+          detail = `remove: ${String((e as Error)?.message ?? e)}`;
+          if (!this.magpie.keyById(rec.keyId) && (await oldSecretVerdict()) === "rejected") {
+            enforcement = "keyRevoked";
+            detail = `${detail}; the key is absent and the old secret is explicitly refused`;
+          }
+        }
+        if (enforcement === "safetyUncertain" && this.magpie.keyById(rec.keyId)) {
+          try {
+            const rotated = await this.magpie.rotateKey(rec.keyId);
+            const verdict = rotated && rotated !== oldSecret ? await oldSecretVerdict() : "unknown";
+            if (rotated && rotated !== oldSecret && verdict === "rejected") {
+              rotatedSecret = rotated;
+              enforcement = "secretRotated";
+            } else if (!rotated) {
+              detail = `${detail ? `${detail}; ` : ""}rotate: no new secret`;
+            } else if (rotated === oldSecret) {
+              detail = `${detail ? `${detail}; ` : ""}rotate returned the same secret`;
+            } else if (verdict === "accepted") {
+              detail = `${detail ? `${detail}; ` : ""}rotate completed but the old secret is still accepted`;
+            } else if (verdict === "unknown") {
+              detail = `${detail ? `${detail}; ` : ""}rotate completed but the old secret's refusal could not be proven`;
+            }
+          } catch (rotateError) {
+            detail = `${detail ? `${detail}; ` : ""}rotate: ${String((rotateError as Error)?.message ?? rotateError)}`;
+          }
+        }
+        if (enforcement === "safetyUncertain") {
+          try {
+            await this.magpie.setCostLimit(rec.keyId, rec.window, 0.0001);
+            const status = await this.magpie.limitStatus(rotatedSecret ?? oldSecret);
+            if (Math.abs((status.limit?.costLimit ?? 0) - 0.0001) < 1e-9) {
+              enforcement = "capRestricted";
+              detail = `${detail ? `${detail}; ` : ""}a $0.0001 cap still admits calls`;
+            }
+          } catch (capError) {
+            detail = `${detail ? `${detail}; ` : ""}cap: ${String((capError as Error)?.message ?? capError)}`;
+          }
+        }
+      } else {
+        const verdict = await oldSecretVerdict();
+        if (verdict === "rejected") enforcement = "keyRevoked";
+        else detail = "the key is absent but the old secret's refusal could not be proven";
+      }
+
+      if (enforcement === "keyRevoked" || enforcement === "secretRotated") {
+        rec.revokedAt = new Date().toISOString();
+        // The old secret is 401. The rotated secret is deliberately not stored:
+        // nobody needs it and it must never be handed out again.
+        rec.secret = "";
+        rec.pending = null;
+        rec.paused = null;
+        if (this.ledger) {
+          const w = this.ledger.openWindowFor(rec.consumerId);
+          if (w) this.ledger.closeWindow(w.id, "revoked");
+          this.ledger.revokeAccount(rec.consumerId, "revoked");
+        }
+        this.persist();
+        logger.info(`revoked gateway key ${rec.keyName} (${rec.keyId}) enforcement=${enforcement}`);
+        return { revoked: true, enforcement, detail };
+      }
+
+      // The old key may still work. Keep the record active so a later explicit
+      // revoke/reissue can retry; do not claim a stop that was not measured.
+      logger.error(`could not enforce revocation of ${rec.keyName} (${rec.keyId}): ${detail ?? "unknown"}`);
+      return { revoked: false, enforcement, detail };
     });
   }
 

@@ -9,6 +9,8 @@
 export interface AclExpectation {
   /** this node publishes its gateway on the overlay */
   sharingEnabled: boolean;
+  /** this node publishes an overlay export; defaults to sharingEnabled */
+  exportEnabled?: boolean;
   /** the gateway ports this node may expose through the Forward chain */
   publishedPorts: number[];
   /** this node's export, or null when it shares nothing */
@@ -133,8 +135,12 @@ export function checkConfig(text: string, expect: AclExpectation): AclCheck {
   }
 
   // --- exports ---------------------------------------------------------------
+  // A control-only node exports an address for its bounded presence/control
+  // ports; it never exports a gateway or a catalogue. The export/Forward checks
+  // therefore follow "does this node export?", not "does it share models?".
+  const exporting = expect.exportEnabled ?? expect.sharingEnabled;
   const proxy = asArray(root.proxy_network);
-  if (expect.sharingEnabled) {
+  if (exporting) {
     if (!expect.proxy) problems.push("the expected export is missing from the plugin's configuration");
     else if (proxy.length !== 1) {
       problems.push(`expected exactly one proxy_network export, found ${proxy.length}`);
@@ -218,12 +224,14 @@ export function checkConfig(text: string, expect: AclExpectation): AclCheck {
       for (const p of ports) allowed.add(p);
     }
   }
-  if (expect.sharingEnabled) {
-    if (forward.length === 0) problems.push("a sharing node needs a Forward chain for its published ports");
+  if (exporting) {
     const want = [...new Set(expect.publishedPorts)].sort((a, b) => a - b);
+    if (want.length > 0 && forward.length === 0) problems.push("an exporting node needs a Forward chain for its published ports");
     const got = [...allowed].sort((a, b) => a - b);
-    if (JSON.stringify(want) !== JSON.stringify(got)) {
+    if (want.length > 0 && JSON.stringify(want) !== JSON.stringify(got)) {
       problems.push(`the Forward chain allows [${got.join(", ")}], expected exactly [${want.join(", ")}]`);
+    } else if (want.length === 0 && got.length > 0) {
+      problems.push(`this node publishes no forwarded port, but the Forward chain allows [${got.join(", ")}]`);
     }
   } else if (allowed.size > 0) {
     problems.push(`a node that is not sharing must not allow any forwarded port, found [${[...allowed].join(", ")}]`);

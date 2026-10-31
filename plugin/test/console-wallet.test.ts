@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ConsoleWallet, consoleWalletState } from "../src/console-wallet.ts";
 import { previewDepositDocument, parseWalletSignature, externalSignatureDocument } from "../src/wallet-workflows.ts";
-import { createLab, ensureConsumer, PROVIDER_ID } from "./support/wallet-lab.ts";
+import { createLab, ensureConsumer, PROVIDER_ID, RECIPIENT } from "./support/wallet-lab.ts";
 import { signDigest, TEST_PAYER } from "./support/signer.ts";
 import { Wallet } from "../src/wallet.ts";
 import { ChainStore } from "../src/chainstore.ts";
@@ -24,22 +24,85 @@ async function setup(){
     for(const c of consumers){const rec=lab.provisioner.find(c.consumerId)!;if(rec.paused||rec.revokedAt)continue;const {limit}=await lab.magpie.limitStatus(rec.secret) as any;readbacks[c.consumerId]={at:new Date().toISOString(),fromGateway:true,capUsd:limit!.costLimit,usedUsd:limit!.cost,leftUsd:limit!.costLeft};}
     return {wallet:lab.statusLocal(),consumers,readbacks,deposits:lab.deposits(),accounting:{state:"ok",reason:null,serving:true}};
   },walletStatement:async()=>null} as unknown as Service;
- const file=join(lab.dir,"operations.json"), adapter=new ConsoleWallet(service,file);
+ const file=join(lab.dir,"operations.json"), adapter=new ConsoleWallet(service,file,lab.nowMs);
  const input={consumerId:"alice",chainId:84532,assetId:lab.assetFor(84532).assetId,amount:"1.000000000000000001",ttlSec:3600};
  return {lab,service,adapter,input,file};
 }
 const id="11111111-1111-4111-8111-111111111111";
+/**
+ * The reviewer's gap: the fixture's read-back evidence was stamped with the
+ * wall clock while the console runs on the fixture clock, so the 60-second
+ * read-back window could only ever see a negative age. These tests hand the
+ * console evidence stamped in *its own* clock, so the window and the intent
+ * expiry boundaries are exercised with controlled timestamps.
+ */
+async function controlled(){
+ const lab=createLab();closers.push(()=>lab.close());await ensureConsumer(lab);
+ // The fixture sets a receiving address for 97 only; this node also receives on 84532.
+ lab.wallet.setReceivingAddress("alice",84532,RECIPIENT);
+ // This node is the consumer "alice": the document preview binds to its own nodeId.
+ const service={config:()=>({nodeId:"alice"}),provisioner:lab.provisioner,ledger:lab.ledger,
+  consoleWalletModule:()=>lab.wallet,walletForConfiguration:()=>lab.wallet,
+  accountingStatus:()=>({uncertain:false,lastCheckAt:null,serving:true,uncertainReason:null}),
+  // Controlled evidence: the measurement instant is the fixture clock, not the wall clock.
+  walletEvidence:async()=>{
+    const consumers=lab.views(),readbacks:Record<string,any>={};
+    for(const c of consumers){const rec=lab.provisioner.find(c.consumerId)!;if(rec.paused||rec.revokedAt)continue;const {limit}=await lab.magpie.limitStatus(rec.secret) as any;
+      readbacks[c.consumerId]={at:lab.clock.at.toISOString(),fromGateway:true,capUsd:limit!.costLimit,usedUsd:limit!.cost,leftUsd:limit!.costLeft};}
+    return {wallet:lab.statusLocal(),consumers,readbacks,deposits:lab.deposits(),accounting:{state:"ok",reason:null,serving:true}};
+  }} as unknown as Service;
+ const file=join(lab.dir,"operations-ttl.json"), adapter=new ConsoleWallet(service,file,lab.nowMs);
+ const input={consumerId:"alice",chainId:84532,assetId:lab.assetFor(84532).assetId,amount:"1",ttlSec:3600};
+ return {lab,service,adapter,input,file};
+}
+
+describe("console expiry boundaries use the injected clock",()=>{
+ test("the read-back window is 60 s of the console clock, not a negative wall-clock age",async()=>{
+  const {lab,adapter}=await controlled();
+  const loaded=await adapter.action("wallet-refresh",{}) as any;
+  expect(loaded.wallet.view.evidence.readbacks).toBe(1);
+  expect(loaded.wallet.view.consumers[0].readback.at).toBe(lab.clock.at.toISOString());
+  lab.advance(60_000);                                   // exactly the window: still trusted
+  expect(adapter.snapshot().view!.evidence.readbacks).toBe(1);
+  lab.advance(1);                                        // one millisecond past it
+  expect(adapter.snapshot().view!.evidence.readbacks).toBe(0);
+ });
+
+ test("preview, signature import and transfer instructions all stop exactly at the TTL",async()=>{
+  const {lab,adapter,input}=await controlled();
+  const {preview}=await adapter.action("wallet-intent-preview",input) as any;
+  const created=await adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash}) as any;
+  const document=created.document;
+  lab.advance(3_600_000-1);                              // 1 ms before expiry
+  const early=await adapter.action("deposit-document-preview",{document}) as any;
+  expect(early.verified).toBe(true);
+  const signed=await adapter.action("wallet-signature-import",{consumerId:"alice",invoiceId:document.invoiceId,
+    document:{schema:"ohmyaihub.deposit-signature/v1",invoiceId:document.invoiceId,payerAddress:TEST_PAYER,signature:signDigest(document.digest)}}) as any;
+  expect(signed.transfer.schema).toBe("ohmyaihub.transfer-instructions/v1");
+  expect((await adapter.action("wallet-intent-document",{consumerId:"alice",invoiceId:document.invoiceId}) as any).transfer).not.toBeNull();
+
+  lab.advance(1);                                        // exactly expiresAt
+  await expect(adapter.action("deposit-document-preview",{document})).rejects.toThrow(/过期/);
+  await expect(adapter.action("wallet-signature-import",{consumerId:"alice",invoiceId:document.invoiceId,
+    document:{schema:"ohmyaihub.deposit-signature/v1",invoiceId:document.invoiceId,payerAddress:TEST_PAYER,signature:signDigest(document.digest)}})).rejects.toThrow(/不匹配/);
+  const late=await adapter.action("wallet-intent-document",{consumerId:"alice",invoiceId:document.invoiceId}) as any;
+  expect(late.transfer).toBeNull();                      // no transfer instructions past the deadline
+  const intent=lab.store.intent(document.invoiceId)!;
+  expect(Date.parse(intent.expiresAt)).toBe(lab.clock.at.getTime());   // the deadline is exactly now
+ });
+});
+
 describe("browser wallet workflows",()=>{
  test("preview/create/document/signature/import use real domain and durable same-invoice replay",async()=>{
   const {lab,service,adapter,input,file}=await setup();
   const {preview}=await adapter.action("wallet-intent-preview",input);expect(preview.amountRaw).toBe("1000000000000000001");
   const body={...input,requestId:id,previewHash:preview.previewHash};
   const created=await adapter.action("wallet-intent-create",body);expect(created.transfer).toBeNull();
-  expect(previewDepositDocument(created.document,"alice").verified).toBe(true);
-  const external=externalSignatureDocument(created.document,signDigest(created.document.digest),TEST_PAYER,"alice");
+  expect(previewDepositDocument(created.document,"alice",new Date(lab.clock.at)).verified).toBe(true);
+  const external=externalSignatureDocument(created.document,signDigest(created.document.digest),TEST_PAYER,"alice",new Date(lab.clock.at));
   expect(external.document.invoiceId).toBe(created.document.invoiceId);expect(external.verified).toBe(true);
-  expect(()=>externalSignatureDocument(created.document,"0x"+"11".repeat(65),TEST_PAYER,"alice")).toThrow();
-  const reopened=new ConsoleWallet(service,file),replay=await reopened.action("wallet-intent-create",body);
+  expect(()=>externalSignatureDocument(created.document,"0x"+"11".repeat(65),TEST_PAYER,"alice",new Date(lab.clock.at))).toThrow();
+  const reopened=new ConsoleWallet(service,file,lab.nowMs),replay=await reopened.action("wallet-intent-create",body);
   expect(replay.document.invoiceId).toBe(created.document.invoiceId);expect(lab.wallet.intents("alice")).toHaveLength(1);
   const signed=await adapter.action("wallet-signature-import",{consumerId:"alice",invoiceId:created.document.invoiceId,document:{schema:"ohmyaihub.deposit-signature/v1",invoiceId:created.document.invoiceId,payerAddress:TEST_PAYER,signature:signDigest(created.document.digest)}});
   expect(signed.transfer.schema).toBe("ohmyaihub.transfer-instructions/v1");expect(signed.transfer.amountRaw).toBe(preview.amountRaw);
@@ -71,10 +134,19 @@ describe("browser wallet workflows",()=>{
   const {preview}=await adapter.action("wallet-intent-preview",input);expect(preview.pending.map((p:any)=>p.invoiceId)).toContain(first.intent.invoiceId);expect(preview.blockers).toHaveLength(1);
   await expect(adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash})).rejects.toThrow(/未完成/);
  });
+ test("the injected clock decides expiry; exactly at the TTL the request is already expired",async()=>{
+  const {adapter,input,lab}=await setup();
+  const {preview}=await adapter.action("wallet-intent-preview",input); // ttlSec 3600
+  const {document}=await adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash});
+  expect(previewDepositDocument(document,"alice",new Date(lab.clock.at)).verified).toBe(true);
+  lab.advance(3_600_000); // exactly the requested TTL, not one millisecond more
+  expect(()=>previewDepositDocument(document,"alice",new Date(lab.clock.at))).toThrow(/过期/);
+  await expect(adapter.action("wallet-signature-import",{consumerId:"alice",invoiceId:document.invoiceId,document:{schema:"ohmyaihub.deposit-signature/v1",invoiceId:document.invoiceId,payerAddress:TEST_PAYER,signature:signDigest(document.digest)}})).rejects.toThrow(/失效/);
+ });
  test("import rejects tampered human-visible amount, wrong consumer and private-key fields",async()=>{
-  const {adapter,input}=await setup();const {preview}=await adapter.action("wallet-intent-preview",input);const {document}=await adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash});
-  expect(()=>previewDepositDocument({...document,amount:{tokens:"2",raw:"2"}},"alice")).toThrow();
-  expect(()=>previewDepositDocument(document,"other-consumer")).toThrow();
+  const {adapter,input,lab}=await setup();const {preview}=await adapter.action("wallet-intent-preview",input);const {document}=await adapter.action("wallet-intent-create",{...input,requestId:id,previewHash:preview.previewHash});
+  expect(()=>previewDepositDocument({...document,amount:{tokens:"2",raw:"2"}},"alice",new Date(lab.clock.at))).toThrow();
+  expect(()=>previewDepositDocument(document,"other-consumer",new Date(lab.clock.at))).toThrow();
   expect(()=>parseWalletSignature({signature:"0x"+"11".repeat(65),payerAddress:TEST_PAYER,privateKey:"fixture-only"})).toThrow();
  });
  test("passive projection does no RPC and does not leak credential-bearing RPC URLs",async()=>{

@@ -27,11 +27,13 @@ mock.module(join(src, "console-launch.ts"), () => ({
 }));
 mock.module(join(src, "console-server.ts"), () => ({
   startConsoleServer: () => ({ port: 12346, origin: "http://127.0.0.1:12346", issueTicket: () => "unused-fixture", pendingPairings: () => [], approvePairing: () => false, stop() {} }),
+  startConsoleServerWithFallback: () => ({ server: { port: 12346, origin: "http://127.0.0.1:12346", issueTicket: () => "unused-fixture", pendingPairings: () => [], approvePairing: () => false, stop() {} }, fallback: false }),
 }));
 mock.module(join(src, "console-api.ts"), () => ({
   CONSOLE_ACTIONS: ["configure", "checks"], consoleState: async () => ({}), consoleAction: async () => ({}),
 }));
 mock.module(join(src, "server.ts"), () => ({ startApi: () => ({ port: 12345, stop() {} }) }));
+mock.module(join(src, "control", "app.ts"), () => ({ startControlApp: async () => null, controlAppFor: () => null }));
 mock.module(join(src, "service.ts"), () => ({
   Service: class {
     supervisor = { snapshot: () => ({ pid: null }) };
@@ -43,6 +45,9 @@ mock.module(join(src, "service.ts"), () => ({
       return {};
     }
     async start() { calls.push({ method: "start" }); }
+    async stop() {}
+    setTopologyListener() {}
+    async ensureControlPort() { return null; }
     writeSnapshot() {}
   },
 }));

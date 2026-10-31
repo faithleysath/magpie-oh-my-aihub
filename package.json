@@ -8,7 +8,11 @@
     "type": "git",
     "url": "https://github.com/faithleysath/magpie-oh-my-aihub.git"
   },
-  "keywords": ["magpie-plugin", "easytier", "p2p"],
+  "keywords": [
+    "magpie-plugin",
+    "easytier",
+    "p2p"
+  ],
   "magpie": {
     "page": {
       "title": "Oh My AIHub",
@@ -28,6 +32,10 @@
     "plugin/page/icon.svg",
     "plugin/bin/",
     "plugin/README.md",
-    "README.md"
-  ]
+    "README.md",
+    "!plugin/console/*.test.js"
+  ],
+  "dependencies": {
+    "ethers": "6.17.0"
+  }
 }

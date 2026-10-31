@@ -17,10 +17,11 @@ import { Magpie } from "./magpie.ts";
 import { resolveMagpieBin, statePath } from "./paths.ts";
 import { ownsProcess } from "./easytier.ts";
 import { waitForHostLock, type HostLock } from "./lock.ts";
-import { startConsoleServer, type ConsoleServer } from "./console-server.ts";
+import { startConsoleServerWithFallback, type ConsoleServer } from "./console-server.ts";
 import { CONSOLE_ACTIONS, consoleAction, consoleState } from "./console-api.ts";
 import { readConsolePort, saveConsolePort, readOwnPluginOptions, startConsoleLauncher, publishUnavailableLauncher } from "./console-launch.ts";
 import { Service } from "./service.ts";
+import { startControlApp, type ControlApp } from "./control/app.ts";
 import { startApi } from "./server.ts";
 import {
   decideOptions,
@@ -46,6 +47,9 @@ interface Running {
   service: Service;
   api: { port: number; stop: () => void };
   console?: ConsoleServer;
+  control?: ControlApp;
+  /** Awaitable normal stop used by the host/tests; releases the host lock. */
+  stop: () => Promise<void>;
 }
 
 const g = globalThis as unknown as { __ohMyAIHub?: Promise<Running>; __ohMyAIHubStopped?: boolean };
@@ -64,6 +68,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     let service: Service | undefined;
     let api: { port: number; stop(): void } | undefined;
     let consoleServer: ConsoleServer | undefined;
+    let controlApp: ControlApp | undefined;
     let launcher: ReturnType<typeof startConsoleLauncher> | undefined;
     let stopped = false;
     const parentPid = process.ppid;
@@ -87,18 +92,36 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         }
       }
     };
+    const stopHost = async () => {
+      stopped = true;
+      let failure: Error | null = null;
+      if (controlApp) {
+        try { await controlApp.stop(); }
+        catch (e) { failure = e instanceof Error ? e : new Error(String(e)); logger.error(`P2P control stop degraded: ${String(e)}`); }
+      }
+      try { if (service) await service.stop(); }
+      catch (e) { failure ??= e instanceof Error ? e : new Error(String(e)); logger.warn(`service stop: ${String(e)}`); }
+      shutdown();
+      lock?.release();
+      lock = null;
+      if (failure) throw failure;
+    };
     const onExit = () => { try { shutdown(); } finally { lock?.release(); } };
-    const onSignal = () => { stopped = true; process.exit(0); };
+    const onSignal = () => { stopped = true; void stopHost().then(() => process.exit(0), () => process.exit(1)); };
     // Install before ownership wait, Service construction, or any async startup.
     process.on("exit", onExit);
     process.on("SIGTERM", onSignal); process.on("SIGINT", onSignal);
     const orphanWatch = setInterval(() => {
-      if (parentGone()) { stopped = true; process.exit(0); }
+      if (parentGone()) { stopped = true; void stopHost().then(() => process.exit(0), () => process.exit(1)); }
     }, 500);
     orphanWatch.unref?.();
     failedBootCleanup = async () => {
       stopped = true;
       launcher?.stop(); consoleServer?.stop(); api?.stop();
+      if (controlApp) {
+        try { await controlApp.stop(); }
+        catch (e) { logger.warn(`P2P control stop: ${String(e)}`); }
+      }
       try { if (service) await service.stop(); }
       finally {
         shutdown(); lock?.release(); clearInterval(orphanWatch);
@@ -186,7 +209,26 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     // configure() applies an overlay patch; every fresh host must also recover
     // issued keys, reconcile Remote Magpies and start its chain watchers.
     ensureRunning();
+    // The control port is persisted before the core starts, so the Forward ACL
+    // names it from the first start instead of needing a second restart.
+    if (service.config()?.controlEnabled) {
+      await service.ensureControlPort().catch((e) => logger.warn(`control port allocation: ${String(e)}`));
+    }
     await service.start();
+    ensureRunning();
+    const startControl = async () => {
+      if (!service!.config()?.controlEnabled) return;
+      try {
+        if (!controlApp) controlApp = (await startControlApp(service!)) ?? undefined;
+        else await controlApp.sync();
+      } catch (e) {
+        // A failed control plane degrades the P2P features, never the model
+        // gateway or the console: it is reported, not silently ignored.
+        logger.error(`P2P control plane is not running: ${String(e)}`);
+      }
+    };
+    service.setTopologyListener(startControl);
+    await startControl();
     ensureRunning();
 
     api = startApi({ port: opt.apiPort ? Number(opt.apiPort) : undefined, service });
@@ -197,11 +239,13 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         action: (name: string, body: Record<string, unknown>) => consoleAction(service!, name, body),
         allowedActions: CONSOLE_ACTIONS,
         sensitiveActions: ["key-reveal"],
-        staticModules: ["/session.js", "/providers.js", "/wallet.js"],
+        staticModules: ["/session.js", "/providers.js", "/network.js", "/wallet.js", "/external-wallet.js"],
         pairingFile: statePath("console-pairing.json"),
       };
-      consoleServer = startConsoleServer(consoleOptions);
+      const started = startConsoleServerWithFallback(consoleOptions);
+      consoleServer = started.server;
       saveConsolePort(consoleServer.port);
+      if (started.fallback) logger.warn(`the saved console port was unavailable; the console now listens on 127.0.0.1:${consoleServer.port}`);
       launcher = startConsoleLauncher({
         port: consoleServer.port, issueTicket: () => consoleServer!.issueTicket(), options: optionsRaw,
         pendingPairings: () => consoleServer!.pendingPairings(),
@@ -231,7 +275,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     );
 
     ensureRunning();
-    return { service, api, console: consoleServer };
+    return { service, api, console: consoleServer, control: controlApp, stop: stopHost };
   })().catch(async (error) => {
     // A failed startup must stop its partial Service before another boot can
     // take ownership. Cleanup failure deliberately leaves the lock fail-closed.

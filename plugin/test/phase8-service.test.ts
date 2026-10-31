@@ -6,6 +6,7 @@ import { Service, type Probes } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta, ProviderRecord } from "../src/magpie.ts";
 import { getProviderKey, loadState, setProviderKey } from "../src/state.ts";
+import { fakePortOwnership } from "./support/fake-ports.ts";
 
 // Phase-8 service journeys: configure rollback, cached readiness/local wallet,
 // native share candidates and a targeted remote probe. No overlay, Magpie or
@@ -198,6 +199,7 @@ async function configured(opts: { consuming?: boolean } = {}): Promise<{ service
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
+    ports: { ownership: fakePortOwnership() },
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 200,
     probes,
@@ -277,6 +279,7 @@ describe("phase 8 configure transaction", () => {
       magpie: magpie as never,
       magpieVersion: "magpie 0.1.2038",
       supervisor: sup,
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 200,
       probes: { statusWith: async () => true, catalogModels: async () => [] },
@@ -345,6 +348,7 @@ describe("phase 8 cached readiness and local wallet", () => {
       magpieVersion: "magpie 0.1.2038",
       wallet: fakeWallet as never,
       supervisor: new FakeSupervisor(),
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
     });
     services.push(service);
@@ -381,6 +385,7 @@ describe("phase 8 cached readiness and local wallet", () => {
       magpieVersion: "magpie 0.1.2038",
       wallet: fakeWallet as never,
       supervisor: new FakeSupervisor(),
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
     });
     services.push(service);
@@ -406,6 +411,23 @@ describe("phase 8 share candidates", () => {
     expect(view.priceVersion).toMatch(/^[0-9a-f]{64}$/);
     expect(view.priceLocked).toBe(false);
     expect(view.blocking.map((b) => b.id)).toEqual(["alpha/b"]);
+  });
+
+  test("a peak price is a blocking dynamic price, never a complete off-peak price", async () => {
+    const { service, magpie } = await configured();
+    const peak = meta("alpha/peak", { input: 1, output: 2, cache_read: 0, cache_write: 0, peak: "deepseek" });
+    (peak as { priceUnsupported?: string }).priceUnsupported = "peak";
+    magpie.metas = [
+      meta("alpha/a", { input: 1, output: 2, cache_read: 0, cache_write: 0 }),
+      peak,
+    ];
+    const view = await service.shareCandidates();
+    const blocked = view.models.find((m) => m.id === "alpha/peak")!;
+    expect(blocked.completePrice).toBe(false);
+    expect(blocked.unsupportedPrice).toBe("peak");
+    expect(view.blocking.find((b) => b.id === "alpha/peak")!.reason).toMatch(/unsupported dynamic price/);
+    expect(view.models.filter((m) => m.completePrice).map((m) => m.id)).toEqual(["alpha/a"]);
+    expect(view.priceVersion).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
