@@ -282,11 +282,17 @@ export class ControlApp {
     const forward = this.controlForwards.get(nodeId);
     if (!forward) return;
     this.controlForwards.delete(nodeId);
-    const retire = (this.service as { retireControlForward?: (bind: string, dst: string, owned?: string[]) => Promise<{ closed: boolean }> }).retireControlForward;
-    const owned = [...forward ? [] : [], ...[...this.controlForwards.values()].map((f) => `127.0.0.1:${f.localPort}`), ...[...this.retiredForwards.keys()].map((p) => `127.0.0.1:${p}`)];
+    const retire = (this.service as { retireControlForward?: (bind: string, dst: string, owned?: string[]) => Promise<{ closed: boolean; detail?: string | null }> }).retireControlForward;
+    const owned = [...this.controlForwards.values()].map((f) => `127.0.0.1:${f.localPort}`).concat([...this.retiredForwards.keys()].map((p) => `127.0.0.1:${p}`));
     if (typeof retire === "function") {
       const result = await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst, owned);
-      if (!result.closed) this.retiredForwards.set(forward.localPort, forward.dst);
+      if (!result.closed || result.detail) {
+        this.retiredForwards.set(forward.localPort, forward.dst);
+        for (const other of this.controlForwards.values()) this.retiredForwards.set(other.localPort, other.dst);
+        this.controlForwards.clear();
+        this.endpoints.clear();
+        this.peers.clear();
+      }
       return;
     }
     await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});

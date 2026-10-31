@@ -94,23 +94,25 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     };
     const stopHost = async () => {
       stopped = true;
+      let failure: Error | null = null;
       if (controlApp) {
         try { await controlApp.stop(); }
-        catch (e) { logger.warn(`P2P control stop: ${String(e)}`); }
+        catch (e) { failure = e instanceof Error ? e : new Error(String(e)); logger.error(`P2P control stop degraded: ${String(e)}`); }
       }
       try { if (service) await service.stop(); }
-      catch (e) { logger.warn(`service stop: ${String(e)}`); }
+      catch (e) { failure ??= e instanceof Error ? e : new Error(String(e)); logger.warn(`service stop: ${String(e)}`); }
       shutdown();
       lock?.release();
       lock = null;
+      if (failure) throw failure;
     };
     const onExit = () => { try { shutdown(); } finally { lock?.release(); } };
-    const onSignal = () => { stopped = true; void stopHost().finally(() => process.exit(0)); };
+    const onSignal = () => { stopped = true; void stopHost().then(() => process.exit(0), () => process.exit(1)); };
     // Install before ownership wait, Service construction, or any async startup.
     process.on("exit", onExit);
     process.on("SIGTERM", onSignal); process.on("SIGINT", onSignal);
     const orphanWatch = setInterval(() => {
-      if (parentGone()) { stopped = true; void stopHost().finally(() => process.exit(0)); }
+      if (parentGone()) { stopped = true; void stopHost().then(() => process.exit(0), () => process.exit(1)); }
     }, 500);
     orphanWatch.unref?.();
     failedBootCleanup = async () => {
