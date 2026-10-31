@@ -93,6 +93,8 @@
 
 说明：`ws` 是 ethers 包依赖，但本模块不使用 provider/WebSocket；`aes-js` 是 ethers keystore 的 AES-CTR 实现；`@noble/*` 是 ethers 的曲线/哈希依赖。Bun 宿主仍能看到这些包以及解密后的内存。
 
+为什么不是 scure/noble/viem 组合：本模块需要一个**已实现的 keystore-v3 + 加密 mnemonic** 容器。`@scure/bip39`/`@noble/curves` 只提供助记词/曲线，V3 加密与 `x-ethers` mnemonic 布局需要自己拼装；`@ethereumjs/wallet` 能读写 V3 私钥，但不保存加密 mnemonic，会逼出第二个自定义容器；viem 没有 V3 keystore。ethers 6.17.0 是当前能同时提供 BIP39/BIP44、V3+加密 mnemonic、EIP-712 和付款签名的单一成熟依赖，因此选择它并锁定全部传递依赖。这个选择不构成对 ethers 整体的安全背书。
+
 复现安装：
 
 ```bash
@@ -302,8 +304,8 @@ bun install --frozen-lockfile
 
 ## 6. 与 C-registry / B-core / 外部钱包适配的接口约定
 
-1. **链识别只来自 C-registry**：Service 实现 `WalletChainPolicy.classify(chainId)`，不要在本模块或 UI 复制 56/8453/testnet 清单。vault 自己仍硬拒绝 56/8453，作为第二道门。
-2. **prepared/intent 绑定**：typed data 必须经 `prepareTypedData()` 返回的 `PreparedTypedData`；付款必须经 `preparePayment()`。外部钱包适配器应使用同一个 digest/字段集合，不要另造一份付款归属规则或自行计算可签对象。
+1. **链识别只来自 C-registry**：Service 实现 `WalletChainPolicy.classify(chainId)`，不要在本模块或 UI 复制完整网络/资产注册表。C-registry 的 `support/read-only`、`receivable`、`credit`、`pricing.kind` 字段属于 registry/Service；本核心不读取 `networkType/enabled`，也不会因为 `enabled=true` 而允许签名。vault 自己仍按 **chainId 硬集合**拒绝 56/8453，作为独立第二道门；C-registry 仍需自己的 `assertNoMainnetSend`，两边对 56/8453 必须一致。负向测试已覆盖“permissive policy 把 56 标成 simulation，仍拒绝”。
+2. **prepared/intent 绑定**：typed data 必须经 `prepareTypedData()` 返回的 `PreparedTypedData`；付款必须经 `preparePayment()`。外部钱包适配器（C-external 的 `validateDepositDocument`/`prepareTransfer` 路径）应复用同一个 digest/字段集合；内置路径的 `SigningPermit` 绑定 `paymentIntentHash`（chain/from/to/value/nonce/gas/fees/data），不要另造付款归属规则或自行计算可签对象。
 3. **permit 只在本地创建且绑定 exact intent**：`createSigningPermit()` 必须接收本地 `prepareTypedData()`/`preparePayment()` 的 prepared 对象，绑定 digest 或 paymentIntentHash；`signingFacade()` 不包含它。P2P 消息不能直接产生 permit，也不能把一个 permit 换到另一个收款人/金额/calldata/typed-data 文档上。
 4. **导出只在本地**：完整 `WalletVault` 留在本地 UI/Service；P2P 只拿 facade。`createExportCapability()` 必须在用户点击后调用，导出结果绝不能进入普通响应、幂等缓存、日志或崩溃快照。
 5. **主网只读**：56/8453 只允许 `previewTypedData()` 和只读展示；不得调用 `preparePayment`/`sign*`，不得广播，不得自动授信/自动充值。
