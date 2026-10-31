@@ -138,6 +138,13 @@ accepted the consumer fingerprint and confirmed; the consumer pulled the encrypt
 registered a native Remote and ACKed; the provider shows `acked` with cap/used/remaining and the
 consumer shows one connected provider. No file, CLI or manual key copy was used.
 
+**Lab setup disclosure.** The isolated anvil chain (`--chain-id 84532`), its mock tUSDC asset in
+the node registry and the provider's receiving address were configured before/around the UI run
+with the maintainer API/server (the UI has no anvil-RPC/asset-deployment controls). The wallet
+create/unlock/export/restore, network join, share, discovery, B request/approval and all payment
+UI actions were performed in the real browser. This is a lab prerequisite, not a consumer
+business step; a production deployment still needs an operator-facing asset/network setup.
+
 ## 4. Blocker / UNKNOWN: real C payment end-to-end
 
 After the B authorization, the consumer's payment request action returned `200 queued` with
