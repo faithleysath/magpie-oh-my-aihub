@@ -180,6 +180,7 @@ function fixture(service: WalletLocalService, now: () => number) {
     },
     allowedActions: WALLET_VAULT_ACTIONS,
     sensitiveActions: WALLET_VAULT_SENSITIVE_ACTIONS,
+    onSessionEnd: (sessionId) => service.endSession(sessionId),
   };
   return createConsoleHandler(options, PORT, { now });
 }
@@ -307,7 +308,14 @@ describe("real console auth for wallet vault", () => {
     now += 60_001;
     expect((await action(h, a, "wallet-vault-reveal-mnemonic", { authorizationId: expiring, password: PASSWORD })).status).toBe(400);
 
+    const logoutGrant = (await (await action(h, a, "wallet-vault-reveal-authorize", {
+      kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
+    })).json()).result.authorizationId as string;
+    const oldSessionId = a.cookie.split("=")[1]!;
     await h.handle(request(h, "/ui/logout", { method: "POST", session: a, body: {} }));
     expect((await action(h, a, "wallet-vault-reveal-mnemonic", { authorizationId: expiring, password: PASSWORD })).status).toBe(401);
+    // Even a stale context that still claims to be active cannot reuse the
+    // grant after the transport's session-end hook cleared it.
+    expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: logoutGrant, password: PASSWORD }, context(oldSessionId)))).toBe("wallet-reveal-invalid");
   });
 });
