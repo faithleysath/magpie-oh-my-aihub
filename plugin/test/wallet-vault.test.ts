@@ -969,6 +969,27 @@ describe("simulated/testnet payment signing", () => {
     }
   });
 
+  test("chain 97 is only built as EIP-1559 type 2; real BSC node compatibility is not claimed", async () => {
+    const { vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    const prepared = vault.preparePayment(paymentInput({ chainId: 97 }));
+    const permit = vault.createSigningPermit({
+      kind: "payment",
+      purpose: "payment",
+      prepared,
+      maxPerPaymentWei: 1_000_000_000_000_000n,
+      maxTotalWei: 1_000_000_000_000_000n,
+    });
+    const signed = await vault.signPayment({ prepared, permit });
+    const parsed = Transaction.from(signed.rawTransaction);
+    expect(parsed.type).toBe(2);
+    expect(parsed.chainId).toBe(97n);
+    expect(signed.chainId).toBe(97);
+    // The core does not implement a legacy gasPrice transaction; whether a
+    // particular BSC endpoint accepts type 2 is a separate, unperformed test.
+  });
+
   test("mainnet 56/8453 payment preparation is hard-denied before any signature", async () => {
     const { vault } = await openVault();
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
