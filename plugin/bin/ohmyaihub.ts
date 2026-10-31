@@ -349,7 +349,12 @@ switch (cmd) {
         const s = await call("GET", "/status");
         console.log((s.config?.share?.models ?? []).join("\n"));
       } else {
-        const s = await call("POST", "/share/models", { models });
+        if (models.some((m) => m.includes("*")) && !has("confirm-exact")) {
+          throw new Error(
+            "a wildcard share policy must be expanded first: rerun with --confirm-exact after reviewing the native model prices",
+          );
+        }
+        const s = await call("POST", "/share/models", { models, confirmExact: has("confirm-exact") });
         console.log(JSON.stringify({ ok: true, shareModels: s.config.share.models }, null, 2));
       }
     } else {
