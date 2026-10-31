@@ -302,6 +302,12 @@ describe("BIP39/BIP44 and keystore format", () => {
     await writeFile(path, `${JSON.stringify(huge)}\n`, { mode: 0o600 });
     await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toMatchObject({ code: "keystore-dos" });
 
+    const weak = structuredClone(original);
+    const weakCrypto = weak.crypto ?? weak.Crypto;
+    weakCrypto.kdfparams.n = 1 << 10;
+    await writeFile(path, `${JSON.stringify(weak)}\n`, { mode: 0o600 });
+    await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toMatchObject({ code: "keystore-weak-kdf" });
+
     const extra = structuredClone(original);
     extra.privateKey = VECTOR_12_PRIVATE_KEY;
     await writeFile(path, `${JSON.stringify(extra)}\n`, { mode: 0o600 });
@@ -396,6 +402,12 @@ describe("lock, TTL, restart and password change", () => {
 });
 
 describe("encrypted backup restore", () => {
+  test("backup export requires an unlocked session", async () => {
+    const source = await openVault();
+    await source.vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await expect(source.vault.exportEncryptedBackup()).rejects.toMatchObject({ code: "wallet-locked" });
+  });
+
   test("backup restores the same address into a new vault and keeps the mnemonic exportable", async () => {
     const source = await openVault();
     await source.vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });

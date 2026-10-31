@@ -1572,12 +1572,6 @@ async function writeKeystoreAtomic(path: string, text: string, replace: boolean)
   }
 }
 
-async function linkTemp(temp: string, target: string): Promise<void> {
-  // A hard link publishes the fully fsynced temp file without ever replacing
-  // an existing wallet. `rename` is used only when the caller said replace.
-  await link(temp, target);
-}
-
 async function fsyncDirectory(dir: string): Promise<void> {
   try {
     const handle = await open(dir, "r");
