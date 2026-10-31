@@ -554,6 +554,9 @@ export class PaymentLocalService {
           this.checkOperation(input.operation, state.expected);
           this.revalidate(state);
           const reservation = await state.port.reserve(state.expected);
+          if (!context.assertActive()) {
+            throw new ConsoleInputError("the console session ended during reserve; no send permit was returned; recover via pending");
+          }
           if (reservation.state === "reserved") state.reservationId = reservation.reservationId;
           else if (reservation.reservationId !== state.reservationId) state.reservationId = null;
           return reservation;
@@ -566,6 +569,12 @@ export class PaymentLocalService {
           this.revalidate(state);
           if (!context.assertActive()) throw new ConsoleInputError("the console session is no longer active");
           await state.port.markBroadcasting({ reservationId, operation: state.expected });
+          // The journal has committed broadcasting. Re-check after the await: if
+          // the session expired/logged out while the gate was running, the
+          // external wallet must not receive {ok:true} and must not send.
+          if (!context.assertActive()) {
+            throw new ConsoleInputError("the console session ended during the send gate; do not send; recover via pending");
+          }
           return Object.freeze({ ok: true });
         }
         case "payment-operation-hash": {

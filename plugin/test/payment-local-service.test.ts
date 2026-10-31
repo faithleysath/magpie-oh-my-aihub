@@ -131,14 +131,17 @@ function localService(current: { value: TrustedPaymentObligation | null }, overr
 interface BrowserSession { cookie: string; csrf: string; instance: string; expiresAt: string }
 interface ContextRecord { name: string; sessionId: string; assertActive: boolean; isActive: boolean }
 
-function fixture(service: PaymentLocalService) {
+function fixture(
+  service: PaymentLocalService,
+  contextFor?: (name: string, context: ConsoleActionContext) => ConsoleActionContext,
+) {
   const contexts: ContextRecord[] = [];
   const h = createConsoleHandler({
     assetsDir,
     state: async () => ({ test: true }),
     action: async (name, input, context: ConsoleActionContext) => {
       contexts.push({ name, sessionId: context.sessionId, assertActive: context.assertActive(), isActive: context.isActive() });
-      return service.action(name, input, context);
+      return service.action(name, input, contextFor?.(name, context) ?? context);
     },
     allowedActions: PAYMENT_LOCAL_ACTIONS,
   }, 39995, { now: () => clock });
@@ -373,6 +376,58 @@ describe("local payment service over real console auth", () => {
     current.value = first;
     expect((await action(h, s, "payment-obligation-preview", { obligationId: first.obligationId })).status).toBe(200);
     expect(PAYMENT_LOCAL_ACTIONS as readonly string[]).not.toContain("payment-operation-release");
+  });
+
+  test("a session that ends during the mark await cannot return a send permit", async () => {
+    const current = { value: obligation() };
+    const service = localService(current);
+    let activeCalls = 0;
+    const { h } = fixture(service, (name, context) =>
+      name === "payment-operation-mark"
+        ? { ...context, assertActive: () => ++activeCalls <= 2, isActive: () => true }
+        : context,
+    );
+    const s = await open(h);
+    const id = current.value!.obligationId;
+    const preview = await jsonOf(await action(h, s, "payment-obligation-preview", { obligationId: id }));
+    const op = operation(current.value!.binding);
+    const reserved = await jsonOf(await action(h, s, "payment-operation-reserve", { obligationId: id, previewRef: preview.previewRef, operation: op }));
+    expect(reserved.state).toBe("reserved");
+
+    const mark = await action(h, s, "payment-operation-mark", {
+      obligationId: id, previewRef: preview.previewRef, reservationId: reserved.reservationId, operation: op,
+    });
+    expect(mark.status).toBe(400);
+    const pending = await jsonOf(await action(h, s, "payment-operation-pending", {}));
+    expect(pending[0]).toMatchObject({ invoice: id, state: "broadcasting", txHash: null });
+    expect(pending[0]).not.toHaveProperty("reservationId");
+  });
+
+  test("a session that ends during reserve does not return a reservation", async () => {
+    const current = { value: obligation() };
+    const service = localService(current);
+    let activeCalls = 0;
+    let wrapReserve = true;
+    const { h } = fixture(service, (name, context) =>
+      name === "payment-operation-reserve" && wrapReserve
+        ? { ...context, assertActive: () => ++activeCalls <= 1, isActive: () => true }
+        : context,
+    );
+    const s = await open(h);
+    const id = current.value!.obligationId;
+    const preview = await jsonOf(await action(h, s, "payment-obligation-preview", { obligationId: id }));
+    const op = operation(current.value!.binding);
+    const reserve = await action(h, s, "payment-operation-reserve", { obligationId: id, previewRef: preview.previewRef, operation: op });
+    expect(reserve.status).toBe(400);
+
+    const pending = await jsonOf(await action(h, s, "payment-operation-pending", {}));
+    expect(pending[0]).toMatchObject({ invoice: id, state: "reserved", txHash: null });
+    // A new session cannot win the reservation; the row stays reserved.
+    wrapReserve = false;
+    const s2 = await open(h);
+    const p2 = await jsonOf(await action(h, s2, "payment-obligation-preview", { obligationId: id }));
+    const second = await jsonOf(await action(h, s2, "payment-operation-reserve", { obligationId: id, previewRef: p2.previewRef, operation: op }));
+    expect(second.state).toBe("claimed");
   });
 
   test("operation/binding mismatch and client-declared trusted fields are rejected without a row", async () => {
