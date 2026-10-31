@@ -5,6 +5,7 @@ import { consoleWorkflows } from "./console-workflows.ts";
 import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
 import { hex64, modelList, RequestValidationError } from "./connection-request.ts";
 import type { Service } from "./service.ts";
+import { controlAppFor } from "./control/app.ts";
 
 /** Explicit browser product actions; no arbitrary path or CLI dispatch. */
 export const CONSOLE_ACTIONS = [
@@ -13,6 +14,7 @@ export const CONSOLE_ACTIONS = [
   "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer", "connection-request",
   "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
+  "p2p-request", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
   ...WALLET_CONSOLE_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
@@ -25,6 +27,7 @@ export async function consoleState(service: Service) {
   const snapshot = service.consoleSnapshot();
   // Polling performs only local reads, never active probes.
   const workflows = consoleWorkflows(service).snapshot();
+  const p2p = await controlAppFor(service)?.state() ?? null;
   return clean({
     schema: "ohmyaihub/console/1" as const, at: new Date().toISOString(), configured: Boolean(snapshot.config.nodeId),
     status: {
@@ -32,7 +35,7 @@ export async function consoleState(service: Service) {
       magpie: snapshot.magpie, config: snapshot.config, easytier: snapshot.easytier, providers: snapshot.providers,
       catalog: snapshot.catalog, consumers: snapshot.consumers, accounting: snapshot.accounting,
       checks: snapshot.checks, checksAt: snapshot.checksAt, checksDurationMs: snapshot.checksDurationMs, readiness: snapshot.readiness,
-    }, ...workflows, wallet: consoleWalletState(service),
+    }, ...workflows, p2p, wallet: consoleWalletState(service),
   });
 }
 const refuse = (message: string): never => { throw new ConsoleInputError(message); };
@@ -59,6 +62,31 @@ export async function consoleAction(service: Service, name: string, input: Recor
   try {
     if ((WALLET_CONSOLE_ACTIONS as readonly string[]).includes(name)) return consoleWalletAction(service, name, input);
     const w = () => consoleWorkflows(service);
+    if (name.startsWith("p2p-")) {
+      const app = controlAppFor(service);
+      if (!app) throw new ConsoleInputError("the local P2P control service is not running");
+      switch (name) {
+        case "p2p-request":
+          fields(input, ["nodeId", "fingerprint", "quoteHash", "models"]);
+          return clean(await app.request(input));
+        case "p2p-approve":
+          fields(input, ["requestId", "consumerFingerprint", "quoteHash", "priceVersion", "generation", "models", "capUsd", "acceptFingerprint"]);
+          return clean(await app.approve(input));
+        case "p2p-reject":
+          fields(input, ["requestId", "note"]);
+          await app.reject(input);
+          return { state: "rejected" };
+        case "p2p-revoke":
+          fields(input, ["approvalId"]);
+          await app.revoke(input);
+          return { state: "revoked" };
+        case "p2p-recover":
+          fields(input, ["approvalId"]);
+          return clean(await app.recover(input));
+        default:
+          return refuse("unsupported P2P operation");
+      }
+    }
     switch (name) {
       case "join-network": {
         fields(input,["networkName","networkSecret","initialNode"]);

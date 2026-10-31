@@ -529,7 +529,11 @@ export class Magpie {
       headers: { Authorization: `Bearer ${secret}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) throw new Error(`GET /v1/magpie/limit: HTTP ${res.status}`);
+    if (!res.ok) {
+      const error = new Error(`GET /v1/magpie/limit: HTTP ${res.status}`) as Error & { status?: number };
+      error.status = res.status;
+      throw error;
+    }
     return (await res.json()) as LimitStatus;
   }
 }

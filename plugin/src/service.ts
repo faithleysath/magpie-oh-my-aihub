@@ -145,7 +145,12 @@ export interface Probes {
   /** one GET through EasyTier's loopback SOCKS5 listener */
   catalogHttpGet: (opts: { socksPort: number; host: string; port: number; path: string; timeoutMs: number }) => Promise<{ status: number; body: string }>;
   /** a local catalogue server; injectable so a unit test keeps the LAN untouched */
-  catalogServer: (opts: { hostname: string; port: number; document: () => SignedCatalog | null }) => CatalogServerHandle;
+  catalogServer: (opts: {
+    hostname: string;
+    port: number;
+    document: () => SignedCatalog | null;
+    presence?: () => unknown | null;
+  }) => CatalogServerHandle;
 }
 
 export interface ServiceDeps {
@@ -420,6 +425,7 @@ export class Service {
   private accountingFailureBudget: number;
   private accountingTimeoutMs: number;
   private catalogServer: CatalogServerHandle | null = null;
+  private controlPresenceProvider: (() => unknown | null) | null = null;
   private catalogServerError: string | null = null;
   private catalogQuote: SignedCatalog | null = null;
   private catalogQuoteHash: string | null = null;
@@ -2176,6 +2182,12 @@ export class Service {
   }
 
   // --- read-only catalogue ---------------------------------------------------
+
+  /** Attach the signed control-presence document to the read-only catalog listener. */
+  setControlPresence(presence: (() => unknown | null) | null): void {
+    this.controlPresenceProvider = presence;
+    this.catalogServer?.setPresence?.(presence);
+  }
 
   /** Whether the catalogue should be on the network right now. */
   private catalogPublishing(): boolean {
@@ -3992,12 +4004,13 @@ export class Service {
       await this.provisioner.setModels(consumerId, rec.models);
       models = this.deps.magpie.keyById(rec.keyId)?.models?.map(String) ?? [];
     }
-    if (models.length === 0) {
-      throw new Error(`the key of ${consumerId} has no model whitelist in Magpie; refusing to hand it over`);
-    }
+    // Read the secret under the same per-consumer lock that approve/reissue/
+    // revoke use, and re-check the exact key generation/native row there.
+    const locked = await this.provisioner.readHandover(consumerId, rec.keyId);
+    models = locked.models;
     this.assertShareable(models);
-    logger.info(`handing key ${rec.keyName} over for ${consumerId} (${models.join(", ")})`);
-    return { consumerId, keyName: rec.keyName, key: rec.secret, models, capUsd: rec.capUsd };
+    logger.info(`handing key ${locked.keyName} over for ${consumerId} (${models.join(", ")})`);
+    return { consumerId, keyName: locked.keyName, key: locked.key, models, capUsd: locked.capUsd };
   }
 
   async topUp(consumerId: string, usd: number, depositId?: string): Promise<ConsumerView> {
