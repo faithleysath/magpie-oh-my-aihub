@@ -1169,7 +1169,13 @@ export class WalletVault {
   }
 
   private async persist(wallet: HDNodeWallet, password: string, replace: boolean): Promise<void> {
-    const text = await encryptWallet(wallet, password, this.options.kdf);
+    let text: string;
+    try {
+      text = await encryptWallet(wallet, password, this.options.kdf);
+    } catch (error) {
+      if (error instanceof WalletVaultError) throw error;
+      fail("wallet-io", "could not encrypt the wallet");
+    }
     const parsed = validateKeystore(text);
     if (parsed.address.toLowerCase() !== wallet.address.toLowerCase()) {
       fail("keystore-invalid", "encrypted wallet address does not match the derived account");
