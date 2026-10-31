@@ -15,7 +15,7 @@
 | 基线 main | `8ce5c57f565fb1b835021a9b730b61014eb47d5f` |
 | PR13 | `#13`，MERGED，merge SHA = 上述 main；CI run `41056993038` success |
 | 开发/文档分支 | `feature/phase10-simplified-p2p-ux` @ docs 最新提交（= PR14 head；仅 docs） |
-| 集成分支 | `feature/phase10-integration` @ `6440876`（worktree `/tmp/oma-phase10-integration`；含批准 15/29/17/16/18/27/25/30/24） |
+| 集成分支 | `feature/phase10-integration` @ `cc0d740`（worktree `/tmp/oma-phase10-integration`；含批准 15/29/17/16/18/27/25/30/24/31） |
 | 盘点工作树 | `/Users/laysath/Projects/magpie-oh-my-aihub-import` |
 | 纯 main 只读工作树 | `/tmp/oma-phase10-main-8ce5c57`（detached @ `8ce5c57`） |
 | 目标运行版本（已决定） | **Magpie 0.1.2289 + EasyTier 2.6.4**；隔离副本，不改用户安装 |
@@ -24,7 +24,7 @@
 | 本地门禁 | typecheck / boot-check / secret-scan 通过；clock 集成本地仅跑 typecheck + 4 个纯钱包测试 32/0；**未跑全量**（防旧测试访问生产网关/公共 RPC，等 PR17 guard） |
 | 参考研究 | 审查代理 `6a326f2b-2249-4123-8f35-1fe35926e107`：`/tmp/oma-research/REFERENCE-REVIEW.md` |
 | PR14 | `#14` draft，head = docs 最新提交；**仅 docs，未含应用代码**；内容仅计划，无 GO；不合并 |
-| P0-clock 集成 | 15 `889973f5`；29 `0093279`；17 `49e8c0ff`；16 `10e46a13`；18 `5f771764`；27 `3b55491a`；25 `b1a4838d`；30 `90c32f8c`；24 `ed60ce19`；均独立审通过并本地集成，**非产品 GO** |
+| P0-clock 集成 | 15；29；17；16；18；27；25；30；24；31；均独立审通过并本地集成，**非产品 GO** |
 | 改动前 UI 证据 | `docs/phase10/evidence/`：3 份事实报告 + 16 张实拍 + SHA256SUMS；0.1.2289 真实宿主**空网络**；可标 REPRODUCED/已审查，**不能标 Visual UX GO** |
 | 实现代理模型 | `pi/magpie/group/deepseek-v4.1-flash`（max） |
 | 真实资金 | NO-GO；D 本阶段只出 NO-GO 清单，不执行真实资金 |
@@ -55,16 +55,16 @@
 | 工作流 | 独立 worktree | 负责代理 | 分支 / PR | 状态 | 集成条件 |
 | --- | --- | --- | --- | --- | --- |
 | A-ui | `/tmp/oma-phase10-integration`（集成） | `ccb08749-badc-4512-9604-e93ce7bd76b9` | PR #25 `b1a4838d` base `8ce5c57` → `f6c329e` | DONE（UI 单元集成） | 六项独立 PASS；73 console/0；console-security+api 36/0；typecheck；旧 `cbce700` 阻断留历史 | 非 Visual GO；ProviderView 无 models 字段→模型计数分支不可达（未知非虚报）；真实 host 746de60 五文件同 hash，但 b1a4838 干净安装/真实 join/share UNKNOWN |
-| A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | PR #22 latest `56d05f7` | REVIEW | 原五组 PASS；但 allCLI 活 context / wildcard 等剩余 fix；旧 db0a4c2b/77/feeddec 历史保留 | 不自动批准；CI 绿 ≠ A 总 GO；未集成 |
-| B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | PR #26 latest `4304db5e` | BLOCKED | 仍 TTL 持久撤销 / noSideEffect 绑定 / 同 consumer 未决阻断，fix 中 | 旧 d2d 阻断历史；不准 stack；B 整体 NO-GO/未验证 |
-| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #19 `6fa9877a` / PR #20 `f779d46d` | BLOCKED | 19 仅 20 技术 base；20 独立复审仍 BLOCKED：limitStatus 任意 throw 误当拒 Key、missingrecord 假 enforced、expectedKeyId 预检锁外可误删 reissue 新 Key、handover 无同锁 | 旧 gen/typed/pending PASS 不覆盖；loopback 不能证明远端 401；旧 715 阻断留历史 |
-| C-registry | `/Users/laysath/.paseo/worktrees/1z728cdk/c-registry` | `0c94d106-6442-470f-8f14-374c38ea20f7` | PR #21 latest `20461b18` | BLOCKED | 三项 fix 待 `93febdd5…`；旧 917 历史 | 不准正式集成；资金 NO-GO |
-| C-wallet | `/Users/laysath/.paseo/worktrees/1z728cdk/c-wallet` | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | PR #23 latest `325b81af` | BLOCKED | 正式 5 项接线阻断 fix，不是纯首次审；真实资金/UI 未接 | 旧 1a8a53d 不是当前 target；未集成 |
-| PR31 | TBD | TBD | PR #31 `ac7bfd0` | REVIEW | 动态主体 PASS；env/unregister/awaitstop 小 fix 待审 | 未集成；workstream 待主审标注 |
+| A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | PR #22 latest `56d05f7` | REVIEW | 四残余 fix + forward recovery 独立中；旧 db0a4c2b/77/feeddec 历史保留 | 不自动批准；未集成 |
+| B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | PR #26 latest `cdee243` | REVIEW | 三生命周期修复复审中；旧 d2d/4304 阻断历史 | 不准 stack；B 整体 NO-GO/未验证 |
+| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #19 `6fa9877a` / PR #20 `7c55898` | REVIEW | 19 仅 20 技术 base；20 撤销读回/锁/恢复复审中；旧 f779/715 阻断历史 | loopback 不能证明远端 401；B 整体 NO-GO |
+| C-registry | `/Users/laysath/.paseo/worktrees/1z728cdk/c-registry` | `0c94d106-6442-470f-8f14-374c38ea20f7` | PR #21 latest `20461b1` | REVIEW | 三 fix 复审中；旧 917 历史 | 不准正式集成；资金 NO-GO |
+| C-wallet | `/Users/laysath/.paseo/worktrees/1z728cdk/c-wallet` | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | PR #23 `325b81a` | BLOCKED | 五 fix 进行中；真实资金/UI 未接 | 旧 1a8a53d 不是当前 target；未集成 |
+| PR31 | `/tmp/oma-phase10-integration`（集成） | P0 测试代理 | PR #31 `ac7bfd0`+`659d8b3` → `cc0d740` | DONE（测试集成） | service 41/0；CLI 35/0；typecheck；secret-scan；动态端口/guard 已含；只取 service.test delta | 非产品 GO；未混 C21 资金改动 |
 | C-external | `/tmp/oma-phase10-integration`（模块集成） | `3820537e-5840-4926-ba00-5975805b2df6` | PR #30 行为 `90c32f8c`；PR head `ae596c3`（仅 docs 2 行）→ `6440876` | DONE（隔离模块集成） | 52 module/0；chain1 deny/SVG null/无 operationPort 零 provider call/unknown 跨 session 阻重发；actual journal 未做，default send off | **非 WalletGO**；不接 Service journal/UI；真实扩展 UNKNOWN；资金 NO-GO |
 | Windows CI | `/tmp/oma-phase10-integration`（子集集成） | P0 测试代理 | PR #24 `ed60ce19` → `6440876` | DONE（Windows 子集证据） | workflow + tests；真实 windows-latest 证据；本机 typecheck/platform/networkloopback 48/0；未在本机模拟 Windows | 仅 Windows 子集/真实 runner 证据；**不是 Windows 产品支持/平台 GO** |
 | P0-clock | `/Users/laysath/Projects/magpie-oh-my-aihub-clock-fix` | `f63b644e-40df-4174-afd4-c4f43da87927` | `fix/phase10-validation-clock` @ `889973f5` / PR #15 (draft) | DONE（集成） | 独立审通过；本地集成到 `feature/phase10-integration` @ `877d0bc5`；PR14 仍 docs-only |
-| P0-integration | `/tmp/oma-phase10-integration` | INTEGRATION | `feature/phase10-integration` @ `6440876` | DONE（集成） | 只接已批准 15+29+17+16+18+27+25+30+24；20/21/22/23/26/31 未接；非产品 GO |
+| P0-integration | `/tmp/oma-phase10-integration` | INTEGRATION | `feature/phase10-integration` @ `cc0d740` | DONE（集成） | 只接已批准 15+29+17+16+18+27+25+30+24+31；20/21/22/23/26 未接；非产品 GO |
 | P0-peak | `/tmp/oma-phase10-integration`（集成） | P0 测试代理 | PR #16 `10e46a13` base `889973f` → `343dae2` | DONE（集成） | 自身 commits `0661bede` + `9a46cc`；跳过 clock `10e46a`；typecheck；87 定向/0；secret-scan PASS | 旧 `0661bede` 阻断历史留存；非产品 GO |
 | P0-hermetic | `/tmp/oma-phase10-integration`（集成） | P0 测试代理 | PR #17 `49e8c0ff` base `889973f` → `6c267d6` | DONE（集成） | 四 commits 依次 pick（60d0d04, 3ce22ee, 66d19e4, 49e8c0f）；CI `41160096921` 双绿；typecheck；network-guard 7/0；phase8 35/0 | scope 仅 global fetch + Bun.serve；socket/subprocess 受控 seam；register 生命周期如实；非全网络 sandbox/非产品 GO |
 | P0-pin | `/tmp/oma-phase10-integration`（集成） | P0 测试代理 | PR #18 `5f771764` base `889973f` → `b873b0d` | DONE（限定工具/证据） | 五 commits（c121da6, 934e679, d3c066c, 3826fad, 5f77176）；exact mac arm hash 强制；unittest 12/0；typecheck；secret-scan；proof SHA 匹配 | 不改用户安装；非产品 GO；非真实双主机 |
@@ -222,7 +222,8 @@
 | 2026-10-31 | C23 当前 target | PR #23 `325b81af`；独立审 `b97887e5…` | PR #23 | REVIEW；未集成 |
 | 2026-10-31 | C30 隔离模块集成 | 行为 `90c32f8c`；PR head `ae596c3` 仅 docs 2 行 → `6440876`；external 52/0；console 73/0；security/api 36/0；typecheck；default send off | PR #30 / integration | 非 WalletGO；未接 Service journal/UI；资金 NO-GO |
 | 2026-10-31 | Windows 子集集成 | PR #24 `ed60ce19` → `6440876`；workflow explicit 22 files，MIN 380 未放宽；typecheck；platform/loopback 48/0 | PR #24 / integration | 非 Windows 产品支持；真实 Windows job 未在本机重跑 |
-| 2026-10-31 | 当前 review targets | 22 `56d05f7` allCLI/wildcard fix；26 `4304db5e` 三阻断；23 `325b81af` 5 接线阻断；21 `20461b18` 三 fix；20 `f779d46d` 四阻断；31 `ac7bfd0` 小 fix | 各自 PR | 未集成 |
+| 2026-10-31 | 当前 review targets | 22 `56d05f7` 四残余 fix + forward recovery；26 `cdee243` 三生命周期修复；23 `325b81a` 五 fix 进行中；21 `20461b1` 三 fix；20 `7c55898` 撤销读回/锁/恢复；30 行为 `90c32f8`（final docs `ae596c3`） | 各自 PR | 未集成；仅 30/31 已批准部分 |
+| 2026-10-31 | PR31 测试集成 | 源 `ac7bfd0`+`659d8b3` base approved17 → `cc0d740`；service 41/0；CLI 35/0；typecheck；secret-scan；clean | PR #31 / integration | 非产品 GO；动态端口意图 |
 | 2026-10-31 | C-wallet 交付待审 | PR #23 head `1a8a53d`；41 模块测试；未 UI/真实资金；独立审 `b97887e5…` | PR #23 | REVIEW；未集成 |
 | 2026-10-31 | P0 报告命名 | P0-clock 属 P0，不沿用 D2 名称 | 主审说明 | VERIFIED |
 | 2026-10-31 | 改动前 UI 审查证据 | 3 份事实报告 + 16 张截图 + SHA256SUMS 已入库；无 HOME/app/凭据；0.1.2289 空网络 | `docs/phase10/evidence/` | REPRODUCED / 已审查；非 Visual UX GO |
