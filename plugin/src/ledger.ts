@@ -28,6 +28,32 @@ export type AccountStatus = "active" | "paused" | "revoked";
 export type WindowStatus = "open" | "draining" | "closed";
 export type DepositStatus = "intent" | "applied" | "failed";
 
+/**
+ * The provenance of a deposit. This is not a display label: it decides whether a
+ * row may back a chain retry, a local top-up or an account opening. Legacy rows
+ * are classified from their existing source without rewriting it.
+ */
+export type FundsClass = "chain" | "manual" | "simulated" | "opening";
+
+/** Classify the historical/current source text; null means unclassified. */
+export function classifyDepositSource(source: unknown): FundsClass | null {
+  if (typeof source !== "string") return null;
+  if (classifyChainSource(source) !== null) return "chain";
+  if (source === "opening") return "opening";
+  if (source === "manual") return "manual";
+  if (source === "simulated") return "simulated";
+  return null;
+}
+
+/** The chain id encoded by an exact `chain:<id>` source, or null. */
+export function classifyChainSource(source: unknown): number | null {
+  if (typeof source !== "string") return null;
+  const match = /^chain:(\d+)$/.exec(source);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 export interface LedgerAccount {
   consumerId: string;
   status: AccountStatus;
@@ -66,6 +92,11 @@ export interface LedgerDeposit {
   consumerId: string;
   amountNanos: number;
   source: string;
+  fundsClass: FundsClass;
+  /** chain id for chain-derived rows; null otherwise */
+  chainId: number | null;
+  /** registry asset id for chain-derived rows when known; null for legacy rows */
+  assetId: string | null;
   status: DepositStatus;
   windowId: string | null;
   priceVersion: string | null;
@@ -142,6 +173,9 @@ interface DepositRow {
   consumer_id: string;
   amount_nanos: number;
   source: string;
+  funds_class: string | null;
+  chain_id: number | null;
+  asset_id: string | null;
   status: DepositStatus;
   window_id: string | null;
   price_version: string | null;
@@ -210,6 +244,9 @@ CREATE TABLE IF NOT EXISTS deposits (
   consumer_id TEXT NOT NULL,
   amount_nanos INTEGER NOT NULL CHECK (amount_nanos > 0),
   source TEXT NOT NULL,
+  funds_class TEXT,
+  chain_id INTEGER,
+  asset_id TEXT,
   status TEXT NOT NULL,
   window_id TEXT,
   price_version TEXT,
@@ -311,11 +348,15 @@ function mapWindow(r: WindowRow): LedgerWindow {
 }
 
 function mapDeposit(r: DepositRow): LedgerDeposit {
+  const fundsClass = (r.funds_class as FundsClass | null) ?? classifyDepositSource(r.source) ?? "simulated";
   return {
     id: r.id,
     consumerId: r.consumer_id,
     amountNanos: r.amount_nanos,
     source: r.source,
+    fundsClass,
+    chainId: r.chain_id ?? (fundsClass === "chain" ? classifyChainSource(r.source) : null),
+    assetId: r.asset_id ?? null,
     status: r.status,
     windowId: r.window_id,
     priceVersion: r.price_version,
@@ -360,6 +401,11 @@ export class Ledger {
     if (!depositColumns.some((c) => c.name === "price_version")) {
       this.db.exec("ALTER TABLE deposits ADD COLUMN price_version TEXT");
     }
+    // Provenance columns are nullable so historical rows are read without
+    // rewriting their source, chain id or amount; mapDeposit classifies them.
+    if (!depositColumns.some((c) => c.name === "funds_class")) this.db.exec("ALTER TABLE deposits ADD COLUMN funds_class TEXT");
+    if (!depositColumns.some((c) => c.name === "chain_id")) this.db.exec("ALTER TABLE deposits ADD COLUMN chain_id INTEGER");
+    if (!depositColumns.some((c) => c.name === "asset_id")) this.db.exec("ALTER TABLE deposits ADD COLUMN asset_id TEXT");
     try {
       // SQLite creates the file with the process umask; make the 0600 intent explicit.
       chmodSync(path, 0o600);
@@ -439,13 +485,16 @@ export class Ledger {
       if (input.openingNanos > 0) {
         this.db
           .query(
-            "INSERT INTO deposits(id,consumer_id,amount_nanos,source,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO deposits(id,consumer_id,amount_nanos,source,funds_class,chain_id,asset_id,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           )
           .run(
             `opening:${input.consumerId}`,
             input.consumerId,
             input.openingNanos,
             "opening",
+            "opening",
+            null,
+            null,
             "applied",
             window.id,
             input.price.version,
@@ -583,11 +632,34 @@ export class Ledger {
    * amount is a no-op; the same id with another amount is refused. A caller
    * must never add the credit until the cap read-back confirms it.
    */
-  depositIntent(input: { id: string; consumerId: string; amountNanos: number; source: string; at?: string }): { deposit: LedgerDeposit; created: boolean } {
+  depositIntent(input: {
+    id: string;
+    consumerId: string;
+    amountNanos: number;
+    source: string;
+    fundsClass?: FundsClass;
+    chainId?: number | null;
+    assetId?: string | null;
+    at?: string;
+  }): { deposit: LedgerDeposit; created: boolean } {
     // A second, durable mainnet gate: no future watcher/CLI bug can book a
     // `chain:56` or `chain:8453` credit even if it reaches the ledger directly.
     assertCreditSourceNotMainnet(input.source);
     if (!Number.isInteger(input.amountNanos) || input.amountNanos <= 0) throw new Error("a deposit must be a positive integer amount");
+    const fundsClass = input.fundsClass ?? classifyDepositSource(input.source);
+    if (!fundsClass) throw new Error(`deposit source ${JSON.stringify(input.source)} has no trusted funds class`);
+    if (fundsClass === "opening") throw new Error("an opening balance is written only by the account-opening transaction");
+    const sourceChainId = classifyChainSource(input.source);
+    const chainId = input.chainId ?? sourceChainId;
+    if (fundsClass === "chain") {
+      if (chainId === null || !Number.isSafeInteger(chainId) || chainId <= 0) throw new Error("a chain deposit needs a positive chain id");
+      if (input.source !== `chain:${chainId}`) throw new Error("a chain deposit source must be exactly chain:<chainId>");
+    } else if (chainId !== null || input.chainId !== undefined && input.chainId !== null) {
+      throw new Error(`a ${fundsClass} deposit cannot name a chain`);
+    }
+    if (input.assetId !== undefined && input.assetId !== null && !/^eip155:\d+:0x[0-9a-f]{40}$/.test(input.assetId)) {
+      throw new Error("a deposit asset id must be eip155:<chain>:<contract>");
+    }
     return this.tx(() => {
       const existing = this.deposit(input.id);
       if (existing) {
@@ -596,15 +668,18 @@ export class Ledger {
             `deposit ${input.id} already exists for ${existing.consumerId} at ${existing.amountNanos} nanos; it cannot be replayed with another amount`,
           );
         }
+        if (existing.fundsClass !== fundsClass || existing.chainId !== chainId) {
+          throw new Error(`deposit ${input.id} is already a ${existing.fundsClass} deposit and cannot be reclassified`);
+        }
         return { deposit: existing, created: false };
       }
       const at = input.at ?? nowIso();
       this.db
         .query(
-          "INSERT INTO deposits(id,consumer_id,amount_nanos,source,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO deposits(id,consumer_id,amount_nanos,source,funds_class,chain_id,asset_id,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
-        .run(input.id, input.consumerId, input.amountNanos, input.source, "intent", null, null, null, at, null, null);
-      this.event(input.consumerId, "deposit-intent", { depositId: input.id, amountNanos: input.amountNanos, source: input.source });
+        .run(input.id, input.consumerId, input.amountNanos, input.source, fundsClass, chainId, input.assetId ?? null, "intent", null, null, null, at, null, null);
+      this.event(input.consumerId, "deposit-intent", { depositId: input.id, amountNanos: input.amountNanos, source: input.source, fundsClass });
       return { deposit: this.deposit(input.id)!, created: true };
     });
   }

@@ -124,7 +124,11 @@ export function assertNoMainnetAutoRecharge(input: { chainId: number; operation?
  */
 export function creditSourceChainId(source: unknown): number | null {
   if (typeof source !== "string") return null;
-  const match = /^(?:chain|mainnet):(\d+)(?=\D|$)/.exec(source);
+  // Normalize case and whitespace so `Chain:56`, ` chain : 56` cannot evade the
+  // mainnet ledger gate. Unknown source formats are additionally refused by the
+  // ledger's funds-class classifier.
+  const normalized = source.trim().toLowerCase();
+  const match = /^(?:chain|mainnet)\s*:\s*(\d+)(?=\D|$)/.exec(normalized);
   if (!match) return null;
   const chainId = Number(match[1]);
   return Number.isSafeInteger(chainId) ? chainId : null;
