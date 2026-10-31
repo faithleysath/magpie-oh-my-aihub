@@ -12,9 +12,10 @@ import { Service, type SupervisorLike } from "../src/service.ts";
 import { consoleAction, CONSOLE_ACTIONS } from "../src/console-api.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta } from "../src/magpie.ts";
-import { emptyPortLedger, SocketBinder, type PortBinder, type PortReservation } from "../src/ports.ts";
+import { emptyPortLedger, SocketBinder } from "../src/ports.ts";
 import { loadState } from "../src/state.ts";
 import { ConsoleInputError } from "../src/console-server.ts";
+import { FakeBinder } from "./support/fake-ports.ts";
 
 const NATIVE = "alpha";
 const NATIVE_MODEL = "alpha/native-model";
@@ -127,34 +128,6 @@ class FakeSupervisor implements SupervisorLike {
       lanIp: "127.0.0.1",
       lastCheckAt: "2026-10-31T00:00:05.000Z",
     };
-  }
-}
-
-/** In-memory PID-less binder: `busy` simulates a foreign listener. */
-class FakeBinder implements PortBinder {
-  held = new Set<string>();
-  busy = new Set<string>();
-  static key(host: string, port: number) {
-    return `${host}:${port}`;
-  }
-  async reserve(host: string, port: number): Promise<PortReservation | null> {
-    const key = FakeBinder.key(host, port);
-    if (this.held.has(key) || this.busy.has(key)) return null;
-    this.held.add(key);
-    return {
-      host,
-      port,
-      release: async () => {
-        this.held.delete(key);
-      },
-    };
-  }
-  async isFree(host: string, port: number): Promise<boolean> {
-    const key = FakeBinder.key(host, port);
-    return !this.held.has(key) && !this.busy.has(key);
-  }
-  occupy(host: string, port: number) {
-    this.busy.add(FakeBinder.key(host, port));
   }
 }
 
@@ -282,6 +255,46 @@ describe("join-network: three fields, everything else automatic", () => {
     expect(second.peers).toEqual(["tcp://198.51.100.7:11010"]);
   });
 
+  test("editing a network may omit the secret and keeps the stored one", async () => {
+    const svc = await service({ config: false });
+    await svc.joinNetwork({ networkName: "omp-lab", networkSecret: "omp-lab-secret" });
+    const secret = svc.config()!.networkSecret;
+    await svc.joinNetwork({ networkName: "omp-lab-edited" });
+    expect(svc.config()!.networkName).toBe("omp-lab-edited");
+    expect(svc.config()!.networkSecret).toBe(secret);
+    // A first join still needs a secret (a fresh data directory has nothing to keep).
+    const here = process.cwd();
+    process.chdir(mkdtempSync(join(tmpdir(), "ohmyaihub-phase10-blank-")));
+    try {
+      const blank = await service({ config: false });
+      await expect(blank.joinNetwork({ networkName: "another-lab" })).rejects.toThrow(/networkSecret/);
+    } finally {
+      process.chdir(here);
+    }
+  });
+
+  test("a restart keeps the identity, providers and the port ledger", async () => {
+    const svc = await service({ config: false });
+    await svc.joinNetwork({ networkName: "omp-lab", networkSecret: "omp-lab-secret" });
+    const first = svc.config()!;
+    const restarted = new Service({
+      magpie: magpie as never,
+      magpieVersion: "magpie 0.1.2289",
+      supervisor: new FakeSupervisor(),
+      lanIp: () => "127.0.0.1",
+      probeTimeoutMs: 100,
+      ports: { binder },
+      probes: { catalogModels: async () => catalogModels(), statusWith: async () => true },
+    });
+    services.push(restarted);
+    const again = restarted.config()!;
+    expect(again.nodeId).toBe(first.nodeId);
+    expect(again.instanceId).toBe(first.instanceId);
+    expect(again.networkSecret).toBe(first.networkSecret);
+    expect(again.secureIdentity).toEqual(first.secureIdentity);
+    expect(loadState().state.ports.version).toBe(1);
+  });
+
   test("the console rejects role/port fields and short secrets", async () => {
     const svc = await service({ config: false });
     await expect(
@@ -327,6 +340,45 @@ describe("share-native-models: one explicit transaction", () => {
     expect(svc.config()!.share.models).toEqual(before.share.models);
     expect(svc.config()!.catalog.enabled).toBe(false);
     expect(svc.statusSnapshotForTest().catalog.publishing).toBe(false);
+  });
+
+  test("a catalogue port held by another process is migrated with the Forward ACL", async () => {
+    let firstBind = true;
+    const bound: number[] = [];
+    const svc = new Service({
+      magpie: magpie as never,
+      magpieVersion: "magpie 0.1.2289",
+      supervisor: sup,
+      lanIp: () => "127.0.0.1",
+      probeTimeoutMs: 100,
+      ports: { binder, now: () => new Date("2026-10-31T00:00:30.000Z") },
+      probes: {
+        catalogModels: async () => catalogModels(),
+        statusWith: async () => true,
+        catalogHttpGet: async () => ({ status: 404, body: "" }),
+        catalogServer: ({ port }) => {
+          if (firstBind) {
+            firstBind = false;
+            throw new Error("Failed to start server. Is port 3426 in use?");
+          }
+          bound.push(port);
+          return { port, stop: () => {} };
+        },
+      },
+    });
+    services.push(svc);
+    await svc.configure({ sharingEnabled: false, consumingEnabled: true, networkName: "phase10-lab", networkSecret: "phase10-lab-secret" });
+    const net = await svc.shareNativeModels({ models: [PRICED], confirm: true });
+    const cfg = svc.config()!;
+    expect(cfg.catalog.port).not.toBe(3426);
+    expect(bound).toEqual([cfg.catalog.port]);
+    const migration = loadState().state.ports.migrations.find((m) => m.purpose === "catalog");
+    expect(migration).toMatchObject({ purpose: "catalog", from: 3426, to: cfg.catalog.port });
+    // The ACL is regenerated from the config, so it names the migrated port.
+    expect(sup.cfg!.publishedPorts).toContain(cfg.catalog.port);
+    expect(net.catalog.server.port).toBe(cfg.catalog.port);
+    expect(net.catalog.publishing).toBe(true);
+    expect(net.catalog.quote!.modelCount).toBe(1);
   });
 
   test("stop-sharing withdraws the export and the catalogue but keeps the selection", async () => {

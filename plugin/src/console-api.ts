@@ -63,7 +63,10 @@ export async function consoleAction(service: Service, name: string, input: Recor
       case "join-network": {
         fields(input,["networkName","networkSecret","initialNode"]);
         const networkName = text(input.networkName,"networkName",63);
-        const networkSecret = text(input.networkSecret,"networkSecret",256);
+        // Editing keeps the stored secret when the field is left blank; a first
+        // join has no stored secret and the service refuses an empty one.
+        let networkSecret: string | undefined;
+        if (input.networkSecret !== undefined && input.networkSecret !== "") networkSecret = text(input.networkSecret,"networkSecret",256);
         let initialNode: string | null = null;
         if (input.initialNode !== undefined && input.initialNode !== null && input.initialNode !== "") {
           initialNode = text(input.initialNode,"initialNode",255).trim();
