@@ -13,14 +13,17 @@ minVersion = "8.30.0"
 [extend]
 useDefault = true
 
-# Public EVM contract addresses are identifiers, not credentials. The shape is
-# 0x + 40 hex; key material (32 bytes) is 64 hex and cannot match.
+# Public EVM contract addresses are identifiers, not credentials. This must be
+# finding-scoped (`match`, not `line`): a privateKey on the same line is a
+# separate finding and must still be reported. The trailing boundary is
+# RE2-compatible (no lookahead) and stops 0x + 64 hex key material from
+# matching its first 40 hex.
 [[allowlists]]
 description = "EVM contract address recorded in token/tokenContract fields"
 condition = "AND"
 rules = ['generic-api-key']
-regexTarget = "line"
-regexes = ['(?i)"?(?:token|token_?contract)"?\s*[:=]\s*"?0x[0-9a-f]{40}"?']
+regexTarget = "match"
+regexes = ['(?i)"?(?:token|token_?contract)"?\s*[:=]\s*"?0x[0-9a-f]{40}(?:[^0-9a-fA-F]|$)']
 
 # Evidence manifests record SHA-256 digests of two artefact names. The key and
 # the 64-hex value shape must both match; any other key or line is reported.

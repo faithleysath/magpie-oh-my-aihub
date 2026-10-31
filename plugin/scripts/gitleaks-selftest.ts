@@ -54,6 +54,12 @@ try {
   write(scanDir, "plugin/oh-my-aihub/config.toml", [`network_secret = "${randomAlnum(40)}"`]);
   write(scanDir, "plugin/lab/private.pem", fakePem().split("\n"));
   write(scanDir, "plugin/src/notes.ts", [`const privateKey = "${randomHex(32)}";`]);
+  // A 32-byte key accidentally written into a token field must be reported.
+  write(scanDir, "plugin/src/token-64.ts", [`const tokenContract = "0x${randomHex(32)}";`]);
+  // A legitimate 40-hex token must not swallow a 64-hex privateKey on the same line.
+  write(scanDir, "plugin/src/token-mixed.ts", [
+    `const token = "0x${randomHex(20)}"; const privateKey = "0x${randomHex(32)}";`,
+  ]);
   // Non-allowlisted line in an allowlisted file: the allowlist is line-scoped.
   write(scanDir, "plugin/test/page-settings.test.ts", [
     `const x = { networkSecret: "${randomAlnum(40)}" };`,
@@ -89,6 +95,8 @@ try {
     "generic-api-key plugin/oh-my-aihub/config.toml:1",
     "private-key plugin/lab/private.pem:1",
     "generic-api-key plugin/src/notes.ts:1",
+    "generic-api-key plugin/src/token-64.ts:1",
+    "generic-api-key plugin/src/token-mixed.ts:1",
     "generic-api-key plugin/test/page-settings.test.ts:1",
     "generic-api-key plugin/test/wallet-vault.test.ts:1",
     "generic-api-key docs/validation/phase7-twohost/manifest.json:3",
@@ -112,6 +120,12 @@ try {
   const unexpected = actual.filter((a) => !expected.includes(a));
   if (missing.length > 0) fail(`not reported (policy too permissive or fixture missing): ${missing.join(", ")}`);
   if (unexpected.length > 0) fail(`unreviewed findings (policy too broad or false positive): ${unexpected.join(", ")}`);
+  // File:line alone cannot distinguish two findings on one line; require the
+  // privateKey finding itself, not just the token finding that is allowed.
+  const mixed = findings.filter((f) => f.File === "plugin/src/token-mixed.ts");
+  if (!mixed.some((f) => /privateKey/i.test(f.Match ?? ""))) {
+    fail("same-line privateKey was swallowed by the token/tokenContract allowlist");
+  }
 
   console.log(`gitleaks self-test PASS: ${expected.length} synthetic secrets reported, public fixtures quiet, rules stay scoped`);
 } finally {
