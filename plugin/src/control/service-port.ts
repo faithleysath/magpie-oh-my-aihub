@@ -224,7 +224,9 @@ export function approve(service: Service, input: ControlApproveInput): Promise<C
       return refuse("quote_mismatch", "approved models must be a subset of the request");
     }
     const legacy = toConnectionRequest(input.document, capUsd);
-    const view = await service.approveConnectionRequest(legacy, models, capUsd);
+    // This is the explicit B human-approval path. A previously revoked consumer
+    // may be re-approved as a new generation; history stays append-only.
+    const view = await service.approveConnectionRequest(legacy, models, capUsd, { reactivate: true });
     if (view.revokedAt) return refuse("conflict", "the consumer was revoked while approving");
     if (view.models.length !== models.length || !sameSet(view.models, models) || view.capUsd !== capUsd) {
       return refuse("conflict", "the consumer authorization differs from the approved request; review it again");

@@ -280,6 +280,14 @@ export class PaymentP2pHost {
     const allowedNetworks = networks.filter((chain) => assets.some((a) => a.assetId.startsWith(`eip155:${chain}:`)));
     const store = new P2pPaymentStore(statePath("p2p-payment.sqlite"));
     const port = createNodePaymentPort(app);
+    // Read the registry again for every payment frame: a test asset registered
+    // after the host started must be usable without a host restart.
+    const allowedNow = () => {
+      const current = wallet.registryView().enabledAssets()
+        .filter((a) => networks.includes(a.chainId) && a.enabled && a.credit && a.pricing.kind === "fixed-test-rate" && a.testnetOnly)
+        .map((a) => ({ assetId: a.assetId, contractAddress: a.contractAddress.toLowerCase(), decimals: a.decimals }));
+      return { networks: [...new Set(current.map((a) => Number(a.assetId.split(":")[1])))].filter((n) => Number.isSafeInteger(n)), assets: current };
+    };
     const provider = new ProviderPaymentService({
       node,
       config: {
@@ -292,6 +300,7 @@ export class PaymentP2pHost {
         allowedNetworks,
         allowedAssets: assets,
       },
+      allowedNow,
       wallet,
       store,
       authorizationFor: (consumerNodeId) => {

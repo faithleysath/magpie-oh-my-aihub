@@ -396,10 +396,6 @@ export class ControlApp {
       !existing.expiresAt ||
       Date.parse(existing.expiresAt) - this.now().getTime() <= 60_000;
     if (!stale) return existing!;
-    if (existing) {
-      await this.dropForward(nodeId);
-      this.endpoints.delete(nodeId);
-    }
     const res = await socksHttpGet({
       socksPort: cfg.catalog.socksPort,
       host: mappedHost(peer.mappedCidr),
@@ -415,6 +411,40 @@ export class ControlApp {
     let endpoint: Endpoint;
     const mapped = presence.endpoint.mappedCidr ?? peer.mappedCidr;
     if (mapped) {
+      // A presence refresh near the TTL is not an endpoint change. The Forward
+      // is a static loopback->overlay mapping; recreating it on every refresh
+      // forced a supervised core restart every ~64 s (EasyTier 2.6.4 cannot
+      // close a live forward). Reuse it while the signed address, control port
+      // and identity are unchanged, and only refresh the evidence timestamps.
+      const sameForward =
+        existing &&
+        existing.mappedCidr === mapped &&
+        existing.fingerprint === presence.node.fingerprint &&
+        existing.hostHeader === `${mappedHost(mapped)}:${presence.endpoint.controlPort}`;
+      if (sameForward) {
+        const refreshed: Endpoint = {
+          ...existing!,
+          quoteHash: peer.quoteHash,
+          fingerprint: presence.node.fingerprint,
+          expiresAt: presence.expiresAt,
+        };
+        this.endpoints.set(nodeId, refreshed);
+        this.seenPresence.set(presence.node.nodeId, presence);
+        this.applyPresenceCapability(presence);
+        this.registerPeer(presence.node.nodeId, refreshed, {
+          accountId: presence.node.fingerprint,
+          nodeId: presence.node.nodeId,
+          fingerprint: presence.node.fingerprint,
+          mappedCidr: presence.endpoint.mappedCidr,
+          controlPort: presence.endpoint.controlPort,
+          catalogQuoteHash: peer.quoteHash,
+        });
+        return refreshed;
+      }
+      if (existing) {
+        await this.dropForward(nodeId);
+        this.endpoints.delete(nodeId);
+      }
       // The signed endpoint is the mapped overlay address. Use the existing
       // EasyTier Forward path to a local owner-proven loopback port; never fall
       // back to a LAN address in production.
@@ -457,6 +487,10 @@ export class ControlApp {
         expiresAt: presence.expiresAt,
       };
     } else if (this.allowLanDirect) {
+      if (existing) {
+        await this.dropForward(nodeId);
+        this.endpoints.delete(nodeId);
+      }
       endpoint = {
         host: presence.endpoint.host,
         port: presence.endpoint.controlPort,

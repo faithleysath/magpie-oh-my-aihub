@@ -184,6 +184,12 @@ export interface ServiceDeps {
    * (or a fake supervisor) so no listener is created on the host.
    */
   ports?: { binder?: PortBinder; ownership?: SocketOwnershipProbe; now?: () => Date };
+  /**
+   * Host ownership proof. Only the instance holding the host lock may start,
+   * adopt, restart or stop the shared overlay core. A probe/secondary instance
+   * is read-only: it must leave the core, its config and its forwards alone.
+   */
+  ownsHost?: () => boolean;
 }
 
 /**
@@ -545,6 +551,7 @@ export class Service {
   private cachedChecksError: string | null = null;
   private binder: PortBinder;
   private ownership: SocketOwnershipProbe;
+  private readonly ownsHost: () => boolean;
   /** one core restart at a time for forward recovery; avoids nested serialize */
   private forwardMigrationBusy = false;
   /** per-provider backoff so a stuck recovery cannot restart the core every tick */
@@ -569,6 +576,8 @@ export class Service {
     }
     this.binder = deps.ports?.binder ?? new SocketBinder();
     this.ownership = deps.ports?.ownership ?? new OsSocketOwnership();
+    this.ownsHost = deps.ownsHost ?? (() => true);
+    for (const f of this.state.controlForwards) this.controlForwards.set(f.bindAddr, { bindAddr: f.bindAddr, dstAddr: f.dstAddr });
     this.clock = deps.ports?.now ?? (() => new Date());
     this.probes = { ...defaultProbes(deps.magpie), ...(deps.probes ?? {}) };
     this.accountingTickMs = Math.max(10, deps.accountingTickMs ?? ACCOUNTING_TICK_MS);
@@ -599,7 +608,7 @@ export class Service {
             logger.info(`export moved to ${cidr}; plugin state updated`);
           }
         },
-      });
+      }, { ownsHost: () => this.ownsHost() });
     // The durable ledger needs Magpie's effective prices. A test double that
     // cannot report them keeps the legacy behaviour rather than failing every
     // key; the real Magpie always has catalogModels().
@@ -1146,6 +1155,7 @@ export class Service {
   // --- lifecycle -------------------------------------------------------------
 
   async start(): Promise<void> {
+    if (!this.ownsHost()) throw new Error("this Service instance does not own the host; refusing to start or adopt the overlay core");
     const cfg = this.state.config;
     let coreReady = true;
     if (cfg?.sharingEnabled && cfg.share.models.some((m) => m.includes("*"))) {
@@ -1278,6 +1288,7 @@ export class Service {
     } catch {
       /* the supervisor reports its own state */
     }
+    if (!this.ownsHost()) return;
     await this.recoverCoreIfHalted().catch((e) => logger.warn(`core recovery failed: ${String(e)}`));
     if (this.busy()) return;
     // Detect a change made to Magpie's provider list outside the plugin. This is
@@ -1405,6 +1416,11 @@ export class Service {
     this.stopCatalogServer();
     this.stopPresenceServer();
     this.walletInstance?.stop();
+    if (!this.ownsHost()) {
+      // A secondary/probe instance never stops the core it did not start.
+      logger.warn("non-owner Service stop: leaving the shared overlay core untouched");
+      return;
+    }
     await this.supervisor.stop();
   }
 
@@ -2055,6 +2071,11 @@ export class Service {
   }
 
   private async applyConfig(cfg: PluginConfig): Promise<void> {
+    if (!this.ownsHost()) throw new Error("this Service instance does not own the host; refusing to rewrite or restart the overlay core");
+    if (process.env.OH_MY_AIHUB_TRACE === "1") {
+      const caller = (new Error().stack ?? "").split("\n").slice(2, 4).map((l) => l.trim()).join(" | ");
+      logger.info(`trace applyConfig ${caller}`);
+    }
     await this.ensureConfiguredPorts(cfg);
     await this.supervisor.start(this.etConfig(cfg));
     await this.supervisor.refresh().catch(() => this.supervisor.snapshot());
@@ -2118,6 +2139,21 @@ export class Service {
     return [...this.forwardSpecs(), ...[...this.controlForwards.values()].map((f) => ({ ...f }))];
   }
 
+  /** Read-only view of the owned control forwards (tests and diagnostics). */
+  controlForwardView(): ForwardSpec[] {
+    return [...this.controlForwards.values()].map((f) => ({ ...f }));
+  }
+
+  /** The canonical owned control-forward set survives a host handover. */
+  private persistControlForwards(): void {
+    const next = [...this.controlForwards.values()].slice(0, 16).map((f) => ({ bindAddr: f.bindAddr, dstAddr: f.dstAddr }));
+    const same = next.length === this.state.controlForwards.length &&
+      next.every((f, i) => this.state.controlForwards[i]?.bindAddr === f.bindAddr && this.state.controlForwards[i]?.dstAddr === f.dstAddr);
+    if (same) return;
+    this.state.controlForwards = next;
+    saveState(this.state);
+  }
+
   /**
    * Opens a control forward and makes it part of the canonical set before the
    * listener exists: the supervisor's safety check must expect exactly this
@@ -2131,6 +2167,7 @@ export class Service {
     try {
       const added = await this.supervisor.addPortForward(bind, dstAddr);
       this.supervisor.setForwards(this.allForwardSpecs());
+      this.persistControlForwards();
       return added;
     } catch (error) {
       if (existing) this.controlForwards.set(bind, existing);
@@ -4324,6 +4361,7 @@ export class Service {
           this.controlForwards.set(f.bindAddr, { bindAddr: f.bindAddr, dstAddr: f.dstAddr });
         }
       }
+      this.persistControlForwards();
       this.supervisor.setForwards(this.allForwardSpecs());
       if (extras.length > 0) {
         // A manual/foreign forward is not ours to import or silently rebuild.
@@ -4603,7 +4641,7 @@ export class Service {
   }
 
   /** Keep quote validation and issuance in the same service operation and consumer lock. */
-  async approveConnectionRequest(request: ConnectionRequest, models: string[], capUsd: number): Promise<ConsumerView> {
+  async approveConnectionRequest(request: ConnectionRequest, models: string[], capUsd: number, opts: { reactivate?: boolean } = {}): Promise<ConsumerView> {
     capOnGrid(capUsd);
     return this.serialize(async () => {
       await this.publishCatalogNow();
@@ -4616,16 +4654,21 @@ export class Service {
       // A repeat is a no-op only for the exact existing approval. It must never
       // turn into an implicit top-up or silently widen an existing account.
       const existing = this.provisioner.find(request.consumer.nodeId);
-      if (existing && (existing.revokedAt || existing.acceptedQuoteHash !== request.quote.contentHash || existing.capUsd !== capUsd || !sameSet(existing.models, chosen.models))) {
+      if (existing?.revokedAt && !opts.reactivate) {
+        throw new RequestValidationError("this consumer was revoked; an explicit re-approval is required");
+      }
+      if (existing && !existing.revokedAt && (existing.acceptedQuoteHash !== request.quote.contentHash || existing.capUsd !== capUsd || !sameSet(existing.models, chosen.models))) {
         throw new RequestValidationError("this consumer already has a different authorization; manage its existing account explicitly");
       }
       return this.ensureConsumer(request.consumer.nodeId, chosen.models, capUsd, {
+        reactivate: Boolean(opts.reactivate && existing?.revokedAt),
         hash: request.quote.contentHash,
         priceVersion: chosen.priceVersion,
         beforeApply: () => {
           validateRequestApproval(request, this.requestApprovalContext(), chosen.models);
           this.assertShareable(chosen.models);
           const current = this.provisioner.find(request.consumer.nodeId);
+          if (opts.reactivate && current?.revokedAt) return;
           if (current && (current.revokedAt || current.acceptedQuoteHash !== request.quote.contentHash || current.capUsd !== capUsd || !sameSet(current.models, chosen.models))) {
             throw new RequestValidationError("this consumer authorization changed while approval was waiting; review it again");
           }
@@ -4689,7 +4732,7 @@ export class Service {
     consumerId: string,
     models: string[],
     capUsd: number,
-    quote: { hash?: string; priceVersion?: string; beforeApply?: () => void } = {},
+    quote: { hash?: string; priceVersion?: string; beforeApply?: () => void; reactivate?: boolean } = {},
   ): Promise<ConsumerView> {
     this.assertShareable(models);
     const v = await this.provisioner.ensure(consumerId, {
@@ -4698,6 +4741,7 @@ export class Service {
       quoteHash: quote.hash,
       quotePriceVersion: quote.priceVersion,
       beforeApply: quote.beforeApply,
+      reactivate: quote.reactivate === true,
     });
     if (!this.state.consumers.includes(consumerId)) this.state.consumers.push(consumerId);
     saveState(this.state);

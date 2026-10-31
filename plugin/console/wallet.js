@@ -553,7 +553,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
       openDialog("导出未签名账单", (root) => { root.append(p("此账单来自本机账本与已获取的核验记录。文件摘要只能用于内容完整性核对，不是签名或付款证明。只包含此伙伴的记录，不包含访问密钥。"), button("下载此伙伴账单", () => download(document, "aihub-consumer-statement.json"), true)); });
     }, { refresh: false })));
     if (!consumer.revokedAt) actions.append(button("核对并重新签发", () => void run("consumer-check", { consumerId: consumer.consumerId }, (preview) => reissue(consumer, preview))));
-    if (!consumer.revokedAt) actions.append(button("撤销此伙伴授权", () => confirm("撤销此伙伴授权", "原有访问密钥会失效，账目保留。撤销不会退还或重建任何费用。", "consumer-revoke", { consumerId: consumer.consumerId })));
+    if (!consumer.revokedAt) actions.append(button("撤销旧版伙伴授权（高级）", () => confirm("撤销旧版伙伴授权（高级）", "原有访问密钥会失效，账目保留。撤销不会退还或重建任何费用。", "consumer-revoke", { consumerId: consumer.consumerId })));
     card.append(actions);
     for (const gap of rows(ledger.gaps).filter((gap) => !gap.resolvedAt)) {
       const node = el("div", null, "wallet-gap"); node.append(el("p", "存在尚未解决的使用日志缺口，历史费用可能缺失。", "inline-warning"), details("日志缺口证据", [["日志标识", gap.logId], ["原因", gap.reason]]), button("审计并接受当前基线", () => resolveGap(consumer, gap))); card.append(node);

@@ -23,6 +23,7 @@ import { backupFile, readJsonWithBackup, writeJsonAtomic } from "./store.ts";
 import { logger, registerSecret } from "./log.ts";
 import { randomMappedCidr } from "./addresses.ts";
 import { emptyPortLedger, normalizePortLedger, type PortLedger } from "./ports.ts";
+import type { ForwardSpec } from "./easytier.ts";
 
 export const STATE_VERSION = 4;
 
@@ -353,6 +354,12 @@ export interface PluginState {
   /** loopback forwards left behind by an EasyTier that cannot remove them live */
   orphanForwards: OrphanForward[];
   /**
+   * Owned control forwards (loopback -> overlay control endpoint). Persisted so
+   * a successor host adopts the same canonical set instead of treating a live
+   * forward as foreign; only the owner may add or remove them.
+   */
+  controlForwards: ForwardSpec[];
+  /**
    * Set while sharing is withdrawn because the native/remote split cannot be
    * proven (Magpie's provider list is unreadable). The operator's intent
    * (`config.sharingEnabled`) is kept; the export is not.
@@ -403,6 +410,7 @@ interface LegacyState {
   providers?: ProviderConnection[];
   providerWiring?: LegacyWiring | null;
   orphanForwards?: OrphanForward[];
+  controlForwards?: unknown;
   shareSuspended?: ShareSuspension | null;
   ports?: unknown;
 }
@@ -685,6 +693,16 @@ export function loadState(): LoadedState {
     consumers: Array.isArray(value.consumers) ? value.consumers.map(String) : [],
     providers,
     orphanForwards: Array.isArray(value.orphanForwards) ? value.orphanForwards : [],
+    controlForwards: Array.isArray(value.controlForwards)
+      ? value.controlForwards.filter(
+          (f): f is ForwardSpec =>
+            Boolean(f) &&
+            typeof (f as ForwardSpec).bindAddr === "string" &&
+            /^127\.0\.0\.1:\d{1,5}$/.test((f as ForwardSpec).bindAddr) &&
+            typeof (f as ForwardSpec).dstAddr === "string" &&
+            /^10\.66\.\d{1,3}\.\d{1,3}:\d{1,5}$/.test((f as ForwardSpec).dstAddr),
+        )
+      : [],
     shareSuspended: value.shareSuspended ?? null,
     ports: normalizePortLedger((value as LegacyState & { ports?: unknown }).ports),
   };
@@ -711,6 +729,7 @@ export function emptyState(): PluginState {
     consumers: [],
     providers: [],
     orphanForwards: [],
+    controlForwards: [],
     shareSuspended: null,
     ports: emptyPortLedger(),
   };

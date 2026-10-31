@@ -494,7 +494,15 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
             : state === "degraded"
               ? "The overlay is running, but its state could not be fully proven."
               : state === "online"
-                ? `已连接到 ${neighbors.length} 个伙伴。`
+                ? (() => {
+                    // Only a fresh, explicitly online neighbour is a connected
+                    // peer. A withdrawn catalogue entry or a last-known row must
+                    // not keep a stopped node in the headline count.
+                    const live = neighbors.filter((n) => n.online === true).length;
+                    const lastKnown = neighbors.length - live;
+                    if (live > 0) return `已连接到 ${live} 个伙伴。${lastKnown ? ` 另有 ${lastKnown} 个最后已知邻居。` : ""}`;
+                    return lastKnown ? `当前没有在线的邻居；${lastKnown} 个为最后已知。` : "已连接到 0 个伙伴。";
+                  })()
                 : "Network state is unknown.";
 
   const quoteModels = input.catalog.quote?.models.length ?? null;

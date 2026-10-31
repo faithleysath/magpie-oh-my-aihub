@@ -780,11 +780,11 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           // clear so the operator can retry after fixing the quote.
           const recovered = recoverApproval(pending, service, now().toISOString());
           if (recovered) {
-            saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, recovered] });
+            saveApprovals(approvalStateFile, { version: 1, approvals: [...records, recovered] });
             return materialsFrom(recovered);
           }
           if (!service.provisioner.find(input.consumer.nodeId)) {
-            saveApprovals(approvalStateFile, { version: 1, approvals: state.approvals });
+            saveApprovals(approvalStateFile, { version: 1, approvals: records });
           } else {
             const failed: ApprovalRecord = {
               ...pending,
@@ -792,7 +792,7 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
               error: String((error as Error)?.message ?? error).slice(0, 300),
               updatedAt: now().toISOString(),
             };
-            saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, failed] });
+            saveApprovals(approvalStateFile, { version: 1, approvals: [...records, failed] });
           }
           throw error;
         }
@@ -808,7 +808,7 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           error: null,
           updatedAt: now().toISOString(),
         };
-        saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, approved] });
+        saveApprovals(approvalStateFile, { version: 1, approvals: [...records, approved] });
         return materials;
       });
     },
