@@ -26,6 +26,7 @@ import {
   WalletVault,
   WalletVaultError,
   createStaticChainPolicy,
+  paymentWorstCaseWei,
   validateAutoRechargePolicy,
   type AutoRechargePolicy,
   type WalletTypedData,
@@ -97,9 +98,52 @@ async function openVault(options: Partial<Parameters<typeof WalletVault.open>[0]
     sessionTtlMs: 1_000,
     chainPolicy: TEST_POLICY,
     purposes: [PAYMENT_PURPOSE],
+    isolatedSimulationChains: [31337],
     ...options,
   });
   return { dir, path, vault };
+}
+
+async function openProductionVault(options: Partial<Parameters<typeof WalletVault.open>[0]> = {}) {
+  const { dir, path } = await freshPath();
+  const vault = await WalletVault.open({
+    path,
+    kdf: TEST_KDF,
+    sessionTtlMs: 1_000,
+    chainPolicy: TEST_POLICY,
+    purposes: [PAYMENT_PURPOSE],
+    ...options,
+  });
+  return { dir, path, vault };
+}
+
+function simplePurpose(chainId: number): WalletTypedDataPurpose {
+  return {
+    id: `p${chainId}`,
+    chainId,
+    primaryType: "P",
+    domainName: "d",
+    domainVersion: "1",
+    verifyingContracts: [PAYEE],
+    messageTypes: { a: "uint256" },
+  };
+}
+
+function simpleDoc(chainId: number): WalletTypedData {
+  return {
+    domain: { name: "d", version: "1", chainId, verifyingContract: PAYEE },
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "verifyingContract", type: "address" },
+      ],
+      P: [{ name: "a", type: "uint256" }],
+    },
+    primaryType: "P",
+    message: { a: 1 },
+  } as WalletTypedData;
 }
 
 function errorCode(error: unknown): string | null {
@@ -376,13 +420,37 @@ describe("x-ethers metadata and mnemonic integrity", () => {
     (addressTamper["x-ethers"] as Record<string, unknown>).gethFilename = `UTC--2026-10-31T00-00-00.0Z--${VECTOR_24_ADDRESS.slice(2).toLowerCase()}`;
     await write(addressTamper);
     const addressVault = await WalletVault.open({ path, kdf: TEST_KDF });
+    expect(addressVault.snapshot().addressVerified).toBe(false);
     await expect(addressVault.unlock(PASSWORD)).rejects.toBeInstanceOf(WalletVaultError);
     expect(addressVault.snapshot().status).toBe("locked");
+    expect(addressVault.snapshot().addressVerified).toBe(false);
 
     const kdfTamper = structuredClone(original);
     (kdfTamper.crypto ?? kdfTamper.Crypto).kdfparams.n = "32768";
     await write(kdfTamper);
     await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toBeInstanceOf(WalletVaultError);
+  });
+
+  test("historical ethers/6.x client metadata is compatible; unknown formats fail closed", async () => {
+    const { path, vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    const original = JSON.parse(await readFile(path, "utf8"));
+
+    for (const client of ["ethers/6.16.0", "ethers/6.17.1"]) {
+      const copy = structuredClone(original);
+      (copy["x-ethers"] as Record<string, unknown>).client = client;
+      await writeFile(path, `${JSON.stringify(copy)}\n`, { mode: 0o600 });
+      const opened = await WalletVault.open({ path, kdf: TEST_KDF });
+      expect(opened.snapshot().addressVerified).toBe(false);
+      await expect(opened.unlock(PASSWORD)).resolves.toMatchObject({ status: "unlocked", addressVerified: true });
+    }
+
+    for (const client of ["ethers/not-pinned", "evm/1.0.0", "", "ethers/7.0.0"]) {
+      const copy = structuredClone(original);
+      (copy["x-ethers"] as Record<string, unknown>).client = client;
+      await writeFile(path, `${JSON.stringify(copy)}\n`, { mode: 0o600 });
+      await expect(WalletVault.open({ path, kdf: TEST_KDF })).rejects.toMatchObject({ code: "keystore-invalid" });
+    }
   });
 });
 
@@ -426,6 +494,7 @@ describe("lock, TTL, restart and password change", () => {
     await vault.unlock(PASSWORD);
     vault.lock();
     expect(vault.snapshot().status).toBe("locked");
+    expect(vault.snapshot().addressVerified).toBe(false);
     await expect(vault.signPayment({ prepared: vault.preparePayment(paymentInput()), permit })).rejects.toMatchObject({
       code: "wallet-locked",
     });
@@ -672,14 +741,16 @@ describe("sensitive exports", () => {
     const { vault } = await openVault();
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     const locked = vault.snapshot();
-    expect(Object.keys(locked).sort()).toEqual(["address", "status", "unlockExpiresAt", "version"]);
+    expect(Object.keys(locked).sort()).toEqual(["address", "addressVerified", "status", "unlockExpiresAt", "version"]);
+    expect(locked.addressVerified).toBe(false);
     expect(JSON.stringify(locked)).not.toContain(PASSWORD);
     expect(JSON.stringify(locked)).not.toContain(VECTOR_12);
     expect(JSON.stringify(locked)).not.toContain(VECTOR_12_PRIVATE_KEY);
 
     await vault.unlock(PASSWORD);
     const unlocked = vault.snapshot();
-    expect(Object.keys(unlocked).sort()).toEqual(["address", "status", "unlockExpiresAt", "version"]);
+    expect(unlocked.addressVerified).toBe(true);
+    expect(Object.keys(unlocked).sort()).toEqual(["address", "addressVerified", "status", "unlockExpiresAt", "version"]);
     expect(JSON.stringify(unlocked)).not.toContain(PASSWORD);
     expect(JSON.stringify(unlocked)).not.toContain(VECTOR_12);
     expect(JSON.stringify(unlocked)).not.toContain(VECTOR_12_PRIVATE_KEY);
@@ -781,6 +852,58 @@ describe("EIP-712 preview and scoped signing", () => {
     ).toBe(VECTOR_12_ADDRESS);
   });
 
+  test("a DepositIntent message.chainId/assetId cannot disagree with domain/purpose", async () => {
+    const depositPurpose: WalletTypedDataPurpose = {
+      id: "deposit-intent-97",
+      chainId: 97,
+      primaryType: "DepositIntent",
+      domainName: DEPOSIT_DOMAIN_NAME,
+      domainVersion: DEPOSIT_DOMAIN_VERSION,
+      verifyingContracts: [DEPOSIT_VERIFYING_CONTRACT],
+      messageTypes: Object.fromEntries(DEPOSIT_TYPES.DepositIntent.map((field) => [field.name, field.type])),
+    };
+    const doc = (messageChain: number, assetChain = 97): WalletTypedData => ({
+      domain: {
+        name: DEPOSIT_DOMAIN_NAME,
+        version: DEPOSIT_DOMAIN_VERSION,
+        chainId: 97,
+        verifyingContract: DEPOSIT_VERIFYING_CONTRACT,
+      },
+      types: DEPOSIT_TYPES as unknown as WalletTypedData["types"],
+      primaryType: "DepositIntent",
+      message: {
+        invoiceId: "inv-1",
+        consumerId: "alice",
+        providerId: "p1",
+        chainId: messageChain,
+        assetId: `eip155:${assetChain}:${PAYEE}`,
+        tokenContract: PAYEE,
+        recipient: PAYEE,
+        expectedAmountRaw: "1",
+        nonce: `0x${"11".repeat(16)}`,
+        requestedAt: 1_700_000_000,
+        expiresAt: 1_700_000_600,
+      },
+    });
+    const { vault } = await openProductionVault({ purposes: [depositPurpose] });
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    for (const chainId of [56, 8453, 1]) {
+      const bad = doc(chainId);
+      expect(() => vault.prepareTypedData({ purpose: depositPurpose.id, typedData: bad })).toThrow(
+        expect.objectContaining({ code: "typed-data-invalid" }),
+      );
+      const preview = vault.previewTypedData(bad);
+      expect(preview.signable).toBe(false);
+    }
+    expect(() => vault.prepareTypedData({ purpose: depositPurpose.id, typedData: doc(97, 56) })).toThrow(
+      expect.objectContaining({ code: "typed-data-invalid" }),
+    );
+    const valid = vault.prepareTypedData({ purpose: depositPurpose.id, typedData: doc(97) });
+    const permit = vault.createSigningPermit({ kind: "typed-data", prepared: valid });
+    expect(vault.signTypedData({ prepared: valid, permit }).chainId).toBe(97);
+  });
+
   test("a prepared purpose can sign, and the signature verifies against the vault address", async () => {
     const { vault } = await openVault();
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
@@ -877,8 +1000,8 @@ describe("EIP-712 preview and scoped signing", () => {
       kind: "payment",
       purpose: "payment",
       prepared,
-      maxPerPaymentWei: 1_000_000_000_000_000n,
-      maxTotalWei: 1_000_000_000_000_000n,
+      maxPerPaymentWei: 2_000_000_000_000_000n,
+      maxTotalWei: 2_000_000_000_000_000n,
     });
     const signed = await facade.signPayment({ prepared, permit });
     expect(signed.from).toBe(VECTOR_12_ADDRESS);
@@ -935,7 +1058,7 @@ describe("simulated/testnet payment signing", () => {
       kind: "payment",
       purpose: "payment",
       prepared,
-      maxPerPaymentWei: 1_000_000_000_000_000n,
+      maxPerPaymentWei: 2_000_000_000_000_000n,
       maxTotalWei: 2_000_000_000_000_000n,
       maxUses: 2,
     });
@@ -958,7 +1081,7 @@ describe("simulated/testnet payment signing", () => {
   });
 
   test("the 56/8453 hard deny survives a permissive chain policy", async () => {
-    const permissive = createStaticChainPolicy({ 56: "simulation", 8453: "testnet", 31337: "simulation" });
+    const permissive = { classify: () => "testnet" as const };
     const { vault } = await openVault({ chainPolicy: permissive });
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await vault.unlock(PASSWORD);
@@ -978,8 +1101,8 @@ describe("simulated/testnet payment signing", () => {
       kind: "payment",
       purpose: "payment",
       prepared,
-      maxPerPaymentWei: 1_000_000_000_000_000n,
-      maxTotalWei: 1_000_000_000_000_000n,
+      maxPerPaymentWei: 2_000_000_000_000_000n,
+      maxTotalWei: 2_000_000_000_000_000n,
     });
     const signed = await vault.signPayment({ prepared, permit });
     const parsed = Transaction.from(signed.rawTransaction);
@@ -1015,8 +1138,6 @@ describe("simulated/testnet payment signing", () => {
       kind: "payment",
       purpose: "payment",
       prepared,
-      maxPerPaymentWei: 1_000_000_000_000_000n,
-      maxTotalWei: 1_000_000_000_000_000n,
       maxUses: 1,
     });
     const changedValue = vault.preparePayment(paymentInput({ valueWei: 1_000_000_000_000_001n }));
@@ -1059,13 +1180,55 @@ describe("simulated/testnet payment signing", () => {
       kind: "payment",
       purpose: "auto-recharge",
       prepared,
-      maxPerPaymentWei: 5n,
-      maxTotalWei: 5n,
       maxUses: 1,
     });
     const signed = await vault.signPayment({ prepared, permit });
     expect(signed.purpose).toBe("auto-recharge");
     expect(permit.remainingUses).toBe(0);
+  });
+
+  test("payment permits are capped by worst-case value plus maximum gas cost", async () => {
+    const { vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    const huge = 10n ** 30n;
+    const prepared = vault.preparePayment(
+      paymentInput({ valueWei: 1n, gasLimit: huge, maxFeePerGas: huge, maxPriorityFeePerGas: 0n }),
+    );
+    const worst = paymentWorstCaseWei(prepared);
+    expect(worst).toBe(1n + huge * huge);
+    expect(() =>
+      vault.createSigningPermit({
+        kind: "payment",
+        purpose: "payment",
+        prepared,
+        maxPerPaymentWei: 1n,
+        maxTotalWei: 1n,
+      }),
+    ).toThrow(expect.objectContaining({ code: "signing-permit-limit" }));
+
+    const oneShot = vault.createSigningPermit({ kind: "payment", purpose: "payment", prepared });
+    const signed = await vault.signPayment({ prepared, permit: oneShot });
+    expect(signed.maxGasCostWei).toBe((huge * huge).toString());
+    expect(signed.maxCostWei).toBe(worst.toString());
+    await expect(vault.signPayment({ prepared, permit: oneShot })).rejects.toMatchObject({
+      code: "signing-permit-exhausted",
+    });
+
+    const twoUses = vault.createSigningPermit({
+      kind: "payment",
+      purpose: "payment",
+      prepared,
+      maxUses: 2,
+      maxPerPaymentWei: worst,
+      maxTotalWei: worst,
+    });
+    await vault.signPayment({ prepared, permit: twoUses });
+    expect(twoUses.remainingUses).toBe(1);
+    await expect(vault.signPayment({ prepared, permit: twoUses })).rejects.toMatchObject({
+      code: "signing-permit-limit",
+    });
+    expect(twoUses.remainingUses).toBe(1);
   });
 
   test("invalid payment fields are rejected before signing", async () => {
@@ -1102,6 +1265,96 @@ describe("simulated/testnet payment signing", () => {
   });
 });
 
+describe("F0 signing-chain allowlist", () => {
+  const wide = { classify: () => "testnet" as const };
+  const rejected = [1, 10, 42161, 137, 324, 59144, 43114, 999999];
+
+  test("wide policy cannot sign a chain outside 97/84532, including known mainnets and unknown", async () => {
+    const purposes = rejected.map(simplePurpose);
+    const { vault } = await openProductionVault({ chainPolicy: wide, purposes });
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    for (const chainId of rejected) {
+      expect(() => vault.preparePayment(paymentInput({ chainId }))).toThrow(
+        expect.objectContaining({ code: "signing-disabled" }),
+      );
+      expect(() =>
+        vault.prepareTypedData({ purpose: `p${chainId}`, typedData: simpleDoc(chainId) }),
+      ).toThrow(expect.objectContaining({ code: "signing-disabled" }));
+    }
+    for (const chainId of [56, 8453]) {
+      expect(() => vault.preparePayment(paymentInput({ chainId }))).toThrow(
+        expect.objectContaining({ code: "signing-mainnet-forbidden" }),
+      );
+    }
+  });
+
+  test("31337 is not enabled by a normal policy; only the explicit isolated constructor allows it", async () => {
+    const normal = await openProductionVault({ purposes: [simplePurpose(31337)] });
+    await normal.vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await normal.vault.unlock(PASSWORD);
+    expect(() => normal.vault.preparePayment(paymentInput({ chainId: 31337 }))).toThrow(
+      expect.objectContaining({ code: "signing-disabled" }),
+    );
+    expect(() =>
+      normal.vault.prepareTypedData({ purpose: "p31337", typedData: simpleDoc(31337) }),
+    ).toThrow(expect.objectContaining({ code: "signing-disabled" }));
+
+    const isolated = await openVault({ purposes: [simplePurpose(31337)] });
+    await isolated.vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await isolated.vault.unlock(PASSWORD);
+    const prepared = isolated.vault.prepareTypedData({
+      purpose: "p31337",
+      typedData: simpleDoc(31337),
+    });
+    const permit = isolated.vault.createSigningPermit({ kind: "typed-data", prepared });
+    expect(isolated.vault.signTypedData({ prepared, permit }).chainId).toBe(31337);
+  });
+
+  test("the static helper cannot even represent an unsupported chain", () => {
+    expect(() => createStaticChainPolicy({ 1: "testnet" })).toThrow(
+      expect.objectContaining({ code: "config-invalid" }),
+    );
+  });
+
+  test("97/84532 remain positive controls for payment and typed-data", async () => {
+    const { vault } = await openProductionVault({
+      purposes: [simplePurpose(97), simplePurpose(84532)],
+    });
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    for (const chainId of [97, 84532]) {
+      const prepared = vault.preparePayment(paymentInput({ chainId }));
+      const permit = vault.createSigningPermit({ kind: "payment", purpose: "payment", prepared });
+      expect((await vault.signPayment({ prepared, permit })).chainId).toBe(chainId);
+      const typed = vault.prepareTypedData({ purpose: `p${chainId}`, typedData: simpleDoc(chainId) });
+      const typedPermit = vault.createSigningPermit({ kind: "typed-data", prepared: typed });
+      expect(vault.signTypedData({ prepared: typed, permit: typedPermit }).chainId).toBe(chainId);
+    }
+  });
+
+  test("auto-recharge policy uses the same allowlist", () => {
+    const now = 1_700_000_000_000;
+    const policy = (chainId: number) => ({
+      version: 1 as const,
+      chainId,
+      assetId: `eip155:${chainId}:0x${"1".repeat(40)}`,
+      maxPerPaymentWei: 1n,
+      maxTotalWei: 1n,
+      maxPayments: 1,
+      expiresAt: now + 60_000,
+      nonce: "0123456789abcdef",
+    });
+    expect(() => validateAutoRechargePolicy(policy(1), { now, chainPolicy: wide })).toThrow(
+      expect.objectContaining({ code: "signing-disabled" }),
+    );
+    expect(() => validateAutoRechargePolicy(policy(31337), { now, chainPolicy: wide })).toThrow(
+      expect.objectContaining({ code: "signing-disabled" }),
+    );
+    expect(validateAutoRechargePolicy(policy(97), { now, chainPolicy: TEST_POLICY })).toMatchObject({ chainId: 97 });
+  });
+});
+
 describe("auto-recharge policy shape (no executor)", () => {
   const base = (): AutoRechargePolicy => ({
     version: 1,
@@ -1117,7 +1370,7 @@ describe("auto-recharge policy shape (no executor)", () => {
   });
 
   test("a bounded short policy validates and is frozen", () => {
-    const policy = validateAutoRechargePolicy(base(), { now: 1_700_000_000_000, chainPolicy: TEST_POLICY });
+    const policy = validateAutoRechargePolicy(base(), { now: 1_700_000_000_000, chainPolicy: TEST_POLICY, isolatedSimulationChains: [31337] });
     expect(policy).toMatchObject({ chainId: 31337, maxPerPaymentWei: 1_000n, maxTotalWei: 5_000n });
     expect(Object.isFrozen(policy)).toBe(true);
   });
@@ -1134,7 +1387,9 @@ describe("auto-recharge policy shape (no executor)", () => {
       { ...base(), maxPayments: 9 },
     ];
     for (const policy of bad) {
-      expect(() => validateAutoRechargePolicy(policy, { now, chainPolicy: TEST_POLICY })).toThrow(WalletVaultError);
+      expect(() =>
+        validateAutoRechargePolicy(policy, { now, chainPolicy: TEST_POLICY, isolatedSimulationChains: [31337] }),
+      ).toThrow(WalletVaultError);
     }
   });
 });

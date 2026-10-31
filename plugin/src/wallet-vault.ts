@@ -53,6 +53,22 @@ export const BIP44_EVM_PATH = "m/44'/60'/0'/0/0";
 /** Chain ids that may never be signed or sent by this experimental wallet. */
 export const MAINNET_SIGNING_DENIED_CHAIN_IDS: readonly number[] = Object.freeze([56, 8453]);
 
+/**
+ * The only chains the built-in signer may use in normal operation. This is an
+ * allowlist, not a mainnet blacklist: chain 1/10/42161/... and unknown ids are
+ * denied even when an injected WalletChainPolicy lies and calls them testnet.
+ */
+export const SIGNING_CHAIN_ALLOWLIST: ReadonlySet<number> = new Set([97, 84532]);
+
+/** 31337 is available only through the explicit isolated test option below. */
+export const ISOLATED_SIMULATION_CHAIN_ALLOWLIST: readonly number[] = Object.freeze([31337]);
+
+const ALLOWED_SIGNING_CHAIN_CLASS = new Map<number, "testnet" | "simulation">([
+  [97, "testnet"],
+  [84532, "testnet"],
+  [31337, "simulation"],
+]);
+
 export const WALLET_VAULT_VERSION = 1;
 export const DEFAULT_SESSION_TTL_MS = 5 * 60_000;
 export const MAX_SESSION_TTL_MS = 15 * 60_000;
@@ -65,8 +81,8 @@ export const MAX_AUTO_RECHARGE_TTL_MS = 5 * 60_000;
 export const MAX_KEYSTORE_BYTES = 128 * 1024;
 export const MAX_PAYMENT_DATA_BYTES = 16 * 1024;
 const UINT256_MAX = (1n << 256n) - 1n;
-const EXPECTED_KEYSTORE_CLIENT = "ethers/6.17.0";
-const GETH_FILENAME_RE = /^UTC--\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+Z--[0-9a-f]{40}$/;
+const ETHERS_CLIENT_RE = /^ethers\/(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/;
+const GETH_FILENAME_RE = /^UTC--\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d+Z--[0-9a-fA-F]{40}$/;
 
 export interface WalletKdfParams {
   /** scrypt N; must be a power of two in [MIN_KDF_N, MAX_KDF_N] */
@@ -99,13 +115,19 @@ export function createStaticChainPolicy(
   entries: Readonly<Record<number, "simulation" | "testnet">>,
 ): WalletChainPolicy {
   const map = new Map<number, "simulation" | "testnet">();
+  const supported = new Map<number, "simulation" | "testnet">([
+    [97, "testnet"],
+    [84532, "testnet"],
+    [31337, "simulation"],
+  ]);
   for (const [raw, value] of Object.entries(entries)) {
     const chainId = Number(raw);
-    if (!Number.isSafeInteger(chainId) || chainId < 1) {
-      throw new WalletVaultError("config-invalid", "chain policy contains an invalid chain id");
+    const expected = supported.get(chainId);
+    if (!expected) {
+      throw new WalletVaultError("config-invalid", "chain policy only supports the explicit test/simulation allowlist");
     }
-    if (value !== "simulation" && value !== "testnet") {
-      throw new WalletVaultError("config-invalid", "chain policy only accepts simulation/testnet classes");
+    if (value !== expected) {
+      throw new WalletVaultError("config-invalid", "chain policy class does not match the supported chain");
     }
     map.set(chainId, value);
   }
@@ -169,8 +191,14 @@ function fail(
 
 export interface WalletSnapshot {
   readonly version: typeof WALLET_VAULT_VERSION;
-  /** The public keystore address; verified against the key during unlock. */
+  /**
+   * The keystore's public address. It is NOT a trusted receiving address until
+   * `addressVerified` is true; locked snapshots must not be used for payment
+   * targets, QR codes or transfer instructions.
+   */
   readonly address: string | null;
+  /** True only while unlocked after the decrypted address/private key checks. */
+  readonly addressVerified: boolean;
   readonly status: WalletStatus;
   /** Absolute session expiry, only while unlocked. */
   readonly unlockExpiresAt: string | null;
@@ -185,6 +213,11 @@ export interface WalletVaultOptions {
   kdf?: Partial<WalletKdfParams>;
   chainPolicy?: WalletChainPolicy;
   purposes?: readonly WalletTypedDataPurpose[];
+  /**
+   * Test-only isolated local chain ids. Only 31337 is accepted. Normal UI/config
+   * must never derive this from networkType or a user-editable setting.
+   */
+  isolatedSimulationChains?: readonly number[];
 }
 
 interface ResolvedVaultOptions {
@@ -194,6 +227,7 @@ interface ResolvedVaultOptions {
   kdf: WalletKdfParams;
   chainPolicy: WalletChainPolicy;
   purposes: ReadonlyMap<string, WalletTypedDataPurpose>;
+  allowedSigningChains: ReadonlyMap<number, "testnet" | "simulation">;
 }
 
 export interface CreateWalletResult {
@@ -497,6 +531,10 @@ export interface PreparedPayment {
   readonly gasLimit: string;
   readonly maxFeePerGas: string;
   readonly maxPriorityFeePerGas: string;
+  /** gasLimit * maxFeePerGas, the worst-case gas spend. */
+  readonly maxGasCostWei: string;
+  /** valueWei + maxGasCostWei, the worst-case total spend. */
+  readonly maxCostWei: string;
   readonly data: string;
   readonly signable: true;
 }
@@ -536,6 +574,8 @@ export interface SignedPayment {
   readonly to: string;
   readonly chainId: number;
   readonly valueWei: string;
+  readonly maxGasCostWei: string;
+  readonly maxCostWei: string;
   readonly nonce: number;
   readonly purpose: PaymentPurpose;
   /** A signed payload has not been broadcast and is not a payment proof. */
@@ -625,9 +665,12 @@ export class WalletVault {
   snapshot(): WalletSnapshot {
     this.expireSessionIfNeeded();
     const session = this.session;
+    const addressVerified =
+      session !== null && this.publicAddress !== null && session.address === this.publicAddress;
     return Object.freeze({
       version: WALLET_VAULT_VERSION,
       address: this.publicAddress,
+      addressVerified,
       status: this.publicAddress === null ? "absent" : session ? "unlocked" : "locked",
       unlockExpiresAt: session ? new Date(session.expiresAt).toISOString() : null,
     });
@@ -833,8 +876,8 @@ export class WalletVault {
     if (!purpose) fail("signing-purpose-invalid", `unknown signing purpose: ${safePurpose(input.purpose)}`);
     const documentChain = normalizeGenericTypedData(input.typedData).chainId;
     if (documentChain === null) fail("typed-data-invalid", "domain chain id is missing");
-    assertSignableChain(documentChain, this.options.chainPolicy);
-    assertSignableChain(purpose.chainId, this.options.chainPolicy);
+    assertSignableChain(documentChain, this.options.chainPolicy, this.options.allowedSigningChains);
+    assertSignableChain(purpose.chainId, this.options.chainPolicy, this.options.allowedSigningChains);
     const normalized = normalizePurposeTypedData(purpose, input.typedData);
     const digest = typedDataDigest(normalized);
     const prepared: PreparedTypedData = Object.freeze({
@@ -865,7 +908,7 @@ export class WalletVault {
       }
       const purpose = this.options.purposes.get(record.purpose.id);
       if (!purpose) fail("signing-purpose-invalid", "the signing purpose is no longer configured");
-      assertSignableChain(purpose.chainId, this.options.chainPolicy);
+      assertSignableChain(purpose.chainId, this.options.chainPolicy, this.options.allowedSigningChains);
       return mintSigningPermit({
         vaultId: this.vaultId,
         sessionId: this.session!.id,
@@ -890,15 +933,15 @@ export class WalletVault {
     if (!record || record.vaultId !== this.vaultId) {
       fail("signing-permit-invalid", "payment permit needs a prepared payment from this vault");
     }
-    assertSignableChain(record.transaction.chainId, this.options.chainPolicy);
-    const value = record.transaction.value;
-    const maxPer = input.maxPerPaymentWei ?? value;
-    const maxTotal = input.maxTotalWei ?? value * BigInt(maxUses);
+    assertSignableChain(record.transaction.chainId, this.options.chainPolicy, this.options.allowedSigningChains);
+    const worst = paymentWorstCaseWei(record.prepared);
+    const maxPer = input.maxPerPaymentWei ?? worst;
+    const maxTotal = input.maxTotalWei ?? worst * BigInt(maxUses);
     if (typeof maxPer !== "bigint" || typeof maxTotal !== "bigint" || maxPer <= 0n || maxTotal <= 0n) {
       fail("signing-permit-invalid", "payment permit needs positive per-payment and total limits");
     }
-    if (maxPer < value) fail("signing-permit-limit", "per-payment limit is below the prepared payment");
-    if (maxTotal < value) fail("signing-permit-limit", "total limit is below the prepared payment");
+    if (maxPer < worst) fail("signing-permit-limit", "per-payment limit is below the worst-case payment cost");
+    if (maxTotal < worst) fail("signing-permit-limit", "total limit is below the worst-case payment cost");
     if (maxPer > maxTotal) fail("signing-permit-invalid", "per-payment limit exceeds total limit");
     return mintSigningPermit({
       vaultId: this.vaultId,
@@ -934,7 +977,7 @@ export class WalletVault {
     }
     const purpose = this.options.purposes.get(record.purpose.id);
     if (!purpose) fail("signing-purpose-invalid", "the signing purpose is no longer configured");
-    assertSignableChain(purpose.chainId, this.options.chainPolicy);
+    assertSignableChain(purpose.chainId, this.options.chainPolicy, this.options.allowedSigningChains);
     if (record.digest !== typedDataDigest(normalizePurposeTypedData(purpose, record.typedData))) {
       fail("prepared-invalid", "prepared typed data no longer matches its purpose");
     }
@@ -953,7 +996,7 @@ export class WalletVault {
 
   preparePayment(input: PaymentRequestInput): PreparedPayment {
     if (this.publicAddress === null) fail("wallet-absent", "no wallet exists");
-    assertSignableChain(input.chainId, this.options.chainPolicy);
+    assertSignableChain(input.chainId, this.options.chainPolicy, this.options.allowedSigningChains);
     if (!Number.isSafeInteger(input.chainId) || input.chainId < 1) {
       fail("payment-invalid", "chain id must be a positive safe integer");
     }
@@ -991,6 +1034,9 @@ export class WalletVault {
       fail("payment-invalid", "payment data is too large");
     }
     if (!isHexData(data)) fail("payment-invalid", "payment data must be an even-length hex string");
+    const maxGasCostWei = input.gasLimit * input.maxFeePerGas;
+    const maxCostWei = input.valueWei + maxGasCostWei;
+    if (maxCostWei > UINT256_MAX) fail("payment-invalid", "worst-case payment exceeds uint256");
 
     const transaction = {
       type: 2 as const,
@@ -1012,6 +1058,8 @@ export class WalletVault {
       gasLimit: input.gasLimit.toString(),
       maxFeePerGas: input.maxFeePerGas.toString(),
       maxPriorityFeePerGas: input.maxPriorityFeePerGas.toString(),
+      maxGasCostWei: maxGasCostWei.toString(),
+      maxCostWei: maxCostWei.toString(),
       data,
       signable: true as const,
     });
@@ -1028,13 +1076,13 @@ export class WalletVault {
     if (record.prepared.from !== session.wallet.address) {
       fail("payment-invalid", "prepared payment belongs to a different account");
     }
-    assertSignableChain(record.transaction.chainId, this.options.chainPolicy);
+    assertSignableChain(record.transaction.chainId, this.options.chainPolicy, this.options.allowedSigningChains);
     const permit = this.consumeSigningPermit(
       input.permit,
       "payment",
       null,
       record.transaction.chainId,
-      record.transaction.value,
+      paymentWorstCaseWei(record.prepared),
       paymentIntentHash(record.prepared),
     ) as PaymentPurpose;
     const rawTransaction = await session.wallet.signTransaction(record.transaction);
@@ -1054,6 +1102,10 @@ export class WalletVault {
       parsed.to?.toLowerCase() !== record.transaction.to.toLowerCase() ||
       parsed.value !== record.transaction.value ||
       parsed.nonce !== record.transaction.nonce ||
+      parsed.data !== record.transaction.data ||
+      parsed.gasLimit !== record.transaction.gasLimit ||
+      parsed.maxFeePerGas !== record.transaction.maxFeePerGas ||
+      parsed.maxPriorityFeePerGas !== record.transaction.maxPriorityFeePerGas ||
       parsed.from?.toLowerCase() !== session.wallet.address.toLowerCase()
     ) {
       fail("payment-invalid", "the signed transaction does not match the prepared payment");
@@ -1065,6 +1117,8 @@ export class WalletVault {
       to: record.transaction.to,
       chainId: record.transaction.chainId,
       valueWei: record.transaction.value.toString(),
+      maxGasCostWei: record.prepared.maxGasCostWei,
+      maxCostWei: record.prepared.maxCostWei,
       nonce: record.transaction.nonce,
       purpose: permit,
       broadcast: false as const,
@@ -1110,7 +1164,7 @@ export class WalletVault {
     expectedKind: SigningPermitKind,
     expectedPurpose: string | null,
     chainId: number,
-    valueWei: bigint | null,
+    spendWei: bigint | null,
     bindingHash: string,
   ): string {
     const session = this.assertSession();
@@ -1128,17 +1182,19 @@ export class WalletVault {
     }
     if (this.currentTime() >= record.expiresAt) fail("signing-permit-expired", "signing permit expired");
     if (record.used >= record.maxUses) fail("signing-permit-exhausted", "signing permit has no uses left");
-    if (valueWei === null) {
+    if (spendWei === null) {
       if (record.maxPerPaymentWei !== null) fail("signing-permit-invalid", "typed-data permit has payment limits");
     } else {
       if (record.maxPerPaymentWei === null || record.maxTotalWei === null) {
-        fail("signing-permit-invalid", "payment permit has no value limits");
+        fail("signing-permit-invalid", "payment permit has no spend limits");
       }
-      if (valueWei > record.maxPerPaymentWei) fail("signing-permit-limit", "payment exceeds the per-payment limit");
-      if (record.spentWei + valueWei > record.maxTotalWei) {
-        fail("signing-permit-limit", "payment exceeds the total permit limit");
+      if (spendWei > record.maxPerPaymentWei) {
+        fail("signing-permit-limit", "worst-case payment exceeds the per-payment limit");
       }
-      record.spentWei += valueWei;
+      if (record.spentWei + spendWei > record.maxTotalWei) {
+        fail("signing-permit-limit", "worst-case payment exceeds the total permit limit");
+      }
+      record.spentWei += spendWei;
     }
     record.used += 1;
     return record.purpose;
@@ -1239,6 +1295,7 @@ function resolveOptions(options: WalletVaultOptions): ResolvedVaultOptions {
   if (!chainPolicy || typeof chainPolicy.classify !== "function") {
     fail("config-invalid", "chain policy must implement classify(chainId)");
   }
+  const allowedSigningChains = buildAllowedSigningChains(options.isolatedSimulationChains);
   const purposes = new Map<string, WalletTypedDataPurpose>();
   for (const raw of options.purposes ?? []) {
     const purpose = normalizePurpose(raw);
@@ -1252,7 +1309,22 @@ function resolveOptions(options: WalletVaultOptions): ResolvedVaultOptions {
     kdf,
     chainPolicy,
     purposes,
+    allowedSigningChains,
   };
+}
+
+function buildAllowedSigningChains(
+  isolatedSimulationChains: readonly number[] | undefined,
+): ReadonlyMap<number, "testnet" | "simulation"> {
+  const allowed = new Map<number, "testnet" | "simulation">();
+  for (const chainId of SIGNING_CHAIN_ALLOWLIST) allowed.set(chainId, "testnet");
+  for (const chainId of isolatedSimulationChains ?? []) {
+    if (!Number.isSafeInteger(chainId) || !ISOLATED_SIMULATION_CHAIN_ALLOWLIST.includes(chainId)) {
+      fail("config-invalid", "isolated simulation chains are limited to 31337");
+    }
+    allowed.set(chainId, "simulation");
+  }
+  return allowed;
 }
 
 function normalizePurpose(raw: WalletTypedDataPurpose): WalletTypedDataPurpose {
@@ -1290,6 +1362,9 @@ function normalizePurpose(raw: WalletTypedDataPurpose): WalletTypedDataPurpose {
   for (const [name, type] of entries) {
     if (!isSafeKey(name) || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) {
       fail("config-invalid", "invalid message field name");
+    }
+    if (name.toLowerCase() === "chainid" && name !== "chainId") {
+      fail("config-invalid", "message chainId must use the exact canonical field name");
     }
     if (typeof type !== "string" || !isPrimitiveTypedDataType(type)) {
       fail("config-invalid", "signing purpose fields must be primitive EIP-712 types");
@@ -1517,7 +1592,13 @@ function validateKeystore(text: string): ParsedKeystore {
   if (xethers.version !== "0.1") fail("keystore-invalid", "unsupported x-ethers metadata version");
   if (xethers.path !== BIP44_EVM_PATH) fail("keystore-invalid", "keystore uses an unexpected BIP44 path");
   if (xethers.locale !== "en") fail("keystore-invalid", "only the English BIP39 wordlist is supported");
-  if (xethers.client !== EXPECTED_KEYSTORE_CLIENT) fail("keystore-invalid", "keystore client metadata is not the pinned ethers version");
+  if (typeof xethers.client !== "string" || xethers.client.length > 128) {
+    fail("keystore-invalid", "keystore client metadata is missing or malformed");
+  }
+  const clientMatch = ETHERS_CLIENT_RE.exec(xethers.client);
+  if (!clientMatch || Number(clientMatch[1]) !== 6) {
+    fail("keystore-invalid", "keystore client metadata is not a supported ethers/6.x format");
+  }
   if (
     typeof xethers.gethFilename !== "string" ||
     !GETH_FILENAME_RE.test(xethers.gethFilename) ||
@@ -1713,19 +1794,25 @@ function byteLength(value: string): number {
 
 // --- typing/signing helpers -------------------------------------------------
 
-function assertSignableChain(chainId: number, policy: WalletChainPolicy): WalletChainClass {
+function assertSignableChain(
+  chainId: number,
+  policy: WalletChainPolicy,
+  allowed: ReadonlyMap<number, "testnet" | "simulation">,
+): WalletChainClass {
   if (!Number.isSafeInteger(chainId) || chainId < 1) fail("signing-disabled", "invalid chain id");
   if (MAINNET_SIGNING_DENIED_CHAIN_IDS.includes(chainId)) {
     fail("signing-mainnet-forbidden", `chain ${chainId} is hard-denied for signing`);
   }
+  const expected = allowed.get(chainId);
+  if (!expected) fail("signing-disabled", `chain ${chainId} is not in the signing allowlist`);
   let classification: WalletChainClass;
   try {
     classification = policy.classify(chainId);
   } catch {
     classification = "unknown";
   }
-  if (classification !== "simulation" && classification !== "testnet") {
-    fail("signing-disabled", `chain ${chainId} is not classified as simulation/testnet`);
+  if (classification !== expected) {
+    fail("signing-disabled", `chain ${chainId} is not classified as the allowlisted ${expected} class`);
   }
   return classification;
 }
@@ -1833,6 +1920,18 @@ function normalizePurposeTypedData(
   for (const field of purposeFields) {
     validateMessageValue(field.type, input.message[field.name], field.name);
   }
+  if (purpose.messageTypes.chainId !== undefined) {
+    const messageChain = parseChainId(input.message.chainId);
+    if (messageChain === null || messageChain !== purpose.chainId) {
+      fail("typed-data-invalid", "message chainId does not match the domain/purpose chain");
+    }
+  }
+  if (purpose.messageTypes.assetId === "string" && typeof input.message.assetId === "string") {
+    const assetMatch = /^eip155:(\d+):0x[0-9a-fA-F]{40}$/.exec(input.message.assetId);
+    if (assetMatch && Number(assetMatch[1]) !== purpose.chainId) {
+      fail("typed-data-invalid", "message assetId chain does not match the domain/purpose chain");
+    }
+  }
 
   const typedData = freezeClone({
     domain: {
@@ -1849,6 +1948,11 @@ function normalizePurposeTypedData(
     message: input.message,
   }) as WalletTypedData;
   return { typedData, verifyingContract: generic.verifyingContract, chainId: purpose.chainId };
+}
+
+/** Worst-case native spend: transfer value plus the maximum gas cost. */
+export function paymentWorstCaseWei(prepared: PreparedPayment): bigint {
+  return BigInt(prepared.valueWei) + BigInt(prepared.gasLimit) * BigInt(prepared.maxFeePerGas);
 }
 
 function paymentIntentHash(prepared: PreparedPayment): string {
@@ -1980,14 +2084,24 @@ function isSafeKey(value: string): boolean {
  */
 export function validateAutoRechargePolicy(
   input: AutoRechargePolicy,
-  options: { now: number; chainPolicy: WalletChainPolicy; maxTtlMs?: number },
+  options: {
+    now: number;
+    chainPolicy: WalletChainPolicy;
+    maxTtlMs?: number;
+    /** Test-only; only 31337 is accepted. */
+    isolatedSimulationChains?: readonly number[];
+  },
 ): AutoRechargePolicy {
   if (!input || typeof input !== "object") fail("auto-recharge-invalid", "auto-recharge policy must be an object");
   if (!Number.isSafeInteger(options.now) || options.now < 0) {
     fail("auto-recharge-invalid", "auto-recharge validation needs a valid clock");
   }
   if (input.version !== 1) fail("auto-recharge-invalid", "unsupported auto-recharge policy version");
-  assertSignableChain(input.chainId, options.chainPolicy);
+  assertSignableChain(
+    input.chainId,
+    options.chainPolicy,
+    buildAllowedSigningChains(options.isolatedSimulationChains),
+  );
   if (!/^eip155:[0-9]+:0x[0-9a-fA-F]{40}$/.test(input.assetId)) {
     fail("auto-recharge-invalid", "asset id must be the explicit eip155 chain/token tuple");
   }
