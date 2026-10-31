@@ -1263,7 +1263,9 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       renderModels();
     }
     updateSelectionControls();
-    for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections], ["p2pInbound", next.status.p2p?.inboundRequests, renderP2pInbound], ["p2pApprovals", next.status.p2p?.approvals, renderP2pApprovals], ["p2pConnections", next.status.p2p, renderP2pConnections]]) {
+    // A discovered presence changes the discovery card's actions even when the
+    // catalogue rows are unchanged; it must be part of that digest.
+    for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled, next.status.p2p?.presence], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections], ["p2pInbound", next.status.p2p?.inboundRequests, renderP2pInbound], ["p2pApprovals", next.status.p2p?.approvals, renderP2pApprovals], ["p2pConnections", next.status.p2p, renderP2pConnections]]) {
       const digest = JSON.stringify(value ?? null);
       if (caches.get(key) !== digest) { caches.set(key, digest); update(); }
     }

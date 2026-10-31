@@ -389,7 +389,12 @@ export class ControlApp {
       const localPort = claim.reservation.port;
       await claim.reservation.release();
       const dst = `${mappedHost(mapped)}:${presence.endpoint.controlPort}`;
-      const added = await this.service.supervisor.addPortForward(`127.0.0.1:${localPort}`, dst);
+      // Registered through the Service so it joins the canonical Forward set:
+      // a forward the supervisor does not expect is an unsafe runtime state.
+      const addControlForward = (this.service as { addControlForward?: (bind: string, dst: string) => Promise<boolean> }).addControlForward;
+      const added = typeof addControlForward === "function"
+        ? await addControlForward.call(this.service, `127.0.0.1:${localPort}`, dst)
+        : await this.service.supervisor.addPortForward(`127.0.0.1:${localPort}`, dst);
       if (!added && !this.service.supervisor.listPortForwards) {
         throw new Error("the overlay control forward could not be installed");
       }

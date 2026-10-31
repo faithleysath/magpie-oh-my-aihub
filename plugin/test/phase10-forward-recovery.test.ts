@@ -467,6 +467,18 @@ describe("control forward retirement", () => {
     expect(loadState().state.orphanForwards.some((o) => o.localPort === 13620)).toBe(true);
   });
 
+  test("a control forward is part of the canonical Forward set (no unsafe-runtime strike)", async () => {
+    const svc = await service();
+    await svc.addControlForward("127.0.0.1:13650", "10.66.1.9:35000");
+    // The generated/persisted config the supervisor checks against must name
+    // exactly this forward; otherwise a live control forward looks foreign and
+    // two refreshes would stop the core.
+    const persisted = (sup.cfg?.portForwards ?? []).map((f) => f.bindAddr);
+    expect(persisted).toContain("127.0.0.1:13650");
+    const et = (svc as unknown as { etConfig: (cfg: unknown) => { portForwards: { bindAddr: string }[] } }).etConfig(svc.config());
+    expect(et.portForwards.map((f) => f.bindAddr)).toContain("127.0.0.1:13650");
+  });
+
   test("multiple owned control forwards are not treated as manual/foreign", async () => {
     const svc = await service();
     binder.occupy("127.0.0.1", 13620);

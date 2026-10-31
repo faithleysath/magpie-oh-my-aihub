@@ -488,6 +488,14 @@ export class Service {
   private controlActive = false;
   /** presence-only listener used when the node does not share a catalogue */
   private presenceServer: CatalogServerHandle | null = null;
+  /**
+   * Loopback forwards the control plane opened towards peers. They are part of
+   * the canonical Forward set: a live forward that the supervisor's own ACL /
+   * config check does not expect is treated as an unsafe runtime (and rightly
+   * so), so every control forward is registered and persisted like a provider
+   * forward.
+   */
+  private controlForwards = new Map<string, ForwardSpec>();
   /** called after a successful configure/sharing change so the control plane can re-sync */
   private topologyListener: (() => Promise<void>) | null = null;
   private catalogServerError: string | null = null;
@@ -2043,7 +2051,7 @@ export class Service {
       mappedCidr: cfg.sharingEnabled || this.controlOnlyPublication() ? cfg.mappedCidr : null,
       publishedPorts: this.publishedPorts(cfg),
       socks5Proxy: cfg.catalog.discoveryEnabled ? `socks5://127.0.0.1:${cfg.catalog.socksPort}` : null,
-      portForwards: cfg.consumingEnabled ? this.forwardSpecs() : [],
+      portForwards: cfg.controlEnabled !== false ? this.allForwardSpecs() : (cfg.consumingEnabled ? this.forwardSpecs() : []),
       secureMode: cfg.secureMode,
       secureIdentity: cfg.secureIdentity,
     };
@@ -2073,6 +2081,32 @@ export class Service {
   private controlOnlyPublication(): boolean {
     const cfg = this.state.config;
     return Boolean(cfg && cfg.controlEnabled && this.controlActive && cfg.controlPort && !cfg.sharingEnabled);
+  }
+
+  /** Provider forwards plus the control plane's owned loopback forwards. */
+  private allForwardSpecs(): ForwardSpec[] {
+    return [...this.forwardSpecs(), ...[...this.controlForwards.values()].map((f) => ({ ...f }))];
+  }
+
+  /**
+   * Opens a control forward and makes it part of the canonical set before the
+   * listener exists: the supervisor's safety check must expect exactly this
+   * forward, and a supervised restart must restore it from the generated TOML.
+   */
+  async addControlForward(bindAddr: string, dstAddr: string): Promise<boolean> {
+    const bind = bindAddr.replace(/^tcp:\/\//, "");
+    if (!/^127\.0\.0\.1:\d{1,5}$/.test(bind)) throw new Error("control forwards must bind 127.0.0.1");
+    const existing = this.controlForwards.get(bind);
+    this.controlForwards.set(bind, { bindAddr: bind, dstAddr });
+    try {
+      const added = await this.supervisor.addPortForward(bind, dstAddr);
+      this.supervisor.setForwards(this.allForwardSpecs());
+      return added;
+    } catch (error) {
+      if (existing) this.controlForwards.set(bind, existing);
+      else this.controlForwards.delete(bind);
+      throw error;
+    }
   }
 
   private forwardSpecs(): ForwardSpec[] {
@@ -3535,7 +3569,7 @@ export class Service {
       if (idx >= 0) this.state.providers[idx] = rec;
       else this.state.providers.push(rec);
       saveState(this.state);
-      this.supervisor.setForwards(this.forwardSpecs());
+      this.supervisor.setForwards(this.allForwardSpecs());
       if (prev && prev.localPort !== localPort) {
         // The old listener cannot be closed live in 2.6.4. Restart from the new
         // config now, so no unregistered forward is left behind, and re-verify
@@ -3744,7 +3778,7 @@ export class Service {
     conn.localPort = nextPort;
     let magpieChanged = false;
     try {
-      this.supervisor.setForwards(this.forwardSpecs());
+      this.supervisor.setForwards(this.allForwardSpecs());
       await this.applyConfig(cfg);
       const proof = await this.proveForwardOwner(conn.id, nextPort);
       if (proof.state !== "stable") {
@@ -3828,7 +3862,7 @@ export class Service {
       conn.forwardPending = null;
       let restored = false;
       try {
-        this.supervisor.setForwards(this.forwardSpecs());
+        this.supervisor.setForwards(this.allForwardSpecs());
         await this.applyConfig(cfg);
         restored = true;
       } catch (restoreError) {
@@ -4013,7 +4047,7 @@ export class Service {
     if (forwards && !forwards.some((f) => f.bindAddr === bind && f.dstAddr === dst)) {
       try {
         await this.supervisor.addPortForward(bind, dst);
-        this.supervisor.setForwards(this.forwardSpecs());
+        this.supervisor.setForwards(this.allForwardSpecs());
       } catch (e) {
         // A port that cannot be restored may be occupied by somebody else; a
         // recovery is one bounded restart, not an endless "degraded" label.
@@ -4031,7 +4065,7 @@ export class Service {
         const adoptedFrom = conn.localPort;
         conn.localPort = owned;
         try {
-          this.supervisor.setForwards(this.forwardSpecs());
+          this.supervisor.setForwards(this.allForwardSpecs());
           await this.applyConfig(cfg);
         } catch (e) {
           logger.warn(`provider ${conn.id}: could not apply the adopted forward port: ${String(e)}`);
@@ -4200,6 +4234,15 @@ export class Service {
       const providerBinds = new Set(this.forwardSpecs().map((f) => f.bindAddr));
       const extras = before.filter((f) => f.bindAddr !== bindAddr && !providerBinds.has(f.bindAddr) && !ownedControl.has(f.bindAddr));
       const ownedForwards = before.filter((f) => f.bindAddr !== bindAddr && ownedControl.has(f.bindAddr));
+      // The retired forward leaves the canonical set; the other owned control
+      // forwards stay and are restored by the restart below.
+      this.controlForwards.delete(bindAddr);
+      for (const f of before) {
+        if (f.bindAddr !== bindAddr && ownedControl.has(f.bindAddr)) {
+          this.controlForwards.set(f.bindAddr, { bindAddr: f.bindAddr, dstAddr: f.dstAddr });
+        }
+      }
+      this.supervisor.setForwards(this.allForwardSpecs());
       if (extras.length > 0) {
         // A manual/foreign forward is not ours to import or silently rebuild.
         const pids = await this.ownership.listenerPids(localPort).then((r) => r.pids ?? []).catch(() => []);
@@ -4793,7 +4836,7 @@ export class Service {
     if (cfg.consumingEnabled) {
       const running = await this.supervisor.listPortForwards().catch(() => null);
       if (running) {
-        const expected = new Set(this.forwardSpecs().map((f) => `${f.bindAddr}->${f.dstAddr}`));
+        const expected = new Set(this.allForwardSpecs().map((f) => `${f.bindAddr}->${f.dstAddr}`));
         const unexpected = running.filter((f) => !expected.has(`${f.bindAddr}->${f.dstAddr}`));
         out.push({
           name: "forwards-match",
