@@ -5,7 +5,8 @@
  * findings, and when a tracked runtime file under page/ or console/ is missing
  * from the tarball (A/B UI work must not silently drop static assets).
  *
- * `--selftest` (on by default) proves the checker is not vacuous.
+ * CI runs with `--selftest`, which proves the checker is not vacuous. Without
+ * the flag only the real packs are checked (the flag is not implicit).
  */
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
