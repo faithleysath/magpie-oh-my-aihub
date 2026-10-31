@@ -216,7 +216,7 @@ second approval layer.
 - per-peer and global rate limit before the node call; global/per-peer concurrency;
 - timeout; wildcard bind and false loopback claims refused.
 
-`plugin/test/control-p2p-port.test.ts` (18 pass):
+`plugin/test/control-p2p-port.test.ts` (21 pass):
 
 - requested-set vs selected-subset price version;
 - approval/hand-over through the real Service;
@@ -227,6 +227,9 @@ second approval layer.
 - corrupt ownership file fails closed before any Remote call;
 - a crash after native add but before final ownership save leaves a pending record;
   the same approval adopts it and a different approval is refused;
+- adoption reads the native limit once, seeds the correct used adjustment, refuses
+  unknown used, and repairs an existing opening that lacks the adjustment without
+  duplicating the opening;
 - `reconcileApproval` is read-only. It returns binding evidence
   (consumerNodeId/requestHash/approvalId/generation/knownKeyId/observedAt/source).
   `keyReady` requires a matching durable journal plus Magpie key-management
@@ -240,13 +243,18 @@ second approval layer.
   verifies the native models/cap, then promotes the journal and reads the secret
   through the locked hand-over. If that adoption cannot be proven, it stays
   `unknown`; it never calls `ensure` or creates a second key.
-  Funding rules for this adoption: if a Ledger account already exists, the
-  existing seed path is a no-op (no second opening/window/deposit). If it does not,
-  the opening is exactly the approved cap once; native `cost` is recorded as one
-  idempotent adjustment (never as a new deposit), the usage cursor starts at the
-  current usage-log end, and no native cap/model/value is changed. The native used
-  cost is read before adoption; if it is unknown, adoption is refused and no
-  opening balance is seeded. No chain deposit/source logic is copied.
+  Funding rules for this adoption: the native limit snapshot is read once and the
+  same `limit.cost` is passed to the seed; there is no second read that could
+  default used to 0. If a Ledger account already exists and has the migration
+  adjustment, it is never reseeded (no second opening/window/deposit and no
+  consumption rewrite). If the account exists but the adjustment is missing and
+  the window has no other consumption, the exact adjustment is repaired and the
+  cursor seeded; if other consumption exists, repair is refused. If no account
+  exists, opening = exactly the approved cap once and native `cost` is recorded as
+  one idempotent adjustment (never a new deposit), then the cursor starts at the
+  current usage-log end. Unknown/NaN/missing native used cost, or a failed/unknown
+  readback, refuses adoption before any opening credit. Native cap/models/keys are
+  read only. No chain deposit/source logic is copied.
   `noSideEffect` is allowed only when a durable pending journal exists, the local
   Provisioner record is absent, **and** the Magpie key list (`keyList`/`keyByName`,
   not just `provisioner.find`) has no key with the deterministic plugin name; source
@@ -287,10 +295,10 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | --- | --- | --- |
 | HTTP transport policy and limits | VERIFIED (unit + real socket) | 20 pass, typecheck |
 | Approval/handover/import adapter reuses Service | VERIFIED (unit with fake Magpie / loopback gateway) | 12 pass |
-| B-core business port mapping + persistent ownership | VERIFIED (unit, fake Magpie) | 18 pass |
+| B-core business port mapping + persistent ownership | VERIFIED (unit, fake Magpie) | 21 pass |
 | Enforced revoke readback/lock/both-fail | VERIFIED (unit, fake Magpie) | 15 port tests |
 | PR #19 transport | PASS (reviewed 7bcf7e0, rebased on approved PR #15) | 20 real/unit tests; see PR #19 |
-| PR #20 adapter targeted | PASS (local, rebased branch) | 20 transport + 12 old adapter + 18 new port tests = 50 total |
+| PR #20 adapter targeted | PASS (local, rebased branch) | 20 transport + 12 old adapter + 21 new port tests = 53 total |
 | Full `bun run test` on PR #20 head `5197fb2` | PASS (CI) | run `41162973476` linux+macOS success; includes the approved PR #15 clock base |
 | Real B-core `P2pNode` stacked and compiled | UNKNOWN (not approved) | B-core PR #26 is committed (`fdc7d4c`/`fba73c`) but not approved for stack; the local port mirrors its `P2pBusinessPort` shape and is compile-checked only in a temporary snapshot |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
