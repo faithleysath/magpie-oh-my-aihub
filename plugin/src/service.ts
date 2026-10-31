@@ -3121,23 +3121,21 @@ export class Service {
     // port while that listener is gone/foreign. Remove our own entry first; a
     // failure here aborts before the core restart.
     if (magpiePort !== null) {
+      // Magpie stores the Gateway Key. Retargeting that entry to another local
+      // port would just make Magpie hand the key to whoever listens there, so
+      // the only safe transition is a verified remove: no entry, no key route.
+      let removalError: string | null = null;
       try {
         await this.deps.magpie.removeProvider(conn.id);
       } catch (e) {
-        // Removing our entry failed. Point our own entry at a loopback port that
-        // is not served, so Magpie cannot send the stored key to the old
-        // (possibly foreign) listener; only then abort.
-        let neutralized = false;
-        try {
-          await this.deps.magpie.replaceRemoteProvider({ id: conn.id, url: "http://127.0.0.1:1", key });
-          neutralized = true;
-        } catch {
-          /* leave the failure visible below */
-        }
+        removalError = (e as Error).message;
+      }
+      if (this.deps.magpie.providerById(conn.id)) {
         conn.status = "degraded";
         conn.detail = (
-          `forward recovery could not disable the old registration (${(e as Error).message}); ` +
-          (neutralized ? "it was pointed at a closed loopback port" : "the registration could not be neutralized")
+          `forward recovery aborted: the old Magpie registration could not be removed` +
+          `${removalError ? ` (${removalError})` : " (still present after remove)"}; ` +
+          `the core was not restarted and the entry was not retargeted. Remove it in Magpie before retrying`
         ).slice(0, 300);
         conn.updatedAt = new Date().toISOString();
         this.forwardMigrationBusy = false;
@@ -4292,9 +4290,6 @@ export class Service {
     if (rec?.forwardPending) {
       known.add(rec.forwardPending.from);
       known.add(rec.forwardPending.to);
-      // A recovery whose old registration could not be removed is neutralized
-      // at :1 by the plugin; it is still ours and may be retried/removed.
-      if (port === 1) return port;
     }
     return known.has(port) ? port : "foreign";
   }
