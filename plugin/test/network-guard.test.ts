@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { expectBlocked, guardInstalled, isTestServerAllowed, registerTestServer } from "./support/network-guard.ts";
+import { expectBlocked, guardInstalled, isTestServerAllowed, registerTestServer, unregisterTestServer } from "./support/network-guard.ts";
 
 describe("hermetic network guard", () => {
   test("is installed by the test preload", () => {
@@ -47,11 +47,14 @@ describe("hermetic network guard", () => {
     }
   });
 
-  test("explicit registration is exact and scoped", () => {
+  test("explicit registration is exact and scoped, and can be removed", async () => {
     registerTestServer("http://127.0.0.1:43210");
     expect(isTestServerAllowed("http://127.0.0.1:43210")).toBe(true);
     expect(isTestServerAllowed("http://127.0.0.1:43211")).toBe(false);
     expect(isTestServerAllowed("http://localhost:43210")).toBe(false);
+    unregisterTestServer("http://127.0.0.1:43210");
+    expect(isTestServerAllowed("http://127.0.0.1:43210")).toBe(false);
+    expect(await expectBlocked(() => fetch("http://127.0.0.1:43210/"))).toBe(true);
   });
 
   test("a swallowed request still fails a test in a real bun run", async () => {
