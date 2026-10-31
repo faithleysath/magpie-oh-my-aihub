@@ -46,7 +46,7 @@ user's Magpie data, default browser profile and port 3425 were never touched.
 | `origin/main` | `8ce5c57f565fb1b835021a9b730b61014eb47d5f` | VERIFIED |
 | PR #49 `feature/phase10-p2p-closure` → `main` | head `6b4d7d2f6e243b8ae8dfd074842cd71985850876`, draft/open | VERIFIED |
 | PR #50 `feature/phase10-wallet-closure` | head `7c974d2`, draft/open; **base was `main`** (so it also showed PR #49's diff). Retargeted to PR #49's branch as part of this delivery | VERIFIED |
-| This delta | `feature/phase10-final-acceptance` → base `feature/phase10-wallet-closure` (PR #50), draft/open: **PR #51**, head `f41da5ea53f583802845333134ceb9e99a50d36a` | VERIFIED |
+| This delta | `feature/phase10-final-acceptance` → base `feature/phase10-wallet-closure` (PR #50), draft/open: **PR #51**; functional head `10a3644`, docs/evidence commits follow on the same branch | VERIFIED |
 | PR #49 checks at its head | plugin Linux PASS, plugin macOS PASS, Windows subset PASS, secrets (tree) PASS, secrets (history) PASS, package contents PASS | VERIFIED |
 | PR #50 checks at `722d67a` | same six checks PASS | VERIFIED |
 | Local gates at the final code+copy commits | `typecheck` PASS, `bun run test` **1405 pass / 0 fail** (92 files, 9933 expectations), `secret-scan` PASS, `boot-check` PASS | REPRODUCED |
@@ -321,9 +321,8 @@ no real wallet secret was used.
 
 ## 9. Delivery
 
-- Branch `feature/phase10-final-acceptance`, pushed at
-  `f41da5ea53f583802845333134ceb9e99a50d36a` (after the two code commits
-  `8df38b3`/`10a3644` and the docs/evidence commit `f41da5e`).
+- Branch `feature/phase10-final-acceptance`, pushed; functional code head
+  `10a3644`, docs/evidence commits follow on the same branch.
 - Delta draft PR: **https://github.com/faithleysath/magpie-oh-my-aihub/pull/51**,
   base `feature/phase10-wallet-closure` (PR #50), **not merged**.
 - PR #50 (https://github.com/faithleysath/magpie-oh-my-aihub/pull/50) was retargeted
