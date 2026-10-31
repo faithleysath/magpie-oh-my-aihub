@@ -860,6 +860,24 @@ export class NetworkRegistry {
   }
 }
 
+function downgradeLegacyLocalNetworks(doc: RegistryDocument): { doc: RegistryDocument; changed: boolean } {
+  let changed = false;
+  const networks = doc.networks.map((n) => {
+    if (
+      n.enabled === true &&
+      (LOCAL_SIMULATION_CHAIN_IDS as readonly number[]).includes(n.chainId) &&
+      !(CREDIT_CHAIN_ALLOWLIST as readonly number[]).includes(n.chainId)
+    ) {
+      changed = true;
+      const marker = "simulation-import-required: legacy local lab credit disabled; use an explicit simulationRegistry for local tests";
+      const notes = n.notes ? `${n.notes} | ${marker}` : marker;
+      return { ...n, enabled: false, notes };
+    }
+    return n;
+  });
+  return { doc: { ...doc, networks }, changed };
+}
+
 function seedDocument(): RegistryDocument {
   return {
     version: NETWORK_REGISTRY_VERSION,
@@ -920,6 +938,9 @@ export function loadRegistry(path = registryPath()): NetworkRegistry {
       }
       doc = { version: NETWORK_REGISTRY_VERSION, networks, assets };
     }
+    const downgraded = downgradeLegacyLocalNetworks(doc);
+    doc = downgraded.doc;
+    migrated = migrated || downgraded.changed;
     try {
       const reg = new NetworkRegistry(doc, (d) => writeJsonAtomic(path, d));
       if (migrated) {
