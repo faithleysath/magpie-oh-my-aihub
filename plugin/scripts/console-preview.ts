@@ -55,7 +55,8 @@ const neighbor = (hostname: string, virtualIpv4: string, latencyMs: number | nul
   lastCatalogReadAt: "2026-10-31T02:00:00.000Z",
 });
 
-function configuredState() {
+// Fixture objects are intentionally loosely typed: they only feed the browser.
+function configuredState(): any {
   return {
     schema: "ohmyaihub/console/1",
     at: new Date().toISOString(),
@@ -158,7 +159,7 @@ function configuredState() {
   };
 }
 
-function firstRunState() {
+function firstRunState(): any {
   const state = configuredState();
   state.configured = false;
   state.status.config = { catalog: {}, share: { models: [] } };
@@ -178,7 +179,7 @@ function firstRunState() {
   return state;
 }
 
-let current = scenario === "first-run" ? firstRunState() : configuredState();
+let current: any = scenario === "first-run" ? firstRunState() : configuredState();
 const csrf = "0".repeat(32);
 const instance = "preview-instance";
 
