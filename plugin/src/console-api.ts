@@ -2,6 +2,7 @@ import { redact } from "./log.ts";
 import { ConsoleInputError } from "./console-server.ts";
 import { configureInput } from "./server.ts";
 import { consoleWorkflows } from "./console-workflows.ts";
+import { NETWORK_LOCAL_ACTIONS, consoleNetworkAction, consoleNetworkState } from "./console-network.ts";
 import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
 import { hex64, modelList, RequestValidationError } from "./connection-request.ts";
 import type { Service } from "./service.ts";
@@ -16,6 +17,7 @@ export const CONSOLE_ACTIONS = [
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
   "p2p-request", "p2p-quote-preview", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
   ...WALLET_CONSOLE_ACTIONS,
+  ...NETWORK_LOCAL_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
   if (typeof value === "string") return redact(value) as T;
@@ -42,7 +44,7 @@ export async function consoleState(service: Service) {
       // The zero-file panel reads status.p2p; the control app's state object is
       // kept one level down so it can never overwrite the console schema.
       p2p,
-    }, ...workflows, wallet: consoleWalletState(service),
+    }, ...workflows, wallet: consoleWalletState(service), networkLocal: consoleNetworkState(service),
   });
 }
 const refuse = (message: string): never => { throw new ConsoleInputError(message); };
@@ -67,6 +69,7 @@ function knownRefusal(error: unknown): boolean {
 }
 export async function consoleAction(service: Service, name: string, input: Record<string, unknown>): Promise<unknown> {
   try {
+    if ((NETWORK_LOCAL_ACTIONS as readonly string[]).includes(name)) return consoleNetworkAction(service, name, input);
     if ((WALLET_CONSOLE_ACTIONS as readonly string[]).includes(name)) return consoleWalletAction(service, name, input);
     const w = () => consoleWorkflows(service);
     if (name.startsWith("p2p-")) {
