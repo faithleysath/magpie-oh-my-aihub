@@ -269,9 +269,9 @@ bun install --frozen-lockfile
 | `bun run secret-scan` | PASS | 工作树无凭据模式 |
 | `bun install --frozen-lockfile` | PASS（no changes） | lock 可复现 |
 | `npm audit --omit=dev`（公共 registry） | 0 known vulnerabilities | 不是完整供应链审计 |
-| GitHub Actions `plugin` run `41160080500`（commit `b972ba3`，本模块 47 个测试） | Linux 786 pass / **5 fail**；macOS 785 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 47 个测试全部 pass |
+| GitHub Actions `plugin` run `41160280967`（commit `c640f65`，本模块 47 个测试） | Linux 787 pass / **5 fail**；macOS 786 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 47 个测试全部 pass |
 
-**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `b972ba3` 上跑全量，Linux 786 pass / 5 fail、macOS 785 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
+**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `c640f65` 上跑全量，Linux 787 pass / 5 fail、macOS 786 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
 
 ### 覆盖矩阵
 
