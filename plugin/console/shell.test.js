@@ -125,6 +125,8 @@ describe("five page shell", () => {
     expect(sharingSection).not.toContain('button("发布目录"');
     expect(sharingSection).not.toContain('button("保存目录说明"');
     expect(providers).not.toContain("consume-toggle");
+    // Stopping is only offered while something is actually shared.
+    expect(providers).toContain('stopShareButton.hidden = next.status.config.sharingEnabled !== true');
   });
 
 });

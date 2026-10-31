@@ -677,6 +677,8 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
   function render(next) {
     state = next;
+    // Stopping only exists while something is shared; sharing itself is the single confirm action.
+    stopShareButton.hidden = next.status.config.sharingEnabled !== true;
     if (!publicationDirty) {
       const config = record(next.status.config.catalog);
       displayName.input.value = config.displayName || "";

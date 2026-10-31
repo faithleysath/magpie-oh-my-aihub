@@ -135,7 +135,7 @@ bun test ./test/console-api.test.ts ./test/console-security.test.ts \
 
 **REPRODUCED（2026-10-31，Bun 1.4.3）**
 
-- `bun test ./console`：**67 pass / 0 fail**（4 个文件、541 断言）。新增 `shell.test.js` 覆盖：5 项导航、首页 5 块、三字段、端口只读、每页 ≤1 primary、主题持久化边界、会话文案区分、`join-network` 只发三字段、`status.network` 空值纪律、单次分享、钱包诊断拆分。
+- `bun test ./console`：**66 pass / 0 fail**（4 个文件、541 断言）。新增 `shell.test.js` 覆盖：5 项导航、首页 5 块、三字段、端口只读、每页 ≤1 primary、主题持久化边界、会话文案区分、`join-network` 只发三字段、`status.network` 空值纪律、单次分享、钱包诊断拆分。
 - 四个 console TS 用例：**55 pass / 3 fail**，失败均为既有时钟固定导致“请求已过期”（P0-3 已知基线问题），与本轮前端改动无关；本轮**未**运行会探测生产 Magpie/RPC 的 `phase8-prompt-journey`、`service` 等重型用例。
 
 ---
