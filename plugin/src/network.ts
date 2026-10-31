@@ -256,8 +256,9 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
     const catalogPeer = catalogByHost.get(hostname) ?? (ip ? catalogByHost.get(`ip:${ip}`) : undefined) ?? null;
     const matching = providerByHost.get(hostname) ?? (ip ? providerByHost.get(ip) : undefined) ?? [];
     const link = classifyLink(peer, route);
+    // An empty record means "not recorded", not "authorized for zero models".
     const modelCounts = matching
-      .map((p) => (p.models === undefined ? null : p.models.length))
+      .map((p) => (p.models && p.models.length ? p.models.length : null))
       .filter((n): n is number => n !== null);
     const relation =
       matching.length === 0 ? "none" : matching.length === 1 ? "i-consume" : "unknown";
