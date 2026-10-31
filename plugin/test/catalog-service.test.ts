@@ -351,6 +351,10 @@ async function service(opts: { catalog?: boolean; discovery?: boolean; sharing?:
     consumingEnabled: opts.consuming ?? true,
     networkName: "catalog-lab",
     networkSecret: "catalog-lab-secret",
+    // Pinned away from the 10.77.0.3/10.77.0.4 peer fixtures: a random local
+    // address colliding with a peer would classify that peer as "self" and is a
+    // 1/254 test flake (seen on one Windows run), not a product condition.
+    virtualIpv4: "10.77.0.99/24",
     catalogEnabled: opts.catalog ?? true,
     catalogDiscovery: opts.discovery ?? false,
     catalogPort: 3426,
