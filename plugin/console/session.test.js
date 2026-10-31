@@ -302,7 +302,9 @@ describe("explicit browser pairing", () => {
     expect(calls).toBe(3);
   });
 
-  test("real handler only creates a new instance session after explicit approval survives host restart", async () => {
+  // Durable pairing journal requires POSIX directory fsync; on win32 the
+  // handler refuses with 503 (known gap, reported by scripts/platform-report.ts).
+  test.skipIf(process.platform === "win32")("real handler only creates a new instance session after explicit approval survives host restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "console-client-pairing-"));
     const options = { pairingFile: join(dir, "pending.json"), state: async () => ({ configured: true }), action: async () => true, allowedActions: ["checks"] };
     let server = createConsoleHandler(options, 34762);

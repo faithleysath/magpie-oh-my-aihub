@@ -92,6 +92,9 @@ jobs:
           bun run scripts/assert-junit.ts
           windows-junit.xml win32 380
           "finds an existing magpie on this host"
+          "a relative parent path is resolved against the parent's own cwd"
+          "browser pairing survives official approval restart through real handler + launcher, never revives old session or opens browser"
+          "real handler only creates a new instance session after explicit approval survives host restart"
 
       - name: Upload Windows evidence
         if: always()
