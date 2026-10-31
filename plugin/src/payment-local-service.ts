@@ -203,6 +203,20 @@ function publicPending(record: PaymentOperationRecord): Record<string, unknown> 
   });
 }
 
+/**
+ * The canonical console context returns a boolean. Other adapters may throw
+ * when inactive and return void when active; only an explicit false is treated
+ * as inactive, so a normal void implementation is not falsely rejected.
+ */
+function contextActive(context: ConsoleActionContext): boolean {
+  const result = context.assertActive();
+  return result !== false;
+}
+
+function requireActive(context: ConsoleActionContext, message: string): void {
+  if (!contextActive(context)) throw new ConsoleInputError(message);
+}
+
 interface SessionPaymentState {
   obligationId: string;
   previewRef: string;
@@ -211,6 +225,8 @@ interface SessionPaymentState {
   expected: ExternalWalletOperation;
   port: PaymentOperationPort;
   reservationId: string | null;
+  /** Server-owned session liveness; used only to prune dead memory state. */
+  active: () => boolean;
 }
 
 export interface PaymentLocalServiceOptions {
@@ -458,14 +474,15 @@ export class PaymentLocalService {
   }
 
   private prune(): void {
-    if (this.sessions.size <= SESSION_STATE_LIMIT) return;
     for (const [sessionId, state] of this.sessions) {
+      // A dead console session can never use its state again; the journal row
+      // persists and remains visible via pending/query. Never evict a live
+      // session that still holds a reservation.
+      if (!state.active()) {
+        this.sessions.delete(sessionId);
+        continue;
+      }
       if (state.reservationId === null && this.now() >= state.previewExpiresAt) this.sessions.delete(sessionId);
-    }
-    while (this.sessions.size > SESSION_STATE_LIMIT) {
-      const first = this.sessions.keys().next().value as string | undefined;
-      if (!first) break;
-      this.sessions.delete(first);
     }
   }
 
@@ -511,7 +528,7 @@ export class PaymentLocalService {
     ) {
       throw new ConsoleInputError("an authenticated console session is required");
     }
-    if (!context.assertActive()) throw new ConsoleInputError("the console session is no longer active");
+    requireActive(context, "the console session is no longer active");
     try {
       switch (name) {
         case "payment-obligation-preview": {
@@ -521,6 +538,12 @@ export class PaymentLocalService {
           const obligation = this.resolve(obligationId);
           this.assertSendable(obligation.binding);
           const existing = this.sessions.get(context.sessionId);
+          if (!existing) {
+            this.prune();
+            if (this.sessions.size >= SESSION_STATE_LIMIT) {
+              throw new ConsoleInputError("too many active payment sessions; complete or wait before starting a new one");
+            }
+          }
           if (existing && existing.obligationId !== obligationId) {
             throw new ConsoleInputError("one active payment port per session; finish or log out before another obligation");
           }
@@ -538,9 +561,15 @@ export class PaymentLocalService {
             expected,
             port: existing?.port ?? this.port(obligation.binding),
             reservationId: existing?.reservationId ?? null,
+            active: () => {
+              try {
+                return contextActive(context);
+              } catch {
+                return false;
+              }
+            },
           };
           this.sessions.set(context.sessionId, state);
-          this.prune();
           return Object.freeze({
             obligationId,
             previewRef,
@@ -554,12 +583,15 @@ export class PaymentLocalService {
           this.checkOperation(input.operation, state.expected);
           this.revalidate(state);
           const reservation = await state.port.reserve(state.expected);
-          if (!context.assertActive()) {
-            throw new ConsoleInputError("the console session ended during reserve; no send permit was returned; recover via pending");
+          requireActive(context, "the console session ended during reserve; no send permit was returned; recover via pending");
+          if (reservation.state === "reserved") {
+            state.reservationId = reservation.reservationId;
+            return reservation;
           }
-          if (reservation.state === "reserved") state.reservationId = reservation.reservationId;
-          else if (reservation.reservationId !== state.reservationId) state.reservationId = null;
-          return reservation;
+          // Never hand an opaque reservation id back for a non-reserved row.
+          // The approved external adapter fails closed when it is not a
+          // non-empty string. Keep the internal state for evidence recording.
+          return Object.freeze({ ...reservation, reservationId: null });
         }
         case "payment-operation-mark": {
           fields(input, ["obligationId", "previewRef", "reservationId", "operation"]);
@@ -567,14 +599,12 @@ export class PaymentLocalService {
           const reservationId = this.requireReservation(state, input);
           this.checkOperation(input.operation, state.expected);
           this.revalidate(state);
-          if (!context.assertActive()) throw new ConsoleInputError("the console session is no longer active");
+          requireActive(context, "the console session is no longer active");
           await state.port.markBroadcasting({ reservationId, operation: state.expected });
           // The journal has committed broadcasting. Re-check after the await: if
           // the session expired/logged out while the gate was running, the
           // external wallet must not receive {ok:true} and must not send.
-          if (!context.assertActive()) {
-            throw new ConsoleInputError("the console session ended during the send gate; do not send; recover via pending");
-          }
+          requireActive(context, "the console session ended during the send gate; do not send; recover via pending");
           return Object.freeze({ ok: true });
         }
         case "payment-operation-hash": {

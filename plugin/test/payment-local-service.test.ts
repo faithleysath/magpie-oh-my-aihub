@@ -274,7 +274,8 @@ describe("local payment service over real console auth", () => {
     const r2 = await jsonOf(await action(h, s2, "payment-operation-reserve", { obligationId: id, previewRef: p2.previewRef, operation: op }));
     expect(r1.state).toBe("reserved");
     expect(r2.state).toBe("claimed");
-    expect(r2.reservationId).toBe(r1.reservationId);
+    // A non-reserved response never hands another session's reservation id out.
+    expect(r2.reservationId).toBeNull();
 
     // The second session does not own the reservation, so it cannot mark or record.
     const s2mark = await action(h, s2, "payment-operation-mark", {
