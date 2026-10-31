@@ -1,0 +1,63 @@
+{
+  "schema": "ohmyaihub.phase10.wallet-lab/v1",
+  "at": "2026-10-31T11:56:00Z",
+  "pins": {
+    "magpie": {
+      "version": "0.1.2289",
+      "commit": "5c637f17b25dad63c490b1edf242c11a83b1b059",
+      "appBinarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c"
+    },
+    "easytier": {
+      "version": "2.6.4",
+      "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+      "core": "6478a522b8637e2bd2ad3adad66ed04a71b35f832bd9889bffaf1863262f6ddf",
+      "cli": "c700c4fee1a7f35fcc1a048520d40cea477b6cf7bf6d75f423fe1642c1ebc75d"
+    },
+    "bunHost": "1.4.4",
+    "foundry": {
+      "anvil": "1.8.6",
+      "commit": "6bad0a66de7c83f7b33695044138f0f5fa4c5990"
+    }
+  },
+  "network": {
+    "name": "phase10-wallet-lab",
+    "topology": "two portable Magpie nodes on one host/LAN, loopback/LAN EasyTier no-TUN; not WAN",
+    "chain": "anvil --chain-id 84532 (isolated; not Base Sepolia)"
+  },
+  "bFlow": {
+    "result": "REPRODUCED (real two-node UI)",
+    "consumerRequest": "no-file request sent from \u53d1\u73b0",
+    "providerApproval": "human fingerprint + model + $0.05 cap + confirm",
+    "delivery": "encrypted delivery pulled; consumer native Remote registered; provider shows acked; consumer shows connected=1",
+    "remoteGeneration": 1,
+    "approvalId": "db228b7c9f2763355a8e42acaf40ae0b"
+  },
+  "paymentFlow": {
+    "result": "BLOCKED / UNKNOWN in this lab",
+    "consumerRequest": {
+      "action": "payment-p2p-request",
+      "status": 200,
+      "requestId": "bcde682d-632f-4254-bd78-9b6a13745ac4",
+      "code": "queued"
+    },
+    "providerSide": "no provider payment request; no terms; no invoice; no signature; no send",
+    "observed": [
+      "The provider and consumer EasyTier peers are connected (1 peer, direct).",
+      "The provider's catalogue/presence is reachable via the consumer SOCKS5 and via a raw socksHttpGet (200, 1822 bytes).",
+      "The consumer's directory refresh sometimes reports 'catalogue read timed out after 5000ms' while a direct raw SOCKS read from the same host succeeds; after setting both nodes to catalogue port 3426 the peer read succeeded.",
+      "After the payment request the provider's plugin host restarted repeatedly (boot log every ~5-10 s); the provider payment state stayed empty. Root cause not established in this lab."
+    ],
+    "conclusion": "The C payment protocol/store/service and the B payment_message hook are covered by unit/integration tests, but a real end-to-end P2P payment is NOT claimed. The no-file authorization/approval/delivery part is real."
+  },
+  "boundaries": [
+    "single-host lab",
+    "no WAN/NAT",
+    "no vendor model",
+    "no mainnet send/credit/auto-recharge",
+    "no browser extension"
+  ],
+  "screenshots": [
+    "provider-wallet-mainnet-readonly.png",
+    "consumer-wallet-locked-restored.png"
+  ]
+}
