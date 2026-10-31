@@ -1121,3 +1121,35 @@ describe("control-only presence is a neighbour, not an offer", () => {
     } finally { r.cleanup(); }
   });
 });
+
+describe("inbound request states map to actions", () => {
+  test("awaiting-trust is actionable and its approval accepts the consumer fingerprint", async () => {
+    const state = baseState();
+    state.status.p2p = {
+      presence: [], counts: {},
+      inboundRequests: [{
+        requestId: "req-1", consumerNodeId: "c".repeat(16), consumerHostname: "伙伴乙",
+        consumerFingerprint: "e".repeat(64), models: [model.id], quoteHash, priceVersion: "f".repeat(64),
+        capUsd: null, expiresAt: "2099-01-01T00:00:00.000Z", tofu: "pending",
+        state: "awaiting-trust", receivedAt: "2026-10-31T00:00:00.000Z", detail: null,
+      }],
+    };
+    const r = runtime(state, async (name, input) => name === "p2p-quote-preview"
+      ? { requestId: input.requestId, quoteHash, priceVersion: "f".repeat(64), models: [model.id], pricing: [{ id: model.id, pricing: model.pricing }] }
+      : {});
+    try {
+      const panel = r.roots["sharing-panel"];
+      expect(panel.textContent).toContain("需要核对身份");
+      await find(panel, "button", "核对并批准").click();
+      await flush();
+      const boxes = all(r.dialog, "input").filter((node) => node.type === "checkbox");
+      for (const box of boxes.slice(-2)) { box.checked = true; await box.emit("change"); }
+      all(r.dialog, "input").find((node) => node.type === "number").value = "1";
+      await find(r.dialog, "button", "确认批准").click();
+      await flush();
+      const approve = r.calls.find((call) => call.name === "p2p-approve");
+      expect(approve).toBeDefined();
+      expect(approve.input.acceptFingerprint).toBe("e".repeat(64));
+    } finally { r.cleanup(); }
+  });
+});

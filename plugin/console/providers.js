@@ -210,8 +210,15 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
   };
 }
 // Zero-file P2P states (B assembly contract, draft). Labels only; no secrets.
-const P2P_INBOUND_LABELS = { pending: "待批准", "waiting-tofu": "需要核对身份", approved: "已批准", rejected: "已拒绝", expired: "已过期" };
-const P2P_OUTBOUND_LABELS = { pending: "等待批准", "awaiting-approval": "等待批准", approved: "正在交付", delivering: "正在交付", connected: "已连接", "action-needed": "需要处理", rejected: "已拒绝", expired: "已过期", revoked: "已撤销" };
+const P2P_INBOUND_LABELS = {
+  requested: "待核对", "awaiting-trust": "需要核对身份", "waiting-tofu": "需要核对身份",
+  "awaiting-approval": "待批准", pending: "待批准", approved: "已批准", rejected: "已拒绝", expired: "已过期",
+};
+const P2P_OUTBOUND_LABELS = {
+  requested: "等待批准", "awaiting-trust": "等待对方核对身份", "awaiting-approval": "等待批准",
+  pending: "等待批准", approved: "正在交付", delivering: "正在交付", connected: "已连接",
+  "action-needed": "需要处理", rejected: "已拒绝", expired: "已过期", revoked: "已撤销",
+};
 const P2P_DELIVERY_LABELS = { none: "未交付", queued: "排队中", delivering: "正在交付", delivered: "已交付", uncertain: "结果未知", revoked: "已撤销" };
 const P2P_CONNECTION_LABELS = { connected: "已连接", registering: "正在注册", "action-needed": "需要处理", disconnected: "已离线", revoked: "已撤销" };
 const P2P_TOFU_LABELS = { accepted: "身份已核对", pending: "首次连接，需要核对身份", changed: "身份已变化，必须重新核对" };
@@ -959,7 +966,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     const rows = items(p2pOf().inboundRequests);
     if (!rows.length) { p2pInboundList.append(empty("还没有收到使用请求", "伙伴在“发现”里直接申请后，会在这里出现；不需要文件、端口或密钥。")); return; }
     for (const request of rows) {
-      const actionable = ["pending", "waiting-tofu"].includes(request.state);
+      const actionable = ["pending", "waiting-tofu", "awaiting-trust", "awaiting-approval", "requested"].includes(request.state);
       const row = el("article", null, "workflow-row");
       const top = toolbar(request.consumerHostname || request.consumerNodeId || "伙伴");
       top.append(badge(P2P_INBOUND_LABELS[request.state] || request.state || "需要处理", actionable ? (request.tofu === "changed" ? "warn" : "info") : "neutral"));
