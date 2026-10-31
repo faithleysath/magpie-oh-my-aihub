@@ -1320,9 +1320,13 @@ export class Service {
    * and (optionally) one initial node. Role, listener and ports are the plugin's
    * job. Every joined node discovers and consumes; sharing is never implied.
    */
-  async joinNetwork(input: { networkName: string; networkSecret: string; initialNode?: string | null }): Promise<StatusSnapshot> {
+  async joinNetwork(input: { networkName: string; networkSecret?: string; initialNode?: string | null }): Promise<StatusSnapshot> {
     const prev = this.state.config;
     const initialNode = (input.initialNode ?? "").trim();
+    // Editing an existing network may leave the secret blank, which keeps the
+    // stored one. A first join cannot: there is nothing to keep.
+    const secret = (input.networkSecret ?? "").trim();
+    if (!secret && !prev) throw new Error("networkSecret must be at least 8 characters");
     // A first join also gets a listener, so another node can reach this one
     // without the operator having to understand "accept connections" or ports.
     const listenAddr =
@@ -1330,7 +1334,7 @@ export class Service {
       `tcp://0.0.0.0:${await this.choosePort("overlay-listen", "0.0.0.0", portRange(11010, 11059), [this.gatewayPort()])}`;
     return this.configure({
       networkName: input.networkName,
-      networkSecret: input.networkSecret,
+      networkSecret: secret || prev?.networkSecret || "",
       peers: initialNode ? [initialNode] : (prev?.peers ?? []),
       listenAddr,
       // All nodes discover and consume. Sharing stays a separate human action.
@@ -2781,6 +2785,18 @@ export class Service {
         }
         if (prev && prevKey) await this.restoreRemoteProvider(prev, prevKey);
       }
+      if (!this.state.providers.some((p) => p.localPort === localPort)) {
+        // The listener could not be proven (or the forward could not be added),
+        // so record a real failure: the next attempt must not reuse this port.
+        await this.recordPortProof({
+          purpose: "forward",
+          host: "127.0.0.1",
+          port: localPort,
+          owner: "easytier",
+          reported: false,
+          detail: `forward to ${input.id} failed: ${(e as Error).message}`.slice(0, 300),
+        }).catch(() => {});
+      }
       if (addedForward && !this.state.providers.some((p) => p.localPort === localPort)) {
         await this.recordOrphanForward(localPort, dst);
       }
@@ -3720,11 +3736,16 @@ export class Service {
 
   private async allocLocalPort(): Promise<number> {
     const used = new Set(this.state.providers.map((p) => p.localPort));
+    // A port whose proof failed is not "free because the range says so": a
+    // retry moves to another candidate and records the migration.
+    const broken = this.portLedger().evidence
+      .filter((e) => e.purpose === "forward" && (e.state === "failed" || e.state === "conflict"))
+      .map((e) => e.port);
     return this.choosePort(
       "forward",
       "127.0.0.1",
       portRange(FORWARD_PORT_FROM, FORWARD_PORT_TO),
-      [...used, this.gatewayPort()],
+      [...used, ...broken, this.gatewayPort()],
     );
   }
 

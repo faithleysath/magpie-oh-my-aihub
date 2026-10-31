@@ -138,13 +138,16 @@ export function normalizePortLedger(raw: unknown): PortLedger {
       const state = String((e as PortEvidence).state ?? "unverified");
       if (!port || !PURPOSES.has(purpose)) continue;
       const reach = String((e as PortEvidence).reachability ?? "");
+      const host = shortText(e.host, 120) ?? "127.0.0.1";
       evidence.push({
         purpose: purpose as PortPurpose,
         port,
-        host: shortText(e.host, 120) ?? "127.0.0.1",
+        host,
         owner: (OWNERS.has(owner) ? owner : "unknown") as PortOwner,
         state: (STATES.has(state) ? state : "unverified") as PortState,
-        reachability: (REACHABILITY.has(reach) ? reach : undefined) as PortReachability | undefined,
+        // A persisted record from before the field existed still states a
+        // boundary: derive it from the recorded bind address.
+        reachability: (REACHABILITY.has(reach) ? reach : reachabilityOf(host)) as PortReachability,
         verifiedAt: typeof e.verifiedAt === "string" ? e.verifiedAt : new Date(0).toISOString(),
         detail: shortText(e.detail, 300),
       });
