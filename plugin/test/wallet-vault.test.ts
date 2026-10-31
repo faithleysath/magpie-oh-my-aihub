@@ -899,6 +899,11 @@ describe("EIP-712 preview and scoped signing", () => {
     expect(() => vault.prepareTypedData({ purpose: depositPurpose.id, typedData: doc(97, 56) })).toThrow(
       expect.objectContaining({ code: "typed-data-invalid" }),
     );
+    const incomplete = doc(97) as unknown as { message: Record<string, unknown> };
+    incomplete.message.assetId = "eip155:97";
+    expect(() => vault.prepareTypedData({ purpose: depositPurpose.id, typedData: incomplete as WalletTypedData })).toThrow(
+      expect.objectContaining({ code: "typed-data-invalid" }),
+    );
     const valid = vault.prepareTypedData({ purpose: depositPurpose.id, typedData: doc(97) });
     const permit = vault.createSigningPermit({ kind: "typed-data", prepared: valid });
     expect(vault.signTypedData({ prepared: valid, permit }).chainId).toBe(97);
@@ -1229,6 +1234,28 @@ describe("simulated/testnet payment signing", () => {
       code: "signing-permit-limit",
     });
     expect(twoUses.remainingUses).toBe(1);
+  });
+
+  test("payment calldata is normalized to lowercase so sign read-back is consistent", async () => {
+    const { vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    const upper = vault.preparePayment(paymentInput({ data: "0xAB" }));
+    const lower = vault.preparePayment(paymentInput({ data: "0xab" }));
+    expect(upper.data).toBe("0xab");
+    expect(lower.data).toBe("0xab");
+
+    const upperPermit = vault.createSigningPermit({ kind: "payment", purpose: "payment", prepared: upper });
+    const upperSigned = await vault.signPayment({ prepared: upper, permit: upperPermit });
+    const upperTx = Transaction.from(upperSigned.rawTransaction);
+    expect(upperTx.data).toBe("0xab");
+    expect(upperPermit.remainingUses).toBe(0);
+
+    const lowerPermit = vault.createSigningPermit({ kind: "payment", purpose: "payment", prepared: lower });
+    const lowerSigned = await vault.signPayment({ prepared: lower, permit: lowerPermit });
+    expect(lowerSigned.hash).toBe(upperSigned.hash);
+    expect(lowerSigned.rawTransaction).toBe(upperSigned.rawTransaction);
+    expect(lowerPermit.remainingUses).toBe(0);
   });
 
   test("invalid payment fields are rejected before signing", async () => {

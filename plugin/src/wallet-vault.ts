@@ -68,12 +68,6 @@ export const SIGNING_CHAIN_ALLOWLIST: ReadonlySet<number> = new Set(SIGNING_CHAI
 /** 31337 is available only through the explicit isolated test option below. */
 export const ISOLATED_SIMULATION_CHAIN_ALLOWLIST: readonly number[] = Object.freeze([31337]);
 
-const ALLOWED_SIGNING_CHAIN_CLASS = new Map<number, "testnet" | "simulation">([
-  [97, "testnet"],
-  [84532, "testnet"],
-  [31337, "simulation"],
-]);
-
 export const WALLET_VAULT_VERSION = 1;
 export const DEFAULT_SESSION_TTL_MS = 5 * 60_000;
 export const MAX_SESSION_TTL_MS = 15 * 60_000;
@@ -1039,6 +1033,7 @@ export class WalletVault {
       fail("payment-invalid", "payment data is too large");
     }
     if (!isHexData(data)) fail("payment-invalid", "payment data must be an even-length hex string");
+    const normalizedData = data.toLowerCase();
     const maxGasCostWei = input.gasLimit * input.maxFeePerGas;
     const maxCostWei = input.valueWei + maxGasCostWei;
     if (maxCostWei > UINT256_MAX) fail("payment-invalid", "worst-case payment exceeds uint256");
@@ -1048,7 +1043,7 @@ export class WalletVault {
       chainId: input.chainId,
       to,
       value: input.valueWei,
-      data,
+      data: normalizedData,
       nonce: input.nonce,
       gasLimit: input.gasLimit,
       maxFeePerGas: input.maxFeePerGas,
@@ -1065,7 +1060,7 @@ export class WalletVault {
       maxPriorityFeePerGas: input.maxPriorityFeePerGas.toString(),
       maxGasCostWei: maxGasCostWei.toString(),
       maxCostWei: maxCostWei.toString(),
-      data,
+      data: normalizedData,
       signable: true as const,
     });
     preparedPaymentRecords.set(prepared, { vaultId: this.vaultId, transaction, prepared });
@@ -1931,9 +1926,15 @@ function normalizePurposeTypedData(
       fail("typed-data-invalid", "message chainId does not match the domain/purpose chain");
     }
   }
-  if (purpose.messageTypes.assetId === "string" && typeof input.message.assetId === "string") {
+  if (purpose.messageTypes.assetId !== undefined) {
+    if (purpose.messageTypes.assetId !== "string" || typeof input.message.assetId !== "string") {
+      fail("typed-data-invalid", "message assetId must be a standard eip155 string");
+    }
     const assetMatch = /^eip155:(\d+):0x[0-9a-fA-F]{40}$/.exec(input.message.assetId);
-    if (assetMatch && Number(assetMatch[1]) !== purpose.chainId) {
+    if (!assetMatch) {
+      fail("typed-data-invalid", "message assetId must be a complete eip155:<chain>:0x<40hex> identifier");
+    }
+    if (Number(assetMatch[1]) !== purpose.chainId) {
       fail("typed-data-invalid", "message assetId chain does not match the domain/purpose chain");
     }
   }
