@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  emptyState,
   getProviderKey,
   keyStoreFile,
   loadState,
@@ -155,6 +156,8 @@ describe("phase-3 migration", () => {
       secureIdentity: null,
       share: { models: ["alpha/*"] },
       catalog: { enabled: false, discoveryEnabled: false, displayName: null, contact: null, port: 3426, socksPort: 13400, refreshSec: 20, minTopUpUsd: 1 },
+      controlEnabled: true,
+      controlPort: null,
     };
     saveState(st);
     const again = loadState();
@@ -166,7 +169,7 @@ describe("phase-3 migration", () => {
 
 describe("crash safety", () => {
   test("writes leave no temporary files behind", () => {
-    saveState({ version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [], shareSuspended: null });
+    saveState({ ...emptyState(), version: STATE_VERSION });
     const names = readdirSync(join(dir, "oh-my-aihub"));
     expect(names.filter((n) => n.endsWith(".tmp"))).toEqual([]);
   });
@@ -192,7 +195,7 @@ describe("crash safety", () => {
   test("the key store is separate and keeps only its own ids", () => {
     setProviderKey("a", "sk-test-store-a");
     setProviderKey("b", "sk-test-store-b");
-    saveState({ version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [], shareSuspended: null });
+    saveState({ ...emptyState(), version: STATE_VERSION });
     const store = read(keyStoreFile());
     expect(Object.keys(store.keys).sort()).toEqual(["a", "b"]);
     const raw = readFileSync(stateFile(), "utf8");

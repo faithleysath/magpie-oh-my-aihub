@@ -22,8 +22,9 @@ import { stateDir, statePath } from "./paths.ts";
 import { backupFile, readJsonWithBackup, writeJsonAtomic } from "./store.ts";
 import { logger, registerSecret } from "./log.ts";
 import { randomMappedCidr } from "./addresses.ts";
+import { emptyPortLedger, normalizePortLedger, type PortLedger } from "./ports.ts";
 
-export const STATE_VERSION = 3;
+export const STATE_VERSION = 4;
 
 /** The overlay's forward-port range; one port per remote provider. */
 export const FORWARD_PORT_FROM = 13425;
@@ -101,6 +102,15 @@ export interface PluginConfig {
   secureIdentity: SecureIdentity | null;
   share: SharePolicy;
   catalog: CatalogConfig;
+  /**
+   * Reserved for the Phase 10 B control listener: every joined node may receive
+   * structured requests, not only a node that shares models. The A-service branch
+   * owns the port mechanism; the B service owns the listener itself. Leaving it
+   * true changes nothing until that service exists.
+   */
+  controlEnabled: boolean;
+  /** the control listener's port; null until it is allocated (never user-entered) */
+  controlPort: number | null;
 }
 
 export type ConnectionStatus = "connected" | "degraded" | "disabled" | "identity-mismatch";
@@ -142,6 +152,8 @@ export interface ProviderConnection {
   /** reference into the key store, never the key itself */
   keyRef: string;
   fingerprint: PeerFingerprint | null;
+  /** models verified at connect time; [] = none recorded (never an authorization claim) */
+  models: string[];
   status: ConnectionStatus;
   detail: string | null;
   limit: ProviderLimitView | null;
@@ -174,6 +186,8 @@ export interface PluginState {
    * (`config.sharingEnabled`) is kept; the export is not.
    */
   shareSuspended: ShareSuspension | null;
+  /** automatic port claims: what was migrated and when each port was last proven */
+  ports: PortLedger;
 }
 
 /** The shape phase 3 wrote; read only, never written. */
@@ -195,6 +209,8 @@ interface LegacyConfig {
   secureIdentity?: SecureIdentity | null;
   share?: SharePolicy;
   catalog?: Partial<CatalogConfig>;
+  controlEnabled?: boolean;
+  controlPort?: number | null;
   sharingEnabled?: boolean;
   consumingEnabled?: boolean;
 }
@@ -216,6 +232,7 @@ interface LegacyState {
   providerWiring?: LegacyWiring | null;
   orphanForwards?: OrphanForward[];
   shareSuspended?: ShareSuspension | null;
+  ports?: unknown;
 }
 
 const KEY_STORE = "provider-keys.json";
@@ -315,16 +332,24 @@ function normalizeConfig(raw: LegacyConfig, wiring: LegacyWiring | null): Plugin
     publishedPorts: Array.isArray(raw.publishedPorts) ? raw.publishedPorts.map(Number).filter(Number.isFinite) : [],
     secureMode: raw.secureMode ?? true,
     secureIdentity: raw.secureIdentity ?? null,
-    share: normalizeShare(raw.share),
+    share: normalizeShare(raw.share, sharingEnabled),
     // A phase-4 document has no catalogue yet: both switches stay off, so an
     // upgrade never starts a listener or publishes anything by itself.
     catalog: normalizeCatalogConfig(raw.catalog),
+    // Default on: receiving a structured request is the normal state for a
+    // joined node. There is no listener until the B service is installed.
+    controlEnabled: raw.controlEnabled ?? true,
+    controlPort: portIn(raw.controlPort, 0) || null,
   };
 }
 
-function normalizeShare(share: SharePolicy | undefined): SharePolicy {
-  const models = Array.isArray(share?.models) ? share.models.map(String).filter(Boolean) : ["*"];
-  return { models: models.length ? models : ["*"] };
+function normalizeShare(share: SharePolicy | undefined, sharingEnabled: boolean): SharePolicy {
+  const models = Array.isArray(share?.models) ? share.models.map(String).filter(Boolean) : [];
+  // A legacy document that shared before the allow list existed keeps the old
+  // "everything" meaning; a new node starts with nothing selected, so no future
+  // model is shared without an explicit choice.
+  if (!models.length && sharingEnabled) return { models: ["*"] };
+  return { models };
 }
 
 function portIn(value: unknown, fallback: number): number {
@@ -425,6 +450,7 @@ export function loadState(): LoadedState {
         localPort: Number(p.localPort ?? 0),
         keyRef: p.keyRef ?? providerKeyRef(p.id),
         fingerprint: p.fingerprint ?? null,
+        models: Array.isArray(p.models) ? p.models.map(String) : [],
         status: p.status ?? "degraded",
         detail: p.detail ?? null,
         limit: p.limit ?? null,
@@ -447,6 +473,7 @@ export function loadState(): LoadedState {
       localPort: Number(wiring.localPort ?? 0),
       keyRef: providerKeyRef(wiring.id),
       fingerprint: null,
+      models: [],
       status: "degraded",
       detail: "migrated from the phase-3 provider wiring; not verified since",
       limit: null,
@@ -464,6 +491,7 @@ export function loadState(): LoadedState {
     providers,
     orphanForwards: Array.isArray(value.orphanForwards) ? value.orphanForwards : [],
     shareSuspended: value.shareSuspended ?? null,
+    ports: normalizePortLedger((value as LegacyState & { ports?: unknown }).ports),
   };
 
   const migratedFrom = legacy ? (typeof value.version === "number" ? value.version : 1) : null;
@@ -482,7 +510,15 @@ export function loadState(): LoadedState {
 }
 
 export function emptyState(): PluginState {
-  return { version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [], shareSuspended: null };
+  return {
+    version: STATE_VERSION,
+    config: null,
+    consumers: [],
+    providers: [],
+    orphanForwards: [],
+    shareSuspended: null,
+    ports: emptyPortLedger(),
+  };
 }
 
 export function saveState(state: PluginState): void {
@@ -501,6 +537,8 @@ export interface ProviderView {
   status: ConnectionStatus;
   detail: string | null;
   fingerprint: PeerFingerprint | null;
+  /** models verified at connect time; [] = none recorded, not "authorized to nothing" */
+  models: string[];
   /** the provider's own native limit numbers, read through its keyed forward */
   limit: ProviderLimitView | null;
   createdAt: string;
@@ -520,6 +558,7 @@ export function providerView(p: ProviderConnection): ProviderView {
     status: p.status,
     detail: p.detail,
     fingerprint: p.fingerprint,
+    models: Array.isArray(p.models) ? [...p.models] : [],
     limit: p.limit ?? null,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,

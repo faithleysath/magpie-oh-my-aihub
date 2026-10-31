@@ -11,6 +11,7 @@ import { getProviderKey } from "../src/state.ts";
 import { priceSnapshot, catalogPriceVersion } from "../src/pricing.ts";
 import { consoleAction } from "../src/console-api.ts";
 import { ConsoleWorkflows } from "../src/console-workflows.ts";
+import { fakePortOwnership } from "./support/fake-ports.ts";
 
 // Service-level catalogue tests: a fake Magpie, a fake supervisor, a fake
 // read-only HTTP server and an in-memory peer. No overlay, no real Magpie and
@@ -324,6 +325,7 @@ async function service(opts: { catalog?: boolean; discovery?: boolean; sharing?:
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
+    ports: { ownership: fakePortOwnership() },
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 200,
     probes: probes(opts.extra),

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EasytierSupervisor, renderConfig, type EasytierConfig } from "../src/easytier.ts";
+import { EasytierSupervisor, renderConfig, type EasytierConfig, type SupervisorOptions } from "../src/easytier.ts";
 
 // A fake easyTier: a "core" that sleeps until signalled and a "cli" that answers
 // from a configuration file the test controls. This is how a runtime check is
@@ -35,8 +35,31 @@ let configFile: string;
 /** every supervisor a test made, stopped after it so no fake core leaks */
 const made: EasytierSupervisor[] = [];
 
+/**
+ * The socket-owner probe, faked from the PID the fake core writes on start.
+ * Production uses lsof/ss; this test seam keeps the same rule: a port is only
+ * accepted when the OS attributes it to the supervised PID.
+ */
+function fakeSocketOwner(): SupervisorOptions["probe"] {
+  return {
+    socketOwner: {
+      async listenerPids() {
+        try {
+          const pid = Number(readFileSync(process.env.FAKE_PID_FILE ?? "", "utf8").trim());
+          return { supported: true, pids: Number.isInteger(pid) && pid > 0 ? [pid] : [], detail: null };
+        } catch {
+          return { supported: true, pids: [], detail: null };
+        }
+      },
+    },
+  };
+}
+
 function makeSup(events: ConstructorParameters<typeof EasytierSupervisor>[0], opts: ConstructorParameters<typeof EasytierSupervisor>[1] = {}): EasytierSupervisor {
-  const sup = new EasytierSupervisor(events, opts);
+  const sup = new EasytierSupervisor(events, {
+    ...opts,
+    probe: { ...fakeSocketOwner(), ...(opts.probe ?? {}) },
+  });
   made.push(sup);
   return sup;
 }
@@ -68,7 +91,7 @@ beforeEach(() => {
   const cli = join(binDir, "easytier-cli");
   writeFileSync(
     core,
-    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "easytier-core 2.6.4-fake"; exit 0; fi\ntrap "exit 0" TERM INT\nwhile :; do sleep 0.2; done\n',
+    '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "easytier-core 2.6.4-fake"; exit 0; fi\necho $$ > "$FAKE_PID_FILE"\ntrap "exit 0" TERM INT\nwhile :; do sleep 0.2; done\n',
   );
   writeFileSync(
     cli,
@@ -91,10 +114,12 @@ if (args.includes("node")) {
   bins = { core, cli, verified: true };
   configFile = join(dir, "running.toml");
   process.env.FAKE_CONFIG = configFile;
+  process.env.FAKE_PID_FILE = join(dir, "core.pid");
 });
 
 afterEach(async () => {
   delete process.env.FAKE_CONFIG;
+  delete process.env.FAKE_PID_FILE;
   for (const sup of made.splice(0)) {
     await sup.stop().catch(() => {});
   }

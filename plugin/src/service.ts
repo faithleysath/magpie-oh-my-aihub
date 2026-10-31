@@ -17,7 +17,8 @@
 // The plugin still never touches an AI request. Magpie authenticates, routes and
 // bills every call through the remote provider's own Gateway Key.
 
-import { lanIPv4 } from "./paths.ts";
+import { lanIPv4, statePath } from "./paths.ts";
+import { readFileSync } from "node:fs";
 import { capOnGrid, modelList, RequestValidationError, validateRequestApproval, type ApprovalContext, type ConnectionRequest } from "./connection-request.ts";
 import { logger, registerSecret, writePageStatus } from "./log.ts";
 import { gatewayBaseURL, type CatalogModelMeta, type LimitStatus, type Magpie } from "./magpie.ts";
@@ -41,6 +42,24 @@ import {
   type SupervisorState,
 } from "./easytier.ts";
 import { mappedHost, randomMappedCidr, randomVirtualIp } from "./addresses.ts";
+import {
+  OsSocketOwnership,
+  SocketBinder,
+  claimFreePort,
+  emptyPortLedger,
+  portRange,
+  proofEvidence,
+  recordPortEvidence,
+  recordPortMigration,
+  verifyOwnedPort,
+  type PortBinder,
+  type PortLedger,
+  type PortOwner,
+  type PortProof,
+  type PortPurpose,
+  type SocketOwnershipProbe,
+} from "./ports.ts";
+import { projectNetwork, splitListenAddr, type NetworkView } from "./network.ts";
 import {
   CATALOG_MAX_MODELS,
   CATALOG_PATH,
@@ -152,6 +171,11 @@ export interface ServiceDeps {
   wallet?: Wallet | null;
   /** build the wallet from the plugin state directory when the node enables it */
   walletFactory?: () => Wallet | null;
+  /**
+   * Port claims. The default holds real sockets; a unit test injects a binder
+   * (or a fake supervisor) so no listener is created on the host.
+   */
+  ports?: { binder?: PortBinder; ownership?: SocketOwnershipProbe; now?: () => Date };
 }
 
 /**
@@ -236,6 +260,10 @@ export interface ShareCandidatesView {
   priceVersion: string | null;
   priceLocked: false;
   blocking: { id: string; reason: string }[];
+  /** when the native-model read behind this view happened */
+  detectedAt?: string;
+  /** this list is Magpie's own model metadata, never a copied setting */
+  source?: "magpie-native";
 }
 
 export interface StatusSnapshot {
@@ -265,6 +293,8 @@ export interface StatusSnapshot {
     catalog: CatalogConfig;
   };
   easytier: SupervisorState;
+  /** the read-only network projection: state, neighbours, ports (never editable) */
+  network: NetworkView;
   consumers: ConsumerView[];
   providers: ProviderView[];
   catalog: CatalogStatus;
@@ -407,9 +437,29 @@ export class Service {
   private cachedChecksAt: string | null = null;
   private cachedChecksDurationMs: number | null = null;
   private cachedChecksError: string | null = null;
+  private binder: PortBinder;
+  private ownership: SocketOwnershipProbe;
+  private clock: () => Date;
+  private lastNetworkRefreshAt = 0;
 
   constructor(private deps: ServiceDeps) {
     this.state = loadState().state;
+    // A proof belongs to the process that made it. After a restart nothing has
+    // been re-proven yet, so persisted "stable" entries become "unverified"
+    // until this instance checks the listeners again (H1: no stale green).
+    if (this.state.ports && this.state.ports.evidence.length) {
+      this.state.ports = {
+        ...this.state.ports,
+        evidence: this.state.ports.evidence.map((e) => ({
+          ...e,
+          state: "unverified" as const,
+          detail: "not re-proven since this host started",
+        })),
+      };
+    }
+    this.binder = deps.ports?.binder ?? new SocketBinder();
+    this.ownership = deps.ports?.ownership ?? new OsSocketOwnership();
+    this.clock = deps.ports?.now ?? (() => new Date());
     this.probes = { ...defaultProbes(deps.magpie), ...(deps.probes ?? {}) };
     this.accountingTickMs = Math.max(10, deps.accountingTickMs ?? ACCOUNTING_TICK_MS);
     this.accountingFailureBudget = Math.max(1, deps.accountingFailureBudget ?? ACCOUNTING_FAILURE_BUDGET);
@@ -871,6 +921,7 @@ export class Service {
 
   async start(): Promise<void> {
     const cfg = this.state.config;
+    let coreReady = true;
     if (cfg) {
       // A legacy document may carry Secure Mode without a keypair (the field was
       // optional); generate and persist one instead of refusing to start.
@@ -880,11 +931,30 @@ export class Service {
         logger.info("generated the Secure Mode identity this node was missing");
       }
       try {
+        // A stored port somebody else now holds is migrated before the start,
+        // never "tried and retried" until it happens to work.
+        await this.ensureConfiguredPorts(cfg);
         await this.supervisor.start(this.etConfig(cfg));
+        this.assertCorePortsProven(await this.reconcileCorePorts(cfg));
+        this.lastProblem = null;
       } catch (e) {
+        // A core we cannot attribute is not "online": stop it rather than serve
+        // with a state that was never proven.
+        await this.supervisor.stop().catch(() => {});
         this.lastProblem = String(e);
+        coreReady = false;
         logger.error(`supervisor did not start: ${String(e)}`);
       }
+    }
+    // A core that is not running or whose listeners cannot be attributed is not
+    // a usable node: do not start the catalogue, guard, provider reconciliation,
+    // accounting or wallet loops on top of it. The state is written as failed
+    // and a later explicit start (after fixing the port/ACL) can retry.
+    if (!coreReady) {
+      this.stopCatalogServer();
+      this.writeSnapshot();
+      logger.error("startup aborted: the overlay core is not proven; background services were not started");
+      return;
     }
     // A core that just started has no leftover forwards: the generated config
     // is the whole set. Anything recorded as orphan is gone with it.
@@ -1138,7 +1208,14 @@ export class Service {
       }
 
       const secureMode = input.secureMode ?? prev?.secureMode ?? true;
-      const rpcPort = input.rpcPort ?? prev?.rpcPort ?? (await freeRpcPort());
+      const rpcPort =
+        input.rpcPort ??
+        prev?.rpcPort ??
+        (await this.choosePort("easytier-rpc", "127.0.0.1", this.rpcCandidates(), [
+          this.gatewayPort(),
+          prev?.catalog.port ?? 3426,
+          prev?.catalog.socksPort ?? 13400,
+        ]));
 
       const virtualIpv4 = input.virtualIpv4 ? normalizeVirtualIp(input.virtualIpv4) : (prev?.virtualIpv4 ?? randomVirtualIp("10.77.0.0/24"));
       const overlayCidr = "10.77.0.0/24";
@@ -1192,6 +1269,8 @@ export class Service {
         secureIdentity,
         share,
         catalog,
+        controlEnabled: prev?.controlEnabled ?? true,
+        controlPort: prev?.controlPort ?? null,
       };
       this.state.config = cfg;
       registerSecret(networkSecret);
@@ -1267,9 +1346,413 @@ export class Service {
     });
   }
 
+  // --- phase-10: three-field join, one explicit share, read-only network ------
+
+  /**
+   * The only first-run network configuration the console offers: name, secret
+   * and (optionally) one initial node. Role, listener and ports are the plugin's
+   * job. Every joined node discovers and consumes; sharing is never implied.
+   */
+  async joinNetwork(input: { networkName: string; networkSecret?: string; initialNode?: string | null }): Promise<StatusSnapshot> {
+    const prev = this.state.config;
+    const initialNode = (input.initialNode ?? "").trim();
+    // Editing an existing network may leave the secret blank, which keeps the
+    // stored one. A first join cannot: there is nothing to keep.
+    const secret = (input.networkSecret ?? "").trim();
+    if (!secret && !prev) throw new Error("networkSecret must be at least 8 characters");
+    // A first join also gets a listener, so another node can reach this one
+    // without the operator having to understand "accept connections" or ports.
+    const listenAddr =
+      prev?.listenAddr ??
+      `tcp://0.0.0.0:${await this.choosePort("overlay-listen", "0.0.0.0", portRange(11010, 11059), [this.gatewayPort()])}`;
+    const snapshot = await this.configure({
+      networkName: input.networkName,
+      networkSecret: secret || prev?.networkSecret || "",
+      peers: initialNode ? [initialNode] : (prev?.peers ?? []),
+      // A first join selects no models: sharing anything later still needs an
+      // explicit native-model choice. An existing policy is kept on edit.
+      shareModels: prev?.share.models ?? [],
+      listenAddr,
+      // All nodes discover and consume. Sharing stays a separate human action.
+      sharingEnabled: prev?.sharingEnabled ?? false,
+      consumingEnabled: true,
+      catalogDiscovery: true,
+    });
+    // `configure` keeps the saved config even when the core refuses to run (a
+    // later boot can retry). Do not report a join that did not happen.
+    const et = this.supervisor.snapshot();
+    if (!et.running) {
+      throw new Error(`the overlay core is not running after the join: ${et.lastError ?? "no error was recorded"}`);
+    }
+    return snapshot;
+  }
+
+  /**
+   * The single explicit "share these models" action. It re-reads Magpie's own
+   * native models and their effective prices, accepts only complete-price native
+   * models, publishes the catalogue and reapplies the ACL in one supervised
+   * restart. A failure restores the previous configuration; this method never
+   * issues a Gateway Key or approves a request. Model settings are not copied:
+   * the existing `share.models` allow list is the only switch.
+   */
+  async shareNativeModels(input: { models: string[]; confirm: boolean }): Promise<StatusSnapshot> {
+    // One transaction at a time: a concurrent tick/share must not see or roll
+    // back half of another operator's change.
+    return this.serialize(() => this.shareNativeModelsLocked(input));
+  }
+
+  private async shareNativeModelsLocked(input: { models: string[]; confirm: boolean }): Promise<StatusSnapshot> {
+    if (input.confirm !== true) throw new Error("refusing to share: the human confirmation (confirm: true) is required");
+    const cfg = this.state.config;
+    if (!cfg) throw new Error("configure this node first");
+    if (!this.deps.magpie.providersReadable()) {
+      throw new Error("cannot read Magpie's provider list; refusing to issue or change a shared key");
+    }
+    const requested = [...new Set(input.models.map((m) => m.trim()).filter(Boolean))];
+    if (requested.length === 0) throw new Error("choose at least one native model with a complete price to share");
+    const candidates = await this.shareCandidates();
+    const byId = new Map(candidates.models.map((m) => [m.id, m]));
+    const selected: string[] = [];
+    for (const model of requested) {
+      const candidate = byId.get(model);
+      if (!candidate) throw new Error(`refusing to share ${model}: it is not one of this Magpie's native models`);
+      if (!candidate.completePrice) {
+        throw new Error(`refusing to share ${model}: it has no complete effective price, so a capped key cannot be issued for it`);
+      }
+      selected.push(model);
+    }
+    selected.sort();
+    const lan = this.lanIp();
+    if (!lan) throw new Error("no usable LAN address to export; connect this machine to a network first");
+    const previousConfig = structuredClone(cfg);
+    const previousSuspension = this.state.shareSuspended ? { ...this.state.shareSuspended } : null;
+    const next: PluginConfig = {
+      ...cfg,
+      sharingEnabled: true,
+      share: { models: selected },
+      mappedCidr: cfg.mappedCidr ?? randomMappedCidr(),
+      proxyCidr: `${lan}/32`,
+      publishedPorts: cfg.publishedPorts.includes(this.gatewayPort())
+        ? cfg.publishedPorts
+        : [...cfg.publishedPorts, this.gatewayPort()],
+      // Publishing the catalogue is part of this one action, not a second one.
+      // Discovery keeps whatever the operator chose (join-network turns it on).
+      catalog: { ...cfg.catalog, enabled: true },
+    };
+    this.state.config = next;
+    saveState(this.state);
+    try {
+      // The guard runs BEFORE the export is opened: it re-checks every issued
+      // key against this node's own native models and the exact selection. A
+      // suspension therefore never happens after the ACL already allowed the
+      // gateway; it either passes here or the transaction fails.
+      const guard = await this.guardSharedKeys();
+      if (guard.suspended || !this.sharingActive()) {
+        const reason = this.state.shareSuspended?.reason ?? "the share guard did not confirm the export";
+        throw new Error(`the share guard withdrew sharing: ${reason}`);
+      }
+      await this.applyConfig(next);
+      const et = this.supervisor.snapshot();
+      if (!et.running) {
+        throw new Error(`the overlay core is not running after the restart: ${et.lastError ?? "no error was recorded"}`);
+      }
+      await this.applyCatalog();
+      this.lastProviderFingerprint = this.providerFingerprint();
+      await this.publishCatalogNow();
+      if (!this.catalogPublishing() || !this.catalogServer || !this.catalogQuote) {
+        throw new Error("the catalogue server is not running or no signed quote was published");
+      }
+      logger.info(`sharing ${selected.length} native model(s); the catalogue is published`);
+      return this.status();
+    } catch (e) {
+      const why = (e as Error)?.message ?? String(e);
+      this.state.config = previousConfig;
+      this.state.shareSuspended = this.state.shareSuspended ?? previousSuspension;
+      saveState(this.state);
+      try {
+        await this.applyConfig(previousConfig);
+        await this.applyCatalog();
+      } catch (restoreError) {
+        const restoreWhy = (restoreError as Error)?.message ?? String(restoreError);
+        logger.error(`sharing models failed (${why}) and restoring the previous configuration failed (${restoreWhy})`);
+        // The core may still be running the half-applied export: stop it, so a
+        // failed rollback can never leave the gateway published.
+        await this.supervisor.stop().catch(() => {});
+        throw new Error(
+          `share failed: ${why}; restoring the previous configuration also failed: ${restoreWhy}. ` +
+            `The overlay core was stopped; the previous config is retained on disk; run checks before retrying.`,
+        );
+      }
+      throw new Error(`share failed: ${why}; the previous configuration was restored`);
+    }
+  }
+
+  /** The separate, explicit stop: withdraws the export and the catalogue. */
+  async stopSharing(input: { confirm: boolean }): Promise<StatusSnapshot> {
+    return this.serialize(async () => {
+      if (input.confirm !== true) throw new Error("refusing to stop sharing without confirm: true");
+      const cfg = this.state.config;
+      if (!cfg) throw new Error("configure this node first");
+      const next: PluginConfig = { ...cfg, sharingEnabled: false, catalog: { ...cfg.catalog, enabled: false } };
+      this.state.config = next;
+      saveState(this.state);
+      try {
+        await this.applyConfig(next);
+        await this.applyCatalog();
+      } catch (e) {
+        // Never leave a config that says "not sharing" while the core still
+        // publishes the old export: stop it and report the failure.
+        await this.supervisor.stop().catch(() => {});
+        throw new Error(`stopping sharing failed: ${(e as Error).message}; the overlay core was stopped`);
+      }
+      logger.info("sharing stopped: the export and the catalogue were withdrawn; keys and records were kept");
+      return this.status();
+    });
+  }
+
+  /** Read-only network diagnostics; never probes, never edits a port. */
+  networkView(): NetworkView {
+    return projectNetwork({
+      config: this.state.config,
+      supervisor: this.supervisor.snapshot(),
+      catalog: this.catalogStatus(),
+      providers: this.providers(),
+      gatewayPort: this.gatewayPort(),
+      ledger: this.portLedger(),
+      serviceProblem: this.lastProblem,
+      consolePort: readPortFile("console-port.json"),
+      apiPort: readPortFile("api-port"),
+      now: () => this.clock().getTime(),
+    });
+  }
+
+  /**
+   * An explicit refresh (a button, never the poll): re-reads EasyTier's peer and
+   * route tables and, when discovery is on, the neighbours' catalogues. Values
+   * are cached between calls so a stuck page cannot hammer the core.
+   */
+  async refreshNetwork(): Promise<NetworkView> {
+    const now = this.clock().getTime();
+    if (now - this.lastNetworkRefreshAt < 2000) return this.networkView();
+    this.lastNetworkRefreshAt = now;
+    await this.supervisor.refresh().catch((e) => logger.warn(`network refresh failed: ${String(e)}`));
+    if (this.state.config?.catalog.discoveryEnabled) {
+      await this.refreshCatalog().catch((e) => logger.warn(`catalogue refresh from the network page failed: ${String(e)}`));
+    }
+    return this.networkView();
+  }
+
+  // --- automatic ports -------------------------------------------------------
+
+  private portLedger(): PortLedger {
+    return this.state.ports ?? emptyPortLedger();
+  }
+
+  private persistLedger(next: PortLedger): void {
+    this.state.ports = next;
+    saveState(this.state);
+  }
+
+  /**
+   * Atomically reserves a candidate, then releases it for the real listener.
+   * The release is followed by a post-start proof, so a port stolen in the gap
+   * is detected instead of being used for an overlay connection.
+   */
+  private async choosePort(purpose: PortPurpose, host: string, candidates: number[], exclude: number[] = []): Promise<number> {
+    const claim = await claimFreePort(this.binder, host, candidates, { exclude });
+    const { port, release } = claim.reservation;
+    await release();
+    return port;
+  }
+
+  /**
+   * Candidates for the core's RPC portal. Deliberately not in ascending order:
+   * 17888 is a well-known EasyTier default that other Magpie/piggybacked cores
+   * on this host may already use, and a collision there is exactly how a
+   * supervisor could read somebody else's core. The chosen port is persisted,
+   * so this only affects first allocation and explicit migration.
+   */
+  private rpcCandidates(exclude: number[] = []): number[] {
+    const ports = portRange(17888, 17959).filter((p) => !exclude.includes(p));
+    for (let i = ports.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ports[i], ports[j]] = [ports[j], ports[i]];
+    }
+    return ports;
+  }
+
+  private async recordPortProof(input: {
+    purpose: PortPurpose;
+    host: string;
+    port: number | null;
+    owner: PortOwner;
+    reported: boolean | null;
+    /** the live PIDs allowed to own this port; empty = no proof possible */
+    expectedPids: number[];
+    detail?: string | null;
+  }): Promise<PortProof | null> {
+    if (!input.port) return null;
+    const proof = await verifyOwnedPort({
+      ownership: this.ownership,
+      purpose: input.purpose,
+      host: input.host,
+      port: input.port,
+      owner: input.owner,
+      reported: input.reported,
+      expectedPids: input.expectedPids,
+      now: this.clock,
+    });
+    const evidence = proofEvidence({
+      purpose: input.purpose,
+      host: input.host,
+      port: input.port,
+      owner: input.owner,
+      proof: input.detail ? { ...proof, detail: proof.detail ?? input.detail } : proof,
+      at: this.clock(),
+    });
+    this.persistLedger(recordPortEvidence(this.portLedger(), evidence));
+    return proof;
+  }
+
+  private migratePort(purpose: PortPurpose, from: number, to: number, reason: string): void {
+    this.persistLedger(
+      recordPortMigration(this.portLedger(), {
+        at: this.clock().toISOString(),
+        purpose,
+        from,
+        to,
+        reason,
+      }),
+    );
+    logger.warn(`port ${purpose} migrated ${from} -> ${to}: ${reason}`);
+  }
+
+  /**
+   * Proves the supervised core really holds the ports its configuration names.
+   * Recorded as evidence, never trusted from the config alone.
+   */
+  /**
+   * Proves the supervised core owns a loopback forward socket. This runs BEFORE
+   * any request carrying the Gateway Key: a foreign listener on that port would
+   * otherwise receive the key. A proof that is not `stable` is a hard failure.
+   */
+  private async proveForwardOwner(id: string, localPort: number): Promise<PortProof> {
+    const snap = this.supervisor.snapshot();
+    const proof = await this.recordPortProof({
+      purpose: "forward",
+      host: "127.0.0.1",
+      port: localPort,
+      owner: "easytier",
+      reported: true,
+      expectedPids: snap.pid ? [snap.pid] : [],
+      detail: `forward to ${id}`,
+    });
+    return (
+      proof ?? {
+        state: "unverified",
+        detail: "no forward proof was produced",
+        pids: null,
+        ownership: "none",
+        reported: null,
+      }
+    );
+  }
+
+  private async reconcileCorePorts(cfg: PluginConfig): Promise<PortProof[]> {
+    const snap = this.supervisor.snapshot();
+    const running = Boolean(snap.running);
+    const expected = snap.pid ? [snap.pid] : [];
+    const proofs: (PortProof | null)[] = [];
+    const listen = splitListenAddr(cfg.listenAddr);
+    proofs.push(
+      await this.recordPortProof({
+        purpose: "overlay-listen",
+        host: listen.host ?? "0.0.0.0",
+        port: listen.port,
+        owner: "easytier",
+        reported: running,
+        expectedPids: expected,
+      }),
+    );
+    proofs.push(
+      await this.recordPortProof({
+        purpose: "easytier-rpc",
+        host: "127.0.0.1",
+        port: cfg.rpcPort,
+        owner: "easytier",
+        reported: running && (snap.rpcPort === null || snap.rpcPort === cfg.rpcPort),
+        expectedPids: expected,
+      }),
+    );
+    if (cfg.catalog.discoveryEnabled) {
+      proofs.push(
+        await this.recordPortProof({
+          purpose: "catalog-socks",
+          host: "127.0.0.1",
+          port: cfg.catalog.socksPort,
+          owner: "easytier",
+          reported: running && (snap.socks5Port === null || snap.socks5Port === cfg.catalog.socksPort),
+          expectedPids: expected,
+        }),
+      );
+    }
+    return proofs.filter((p): p is PortProof => p !== null);
+  }
+
+  /** Every core listener the last apply produced must be owned by the live core. */
+  private assertCorePortsProven(proofs: PortProof[]): void {
+    const bad = proofs.filter((p) => p.state !== "stable");
+    if (bad.length === 0) return;
+    throw new Error(
+      `the overlay core does not own its listeners: ${bad.map((p) => `${p.state}: ${p.detail ?? "no detail"}`).join("; ")}`,
+    );
+  }
+
+  /**
+   * Before the core starts, move a stored port that is already held by somebody
+   * else. Nothing is "just tried": the new port is reserved, persisted, and the
+   * migration is recorded so the diagnostic shows what moved and why.
+   */
+  private async ensureConfiguredPorts(cfg: PluginConfig): Promise<void> {
+    const snap = this.supervisor.snapshot();
+    if (snap.running) return;
+    const reserved = [this.gatewayPort(), cfg.catalog.port, cfg.catalog.socksPort];
+    if (!(await this.binder.isFree("127.0.0.1", cfg.rpcPort))) {
+      const next = await this.choosePort("easytier-rpc", "127.0.0.1", this.rpcCandidates(reserved), reserved);
+      this.migratePort("easytier-rpc", cfg.rpcPort, next, "the stored RPC port was already in use");
+      cfg.rpcPort = next;
+      saveState(this.state);
+    }
+    const listen = splitListenAddr(cfg.listenAddr);
+    if (listen.host && listen.port && !(await this.binder.isFree(listen.host, listen.port))) {
+      const next = await this.choosePort("overlay-listen", listen.host, portRange(11010, 11059), [
+        this.gatewayPort(),
+        cfg.rpcPort,
+        cfg.catalog.port,
+        cfg.catalog.socksPort,
+        listen.port,
+      ]);
+      this.migratePort("overlay-listen", listen.port, next, "the stored overlay listener port was already in use");
+      cfg.listenAddr = `${cfg.listenAddr!.replace(/:\d+$/, "")}:${next}`;
+      saveState(this.state);
+    }
+    if (cfg.catalog.discoveryEnabled && !(await this.binder.isFree("127.0.0.1", cfg.catalog.socksPort))) {
+      const next = await this.choosePort("catalog-socks", "127.0.0.1", portRange(13400, 13424), [
+        this.gatewayPort(),
+        cfg.rpcPort,
+        cfg.catalog.port,
+      ]);
+      this.migratePort("catalog-socks", cfg.catalog.socksPort, next, "the stored catalogue SOCKS5 port was already in use");
+      cfg.catalog.socksPort = next;
+      saveState(this.state);
+    }
+  }
+
   private async applyConfig(cfg: PluginConfig): Promise<void> {
+    await this.ensureConfiguredPorts(cfg);
     await this.supervisor.start(this.etConfig(cfg));
     await this.supervisor.refresh().catch(() => this.supervisor.snapshot());
+    this.assertCorePortsProven(await this.reconcileCorePorts(cfg));
   }
 
   /** The EasyTier configuration that implements the plugin's state. */
@@ -1320,6 +1803,15 @@ export class Service {
     return this.serialize(async () => {
       const cfg = this.state.config;
       if (!cfg) throw new Error("configure this node first");
+      if (enabled && cfg.share.models.length === 0) {
+        throw new Error("choose at least one native model with share-native-models before enabling sharing");
+      }
+      if (enabled && cfg.share.models.some((m) => m.includes("*"))) {
+        throw new Error(
+          "refusing to share with a wildcard model policy: choose the exact native models with share-native-models " +
+            "so future models are never shared without consent",
+        );
+      }
       const next: PluginConfig = {
         ...cfg,
         sharingEnabled: enabled,
@@ -1438,6 +1930,8 @@ export class Service {
       priceVersion,
       priceLocked: false,
       blocking,
+      detectedAt: new Date().toISOString(),
+      source: "magpie-native" as const,
     };
   }
 
@@ -1776,31 +2270,63 @@ export class Service {
       this.writeSnapshot();
       return;
     }
-    const cfg = this.state.config!;
     const host = this.lanIp();
     if (!host) {
       this.catalogServerError = "no usable LAN address to bind the catalogue";
       this.stopCatalogServer();
       logger.error(this.catalogServerError);
-      return;
+      throw new Error(this.catalogServerError);
     }
-    try {
-      if (!this.catalogServer || this.catalogServer.port !== cfg.catalog.port) {
-        this.stopCatalogServer();
-        this.catalogServer = this.probes.catalogServer({
-          hostname: host,
+    // A catalogue port held by another process is migrated, not "tried again":
+    // the Forward ACL names the port, so this is a config change and a restart.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const cfg = this.state.config!;
+      try {
+        if (!this.catalogServer || this.catalogServer.port !== cfg.catalog.port) {
+          this.stopCatalogServer();
+          this.catalogServer = this.probes.catalogServer({
+            hostname: host,
+            port: cfg.catalog.port,
+            document: () => this.localCatalog(),
+          });
+        }
+        await this.publishCatalogNow();
+        this.catalogServerError = null;
+        await this.recordPortProof({
+          purpose: "catalog",
+          host,
           port: cfg.catalog.port,
-          document: () => this.localCatalog(),
+          owner: "plugin",
+          reported: true,
+          expectedPids: [process.pid],
         });
+        return;
+      } catch (e) {
+        const why = String((e as Error).message ?? e);
+        this.catalogServerError = why;
+        this.stopCatalogServer();
+        const portTaken = /in use|EADDRINUSE|address already in use|failed to start server/i.test(why);
+        if (!portTaken) {
+          this.writeSnapshot();
+          throw new Error(`the catalogue could not be published: ${why}`);
+        }
+        const next = await this.choosePort("catalog", host, portRange(3426, 3460), [
+          this.gatewayPort(),
+          cfg.rpcPort,
+          cfg.catalog.socksPort,
+          cfg.catalog.port,
+        ]);
+        this.migratePort("catalog", cfg.catalog.port, next, `the catalogue port was unavailable: ${why}`);
+        this.state.config = { ...cfg, catalog: { ...cfg.catalog, port: next } };
+        saveState(this.state);
+        // The published ACL contains the catalogue port: apply the new config.
+        await this.applyConfig(this.state.config);
       }
-      await this.publishCatalogNow();
-      this.catalogServerError = null;
-    } catch (e) {
-      this.catalogServerError = String((e as Error).message ?? e);
-      this.stopCatalogServer();
-      logger.error(`the catalogue could not be published: ${this.catalogServerError}`);
-      this.writeSnapshot();
     }
+    const why = this.catalogServerError ?? "no free catalogue port";
+    logger.error(`the catalogue could not be published: ${why}`);
+    this.writeSnapshot();
+    throw new Error(`the catalogue could not be published: ${why}`);
   }
 
   /**
@@ -2330,6 +2856,15 @@ export class Service {
       //    announced prefix can take a moment to accept forwarded connections,
       //    so the probe is retried for a few seconds before giving up.
       addedForward = await this.supervisor.addPortForward(bind, dst);
+      // No Gateway Key touches the wire before the OS attributes this loopback
+      // listener to the supervised core.
+      const forwardProof = await this.proveForwardOwner(input.id, localPort);
+      if (forwardProof.state !== "stable") {
+        throw new Error(
+          `127.0.0.1:${localPort} is not provably owned by the supervised core ` +
+            `(${forwardProof.state}: ${forwardProof.detail ?? "no evidence"}); refusing to send the Gateway Key`,
+        );
+      }
       if (!(await this.waitForStatus("127.0.0.1", localPort, 401))) {
         throw new Error(
           `127.0.0.1:${localPort} did not answer 401 without a key: ` +
@@ -2386,6 +2921,7 @@ export class Service {
         localPort,
         keyRef: providerKeyRef(input.id),
         fingerprint: owner ? { hostname: owner.hostname, virtualIpv4: owner.ipv4, peerId: owner.peerId } : null,
+        models: [...(opts.expectedModels ?? remoteModels)],
         status: "connected",
         detail: null,
         limit,
@@ -2423,6 +2959,19 @@ export class Service {
         }
         if (prev && prevKey) await this.restoreRemoteProvider(prev, prevKey);
       }
+      if (!this.state.providers.some((p) => p.localPort === localPort)) {
+        // The listener could not be proven (or the forward could not be added),
+        // so record a real failure: the next attempt must not reuse this port.
+        await this.recordPortProof({
+          purpose: "forward",
+          host: "127.0.0.1",
+          port: localPort,
+          owner: "easytier",
+          reported: false,
+          expectedPids: this.supervisor.snapshot().pid ? [this.supervisor.snapshot().pid!] : [],
+          detail: `forward to ${input.id} failed: ${(e as Error).message}`.slice(0, 300),
+        }).catch(() => {});
+      }
       if (addedForward && !this.state.providers.some((p) => p.localPort === localPort)) {
         await this.recordOrphanForward(localPort, dst);
       }
@@ -2457,6 +3006,12 @@ export class Service {
       }
       deleteProviderKey(id);
       this.state.providers = this.state.providers.filter((p) => p.id !== id);
+      // Evidence for a retired forward port must not look green if the range
+      // hands the same number to a future provider.
+      this.state.ports = {
+        ...this.portLedger(),
+        evidence: this.portLedger().evidence.filter((e) => !(e.purpose === "forward" && e.port === rec.localPort)),
+      };
       saveState(this.state);
       // 2.6.4 cannot close a forward at runtime: restart with the new config so
       // no listener is left pointing at a provider that is no longer used.
@@ -2632,6 +3187,16 @@ export class Service {
         conn.updatedAt = new Date().toISOString();
         return true;
       }
+    }
+
+    const forwardOwner = await this.proveForwardOwner(conn.id, conn.localPort);
+    if (forwardOwner.state !== "stable") {
+      conn.status = "degraded";
+      conn.detail =
+        `127.0.0.1:${conn.localPort} is not provably owned by the supervised core ` +
+        `(${forwardOwner.state}: ${forwardOwner.detail ?? "no evidence"}); not sending the Gateway Key`;
+      conn.updatedAt = new Date().toISOString();
+      return true;
     }
 
     const keyed = await this.probes.statusWith("127.0.0.1", conn.localPort, 200, key);
@@ -3226,6 +3791,31 @@ export class Service {
             : `${expected.size} loopback forward(s), all owned by a provider`,
         });
       }
+      // A forward is only usable when the OS attributes its loopback socket to
+      // the supervised core; a matching config line is not ownership. An
+      // injected test supervisor has no real PID, so the check is not asserted.
+      const snap = this.supervisor.snapshot();
+      const owned: string[] = [];
+      const foreign: string[] = [];
+      for (const p of this.state.providers) {
+        if (!snap.pid) {
+          foreign.push(`${p.id}: no core pid`);
+          continue;
+        }
+        const found = await this.ownership.listenerPids(p.localPort);
+        if (!found.supported) foreign.push(`${p.id}: socket-owner probe unavailable`);
+        else if (!found.pids.includes(snap.pid)) foreign.push(`${p.id}: held by ${found.pids.join(",") || "nobody"}, not pid ${snap.pid}`);
+        else owned.push(p.id);
+      }
+      if (this.state.providers.length) {
+        out.push({
+          name: "forwards-owned",
+          ok: foreign.length === 0,
+          detail: foreign.length
+            ? `loopback forward(s) not proven to belong to this core: ${foreign.join("; ")}`
+            : `${owned.length} loopback forward(s) owned by the core`,
+        });
+      }
     }
     if (this.state.orphanForwards.length) {
       out.push({
@@ -3319,6 +3909,7 @@ export class Service {
         catalog: cfg?.catalog ?? normalizeCatalogConfig(undefined),
       },
       easytier: et,
+      network: this.networkView(),
       consumers: this.provisioner.all(),
       accounting: this.accountingStatus(),
       providers: this.providers(),
@@ -3355,12 +3946,17 @@ export class Service {
 
   private async allocLocalPort(): Promise<number> {
     const used = new Set(this.state.providers.map((p) => p.localPort));
-    for (let port = FORWARD_PORT_FROM; port <= FORWARD_PORT_TO; port++) {
-      if (used.has(port)) continue;
-      if (await portInUse(port)) continue;
-      return port;
-    }
-    throw new Error(`no free loopback port in ${FORWARD_PORT_FROM}-${FORWARD_PORT_TO}`);
+    // A port whose proof failed is not "free because the range says so": a
+    // retry moves to another candidate and records the migration.
+    const broken = this.portLedger().evidence
+      .filter((e) => e.purpose === "forward" && (e.state === "failed" || e.state === "conflict"))
+      .map((e) => e.port);
+    return this.choosePort(
+      "forward",
+      "127.0.0.1",
+      portRange(FORWARD_PORT_FROM, FORWARD_PORT_TO),
+      [...used, ...broken, this.gatewayPort()],
+    );
   }
 
   /**
@@ -3466,7 +4062,9 @@ function configHostname(cfg: PluginConfig): string {
 
 function normalizeShareModels(models: string[]): string[] {
   const cleaned = models.map((m) => m.trim()).filter(Boolean);
-  if (cleaned.length === 0) return ["*"];
+  // An explicit empty policy shares nothing. Only legacy documents may still
+  // carry "*"; a new selection must name native models.
+  if (cleaned.length === 0) return [];
   for (const m of cleaned) {
     if (!/^(\*|[A-Za-z0-9._-]+\/(\*|[A-Za-z0-9._*,/-]+))$/.test(m)) {
       throw new Error(`share model must be "*", "provider/*" or "provider/model": ${m}`);
@@ -3507,26 +4105,20 @@ function normalizeVirtualIp(v: string): string {
   return withPrefix;
 }
 
-async function freeRpcPort(): Promise<number> {
-  for (let port = 17888; port < 17960; port++) {
-    if (!(await portInUse(port))) return port;
-  }
-  throw new Error("no free RPC port in 17888-17959");
-}
-
-async function portInUse(port: number): Promise<boolean> {
-  try {
-    const s = await Bun.connect({ hostname: "127.0.0.1", port, socket: { data() {}, open() {}, close() {} } });
-    s.end();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function safeLanIp(): string | null {
   try {
     return lanIPv4();
+  } catch {
+    return null;
+  }
+}
+
+/** A loopback listener port another part of this host recorded, or null. */
+function readPortFile(name: string): number | null {
+  try {
+    const raw = readFileSync(statePath(name), "utf8").trim();
+    const port = Number(raw);
+    return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
   } catch {
     return null;
   }
@@ -3703,6 +4295,7 @@ function isCriticalCheck(name: string): boolean {
     name === "catalog-identity" ||
     name === "catalog-socks5-loopback" ||
     name === "forwards-match" ||
+    name === "forwards-owned" ||
     name === "no-orphan-forwards"
   );
 }

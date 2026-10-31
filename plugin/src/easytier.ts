@@ -7,6 +7,7 @@ import { checkConfig, type AclExpectation } from "./acl.ts";
 import { lanIPv4, stateDir, statePath } from "./paths.ts";
 import { run } from "./run.ts";
 import { mappedHost, randomMappedCidr, randomVirtualIp } from "./addresses.ts";
+import { OsSocketOwnership, type SocketOwnership, type SocketOwnershipProbe } from "./ports.ts";
 
 export { randomMappedCidr, randomVirtualIp };
 
@@ -373,6 +374,11 @@ export interface SupervisorState {
   mappedCidr: string | null;
   publishedPorts: number[];
   peers: Peer[];
+  /** EasyTier's route table (never a second discovery mechanism) */
+  routes?: RouteRow[];
+  /** when the peer/route reads last succeeded; null = no evidence yet */
+  peersAt?: string | null;
+  routesAt?: string | null;
   secureMode: boolean;
   socks5Port: number | null;
   aclOk: boolean;
@@ -398,6 +404,9 @@ const emptyState = (): SupervisorState => ({
   mappedCidr: null,
   publishedPorts: [],
   peers: [],
+  routes: [],
+  peersAt: null,
+  routesAt: null,
   secureMode: false,
   socks5Port: null,
   aclOk: false,
@@ -438,9 +447,14 @@ export interface SupervisorOptions {
   lanIp?: () => string | null;
   /** injected for tests; production always verifies the downloaded binaries */
   binaries?: Binaries;
+  /** how long start() waits for the owned RPC portal (tests shorten it) */
+  rpcTimeoutMs?: number;
   probe?: {
     nodeInfo?: () => Promise<{ peerId: number; proxyCidrs: string[]; listeners: string[]; config: string }>;
     rpcListeners?: (port: number) => Promise<string[]>;
+    /** OS socket-owner probe; production uses lsof/ss, tests may inject */
+    socketOwner?: SocketOwnershipProbe;
+    nodeIdentity?: (stdout: string) => boolean;
   };
 }
 
@@ -455,10 +469,17 @@ export class EasytierSupervisor {
   private unsafeStrikes = 0;
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private bin: Binaries | null = null;
+  /** the ownership probe used by waitForRpc and every refresh */
+  private ownership: SocketOwnershipProbe;
+  private rpcTimeoutMs: number;
   private cfg: EasytierConfig | null = null;
   private restarts = 0;
   private stopping = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** a scheduled crash-restart; cleared by stop() so a failed start cannot loop */
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  /** true between spawning the core and proving its RPC belongs to it */
+  private startupPending = false;
   private consecutiveFailures = 0;
   private lastStartAt = 0;
   private lastRelocateAt = 0;
@@ -470,9 +491,13 @@ export class EasytierSupervisor {
     this.events = events;
     this.opts = opts;
     this.lanIpSource = opts.lanIp ?? safeLanIp;
+    this.ownership = opts.probe?.socketOwner ?? new OsSocketOwnership();
+    this.rpcTimeoutMs = Math.max(200, opts.rpcTimeoutMs ?? 20_000);
     this.probe = {
       nodeInfo: opts.probe?.nodeInfo ?? (() => this.nodeInfo()),
       rpcListeners: opts.probe?.rpcListeners ?? ((port: number) => rpcListeners(port)),
+      socketOwner: opts.probe?.socketOwner ?? new OsSocketOwnership(),
+      nodeIdentity: opts.probe?.nodeIdentity ?? ((stdout: string) => this.matchesOurInstance(stdout)),
     };
   }
 
@@ -579,6 +604,7 @@ export class EasytierSupervisor {
       env: process.env,
     });
     this.proc = proc;
+    this.startupPending = true;
     this.lastStartAt = Date.now();
     this.state.pid = proc.pid;
     this.state.running = true;
@@ -592,14 +618,18 @@ export class EasytierSupervisor {
     this.persist();
     this.emit();
 
-    const up = await this.waitForRpc(cfg.rpcPort, 20_000);
+    const up = await this.waitForRpc(cfg.rpcPort, this.rpcTimeoutMs);
     if (!up) {
-      const why = `easytier-core did not answer its RPC on 127.0.0.1:${cfg.rpcPort} within 20s`;
+      const why =
+        this.state.lastError ??
+        `easytier-core did not answer its RPC on 127.0.0.1:${cfg.rpcPort} within ${this.rpcTimeoutMs}ms`;
       logger.error(why);
       this.state.lastError = why;
+      this.startupPending = false;
       await this.stop();
       throw new Error(why);
     }
+    this.startupPending = false;
     await this.refresh();
     return this.snapshot();
   }
@@ -633,11 +663,14 @@ export class EasytierSupervisor {
     this.state.pid = null;
     this.persist();
     this.emit();
-    this.scheduleRestart();
+    // During the first start, start() owns the error: a scheduleRestart here
+    // would overwrite the real reason and could restart into the same foreign
+    // port before waitForRpc has even finished.
+    if (!this.startupPending) this.scheduleRestart();
   }
 
   private scheduleRestart(): void {
-    if (!this.cfg || this.stopping) return;
+    if (!this.cfg || this.stopping || this.startupPending) return;
     const stable = Date.now() - this.lastStartAt > 5 * 60_000;
     if (stable) this.consecutiveFailures = 0;
     this.consecutiveFailures += 1;
@@ -652,8 +685,10 @@ export class EasytierSupervisor {
     this.state.restarts = this.restarts;
     this.state.lastError = `restarting in ${delay} ms (attempt ${this.consecutiveFailures})`;
     this.emit();
-    setTimeout(() => {
-      if (!this.cfg || this.stopping) return;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (!this.cfg || this.stopping || this.startupPending) return;
       this.start(this.cfg).catch((e) => logger.error(`restart failed: ${String(e)}`));
     }, delay);
   }
@@ -674,6 +709,10 @@ export class EasytierSupervisor {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
     }
     const pid = this.state.pid;
     if (pid) {
@@ -709,11 +748,59 @@ export class EasytierSupervisor {
     this.emit();
   }
 
+  /** Does the core's reported config belong to the instance we just launched? */
+  private matchesOurInstance(stdout: string): boolean {
+    if (!this.cfg) return false;
+    try {
+      const node = JSON.parse(stdout || "{}") as { config?: unknown };
+      const config = typeof node.config === "string" ? node.config : "";
+      if (!config) return false;
+      if (extractToml(config, "instance_id") !== this.cfg.instanceId) return false;
+      const name = extractToml(config, "network_name");
+      if (name !== null && name !== this.cfg.networkName) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Waits for the RPC portal of *our* child.
+   *
+   * The portal is unauthenticated: any process on 127.0.0.1:<port> can answer.
+   * Before the first CLI call the OS must attribute the listening socket to the
+   * live PID we spawned; then the returned config must carry our instance id.
+   * A foreign listener, an exited child or an unavailable owner probe fails the
+   * start — the CLI never reads somebody else's core (observed with 17888).
+   */
   private async waitForRpc(port: number, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
+    const ourPid = this.proc?.pid ?? null;
+    if (!ourPid) {
+      this.state.lastError = "the supervised core has no pid; refusing to query an unowned RPC portal";
+      return false;
+    }
     while (Date.now() < deadline) {
-      const r = await this.cli(["-o", "json", "node"], port, 3000);
-      if (r.code === 0) return true;
+      // pump() clears this.proc as soon as the child exits.
+      if (!this.proc || this.proc.exitCode !== null) {
+        this.state.lastError = `easytier-core exited before its RPC answered on 127.0.0.1:${port}`;
+        return false;
+      }
+      const owner: SocketOwnership = await this.ownership.listenerPids(port);
+      if (!owner.supported) {
+        this.state.lastError =
+          `cannot prove the RPC portal on 127.0.0.1:${port} belongs to this core: ` +
+          (owner.detail ?? "the OS socket-owner probe is unavailable on this platform");
+        return false;
+      }
+      if (owner.pids.includes(ourPid)) {
+        const r = await this.cli(["-o", "json", "node"], port, 3000);
+        if (r.code === 0 && (!this.proc || this.proc.exitCode === null)) {
+          if (this.probe.nodeIdentity(r.stdout)) return true;
+          this.state.lastError = "the RPC portal answered with a different instance id; refusing to use it";
+          return false;
+        }
+      }
       await new Promise((res) => setTimeout(res, 500));
     }
     return false;
@@ -845,6 +932,21 @@ export class EasytierSupervisor {
       problems.push(`cannot read the running configuration: ${(e as Error).message}`);
     }
 
+    if (node && this.state.rpcPort) {
+      const expected = this.state.pid;
+      const owner = await this.ownership.listenerPids(this.state.rpcPort);
+      if (!owner.supported) {
+        problems.push(
+          `the RPC portal owner cannot be verified on this platform: ${owner.detail ?? "no OS socket-owner probe"}`,
+        );
+      } else if (!expected || !owner.pids.includes(expected)) {
+        problems.push(
+          `the RPC portal on port ${this.state.rpcPort} is held by pid ${owner.pids.join(",") || "nobody"}, ` +
+            `not this core (pid ${expected ?? "unknown"})`,
+        );
+      }
+    }
+
     if (node) {
       const acl = checkConfig(
         node.config,
@@ -881,8 +983,15 @@ export class EasytierSupervisor {
 
       try {
         this.state.peers = await this.peers();
+        this.state.peersAt = new Date().toISOString();
       } catch (e) {
         logger.warn(`peer list unavailable: ${String(e)}`);
+      }
+      try {
+        this.state.routes = await this.routes();
+        this.state.routesAt = new Date().toISOString();
+      } catch (e) {
+        logger.warn(`route table unavailable: ${String(e)}`);
       }
       this.state.lanIp = safeLanIp();
       this.state.rpcPort = this.state.rpcPort ?? this.cfg?.rpcPort ?? null;
