@@ -461,6 +461,36 @@ export class Provisioner {
     return { start: new Date(y, m, d).toISOString(), reset: new Date(y, m, d + 1).toISOString() };
   }
 
+  /**
+   * Re-open the ledger for a consumer whose provider explicitly re-approved it.
+   * The revoked account, its closed windows, deposits and consumption remain
+   * readable; only a new window is added for the new key/cap.
+   */
+  private async reactivateLedger(rec: ConsumerRecord): Promise<void> {
+    if (!this.ledger) return;
+    const snap =
+      (await this.snapshotFor(rec.models).catch(() => null)) ?? {
+        version: "unpriced",
+        body: JSON.stringify({ models: [...rec.models].sort(), prices: {} }),
+        models: [...rec.models].sort(),
+        prices: {},
+      };
+    const bounds = this.windowBounds(rec.window);
+    this.ledger.reactivateAccount({
+      consumerId: rec.consumerId,
+      keyId: rec.keyId,
+      keyName: rec.keyName,
+      price: snap,
+      windowSpec: rec.window,
+      startAt: bounds.start,
+      resetAt: bounds.reset,
+      capNanos: usdToNanos(rec.capUsd),
+    });
+    rec.priceVersion = snap.version;
+    this.persist();
+    logger.info(`ledger account ${rec.consumerId} reactivated with a new window (history preserved)`);
+  }
+
   private async seedLedger(
     rec: ConsumerRecord,
     opts: { requireKnownUsage?: boolean; status?: LimitStatus | null } = {},
@@ -1193,7 +1223,7 @@ export class Provisioner {
   /** Creates the consumer's key if it does not exist yet, and checks it either way. */
   async ensure(
     consumerId: string,
-    opts: { models: string[]; window?: string; capUsd: number; quoteHash?: string; quotePriceVersion?: string; beforeApply?: () => void },
+    opts: { models: string[]; window?: string; capUsd: number; quoteHash?: string; quotePriceVersion?: string; beforeApply?: () => void; reactivate?: boolean },
   ): Promise<ConsumerView> {
     if (!consumerId || !/^[a-z0-9][a-z0-9._-]{1,40}$/.test(consumerId)) {
       throw new Error("consumerId must be 2-41 characters of a-z0-9._-");
@@ -1216,7 +1246,21 @@ export class Provisioner {
       // Quote-based approval rechecks after waiting for this consumer's lock.
       opts.beforeApply?.();
       let rec = this.find(consumerId);
-      if (rec?.revokedAt) throw new Error(`consumer ${consumerId} was revoked; create a new consumer id`);
+      let reactivated = false;
+      if (rec?.revokedAt) {
+        if (!opts.reactivate) throw new Error(`consumer ${consumerId} was revoked; create a new consumer id`);
+        // Explicit human re-approval: the old native key is gone; a new key is
+        // issued for a new authorization generation. Ledger rows are never
+        // rewritten; the ledger account is reactivated with a new window.
+        const staleName = Provisioner.keyName(consumerId);
+        const stale = this.magpie.keyByName(staleName);
+        if (stale) await this.magpie.removeKey(stale.id).catch((e) => logger.error(`could not remove the revoked key ${staleName}: ${String(e)}`));
+        this.list = this.list.filter((c) => c.consumerId !== consumerId);
+        this.persist();
+        rec = undefined;
+        reactivated = true;
+        logger.info(`reactivating consumer ${consumerId} after an explicit re-approval`);
+      }
       if (rec) {
         await this.reconcile(rec);
         await this.ledgerCheck(rec);
@@ -1272,8 +1316,11 @@ export class Provisioner {
           this.persist();
           await this.setCap(rec, capUsd);
           await this.verify(rec);
-          if (this.ledger) await this.seedLedger(rec);
-          logger.info(`created gateway key ${keyName} (${key.id}) for ${consumerId}`);
+          if (this.ledger) {
+            if (reactivated) await this.reactivateLedger(rec);
+            else await this.seedLedger(rec);
+          }
+          logger.info(`${reactivated ? "reactivated" : "created"} gateway key ${keyName} (${key.id}) for ${consumerId}`);
         } catch (e) {
           // A key that could not be given its whitelist or cap must never be
           // handed over: delete it rather than leave a dangerous one behind.

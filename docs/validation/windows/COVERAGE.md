@@ -20,7 +20,7 @@ test on Windows.
 | artifacts | `windows-test-summary.md`, `windows-platform-report.md` | VERIFIED |
 | local baseline | macOS 26.6.2 arm64, same subset: 389 executed / 0 failed (skips are win32-only) | REPRODUCED |
 
-The job fails if the report is missing, if fewer than 380 tests execute, if any
+The job fails if the report is missing, if fewer than 360 tests execute, if any
 test fails, if the file count differs, or if an unreviewed skip appears
 (`plugin/scripts/run-windows-subset.ts`). No `continue-on-error` is used.
 

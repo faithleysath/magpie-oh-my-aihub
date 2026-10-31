@@ -283,6 +283,62 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(lookupControlApproval(APPROVAL, approvalFile)?.state).toBe("approved");
   });
 
+  test("an externally revoked consumer can be re-approved as a new generation", async () => {
+    // The console also exposes the legacy operator revoke. That path removes
+    // the Magpie key but does not know the P2P approval id. The old approval
+    // must converge to revoked, and an explicit new human approval must be able
+    // to issue one new key (never replay the dead one, never keep two active).
+    const { svc, magpie } = realService();
+    const approvalFile = join(process.cwd(), "control-approvals.json");
+    const port = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    const consumer = { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) };
+    const first = await port.approve({
+      approvalId: APPROVAL,
+      generation: 1,
+      requestHash: HASH,
+      request: requestDocument() as any,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    await svc.provisioner.revokeEnforced("alice", first.keyId);
+    expect(svc.provisioner.find("alice")!.revokedAt).not.toBeNull();
+    const second = await port.approve({
+      approvalId: APPROVAL2,
+      generation: 2,
+      requestHash: "9".repeat(64),
+      request: requestDocument() as any,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: "explicit re-approval after revoke",
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    expect(second.keyId).not.toBe(first.keyId);
+    expect(magpie.keys.size).toBe(1); // exactly one active native key
+    expect(magpie.keyById(first.keyId)).toBeUndefined();
+    expect(svc.provisioner.find("alice")!.revokedAt).toBeNull();
+    const expectedVersion = catalogPriceVersion([models[0]!])!;
+    expect(svc.provisioner.find("alice")!.priceVersion).toBe(expectedVersion);
+    const records = JSON.parse(readFileSync(approvalFile, "utf8")).approvals;
+    expect(records.find((a: any) => a.approvalId === APPROVAL).state).toBe("revoked");
+    expect(records.find((a: any) => a.approvalId === APPROVAL2).state).toBe("approved");
+    // Replaying the dead approval id must not return its materials.
+    await expect(port.approve({
+      approvalId: APPROVAL,
+      generation: 1,
+      requestHash: HASH,
+      request: requestDocument() as any,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    })).rejects.toThrow(/already revoked|native key is gone/);
+  });
+
   test("reconcileApproval is read-only and recovers only a proven keyReady", async () => {
     const { svc, magpie } = realService();
     const approvalFile = join(process.cwd(), "control-approvals.json");

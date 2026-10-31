@@ -616,9 +616,11 @@ export class Ledger {
         null,
         null,
       );
+    // A reactivation opens a window under a NEW key; the account row must name
+    // that key too, or an audit would pair the new window with the dead key.
     this.db
-      .query("UPDATE accounts SET status='active',window_id=?,price_version=?,reason=NULL,updated_at=? WHERE consumer_id=?")
-      .run(id, input.price.version, at, input.consumerId);
+      .query("UPDATE accounts SET status='active',key_id=?,key_name=?,window_id=?,price_version=?,reason=NULL,updated_at=? WHERE consumer_id=?")
+      .run(input.keyId, input.keyName, id, input.price.version, at, input.consumerId);
     return this.window(id)!;
   }
 
@@ -662,6 +664,38 @@ export class Ledger {
 
   revokeAccount(consumerId: string, reason: string): void {
     this.db.query("UPDATE accounts SET status='revoked',reason=?,updated_at=? WHERE consumer_id=?").run(reason, nowIso(), consumerId);
+  }
+
+  /**
+   * Explicit provider re-approval after a revocation. History is append-only:
+   * the revoked account row, its closed windows, deposits and consumption are
+   * left untouched; a new window is opened for the new key and the account is
+   * marked active again. No opening deposit is invented.
+   */
+  reactivateAccount(input: {
+    consumerId: string;
+    keyId: string;
+    keyName: string;
+    price: PriceSnapshot;
+    windowSpec: string;
+    startAt: string;
+    resetAt: string;
+    capNanos: number;
+  }): LedgerWindow {
+    return this.tx(() => {
+      const existing = this.account(input.consumerId);
+      if (!existing) throw new Error(`ledger account ${input.consumerId} does not exist`);
+      if (existing.status !== "revoked") throw new Error(`ledger account ${input.consumerId} is not revoked`);
+      if (this.openWindowFor(input.consumerId)) throw new Error(`ledger account ${input.consumerId} already has an open window`);
+      const w = this.insertWindow(input);
+      this.event(input.consumerId, "account-reactivated", {
+        windowId: w.id,
+        keyId: input.keyId,
+        priceVersion: input.price.version,
+        capNanos: input.capNanos,
+      });
+      return w;
+    });
   }
 
   deposit(id: string): LedgerDeposit | null {
