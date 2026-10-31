@@ -31,7 +31,7 @@ const find = (root, tag, text) => descendants(root).find((node) => node.tagName 
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
 function runtime(state = stateFixture(), action = async () => ({})) {
   const previous = globalThis.document;
-  const roots = { "wallet-panel": new Node("section"), "accounting-panel": new Node("section") };
+  const roots = { "wallet-panel": new Node("section"), "accounting-panel": new Node("section"), "wallet-diagnostics": new Node("section") };
   const body = new Node("body"); body.append(...Object.values(roots));
   globalThis.document = { body, getElementById: (id) => roots[id], createElement: (tag) => new Node(tag) };
   const calls = [], notices = [];
@@ -63,8 +63,10 @@ describe("wallet presentation semantics", () => {
     try {
       const wallet = r.roots["wallet-panel"];
       expect(wallet.textContent).toContain("BSC Testnet"); expect(wallet.textContent).toContain("Base Sepolia");
-      expect(all(wallet, "button").filter((node) => node.textContent === "编辑 RPC")).toHaveLength(2);
-      expect(all(wallet, "button").filter((node) => node.textContent === "扫描此网络")).toHaveLength(2);
+      const diagnostics = r.roots["wallet-diagnostics"];
+      expect(all(wallet, "button").filter((node) => node.textContent === "编辑 RPC")).toHaveLength(0);
+      expect(all(diagnostics, "button").filter((node) => node.textContent === "编辑 RPC")).toHaveLength(2);
+      expect(all(diagnostics, "button").filter((node) => node.textContent === "扫描此网络")).toHaveLength(2);
       expect(r.calls).toHaveLength(0);
       const select = all(r.roots["accounting-panel"], "select")[0]; expect(select.value).toBe(""); select.value = "friend"; await select.emit("change");
       const root = r.roots["accounting-panel"];
@@ -87,7 +89,7 @@ test("verified timeline step without timestamp stays verified and missing eviden
     expect(signature.textContent).toContain("付款方签名已验证未记录核验时间");
     expect(signature.textContent).not.toContain("尚未验证");
     expect(root.textContent).toContain("最近主动核验：尚未验证");
-    await all(root, "button").find((node) => node.textContent === "注册测试代币").click();
+    await all(r.roots["wallet-diagnostics"], "button").find((node) => node.textContent === "注册测试代币").click();
     expect(r.dialog.textContent).toContain("1 USD = 1,000,000,000 nanoUSD");
     expect(r.calls).toHaveLength(0);
   } finally { r.cleanup(); }
@@ -290,7 +292,7 @@ describe("real mounted wallet handlers", () => {
   test("RPC replacement is explicit, write-only and input clears on close or session expiry", async () => {
     const r = runtime();
     try {
-      await all(r.roots["wallet-panel"], "button").find((node) => node.textContent === "编辑 RPC").click();
+      await all(r.roots["wallet-diagnostics"], "button").find((node) => node.textContent === "编辑 RPC").click();
       const endpoints = all(r.dialog, "textarea")[0]; expect(endpoints.value).toBe(""); endpoints.value = "http://127.0.0.1:4567/private-fixture";
       await find(r.dialog, "button", "保存 RPC 配置").click(); await flush(); expect(r.calls).toHaveLength(0);
       all(r.dialog, "input")[0].checked = true; await find(r.dialog, "button", "保存 RPC 配置").click(); await flush();
@@ -336,4 +338,20 @@ test("wallet shipped source has no key custody, persistence, unsafe HTML or CLI 
   expect(source).not.toMatch(/type\s*=\s*["']password/);
   const links = [...source.matchAll(/https:\/\/[^"\s]+/g)].map((match) => match[0]);
   expect(links).toEqual(["https://www.bnbchain.org/en/blog/moving-from-a-centralized-exchange-to-bnb-chain", "https://docs.peer.xyz/guides/zh/alipay-buy"]);
+});
+
+test("wallet page is a flat read-only overview; chain tools live in network diagnostics", () => {
+  const source = readFileSync(new URL("./wallet.js", import.meta.url), "utf8");
+  expect(source).toContain('document.getElementById("wallet-diagnostics")');
+  expect(source).toContain("RPC、观察器、扫描、测试代币、对账与审计都在这里");
+  expect(source).toContain("这是既有会计路径，不是 Phase 10 的无文件目标。");
+  // Rows are flat, never a card inside a card.
+  expect(source).toContain('"wallet-network-row"');
+  expect(source).not.toContain('"wallet-network-card"');
+  // An unread chain must never be rendered as a zero balance.
+  expect(source).toContain('!chain.lastScanAt && !(chain.totals?.credited > 0) ? "尚未查询"');
+  // Offline statement import belongs to the recovery disclosure, not the everyday path.
+  const guide = source.slice(source.indexOf("使用方 · 用自己的外部钱包付款"), source.indexOf("钱包与链诊断"));
+  expect(guide).not.toContain('button("导入共享方账单"');
+  expect(source).toContain('button("导入共享方账单"');
 });
