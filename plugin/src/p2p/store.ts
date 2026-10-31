@@ -25,6 +25,7 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { fingerprintOf } from "../catalog.ts";
 import { statePath } from "../paths.ts";
 import {
   assertNoSecretMaterial,
@@ -498,6 +499,52 @@ export class P2pStore {
 
   /** A human explicitly accepted this exact key for this node. */
   acceptPeer(peer: P2pPeerIdentity, now: Date): P2pPeerTrustRow {
+    const row = this.getPeer(peer.nodeId);
+    if (row?.pendingJson) {
+      let pendingFingerprint: string | null = null;
+      try {
+        pendingFingerprint = (JSON.parse(row.pendingJson) as { fingerprint?: string }).fingerprint ?? null;
+      } catch {
+        pendingFingerprint = "unreadable";
+      }
+      // Clearing a pending change by passing the old row is exactly how a key
+      // swap used to be lost. Only an explicit fingerprint may do it.
+      if (pendingFingerprint !== peer.fingerprint) {
+        fail("stale_identity", "a pending identity change must be accepted with acceptPendingPeer and its fingerprint");
+      }
+    }
+    this.storeAcceptPeer(peer, now);
+    return this.getPeer(peer.nodeId)!;
+  }
+
+  /**
+   * Explicitly accepts the changed key a human has just reviewed. The caller
+   * must name the exact pending fingerprint; a changed/unknown pending row is
+   * refused, so a silent key swap is impossible.
+   */
+  acceptPendingPeer(nodeId: string, expectedFingerprint: string, now: Date): P2pPeerTrustRow {
+    const row = this.getPeer(nodeId);
+    if (!row) fail("not_found", "this peer has never been seen");
+    if (!row.pendingJson) fail("conflict", "this peer has no pending identity change");
+    let pending: { accountId?: unknown; fingerprint?: unknown; publicKey?: unknown; hostname?: unknown };
+    try {
+      pending = JSON.parse(row.pendingJson) as typeof pending;
+    } catch {
+      return fail("conflict", "the pending identity record is unreadable");
+    }
+    if (typeof pending.fingerprint !== "string" || pending.fingerprint !== expectedFingerprint) {
+      fail("stale_identity", "the pending fingerprint changed; review it again");
+    }
+    if (typeof pending.accountId !== "string" || pending.accountId !== pending.fingerprint) fail("conflict", "the pending account id is inconsistent");
+    if (typeof pending.publicKey !== "string" || fingerprintOf(pending.publicKey) !== pending.fingerprint) {
+      fail("conflict", "the pending key does not match its fingerprint");
+    }
+    if (typeof pending.hostname !== "string") fail("conflict", "the pending hostname is missing");
+    this.storeAcceptPeer({ accountId: pending.accountId, nodeId, hostname: pending.hostname, publicKey: pending.publicKey, fingerprint: pending.fingerprint }, now);
+    return this.getPeer(nodeId)!;
+  }
+
+  private storeAcceptPeer(peer: P2pPeerIdentity, now: Date): void {
     const at = now.toISOString();
     this.db
       .query(
@@ -508,12 +555,12 @@ export class P2pStore {
            last_seen_at=excluded.last_seen_at, revoked_at=NULL`,
       )
       .run(peer.nodeId, peer.accountId, peer.fingerprint, peer.publicKey, peer.hostname, at, at);
-    return this.getPeer(peer.nodeId)!;
   }
 
   revokePeer(nodeId: string, now: Date): void {
     this.db.query("UPDATE p2p_peer_trust SET accepted = 0, revoked_at = ? WHERE node_id = ?").run(now.toISOString(), nodeId);
   }
+
 
   listPeers(): P2pPeerTrustRow[] {
     const rows = this.db.query("SELECT * FROM p2p_peer_trust ORDER BY last_seen_at DESC").all() as Record<string, unknown>[];

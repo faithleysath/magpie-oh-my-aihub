@@ -50,6 +50,8 @@ export class P2pSession {
   private seqIn: number;
   private seqOut: number;
   private closed: string | null = null;
+  /** frames dropped before AEAD authentication; a metric, never a close reason */
+  private rejected = 0;
 
   private constructor(
     private readonly material: SessionMaterial,
@@ -95,6 +97,9 @@ export class P2pSession {
   }
   get closedReason(): string | null {
     return this.closed;
+  }
+  get rejectedFrames(): number {
+    return this.rejected;
   }
 
   /** Persists the session row (metadata only) and opens the transport. */
@@ -185,32 +190,46 @@ export class P2pSession {
     const direction = this.direction() === "c2s" ? "s2c" : "c2s";
     const receive = receiveKey(this.material.keys, this.role);
 
+    const frameHash = digestHex(frame.ciphertext);
+    // Sequence numbers are an unauthenticated header field. A forged/odd header
+    // must never kill a legitimate session; only an AEAD-verified frame may.
     if (frame.seq <= this.seqIn) {
       const known = this.store.inboundBySeq(this.sessionId, frame.seq);
-      const frameHash = digestHex(frame.ciphertext);
-      if (!known || known.direction !== "in" || known.msgId !== msgIdHex || known.frameHash !== frameHash) {
-        this.shutdown("replay");
-        fail("replay", "an old sequence number was replayed with different content");
+      if (known && known.direction === "in" && known.msgId === msgIdHex && known.frameHash === frameHash) {
+        return { seq: frame.seq, type: frame.type, envelope: null, duplicate: true, cachedResultCode: known.resultCode, cachedResultJson: known.resultJson };
       }
-      return { seq: frame.seq, type: frame.type, envelope: null, duplicate: true, cachedResultCode: known.resultCode, cachedResultJson: known.resultJson };
+      if (!this.authenticatedAt(frame, receive, direction)) {
+        this.rejected += 1;
+        return fail("replay", "an unauthenticated old frame was ignored");
+      }
+      this.shutdown("authenticated replay");
+      return fail("replay", "an authenticated old frame was replayed");
     }
     if (frame.seq !== this.seqIn + 1) {
-      this.shutdown("sequence gap");
-      fail("replay", "the inbound sequence skipped a frame");
-    }
-    if (this.store.inboundByMsgId(this.sessionId, msgIdHex)) {
-      this.shutdown("message id reuse");
-      fail("replay", "this message id was already used in the session");
+      if (!this.authenticatedAt(frame, receive, direction)) {
+        this.rejected += 1;
+        return fail("replay", "an unauthenticated sequence gap was ignored");
+      }
+      this.shutdown("authenticated sequence gap");
+      return fail("replay", "an authenticated frame skipped a sequence");
     }
 
-    const plaintext = openFrame(receive, {
-      sessionId: this.sessionId,
-      direction,
-      seq: frame.seq,
-      msgId: msgIdHex,
-      type: frame.type,
-      ciphertext: frame.ciphertext,
-    });
+    let plaintext: Buffer;
+    try {
+      plaintext = openFrame(receive, {
+        sessionId: this.sessionId,
+        direction,
+        seq: frame.seq,
+        msgId: msgIdHex,
+        type: frame.type,
+        ciphertext: frame.ciphertext,
+      });
+    } catch (e) {
+      // Unauthenticated garbage: reject the frame, keep the real session open.
+      // Rate limiting belongs to the HTTP layer (B-service).
+      this.rejected += 1;
+      throw e;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(plaintext.toString("utf8")) as unknown;
@@ -220,11 +239,22 @@ export class P2pSession {
     } finally {
       plaintext.fill(0);
     }
-    const verified = validateEnvelope(parsed, {
-      now: this.clock(),
-      expectedFrom: { nodeId: this.material.peer.nodeId, fingerprint: this.material.peer.fingerprint },
-      expectedTo: { nodeId: this.material.self.nodeId, fingerprint: this.material.self.fingerprint },
-    });
+    if (this.store.inboundByMsgId(this.sessionId, msgIdHex)) {
+      this.shutdown("message id reuse");
+      return fail("replay", "this message id was already used in the session");
+    }
+    let verified: ReturnType<typeof validateEnvelope>;
+    try {
+      verified = validateEnvelope(parsed, {
+        now: this.clock(),
+        expectedFrom: { nodeId: this.material.peer.nodeId, fingerprint: this.material.peer.fingerprint },
+        expectedTo: { nodeId: this.material.self.nodeId, fingerprint: this.material.self.fingerprint },
+      });
+    } catch (e) {
+      // The frame authenticated, so the peer really sent an invalid envelope.
+      this.shutdown("invalid authenticated envelope");
+      throw e;
+    }
     if (verified.envelope.id !== msgIdHex) {
       this.shutdown("id mismatch");
       return fail("malformed", "the envelope id does not match the frame id");
@@ -234,7 +264,6 @@ export class P2pSession {
       return fail("malformed", "the frame type does not match the signed envelope type");
     }
     const bodyHash = verified.bodyHash;
-    const frameHash = digestHex(frame.ciphertext);
     const at = this.clock().toISOString();
     this.store.db.transaction(() => {
       this.store.bumpSeqIn(this.sessionId, frame.seq, this.clock());
@@ -242,6 +271,25 @@ export class P2pSession {
     })();
     this.seqIn = frame.seq;
     return { seq: frame.seq, type: frame.type, envelope: verified.envelope, duplicate: false, cachedResultCode: null, cachedResultJson: null };
+  }
+
+  /** Decrypts a frame at a claimed sequence purely to prove the peer sent it. */
+  private authenticatedAt(frame: { seq: number; msgId: Buffer; type: P2pMessageType; ciphertext: Buffer }, key: Buffer, direction: "c2s" | "s2c"): boolean {
+    let plaintext: Buffer;
+    try {
+      plaintext = openFrame(key, {
+        sessionId: this.sessionId,
+        direction,
+        seq: frame.seq,
+        msgId: frame.msgId.toString("hex"),
+        type: frame.type,
+        ciphertext: frame.ciphertext,
+      });
+    } catch {
+      return false;
+    }
+    plaintext.fill(0);
+    return true;
   }
 
   /** Stores the business result for an inbound sequence (sensitive-safe). */

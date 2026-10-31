@@ -3,10 +3,12 @@
 // two-host integration claim.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, sha256Hex } from "../src/catalog.ts";
+import { canonicalJson, loadOrCreateCatalogIdentity, sha256Hex } from "../src/catalog.ts";
 import { P2pLab, KEY, KEY_ID } from "./support/p2p-lab.ts";
+import { p2pIdentityFromCatalog, type P2pIdentity } from "../src/p2p/identity.ts";
 import { P2pError } from "../src/p2p/protocol.ts";
 
 let lab: P2pLab | null = null;
@@ -188,6 +190,56 @@ describe("restart and recovery", () => {
   });
 });
 
+describe("TOFU key change", () => {
+  test("a pending new fingerprint blocks the old key, is accepted explicitly, and kills old generations", async () => {
+    lab = P2pLab.create();
+    const { approval, requestHash, sessionId } = await lab.deliver();
+    await lab.A.tick();
+    expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("acked");
+
+    const alien = alienIdentity();
+    lab.storeB.recordPeerSeen(alien.peer, lab.clock.now);
+    expect((await lab.B.listRequests()).find((r) => r.requestHash === requestHash)?.trust).toBe("changed");
+
+    expect(() => lab!.B.acceptConsumer("aaaa1111", "0".repeat(64))).toThrow(P2pError);
+    lab.B.acceptConsumer("aaaa1111", alien.peer.fingerprint);
+    expect(lab.storeB.getPeer("aaaa1111")?.fingerprint).toBe(alien.peer.fingerprint);
+    expect(lab.storeB.getPeer("aaaa1111")?.pendingJson).toBeNull();
+    expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("revoked");
+    expect(lab.storeB.hasTombstone("authorization", approval.approvalId)).toBe(true);
+    expect(lab.storeB.getSession(sessionId)?.state).toBe("closed");
+
+    // The old key cannot approve its old request any more.
+    await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true })).rejects.toBeInstanceOf(P2pError);
+  });
+});
+
+describe("uncertain revoke and generations", () => {
+  test("an uncertain revoke can converge after a later confirmation and a new generation can be approved", async () => {
+    lab = P2pLab.create();
+    const { approval, requestHash } = await lab.deliver();
+    await lab.A.tick();
+
+    lab.faults.revokeUnconfirmed = true;
+    await expect(lab.B.revoke(approval.approvalId, "key-rotated")).rejects.toBeInstanceOf(P2pError);
+    expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("uncertain");
+    expect(lab.storeB.outboxByIdempotency("revoked", expectedRevokedIdempotency(approval.approvalId))).toBeNull();
+
+    lab.faults.revokeUnconfirmed = false;
+    await lab.B.revoke(approval.approvalId, "key-rotated");
+    expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("revoked");
+    expect((await lab.B.listRequests()).find((r) => r.requestHash === requestHash)?.state).toBe("revoked");
+
+    const generation2 = await lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true });
+    expect(generation2.generation).toBe(2);
+    expect(generation2.approvalId).not.toBe(approval.approvalId);
+    expect(generation2.state).not.toBe("rejected");
+    await lab.A.tick();
+    expect(lab.calls.register).toBe(2);
+    expect((await lab.B.approvalView(generation2.approvalId))?.ackState).toBe("acked");
+  });
+});
+
 describe("no secrets and no powerful imports", () => {
   test("both sqlite files are free of the gateway key", async () => {
     lab = P2pLab.create();
@@ -225,6 +277,25 @@ describe("no secrets and no powerful imports", () => {
     }
   });
 });
+
+function alienIdentity(): P2pIdentity {
+  const dir = mkdtempSync(join(tmpdir(), "p2p-alien-"));
+  const cwd = process.cwd();
+  try {
+    process.chdir(dir);
+    const id = loadOrCreateCatalogIdentity();
+    return p2pIdentityFromCatalog(id, {
+      nodeId: "aaaa1111",
+      hostname: "ohmyaihub-aaaa1111",
+      mappedCidr: "10.66.2.3/32",
+      controlPort: 3428,
+      gatewayPort: null,
+      catalogQuoteHash: null,
+    });
+  } finally {
+    process.chdir(cwd);
+  }
+}
 
 function expectedDeliveryIdempotency(approvalId: string): string {
   return sha256Hex("p2p:delivery:" + approvalId).slice(0, 32);

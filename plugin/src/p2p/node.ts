@@ -28,6 +28,7 @@
 import { randomBytes } from "node:crypto";
 import {
   canonicalJson,
+  fingerprintOf,
   loadCatalogTrust,
   sha256Hex,
 } from "../catalog.ts";
@@ -122,7 +123,7 @@ export interface P2pRequestValidation {
   models: string[];
   /** must equal request.quote.contentHash */
   quoteHash: string;
-  /** price version for the REQUESTED set (not the approved subset) */
+  /** price version for the REQUESTED set; informational, never the approved subset */
   priceVersion: string;
   /** when the offer/validation stops being usable */
   expiresAt: string;
@@ -326,6 +327,8 @@ export interface P2pApprovalView {
 // --- implementation ----------------------------------------------------------
 
 const ACTIVE_APPROVAL_STATES = ["approving", "approved", "delivering", "delivered", "acked"] as const;
+/** A revoke may retry an uncertain approval once the port confirms the key is gone. */
+const REVOCABLE_STATES = [...ACTIVE_APPROVAL_STATES, "uncertain"] as const;
 const MAX_MEMO = 200;
 
 export class P2pNode {
@@ -445,6 +448,11 @@ export class P2pNode {
    * Opens, verifies and dispatches one sealed frame. A duplicate frame returns
    * the cached result and performs no second side effect.
    */
+  /** Frames dropped before authentication (for B-service rate/metrics). */
+  rejectedFrameCount(sessionId: string): number {
+    return this.sessions.get(sessionId)?.rejectedFrames ?? 0;
+  }
+
   async handleFrame(sessionId: string, frame: Uint8Array): Promise<P2pFrameResult> {
     this.assertOpen();
     const session = this.sessions.get(sessionId);
@@ -556,7 +564,7 @@ export class P2pNode {
     if (existing && existing.consumerFingerprint !== peer.fingerprint) {
       fail("conflict", "this request hash is already bound to another consumer identity");
     }
-    if (existing && !["rejected", "expired"].includes(existing.state)) {
+    if (existing && !["rejected", "expired", "revoked"].includes(existing.state)) {
       await this.port.recordRequest({ requestHash: body.requestHash, request, consumer: peer, sessionId: session.sessionId, firstSeenAt: existing.receivedAt, expiresAt: existing.expiresAt });
       return this.finishInbox(inbox.row, "duplicate", { requestHash: body.requestHash, state: existing.state });
     }
@@ -726,6 +734,7 @@ export class P2pNode {
     const request = this.store.getRequest(body.requestHash);
     if (!request) fail("not_found", "the consumer has no such request");
     if (request.consumerFingerprint !== this.identity.peer.fingerprint) fail("stale_identity", "the request belongs to another consumer");
+    if (request.state === "revoked") fail("conflict", "the request was revoked; a late approval cannot resurrect it");
     let approval = this.store.getApproval(body.approvalId);
     if (approval) {
       if (approval.keyId && approval.keyId !== body.keyId) fail("conflict", "the approval has a different key");
@@ -813,7 +822,14 @@ export class P2pNode {
     if (Math.abs(approval.capUsd - body.capUsd) > 1e-9) fail("conflict", "the delivery cap differs from the approval");
     if (Date.parse(body.expiresAt) <= this.clock().getTime()) fail("expired", "the delivery already expired");
 
+    // Defense in depth: even if a session somehow carried a stale delivery, a
+    // revoked/uncertain approval is not importable.
+    if (!["approved", "delivering", "delivered", "acked"].includes(approval.state)) {
+      fail("conflict", `the approval is ${approval.state}; the delivery cannot be imported`);
+    }
     const existing = this.store.getDelivery(body.approvalId);
+    if (existing?.state === "revoked") fail("conflict", "the authorization was revoked");
+    if (!existing && this.store.hasTombstone("authorization", body.approvalId)) fail("conflict", "the authorization was revoked");
     if (existing) {
       if (existing.authorizationHash !== body.authorizationHash || existing.keyId !== body.keyId) {
         this.store.transitionApproval(body.approvalId, ["approved", "delivering", "delivered"], "uncertain", { error: "superseded by a different delivery" });
@@ -1016,11 +1032,20 @@ export class P2pNode {
 
   // --- local provider actions ------------------------------------------------
 
-  acceptConsumer(nodeId: string): void {
+  acceptConsumer(nodeId: string, expectedFingerprint: string): void {
     this.assertOpen();
     const row = this.store.getPeer(nodeId);
     if (!row) fail("not_found", "this consumer has never been seen");
-    this.store.acceptPeer(rowToPeer(row), this.clock());
+    const old = rowToPeer(row);
+    const pending = pendingPeerOf(row);
+    if (pending) {
+      if (pending.fingerprint !== expectedFingerprint) fail("stale_identity", "the pending fingerprint changed; review it again");
+      const accepted = this.store.acceptPendingPeer(nodeId, expectedFingerprint, this.clock());
+      this.invalidateOldIdentity(nodeId, old, rowToPeer(accepted));
+      return;
+    }
+    if (old.fingerprint !== expectedFingerprint) fail("stale_identity", "this is not the accepted fingerprint for the node");
+    this.store.acceptPeer(old, this.clock());
   }
 
   /**
@@ -1038,25 +1063,30 @@ export class P2pNode {
       if (memo !== null && /[\u0000-\u001f\u007f]/.test(memo)) fail("malformed", "the memo contains a control character");
       const request = this.store.getRequest(requestHash);
       if (!request) fail("not_found", "no such connection request");
-      if (request.state === "revoked") fail("conflict", "the request was revoked");
       const active = this.store.activeApprovalByRequest(requestHash);
       if (active) {
         const sameDecision = sameSet(JSON.parse(active.modelsJson) as string[], models) && Math.abs(active.capUsd - capUsd) <= 1e-9 && (active.memo ?? null) === memo;
         if (sameDecision) return this.viewOf(active);
         fail("conflict", "this request is already approved with a different decision");
       }
-      if (!["received", "awaiting-trust", "awaiting-approval", "rejected", "expired"].includes(request.state)) {
+      if (!["received", "awaiting-trust", "awaiting-approval", "rejected", "expired", "revoked"].includes(request.state)) {
         fail("conflict", `the request is ${request.state}`);
       }
 
       const peerRow = this.store.getPeer(request.consumerNodeId);
       if (!peerRow) fail("not_found", "the consumer identity is not recorded");
-      const peer = rowToPeer(peerRow);
+      const oldPeer = rowToPeer(peerRow);
+      // If a different key was seen for this node, the human decision is about
+      // that *pending* key, not the old one. The request must be signed by it.
+      const pending = pendingPeerOf(peerRow);
+      const peer = pending ?? oldPeer;
       if (request.consumerFingerprint !== peer.fingerprint) fail("stale_identity", "the request was stored for another consumer key");
       let verdict = trustVerdict(trustRowToLike(peerRow), peer);
       if (verdict !== "accepted") {
         if (!input.acceptConsumer) fail("untrusted_peer", `the consumer identity is ${verdict}; accept it in the same explicit approval`);
-        this.store.acceptPeer(peer, this.clock());
+        if (pending) this.store.acceptPendingPeer(peer.nodeId, peer.fingerprint, this.clock());
+        else this.store.acceptPeer(peer, this.clock());
+        if (peer.fingerprint !== oldPeer.fingerprint) this.invalidateOldIdentity(peer.nodeId, oldPeer, peer);
         verdict = "accepted";
       }
       if (!models.every((m) => JSON.parse(request.modelsJson).includes(m))) fail("conflict", "approved models must be a subset of the request");
@@ -1163,11 +1193,15 @@ export class P2pNode {
         this.store.transitionApproval(approvalId, [...ACTIVE_APPROVAL_STATES], "uncertain", { error: `revoke failed: ${outcome.detail ?? "the key is still usable"}`.slice(0, 300) });
         fail("conflict", "the provisioner key is still usable; no revocation notice was sent");
       }
-      if (!this.store.transitionApproval(approvalId, [...ACTIVE_APPROVAL_STATES], "revoked", { error: reason })) {
+      // An uncertain approval is still revocable: the port just confirmed that
+      // the native key is gone, so the state must be allowed to converge.
+      if (!this.store.transitionApproval(approvalId, [...REVOCABLE_STATES], "revoked", { error: reason })) {
         const current = this.store.getApproval(approvalId);
-        if (current?.state === "revoked") return;
-        fail("conflict", `the approval cannot be revoked from ${current?.state ?? "unknown"}`);
+        if (current?.state !== "revoked") fail("conflict", `the approval cannot be revoked from ${current?.state ?? "unknown"}`);
       }
+      // The request becomes re-approvable as a NEW generation; the old one is
+      // tombstoned and its key is already gone. No key is reissued here.
+      this.store.setRequestState(approval.requestHash, "revoked", this.clock(), { note: reason });
       this.store.setDeliveryState(approvalId, "revoked", this.clock(), reason);
       this.store.putTombstone("authorization", approvalId, `revoked: ${reason}`, this.clock());
       const body: P2pRevokedBody = {
@@ -1387,6 +1421,26 @@ export class P2pNode {
 
   private verdictFor(peer: P2pPeerIdentity): P2pTrustVerdict {
     return trustVerdict(trustRowToLike(this.store.getPeer(peer.nodeId)), peer);
+  }
+
+  /**
+   * A newly accepted key invalidates the old identity's live sessions and
+   * approval generations. The old key is gone from the trust row, so it cannot
+   * be used again; its authorizations are tombstoned and never resurrect.
+   */
+  private invalidateOldIdentity(nodeId: string, oldPeer: P2pPeerIdentity, nextPeer: P2pPeerIdentity): void {
+    for (const session of this.sessions.values()) {
+      if (session.closedReason) continue;
+      if (session.peer.nodeId === nodeId && session.peer.fingerprint === oldPeer.fingerprint) session.close("consumer identity changed");
+    }
+    for (const approval of this.store.listApprovals(nodeId)) {
+      if (approval.consumerFingerprint !== oldPeer.fingerprint) continue;
+      if (![...REVOCABLE_STATES].includes(approval.state as (typeof REVOCABLE_STATES)[number])) continue;
+      this.store.transitionApproval(approval.approvalId, [...REVOCABLE_STATES], "revoked", { error: "consumer identity changed" });
+      this.store.setDeliveryState(approval.approvalId, "revoked", this.clock(), "consumer identity changed");
+      this.store.putTombstone("authorization", approval.approvalId, "consumer identity changed", this.clock());
+    }
+    this.store.putTombstone("identity", `${nodeId}:${oldPeer.fingerprint}`, `replaced by ${nextPeer.fingerprint}`, this.clock());
   }
 
   private assertRequestAgainstContext(request: P2pRequestDocument, context: P2pProviderContext): void {
@@ -1941,6 +1995,19 @@ function trustRowToLike(row: ReturnType<P2pStore["getPeer"]>): { fingerprint: st
 
 function rowToPeer(row: NonNullable<ReturnType<P2pStore["getPeer"]>>): P2pPeerIdentity {
   return { accountId: row.accountId, nodeId: row.nodeId, hostname: row.hostname, publicKey: row.publicKey, fingerprint: row.fingerprint };
+}
+
+/** The changed key a human still has to accept, if any. */
+function pendingPeerOf(row: NonNullable<ReturnType<P2pStore["getPeer"]>>): P2pPeerIdentity | null {
+  if (!row.pendingJson) return null;
+  try {
+    const p = JSON.parse(row.pendingJson) as Record<string, unknown>;
+    if (typeof p.accountId !== "string" || typeof p.fingerprint !== "string" || typeof p.publicKey !== "string" || typeof p.hostname !== "string") return null;
+    if (fingerprintOf(p.publicKey) !== p.fingerprint || p.accountId !== p.fingerprint) return null;
+    return { accountId: p.accountId, nodeId: row.nodeId, hostname: p.hostname, publicKey: p.publicKey, fingerprint: p.fingerprint };
+  } catch {
+    return null;
+  }
 }
 
 function inboundApprovalOf(body: P2pApprovedBody, provider: P2pPeerIdentity): P2pInboundApproval {

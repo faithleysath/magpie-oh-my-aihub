@@ -45,6 +45,12 @@ The source-scan test asserts that `src/p2p/*` does not import `ledger.ts`,
   stays revoked. **A valid signature never auto-trusts.** `approve()` requires
   `accepted` unless the same explicit local action also passes
   `acceptConsumer: true`.
+- A pending key change blocks the **old** key too. Accepting it requires the
+  exact fingerprint the human reviewed (`acceptConsumer(nodeId, fingerprint)` /
+  `P2pStore.acceptPendingPeer(nodeId, fingerprint)`); passing the old row cannot
+  clear it. Acceptance closes the old key's live sessions, revokes its live
+  approval generations, writes authorization tombstones and records an identity
+  tombstone, so neither the old session nor the old generation can revive.
 - The Ed25519 private key is read from the Catalogue file; it is never copied.
   Session X25519 keys exist only in memory and are wiped on close.
 
@@ -127,10 +133,17 @@ consumer                                   provider
 Frame: `"OMA1" | version(1) | typeCode(1) | seq uint64be | msgId(16) | len uint16be | GCM ciphertext+tag`.
 
 - AAD = `canonicalJson({domain:"ohmyaihub/p2p/frame/v1", protocol, sessionId, direction, seq, msgId, type})`; nonce = `00000000 || seq`.
-- `seq` starts at 1 per direction and must be contiguous. A duplicate of a stored
-  frame (same seq, msgId, ciphertext hash) returns the cached result; the same
-  seq with different content, a gap, or msgId reuse closes the session.
-- A frame replayed into another session fails the AAD and is rejected.
+- `seq` starts at 1 per direction and must be contiguous. **Sequence numbers are
+  unauthenticated header fields:** before the AEAD verifies, a forged gap, an old
+  seq or random ciphertext is only dropped and counted (`rejectedFrames`), never
+  used to advance `lastSeqIn` or close the session. An exact retransmission of a
+  stored frame (same seq, msgId, ciphertext hash) returns the cached result.
+- Only an **authenticated** violation closes the session: a replayed frame that
+  decrypts but does not match the stored one, an authenticated sequence gap, or
+  msgId reuse after decryption. A frame replayed into another session fails the
+  AAD and is rejected without touching state.
+- Rate limiting is the HTTP layer's job (B-service); this core only counts
+  rejected frames so the transport can act on them.
 - Session rows, message rows and tombstones are persisted; the ciphertext is
   kept as an opaque hash for retransmission checks, never as a key store.
 
@@ -165,11 +178,17 @@ requested → approved → delivered → acked
     authorization carry.
   The core never compares these two for equality. Only the selected-subset
   version is delivered.
-- **Revoke ordering:** the native key is revoked through the port *before* any
-  `revoked` wire message can be queued. A port failure (throw or
+- **Revoke ordering and recovery:** the native key is revoked through the port
+  *before* any `revoked` wire message can be queued. A port failure (throw or
   `{revoked:false}`) leaves the approval `uncertain`, surfaces
-  `action-needed`, and sends nothing. A restart never turns `uncertain` into a
-  success.
+  `action-needed`, and sends nothing. A later explicit retry of the **same
+  approval/generation** is allowed: if the port then confirms the key is gone,
+  the approval converges to `revoked`, the authorization is tombstoned, the
+  request becomes `revoked`, and only then is the notice queued. A restart never
+  turns `uncertain` into a success. After a successful revoke, a **new explicit
+  human approval** creates generation 2 (new approval id/key scope); nothing is
+  auto-reissued, and the old generation's late deliveries are refused by
+  approval state, delivery state and tombstone.
 - **ACK does not gate registration.** On delivery the consumer opens the seal,
   checks every binding, calls `importAuthorization` (native Remote
   registration + models/cap readback), records `delivered`, and only then queues
@@ -325,14 +344,17 @@ bun test test/p2p-crypto.test.ts test/p2p-protocol.test.ts test/p2p-handshake.te
 The suite covers: RFC 7748 X25519 vector, low-order/all-zero points, HKDF
 separation, AEAD roundtrip/tamper/AAD mismatch, frame header strictness,
 authorization seal bindings, envelope field/type/version/size/time/signature
-negatives, request body binding, TOFU, price-version split, approval
-idempotency/conflict, revoke confirmed/unconfirmed/throwing, duplicate
-delivery/ACK, restart/crash recovery, SQLite secret scan and the source scan.
+negatives, request body binding, TOFU (including explicit pending acceptance and
+old-key blocking), price-version split, approval idempotency/conflict, revoke
+confirmed/unconfirmed/throwing, uncertain revoke convergence and generation 2,
+duplicate delivery/ACK, unauthenticated seq=1000/old-seq frames not closing the
+session (with rejected-frame counting), byte-identical retransmission, restart/
+crash recovery, SQLite secret scan and the source scan.
 The tests use a temp directory, a fixed clock and an in-process overlay; they do
 not resolve the LAN IP, open a port, read the production Magpie state or call a
 public RPC.
 
-Expected result at this commit: `47 pass / 0 fail`, typecheck clean.
+Expected result at this commit: `52 pass / 0 fail`, typecheck clean.
 
 ## 12. Not verified (UNKNOWN)
 
@@ -356,6 +378,10 @@ Expected result at this commit: `47 pass / 0 fail`, typecheck clean.
   contract decision.
 - Approval expiry vs. a long ACK-loss window is bounded but not tuned against a
   real operator workflow.
+- A node that publishes no model catalogue has a control endpoint in B-service,
+  but this core has no signed presence/reverse-reachability message yet. The
+  current flow relies on the consumer keeping a session open; if it is lost, the
+  consumer must reconnect and query `status`. This is a known gap, not a claim.
 
 ## 13. Integration order
 

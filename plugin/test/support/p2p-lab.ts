@@ -68,6 +68,7 @@ export class P2pLab {
     drop: 0,
   };
   readonly importedApprovals: string[] = [];
+  readonly sentFrames: Array<{ sessionId: string; from: "A" | "B"; frame: Buffer }> = [];
   readonly registeredSessions: Array<{ approvalId: string; providerNodeId: string; providerFingerprint: string }> = [];
 
   private constructor() {
@@ -118,6 +119,7 @@ export class P2pLab {
         return result.serverHello;
       },
       frame: async (session, frame) => {
+        this.sentFrames.push({ sessionId: session.sessionId, from: self, frame: Buffer.from(frame) });
         const targetNode = self === "A" ? this.B : this.A;
         await targetNode.handleFrame(session.sessionId, frame);
       },

@@ -127,6 +127,9 @@ export function trustVerdict(record: P2pTrustRecordLike | null | undefined, peer
     return record.pendingFingerprint === peer.fingerprint ? "pending" : "changed";
   }
   if (!record.accepted) return "pending";
+  // A changed key blocks the *old* key too until a human resolves the pending
+  // change: otherwise the replaced identity keeps acting while the new one waits.
+  if (record.pendingFingerprint && record.pendingFingerprint !== peer.fingerprint) return "changed";
   return "accepted";
 }
 
