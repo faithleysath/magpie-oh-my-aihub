@@ -4,3 +4,7 @@
 # or credential is involved. New findings, even in the same file, still fail.
 6d4eb6478d6574f461cc8ec3c5a95b63753afed8:plugin/test/wallet-vault.test.ts:generic-api-key:39
 6d4eb6478d6574f461cc8ec3c5a95b63753afed8:plugin/test/wallet-vault.test.ts:generic-api-key:306
+# Synthetic fault-injection key in an unmerged protocol test branch
+# (plugin/test/p2p-node.test.ts:312, commit 4304db5e6db9...); test data, not a
+# credential. Commit+file+rule+line scoped; other lines/commits still report.
+4304db5e6db93d5441ecc0eae6dacc1acfc43ce3:plugin/test/p2p-node.test.ts:generic-api-key:312
