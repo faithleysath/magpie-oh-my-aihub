@@ -92,14 +92,18 @@ const localNetwork: NetworkRecord = {
   displayName: "Anvil (local EVM)",
   family: "evm",
   networkType: "testnet",
+  support: "credit",
+  receivable: false,
   rpcEndpoints: [RPC],
   blockExplorer: "",
   nativeSymbol: "ETH",
+  nativeDecimals: 18,
   enabled: true,
   finality: { mode: "confirmations", confirmations: 1, reorgDepth: 1, rationale: "a local dev chain cannot reorganise; one confirmation is the whole rule" },
   scanIntervalSec: 2,
   maxBlockRange: 5000,
   notes: "local lab only",
+  evidence: null,
 };
 
 interface LabResult {
