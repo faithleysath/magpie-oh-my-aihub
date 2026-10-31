@@ -19,7 +19,7 @@
 | 冻结证据 HEAD | `cc0d740876e5a667f1789e1ae3b4966ecf8cef9f`：f63b 独立临时组合测试 + `6a326f2b` 干净真实 Magpie 仅会话/5页/布局空态；**禁止 join/share/payment；22 未批**；本轮不接新业务 |
 | cc0 组合验证 | 845 pass/8 fail（EADDRNOTAVAIL，TIME_WAIT 16244/16384）→ 恢复后 853/0；frozen install/typecheck/boot/secret PASS；**非产品 GO**；报告 `docs/phase10/evidence/2026-10-31-integration-cc0d740-validation.md` |
 | cc0 真实宿主 | 本地目录直链安装（非 GitHub 升级包）；5 UI 文件 hash + ownerPid/status.pid/listener/argv 一致；三字段/主题/焦点/390/logout PASS；**5 页/join/share/payment UNKNOWN**；**非 Visual GO** |
-| next integration（28） | `feature/phase10-integration-next` @ `87a72c6`（worktree `/tmp/oma-phase10-integration-next`；从 cc0 开发，只接 28 自身 delta；**与 cc0 证据分开**） |
+| next integration（28+23） | `feature/phase10-integration-next` @ `7b46bd4`（worktree `/tmp/oma-phase10-integration-next`；从 cc0 开发，接 28 + 23 自身 delta；**与 cc0 证据分开**） |
 | 盘点工作树 | `/Users/laysath/Projects/magpie-oh-my-aihub-import` |
 | 纯 main 只读工作树 | `/tmp/oma-phase10-main-8ce5c57`（detached @ `8ce5c57`） |
 | 目标运行版本（已决定） | **Magpie 0.1.2289 + EasyTier 2.6.4**；隔离副本，不改用户安装 |
@@ -59,11 +59,11 @@
 | 工作流 | 独立 worktree | 负责代理 | 分支 / PR | 状态 | 集成条件 |
 | --- | --- | --- | --- | --- | --- |
 | A-ui | `/tmp/oma-phase10-integration`（集成） | `ccb08749-badc-4512-9604-e93ce7bd76b9` | PR #25 `b1a4838d` base `8ce5c57` → `f6c329e` | DONE（UI 单元集成） | 六项独立 PASS；73 console/0；console-security+api 36/0；typecheck；旧 `cbce700` 阻断留历史 | 非 Visual GO；ProviderView 无 models 字段→模型计数分支不可达（未知非虚报）；真实 host 746de60 五文件同 hash，但 b1a4838 干净安装/真实 join/share UNKNOWN |
-| A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | PR #22 `56d05f7` + #32/33/34 targets | REVIEW | 22 四残余 fix；32/33/34 待审；modelsEvidence 后端/UI 独立已授权实施 | 旧 db0a4c2b/77/feeddec 历史；未集成 |
+| A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | PR #22 `56d05f7` + #32/33/34/36 | REVIEW | 22 四残余 fix；32/34/36 fix 中；33 技术依赖批准；modelsEvidence 独立实施 | 旧 db0a4c2b/77/feeddec 历史；未集成 |
 | B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | PR #26 `eccb1440` | DONE（仅 20 技术依赖） | 独立最终 PASS；主审批准仅作 20 技术依赖 | **不是整个 B/默认产品 GO**；旧 cdee/4304/d2d 历史 |
-| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #20 `9f51c078` | BLOCKED | independent unique keyReady adopt 阻断 fix 中；noSideEffect 已 PASS | 旧 7c/f779/715 历史；未集成 |
-| C-wallet | `/Users/laysath/.paseo/worktrees/1z728cdk/c-wallet` | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | PR #23 `9393b12c` | REVIEW | 五 fix 已交 `b97887e5…` 短复审 | 旧 325b81a 历史；未集成 |
-| C-registry | `/Users/laysath/.paseo/worktrees/1z728cdk/c-registry` | `0c94d106-6442-470f-8f14-374c38ea20f7` | PR #21 `20461b1` | BLOCKED | 四 actual money fix 中 | 旧 917 历史；不准正式集成 |
+| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #20 `9f51c078` | BLOCKED | adopt seed fix 中；noSideEffect 已 PASS | 旧 7c/f779/715 历史；未集成 |
+| C-wallet | `/tmp/oma-phase10-integration-next`（核心集成） | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | PR #23 `8fdc3cdf` → `7b46bd4` | DONE（wallet core） | 独立 `b97887e5` PASS；ethers 6.17 pin/lock；56 wallet/0；typecheck/pack/secret PASS；gitleaks 2 public BIP39 variable false positives | **wallet usability 未验**；真实资金/主网签名发送 NO-GO；UI 未接；非安全审计 |
+| C-registry | `/Users/laysath/.paseo/worktrees/1z728cdk/c-registry` | `0c94d106-6442-470f-8f14-374c38ea20f7` | PR #21 `20461b1` | BLOCKED | legacy fix 中 | 旧 917 历史；不准正式集成 |
 | PR31 | `/tmp/oma-phase10-integration`（集成） | P0 测试代理 | PR #31 `ac7bfd0`+`659d8b3` → `cc0d740` | DONE（测试集成） | service 41/0；CLI 35/0；typecheck；secret-scan；动态端口/guard 已含；只取 service.test delta | 非产品 GO；未混 C21 资金改动 |
 | C-external | `/tmp/oma-phase10-integration`（模块集成） | `3820537e-5840-4926-ba00-5975805b2df6` | PR #30 行为 `90c32f8c`；PR head `ae596c3`（仅 docs 2 行）→ `6440876` | DONE（隔离模块集成） | 52 module/0；chain1 deny/SVG null/无 operationPort 零 provider call/unknown 跨 session 阻重发；actual journal 未做，default send off | **非 WalletGO**；不接 Service journal/UI；真实扩展 UNKNOWN；资金 NO-GO |
 | Windows CI | `/tmp/oma-phase10-integration`（子集集成） | P0 测试代理 | PR #24 `ed60ce19` → `6440876` | DONE（Windows 子集证据） | workflow + tests；真实 windows-latest 证据；本机 typecheck/platform/networkloopback 48/0；未在本机模拟 Windows | 仅 Windows 子集/真实 runner 证据；**不是 Windows 产品支持/平台 GO** |
@@ -87,12 +87,12 @@
 | PR | 当前 target | 状态 | 当前事实 | 历史（不当前） |
 | --- | --- | --- | --- | --- |
 | 26 | `eccb144002647f8a5d2a3385cf16df05c8934306` | DONE（仅 20 技术依赖） | 独立最终 PASS；主审批准仅作 20 技术依赖 | cdee/4304/d2d 阻断历史；**不是整个 B/默认产品 GO** |
-| 20 | `9f51c0780410512e5a233684539efe9ea55e63a6` | BLOCKED | unique keyReady adopt 阻断 fix 中；noSideEffect 已 PASS | 7c/f779/715 历史 |
-| 23 | `9393b12ce033b5c564f10c6a41e232aafccd749a` | REVIEW | 五 fix 交 `b97887e5…` 短复审 | 325b81a/1a8a53d 历史 |
-| 21 | `20461b1` | BLOCKED | 四 actual money fix 中 | 917c429 历史；不准正式集成 |
-| 22 | `56d05f7` | REVIEW | 四残余 fix；32/33/34 targets 待审；modelsEvidence 后端/UI 独立已授权 | db0a4c2b/77/feeddec 历史 |
-| 32/33/34 | 待 handoff | REVIEW | 独立审 | — |
-| 30 | 行为 `90c32f8c` / final docs `ae596c3` | DONE（隔离模块） | 已集成；default send off；非 WalletGO | 837/d533 历史 |
+| 20 | `9f51c0780410512e5a233684539efe9ea55e63a6` | BLOCKED | adopt seed fix 中 | 7c/f779/715 历史 |
+| 23 | `8fdc3cdf856bd38157ef51e45227ea5dea7914ca` | DONE（wallet core） | 独立 PASS；已接 next `7b46bd4`；56 wallet/0；gitleaks 2 false positives | 9393/325/1a8a 历史；wallet usability/UI/真实资金未验 |
+| 21 | `20461b1` | BLOCKED | legacy fix 中 | 917c429 历史；不准正式集成 |
+| 22 | `56d05f7` | REVIEW | 四残余 fix；32/34/36 fix 中；33 技术依赖批准；modelsEvidence 后端/UI 独立已授权 | db0a4c2b/77/feeddec 历史 |
+| 32/34/36 | 待 handoff | REVIEW | fix 中 | A32/34/36 |
+| 33 | 待 handoff | DONE（技术依赖） | 主审批准技术依赖 | 未默认产品集成 |
 | 31 | `ac7bfd0`+`659d8b3` | DONE（测试） | 已集成；service 41/0 | — |
 | 24 | `ed60ce19` | DONE（Windows 子集） | 已集成；非平台 GO | 927c71a 历史 |
 | 28 | `10ca2e7` → next `87a72c6` | DONE（安全工具） | gitleaks/pack/scan 通过 | 927c71a 历史 |
@@ -164,7 +164,8 @@
 | C12 | C21 修复复审 | C-registry | BLOCKED | C1 | chain1 watcher/testnet 可启、FundsClass/reconcile 来源、RPC v2 https/307/body/failover 校验 | 3 小 fix 不扩功能；仍无 C 总 GO；不作远端盗款夸大 |
 | C2 | 收款网络默认空选 | C-registry | TODO | C1 | 默认无链/资产；必须明确选 | 不自动选链 |
 | C3 | 严格资产四元组 | C-registry | TODO | C1 | `chainId+tokenContract+decimals+issuerType`；拒绝符号推断 | 任意代币 |
-| C4 | 内置钱包：隔离模拟创建/恢复/加密存储/短解锁 | C-wallet | REVIEW | P0 | PR #23 `9393b12c`；五 fix 交 `b97887e5…` 短复审 | 旧 325 历史；未 UI/真实金；未集成 |
+| C4 | 内置钱包：隔离模拟创建/恢复/加密存储/短解锁 | C-wallet | DONE（core） | P0 | PR #23 `8fdc3cdf` → next `7b46bd4`；56 wallet/0 | wallet usability/UI 未验；真实资金 NO-GO |
+| C5 | 敏感导出/助记词 | C-wallet | DONE（core） | C4 | PR #23 core；重新验证密码/导出逻辑在核心 | UI 未接；非安全审计；真实资金 NO-GO |
 | C5 | 敏感导出/助记词 | C-wallet | REVIEW | C4 | PR #23；警告 + **重新验证钱包密码**；不落日志/快照 | 未集成；独立审进行中 |
 | C6 | 外置钱包/多扩展明确选择 | C-external | BLOCKED | P0 | PR #30 行为 `90c32f8c` 已模块集成；default send off；Service journal/UI 未接 | chain1/SVG 已修；真实扩展 UNKNOWN；非 WalletGO |
 | C7 | P2P 付款/签名 | C-wallet + C-external | DOING | C2,C3 | 测试网/模拟；直接签名；普通钱包无签名文件 | 主网广播/签名文件路径 |
@@ -240,7 +241,10 @@
 | 2026-10-31 | A-service 当前 target | PR #22 `56d05f7`；四残余 fix；32/33/34 targets；modelsEvidence 独立实施 | PR #22 | REVIEW；旧 db0a4c2b/77/feeddec 历史 |
 | 2026-10-31 | B26 最终 PASS | PR #26 `eccb1440`；独立最终 PASS；主审批准仅作 20 技术依赖 | PR #26 | 非整个 B/默认产品 GO |
 | 2026-10-31 | B20 当前 target | PR #20 `9f51c078`；unique keyReady adopt 阻断 fix；noSideEffect 已 PASS | PR #20 | BLOCKED；旧 f779 历史；loopback 不能证明远端 401 |
-| 2026-10-31 | C23 当前 target | PR #23 `9393b12c`；五 fix 交 `b97887e5…` 短复审 | PR #23 | REVIEW；旧 325 历史 |
+| 2026-10-31 | C23 wallet core | 源 `8fdc3cdf` → next `7b46bd4`；ethers 6.17 root/plugin pin/lock；56 wallet/0；typecheck/pack/secret PASS | PR #23 / next integration | DONE（core）；wallet usability/UI/真实资金未验 |
+| 2026-10-31 | C23 依赖/打包 | root+plugin `ethers 6.17.0`；frozen install；pack `--selftest` + root dependency PASS；有限依赖快照，非正式安全审计 | PR #23 / next | 非安全审计 |
+| 2026-10-31 | C23 gitleaks false positives | `plugin/test/wallet-vault.test.ts:47/363`：public BIP-39 runtime-derived variable assignments；不扩路径 allowlist；feedback 实现者运行时构造/精确语义识别 | PR #23 | 2 findings；非真 secret；不影响 wallet core PASS，但扫描未清零 |
+| 2026-10-31 | 23 兼容修 | 加 ethers 后 @types/node 降至 22，preview Response Buffer 类型不兼容；改 `Uint8Array`，无行为变化 | `plugin/scripts/console-preview.ts` | 集成兼容修；非产品行为 |
 | 2026-10-31 | C30 隔离模块集成 | 行为 `90c32f8c`；PR head `ae596c3` 仅 docs 2 行 → `6440876`；external 52/0；console 73/0；security/api 36/0；typecheck；default send off | PR #30 / integration | 非 WalletGO；未接 Service journal/UI；资金 NO-GO |
 | 2026-10-31 | Windows 子集集成 | PR #24 `ed60ce19` → `6440876`；workflow explicit 22 files，MIN 380 未放宽；typecheck；platform/loopback 48/0 | PR #24 / integration | 非 Windows 产品支持；真实 Windows job 未在本机重跑 |
 | 2026-10-31 | 当前 review targets | 22 `56d05f7`；20 `9f51c078`；23 `9393b12c`；21 `20461b1`；26 `eccb1440`（仅 20 依赖）；32/33/34 待审 | 各自 PR | 见 §2.0；历史不覆盖当前 |
@@ -250,7 +254,7 @@
 | 2026-10-31 | cc0 组合软件验证 | 报告 sha256 `d1ed42276144f7ffd5fea884dd90756be1a1d9197183457735a83d3185aad120`；845/8→853/0；EADDRNOTAVAIL/TIME_WAIT 归因；frozen/typecheck/boot/secret PASS | `docs/phase10/evidence/2026-10-31-integration-cc0d740-validation.md` | 非产品 GO；未起 Magpie/ET |
 | 2026-10-31 | cc0 真实宿主证据 | 报告 sha256 `58271a2fd365e132b05624bf21486e9b0eeaf904e8e16b2f23edd2889c82feb0`；本地目录安装；5 UI hash/PID/argv；三字段/主题/焦点/390/logout PASS；5 页/join/share/payment UNKNOWN | `docs/phase10/evidence/2026-10-31-integration-cc0d740-host.md` + `host-env.txt` + `console.sha256` + `screenshots/cc0d740/` + `host.SHA256SUMS` | 非 Visual GO；非 GitHub 升级包验收；tracked clean 但 ignored 运行期文件由宿主写入 |
 | 2026-10-31 | 证据包统计 | 原始 11 files（README/report/ENV/SHA/7 PNG）；仓库只收 md/env/hash/7 PNG，不含 tar/logs/HOME | `docs/phase10/evidence/` | 按真实 find 清单，不用错误“10 个” |
-| 2026-10-31 | C-wallet 历史 1a8a | 41 模块测试；未 UI/真实资金 | PR #23 | 历史；当前 9393b12c |
+| 2026-10-31 | C-wallet 历史 | 9393/325/1a8a 仅历史；当前核心 `8fdc3cdf` 已接 next | PR #23 | 历史不当前 |
 | 2026-10-31 | P0 报告命名 | P0-clock 属 P0，不沿用 D2 名称 | 主审说明 | VERIFIED |
 | 2026-10-31 | 改动前 UI 审查证据 | 3 份事实报告 + 16 张截图 + SHA256SUMS 已入库；无 HOME/app/凭据；0.1.2289 空网络 | `docs/phase10/evidence/` | REPRODUCED / 已审查；非 Visual UX GO |
 | 2026-10-31 | 外置钱包测试计划 | 真实 MetaMask/Rabby 验收 **BLOCKED/UNKNOWN**（隔离 profile 工具缺口）；不碰默认 profile | `docs/phase10/evidence/2026-10-31-external-wallet-test-plan.md` | 附录；非验收 |
