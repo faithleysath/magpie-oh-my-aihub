@@ -166,6 +166,7 @@ function portView(input: {
   port: number | null;
   owner: PortOwner;
   ledger?: PortLedger;
+  reachability?: PortReachability;
   fallback: { state: PortState; detail: string | null; verifiedAt?: string | null };
 }): NetworkPortView {
   const record: PortEvidence | null =
@@ -177,7 +178,7 @@ function portView(input: {
     port: input.port,
     owner: input.owner,
     editable: false,
-    reachability: record?.reachability ?? reachabilityOf(input.host),
+    reachability: record?.reachability ?? input.reachability ?? reachabilityOf(input.host),
     state: record?.state ?? input.fallback.state,
     verifiedAt: record?.verifiedAt ?? input.fallback.verifiedAt ?? null,
     detail: record?.detail ?? input.fallback.detail,
@@ -367,7 +368,13 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
       port: input.gatewayPort,
       owner: "magpie",
       ledger: input.ledger,
-      fallback: { state: "unknown", detail: "owned by Magpie; this plugin never changes its listener" },
+      // The plugin reads the gateway on loopback but does not own its bind: it
+      // may also listen on the LAN IP while sharing, so do not claim loopback.
+      reachability: "unknown",
+      fallback: {
+        state: "unknown",
+        detail: "owned by Magpie; this plugin never changes its listener and does not assert its bind scope",
+      },
     }),
   );
   for (const provider of input.providers) {

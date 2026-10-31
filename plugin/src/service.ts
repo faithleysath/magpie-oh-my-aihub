@@ -1389,7 +1389,8 @@ export class Service {
         ? cfg.publishedPorts
         : [...cfg.publishedPorts, this.gatewayPort()],
       // Publishing the catalogue is part of this one action, not a second one.
-      catalog: { ...cfg.catalog, enabled: true, discoveryEnabled: true },
+      // Discovery keeps whatever the operator chose (join-network turns it on).
+      catalog: { ...cfg.catalog, enabled: true },
     };
     this.state.config = next;
     saveState(this.state);

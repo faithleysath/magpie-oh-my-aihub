@@ -22,7 +22,7 @@ import { stateDir, statePath } from "./paths.ts";
 import { backupFile, readJsonWithBackup, writeJsonAtomic } from "./store.ts";
 import { logger, registerSecret } from "./log.ts";
 import { randomMappedCidr } from "./addresses.ts";
-import { emptyPortLedger, normalizePortLedger, PORT_EVIDENCE_LIMIT, type PortLedger } from "./ports.ts";
+import { emptyPortLedger, normalizePortLedger, type PortLedger } from "./ports.ts";
 
 export const STATE_VERSION = 4;
 
