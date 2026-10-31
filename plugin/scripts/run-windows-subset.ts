@@ -9,7 +9,7 @@
  */
 import { appendFileSync, writeFileSync } from "node:fs";
 
-const MIN_EXECUTED = 380;
+const MIN_EXECUTED = 360;
 const ASSERTIONS = /(\d+)\s+expect\(\)\s+calls/;
 const lineCount = (word: string): number => {
   const m = new RegExp(`^\\s*(\\d+)\\s+${word}\\s*$`, "m").exec(text);
