@@ -229,23 +229,25 @@ second approval layer.
   the same approval adopts it and a different approval is refused;
 - `reconcileApproval` is read-only. It returns binding evidence
   (consumerNodeId/requestHash/approvalId/generation/knownKeyId/observedAt/source).
-  `keyReady` requires a matching durable journal **and a consistent local
-  Provisioner record** plus Magpie key-management readback:
-  `source:"magpie-key-readback"`, `checked:["keys","keyId","models","costLimit"]`,
-  `nativeKeyIds` (max 100) containing the target, key name
-  `ohmyaihub-<consumer>`, matching quote/models/cap, and evidence observed within 5
-  minutes. A pending journal plus a matching native key **without** a local
-  Provisioner record is `unknown`: adoption of metadata alone would leave the
-  Provisioner/ledger state inconsistent. A consistent pending journal + local
-  record + native key is a keyReady and is adopted without calling ensure again.
+  `keyReady` requires a matching durable journal plus Magpie key-management
+  readback: `source:"magpie-key-readback"`, `checked:["keys","keyId","models","costLimit"]`,
+  `nativeKeyIds` (refuse the snapshot above 100 keys) containing the target, key
+  name `ohmyaihub-<consumer>`, matching quote/models/cap, and evidence observed
+  within 5 minutes. A pending journal plus the exact native key may have **no
+  local Provisioner record** (the crash window); in that case `takeAuthorization`
+  first reconstructs the local Provisioner record and seeds the Ledger from the
+  real native key (`Provisioner.adoptControlKey`, no create/rotate/remove/recap),
+  verifies the native models/cap, then promotes the journal and reads the secret
+  through the locked hand-over. If that adoption cannot be proven, it stays
+  `unknown`; it never calls `ensure` or creates a second key.
   `noSideEffect` is allowed only when a durable pending journal exists, the local
   Provisioner record is absent, **and** the Magpie key list (`keyList`/`keyByName`,
   not just `provisioner.find`) has no key with the deterministic plugin name; source
   is `provisioner-journal:magpie-readback`, checked `["journal","keys"]`.
   A missing journal, a key-management readback error, a named key without a local
-  record, or stale evidence is `unknown`, never `noSideEffect`. Native key ids are
-  capped at 100 to match the core evidence bound; loopback gateway 401 is not a
-  remote 401 proof. This is Magpie key
+  record, or stale evidence is `unknown`, never `noSideEffect`. Native key ids
+  above 100 make the snapshot unavailable (`unknown`) rather than silently
+  truncating a target; loopback gateway 401 is not a remote 401 proof. This is Magpie key
   management state, not a remote gateway 401 and not the AI gateway;
 - enforced revoke: remove success, rotation fallback, a rotation whose old secret
   is still accepted is not claimed, transport/5xx/bad-JSON readback is unknown, a
@@ -282,7 +284,7 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | Enforced revoke readback/lock/both-fail | VERIFIED (unit, fake Magpie) | 15 port tests |
 | PR #19 transport | PASS (reviewed 7bcf7e0, rebased on approved PR #15) | 20 real/unit tests; see PR #19 |
 | PR #20 adapter targeted | PASS (local, rebased branch) | 20 transport + 12 old adapter + 18 new port tests = 50 total |
-| Full `bun run test` on PR #20 head `49285ba` | PASS (CI) | run `41161481260` linux+macOS success; includes the approved PR #15 clock base |
+| Full `bun run test` on PR #20 head `5197fb2` | PASS (CI) | run `41162973476` linux+macOS success; includes the approved PR #15 clock base |
 | Real B-core `P2pNode` stacked and compiled | UNKNOWN (not approved) | B-core PR #26 is committed (`fdc7d4c`/`fba73c`) but not approved for stack; the local port mirrors its `P2pBusinessPort` shape and is compile-checked only in a temporary snapshot |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
 | Real EasyTier 2.6.4 two-node hello/frame/TOFU | UNKNOWN | no two-node overlay run |
@@ -290,8 +292,8 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | Control port from A-service | PLANNED | A-service `reservePort`/`verifyOwnedPort`; no fixed 3427/user port |
 | Real funds / mainnet | **NO-GO** | out of scope; no wallet or real asset used |
 
-PR #20's CI run `41161481260` is green on linux and macOS for head
-`49285ba648c72f8caa652f075ea3222dcf7738c1`; it is the PR head, not a temporary
+PR #20's CI run `41162973476` is green on linux and macOS for head
+`5197fb2cf6548ce8924c2c5a24d95e08289bf824`; it is the PR head, not a temporary
 combination. The earlier 773/0 local run was the PR #19 transport combined with the
 two P0 branches in /tmp and is recorded separately. Neither is a claim that the
 hermetic guard is part of B or an approval to integrate P0. No real two-node pass is
