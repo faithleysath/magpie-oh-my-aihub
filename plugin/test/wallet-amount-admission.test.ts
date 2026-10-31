@@ -16,7 +16,7 @@ async function setup() {
     consoleWalletModule:()=>lab.wallet,walletForConfiguration:()=>lab.wallet,
     accountingStatus:()=>({uncertain:false,lastCheckAt:null,serving:true,uncertainReason:null})} as unknown as Service;
   const file=join(lab.dir,"operations-admission.json");
-  const adapter=new ConsoleWallet(service,file);
+  const adapter=new ConsoleWallet(service,file,lab.nowMs);
   const input={consumerId:"alice",chainId:84532,assetId:lab.assetFor(84532).assetId,amount:"1",ttlSec:3600};
   return {lab,service,adapter,input,file};
 }
@@ -32,7 +32,7 @@ describe("numeric admission precedes durable wallet intent reservation",()=>{
     }
     // A new host and the same operation UUID can make a valid request: the
     // known-invalid input never left a permanent uncertainty tombstone.
-    const reopened=new ConsoleWallet(service,file);
+    const reopened=new ConsoleWallet(service,file,lab.nowMs);
     const {preview}=await reopened.action("wallet-intent-preview",input);
     const created=await reopened.action("wallet-intent-create",{...input,requestId,previewHash:preview.previewHash});
     expect(created.document.amount.raw).toBe("1000000000000000000");
@@ -46,7 +46,7 @@ describe("numeric admission precedes durable wallet intent reservation",()=>{
     await expect(adapter.action("wallet-intent-preview",{...input,amount:"9007199.254740992"})).rejects.toThrow(/安全记账范围/);
   });
   test("imported signing fields and payer cannot drift from the exact typed data",async()=>{
-    const {adapter,input}=await setup();
+    const {adapter,input,lab}=await setup();
     const {preview}=await adapter.action("wallet-intent-preview",input);
     const {document}=await adapter.action("wallet-intent-create",{...input,requestId,previewHash:preview.previewHash});
     const variants=[
@@ -57,16 +57,16 @@ describe("numeric admission precedes durable wallet intent reservation",()=>{
       {...document,recipientAddress:"0x"+"12".repeat(20)},
       {...document,digest:"0x"+"12".repeat(32)},
     ];
-    for(const changed of variants) expect(()=>previewDepositDocument(changed,"alice")).toThrow();
-    expect(()=>externalSignatureDocument(document,signDigest(document.digest),"0x"+"12".repeat(20),"alice")).toThrow(/不匹配/);
-    expect(externalSignatureDocument(document,signDigest(document.digest),TEST_PAYER,"alice").verified).toBe(true);
+    for(const changed of variants) expect(()=>previewDepositDocument(changed,"alice",new Date(lab.clock.at))).toThrow();
+    expect(()=>externalSignatureDocument(document,signDigest(document.digest),"0x"+"12".repeat(20),"alice",new Date(lab.clock.at))).toThrow(/不匹配/);
+    expect(externalSignatureDocument(document,signDigest(document.digest),TEST_PAYER,"alice",new Date(lab.clock.at)).verified).toBe(true);
   });
   test("imported signing documents refuse uint256 overflow as a known validation error",async()=>{
-    const {adapter,input}=await setup();
+    const {adapter,input,lab}=await setup();
     const {preview}=await adapter.action("wallet-intent-preview",input);
     const {document}=await adapter.action("wallet-intent-create",{...input,requestId,previewHash:preview.previewHash});
     const amountRaw=(1n<<256n).toString();
     const invalid={...document,amount:{raw:amountRaw,tokens:formatTokenAmount(amountRaw,18)},typedData:{...document.typedData,message:{...document.typedData.message,expectedAmountRaw:amountRaw}}};
-    expect(()=>previewDepositDocument(invalid,"alice")).toThrow(/uint256/);
+    expect(()=>previewDepositDocument(invalid,"alice",new Date(lab.clock.at))).toThrow(/uint256/);
   });
 });
