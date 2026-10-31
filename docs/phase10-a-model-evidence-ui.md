@@ -53,7 +53,7 @@ status.providers[].modelsEvidence = {
    - `modelsEvidence.status === "current"`
    - `modelsEvidence.callable === "yes"`
    - `modelCount` 是有限非负数
-   - 未过期：`expiresAt` 存在且 `Date.parse(expiresAt) > now`（页面长时间停留的兜底；后端仍拥有 freshness 定义）
+   - 未过期且可证明：`expiresAt` 可解析且 `Date.parse(expiresAt) > now`（页面长时间停留的兜底；后端仍拥有 freshness 定义）。`expiresAt` 缺失或不可解析 → 保守视为 `unknown`，不计入，并给“重新读取”的下一步。
 3. 有可用 → `current`，标题「N 个当前可见模型」，详情「M 个伙伴服务 · 最近真实读回；推理额度与 429 另计，不代表可调用」，可展开列表；额度状态单独标注（正常/已用尽/待确认）。`modelCount === 0` 时为 `empty`：「已连接，但没有发现模型」+ 核对模型范围与额度。
 4. 有证据但 `callable === "no"`（401/撤销）→ `denied`：「授权未通过」+ 核验密钥与额度，不用 0 代替；若同时 stale 则显示过期。
 5. 无可用但存在 `stale` 或已过期 → 「模型清单已过期」+ 下一步“到「发现 → 我的连接」重新读取可用模型；过期清单不算可用。”
@@ -94,7 +94,7 @@ bun run secret-scan    # PASS
   - legacy `provider.models` 存在但无 evidence → `unknown`、0；evidence 非 current / callable 非 yes / count null 同样不计；
   - stale → 「模型清单已过期」+ 下一步文案；
   - 一个 stale + 一个 current → 只计 current；
-  - 页面停留超过 `expiresAt` → 自动转为 stale；
+  - 页面停留超过 `expiresAt` → 自动转为 stale；`expiresAt` 缺失/不可解析 → `unknown` 不计；未来时间 → 正常计数；
   - current + `limit.spent` / `costLeft<=0` → 仍显示清单数，但额度行明确“额度已用尽（原生 429）”；未读额度 → “额度待确认”；
   - current 但 `modelCount === 0` → “已连接，但没有发现模型”；`callable:"no"`（401/撤销）→ “授权未通过”，不用 0；
   - 换 Key（`keyGeneration` 变化）→ `stale` 不计，只有新的 current 读回才重新计数；

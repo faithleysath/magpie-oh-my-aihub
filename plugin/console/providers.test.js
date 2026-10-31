@@ -407,7 +407,7 @@ test("all shipped workflow DOM avoids HTML injection, remote resources and brows
 
 describe("available-model evidence (simulated status.providers, no backend)", () => {
   const evidence = (over = {}) => ({
-    status: "current", source: "provider-models", readAt: "2026-10-31T00:00:00.000Z",
+    status: "current", source: "provider-models", readAt: "2026-10-31T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z",
     models: ["qwen/qwen3-32b", "deepseek/deepseek-chat"], modelCount: 2, callable: "yes",
     identity: { hostname: "partner-harbor", virtualIpv4: null, fingerprint: null },
     generation: 3, keyRef: "provider-keys.json#p1", keyGeneration: 2, error: null, ...over,
@@ -442,6 +442,12 @@ describe("available-model evidence (simulated status.providers, no backend)", ()
     expect(summary.detail).toContain("重新读取可用模型");
     expect(summary.detail).toContain("过期清单不算可用");
     expect(modelEvidenceSummary([])).toMatchObject({ state: "none", label: "尚未连接" });
+  });
+
+  test("missing or unparsable expiry is treated as unknown, not current", () => {
+    expect(modelEvidenceSummary([provider({ modelsEvidence: evidence({ expiresAt: null }) })])).toMatchObject({ state: "unknown", count: 0 });
+    expect(modelEvidenceSummary([provider({ modelsEvidence: evidence({ expiresAt: "not-a-date" }) })])).toMatchObject({ state: "unknown", count: 0 });
+    expect(modelEvidenceSummary([provider({ modelsEvidence: evidence({ expiresAt: "2999-01-01T00:00:00.000Z" }) })])).toMatchObject({ state: "current", count: 2 });
   });
 
   test("a page left open past expiresAt stops counting the old list", () => {

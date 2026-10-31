@@ -100,7 +100,7 @@ function configuredState(): any {
         fingerprint: { hostname: "partner-harbor" },
         limit: { costLimit: 2.5, cost: 0.42, costLeft: 2.08, spent: false },
         modelsEvidence: {
-          status: "current", source: "provider-models", readAt: new Date().toISOString(),
+          status: "current", source: "provider-models", readAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
           models: ["qwen/qwen3-32b", "deepseek/deepseek-chat"], modelCount: 2, callable: "yes",
           identity: { hostname: "partner-harbor", virtualIpv4: "10.126.126.2", fingerprint: null },
           generation: 4, keyRef: "provider-keys.json#provider-harbor", keyGeneration: 2, error: null,
@@ -189,7 +189,7 @@ function firstRunState(): any {
 function staleEvidenceState() {
   const state = configuredState();
   const provider = state.status.providers[0];
-  provider.modelsEvidence = { ...provider.modelsEvidence, status: "stale", callable: "unknown", modelCount: null, models: [], readAt: "2026-10-30T21:00:00.000Z" };
+  provider.modelsEvidence = { ...provider.modelsEvidence, status: "stale", callable: "unknown", modelCount: null, models: [], readAt: "2026-10-30T21:00:00.000Z", expiresAt: "2026-10-30T21:05:00.000Z" };
   return state;
 }
 let current: any = scenario === "first-run" ? firstRunState() : scenario === "stale" ? staleEvidenceState() : configuredState();

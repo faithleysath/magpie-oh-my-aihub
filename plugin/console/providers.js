@@ -77,15 +77,17 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
     const hostname = provider?.fingerprint?.hostname || provider?.hostname || provider?.id || "伙伴服务";
     // The backend owns freshness; this guard only stops a page that has been
     // open past expiresAt from showing an old list as current.
-    const expiresAt = typeof evidence.expiresAt === "string" ? Date.parse(evidence.expiresAt) : null;
-    const expired = Number.isFinite(expiresAt) && expiresAt <= now;
-    return { hostname, evidence, expired, quota: quotaEvidence(provider) };
+    const rawExpiry = typeof evidence.expiresAt === "string" ? Date.parse(evidence.expiresAt) : NaN;
+    // A current record without a usable expiry cannot be proven fresh; stay
+    // conservative instead of trusting it forever.
+    const freshness = Number.isFinite(rawExpiry) ? (rawExpiry <= now ? "expired" : "fresh") : "unknown";
+    return { hostname, evidence, freshness, quota: quotaEvidence(provider) };
   });
   if (!rows.length) {
     return { state: "none", count: 0, providers: 0, entries: [], label: "尚未连接", detail: "还没有连接伙伴服务；在“发现”核对身份后申请模型。" };
   }
-  const usable = rows.filter((row) => row.evidence.status === "current" && !row.expired && row.evidence.callable === "yes" && typeof row.evidence.modelCount === "number" && Number.isFinite(row.evidence.modelCount) && row.evidence.modelCount >= 0);
-  const denied = rows.some((row) => row.evidence.callable === "no");
+  const usable = rows.filter((row) => row.evidence.status === "current" && row.freshness === "fresh" && row.evidence.callable === "yes" && typeof row.evidence.modelCount === "number" && Number.isFinite(row.evidence.modelCount) && row.evidence.modelCount >= 0);
+  const denied = rows.some((row) => row.evidence.callable === "no" && row.evidence.status !== "stale");
   if (usable.length) {
     const count = usable.reduce((total, row) => total + row.evidence.modelCount, 0);
     const spent = usable.some((row) => row.quota.state === "spent");
@@ -117,7 +119,7 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
     };
   }
   if (denied) {
-    const stale = rows.some((row) => row.evidence.status === "stale" || row.expired);
+    const stale = rows.some((row) => row.evidence.status === "stale" || row.freshness === "expired");
     return {
       state: "denied",
       count: 0,
@@ -129,7 +131,7 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
         : "最近一次读回被拒绝（401/撤销）；到「发现 → 我的连接」核验密钥与额度，不会用 0 代替。",
     };
   }
-  const stale = rows.some((row) => row.evidence.status === "stale" || row.expired);
+  const stale = rows.some((row) => row.evidence.status === "stale" || row.freshness === "expired");
   return {
     state: stale ? "stale" : "unknown",
     count: 0,
