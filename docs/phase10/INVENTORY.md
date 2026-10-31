@@ -16,13 +16,13 @@
 
 1. **PR13 已合并**：`#13 feat: make Oh My AI Hub a local browser-managed Magpie plugin`，merge commit 就是当前 main `8ce5c57`，合并时间 `2026-10-30T12:39:28Z`，head 分支 `feature/local-web-console`，CI（run `41056993038`）在该 SHA 上通过。**VERIFIED**
 2. Phase 9 的浏览器控制台、EasyTier no-TUN、原生 Remote Magpie、测试网钱包链路均已实现并被 PR13 带入 main；本次盘点确认代码、动作白名单、持久化文件和测试与报告一致。**VERIFIED**
-3. **本机安装的 Magpie 是 0.1.2289，不是已测试的 0.1.2171，也不是计费 pin 0.1.2038**。0.1.2171→0.1.2289 相差 165 个上游提交，其中 `access`、`budget`、`gateway-key` CLI、`lan` 网关有实质变化。Phase 10 的第一道门是重新确认/重钉版本，不能把 Phase 9 的 0.1.2171 结论直接套到本机。**VERIFIED（源码对比）/ UNKNOWN（0.1.2289 运行时）**
-4. 0.1.2289 新增 **DeepSeek 峰谷价**（`internal/catalog/peak.go`，峰时 ×2），`budget.priceOf` 与 `usage.Record.CostAt` 都按调用时间计价；插件的 `plugin/src/pricing.ts` 会丢弃 `peak` 字段且 `priceVersion` 不含它。结果可能是“原生成本按峰时翻倍、插件账本按静态价结算”，进而触发暂停或低估。**VERIFIED（源码）/ UNKNOWN（运行时）**
+3. **本轮目标版本已决定：本机 Magpie 0.1.2289 + EasyTier 2.6.4，使用隔离副本，不修改用户安装**。它不是已测试的 0.1.2171，也不是计费 pin 0.1.2038；0.1.2171→0.1.2289 相差 165 个上游提交，其中 `access`、`budget`、`gateway-key` CLI、`lan` 网关有实质变化。不得把 Phase 9 的 0.1.2171 结论直接套到本机；P0 负责最小重测。**VERIFIED（源码对比）/ UNKNOWN（0.1.2289 运行时）**
+4. 0.1.2289 新增 **DeepSeek 峰谷价**（`internal/catalog/peak.go`，峰时 ×2），`budget.priceOf` 与 `usage.Record.CostAt` 都按调用时间计价；插件的 `plugin/src/pricing.ts` 会丢弃 `peak` 字段且 `priceVersion` 不含它。结果可能是“原生成本按峰时翻倍、插件账本按静态价结算”，进而触发暂停或低估。**决定：本轮 P0-2 先 fail-closed 拒绝含 `peak` 的价格，后续单独实现峰谷价。VERIFIED（源码）/ UNKNOWN（运行时）**
 5. 本机 `bun run test` 当前 **740 pass / 5 fail**（52 个文件，5909 断言）。5 个失败都来自测试夹具固定时钟 `2026-10-30T12:00Z` 与真实墙钟（2026-10-31）不一致导致的“已过期”，不是产品逻辑回归；合并时 CI 是绿的。Phase 10 必须先把测试时钟注入修好，否则不能把 `bun run test` 当门禁。**REPRODUCED**
-6. 现有普通用户路径仍然偏长：提供方需 **共享开关 → 读取本机模型 → 选模型 → 保存 → 发布目录 → 出示身份**，使用方需 **开启发现 → 刷新 → 核对指纹 → 选模型 → 生成申请**，提供方再 **导入申请 → 选模型/填正额度 → 批准 → 交付授权**，使用方再 **导入授权 → 确认连接**。A 的“极简”必须在不删除这些安全确认的前提下压缩步骤。**VERIFIED（代码与报告）**
+6. 现有普通用户路径仍然偏长：提供方需 **共享开关 → 读取本机模型 → 选模型 → 保存 → 发布目录 → 出示身份**，使用方需 **开启发现 → 刷新 → 核对指纹 → 选模型 → 生成申请**，提供方再 **导入申请 → 选模型/填正额度 → 批准 → 交付授权**，使用方再 **导入授权 → 确认连接**。A 的三字段交互必须在不删除这些安全确认的前提下压缩配置步骤；B 的无文件 P2P 必须替换文件往返，而不是把文件做得更漂亮。**VERIFIED（代码与报告）**
 7. 主网在代码里是“注册但永远禁用”的记录：`RESERVED_MAINNETS`（56、8453）、`networkType: mainnet` 的多处硬拒绝、UI 的 `TEST_CHAINS = [97,84532]`、只允许 `testnetOnly` 资产与固定测试汇率。C 不是“打开一个开关”，而是一次跨注册表、观察器、账本、UI 与价格语义的改造。**VERIFIED**
 8. 真实资金、主网自动授信、自动充值仍是 **NO-GO**；主网代码路径即使实现，也只能在没有真实资产的环境验证，并保留人工确认与硬上限。**约束来自任务与 ARCHITECTURE**
-9. Phase 10 的 A/B/C/D 拆分是本次为盘点做的**建议映射**（A=极简 P2P，B=贴纸风重设计，C=主网钱包升级，D=版本重钉/证据门）。父任务只点名 A/B/C；若 D 的原意不同，只需调整 FLOWS 的边界表，不影响本盘点的代码事实。**PROPOSED**
+9. Phase 10 的字母严格按用户定义：**A=视觉/交互/三字段/端口/状态邻居；B=无文件 P2P/人工审批/端到端加密授权；C=钱包与主网准备；D=真实资金独立审查**。版本复测、测试时钟与最小证据不是 D，而是所有实现前的**P0 基础单元**。签名文件/邀请卡只允许作为 B 的紧急兼容回退，不能代替 B。**用户定义 / 本盘点按此执行**
 10. 本盘点未重新盲测任何 Phase 9 实验，也未接触真实资产。下面“已测/未知”全部引用既有证据范围，并单独标出本次新核实的内容。
 
 ## 1. 起点、分支与 PR13
@@ -44,7 +44,7 @@
 
 保护措施：创建分支前确认无未提交改动；未切换到别的项目目录；未改 `~/Projects` 下其他仓库；未运行会改写用户 Magpie 配置的实验。
 
-## 2. 版本基线与“重钉”风险（Phase 10 的第一道门）
+## 2. 版本基线与复测风险（P0，不是 D）
 
 | 组件 | 代码/文档中的 pin | 本机实际 | 状态 |
 | --- | --- | --- | --- |
@@ -147,7 +147,7 @@
 
 传输实现：`plugin/src/console-server.ts`；动作入口：`plugin/src/console-api.ts:CONSOLE_ACTIONS`；钱包动作：`plugin/src/console-wallet.ts:WALLET_CONSOLE_ACTIONS`。
 
-### 5.1 页面
+### 5.1 页面（现状 7 页；A 的目标是 5 页）
 
 | 页面（导航 id） | 主要展示 | 数据来源（轮询只做本地读） | 动作（动作名 → 适配器） |
 | --- | --- | --- | --- |
@@ -158,6 +158,8 @@
 | 测试网钱包 `wallet` | 网络/资产/收款/观察器、入账申请、签名/转账指引、异常审计 | `wallet.registry/view/intents/anomalies/receiving` | 21 个 `wallet-*` / `deposit-*` / `accounting-*`（见下） |
 | 用量与账单 `accounting` | 按消费者隔离的入账/消耗/余额/超支/窗口/原生额度/价格版本、消费分页、日志缺口、账单导入导出 | `status.consumers` + `wallet.view` | `accounting-refresh`、`accounting-history`、`wallet-statement`、`wallet-statement-preview`、`usage-gap-resolve`、`wallet-refresh`、`consumer-*` |
 | 网络与设置 `settings` | 4 步首次向导 / 编辑；能力、网络名、密码、节点、监听、高级端口 | `status.config` | `configure` |
+
+**A 的目标 IA（5 页）**：首页（状态/端口/邻居）、发现（目录 + 我的连接）、我的共享（分享 + 审批 + 已授权）、钱包（钱包 + 用量与账单）、网络（三字段 + 高级项）。旧的独立“我的连接”“用量与账单”“网络与设置”并入上述 5 页，不保留 7 页。
 | 会话/配对壳 `session-panel` | 打开票据、配对码、过期、重试、退出 | `/ui/session`、`/ui/pairing*` | 客户端 `session.js` |
 
 ### 5.2 动作总数与分组
@@ -272,17 +274,20 @@
 
 `plugin/src/walletstatement.ts`：未签名账单；摘要只证明内容一致，不证明付款/身份/最终性。
 
-### 8.4 主网改造面（C 的工作清单，不是已实现）
+### 8.4 C 的准备清单（钱包与主网准备，不是真实资金上线）
 
 要把 C 做成，至少同时改：
 
-1. `networks.ts`：主网记录从 reserved 变为可配置；`networkType` 门、`validate`/`requireEnabledNetwork`/`setNetworkEnabled`/`registerTestAsset` 的主网拒绝；主网最终性策略必须**实测**（BSC 56、Base 8453 与测试网不同）。
-2. `asset` 模型：不能再用 `issuerType: mock` + `testnetOnly` + 固定测试汇率；需要真实发行方/合约白名单、真实 USD 计价来源、价格版本与峰谷价。
-3. `watcher.ts`/`chainstore.ts`：主网 reorg/最终性、RPC 多源一致性、gas/转账确认；不能把测试网 15 确认直接照搬。
-4. `console-wallet.ts`：`wallet-network`/`wallet-scan`/`plan` 的 testnet 硬检查；`console/wallet.js` 的 `TEST_CHAINS`、文案与“测试网”提示。
-5. `wallet-workflows.ts`/`walletview.ts`：汇率、金额、转账指引、账单语义。
-6. **授信策略**：现路径 `creditFinalized()` 达到最终性后**自动** `applyDeposit` 抬升 Key cap。任务明确“主网自动授信”是 NO-GO，因此主网模式必须改为“最终性 → 待人工确认 → 明确动作 → 才入账/抬 cap”，并给出可审计的确认记录；这不只是 UI 改动。
-7. **价格锁定阻塞**（ARCHITECTURE Known blocker #1）与峰谷价：未解决前不得承载真实资金。
+1. `networks.ts`：56/8453 从 `RESERVED_MAINNETS` 变为**一等公民的只读网络**（同形展示、无 primary、用户收款网络可选但**默认空选**）；新增“可展示/可收款”与“可观察/可入账”分离的判定。主网记录不得进入 `ChainWatcher`、不得 `applyDeposit`、不得抬 Key cap。
+2. `asset` 模型：严格 `(chainId, contract)` 白名单 + 链上 decimals 校验；主网资产只用于展示/收款，不进入入账；拒绝符号推断与任意代币。测试资产仍按 `testnetOnly`；主网资产不能复用固定测试汇率。
+3. `watcher.ts`/`chainstore.ts`：主网 reorg/最终性/RPC 多源只作为**只读展示或未来准备**，不得成为入账路径；测试网/隔离模拟链沿用既有 finality→ledger→cap。
+4. `console-wallet.ts`：`wallet-network`/`wallet-scan`/`plan` 从硬编码 testnet 改为“注册表 + readOnly/creditable”判定；主网 `scan`/`intent`/`credit` 全部拒绝；`console/wallet.js` 的 `TEST_CHAINS = [97,84532]` 改为注册表驱动。
+5. `wallet-workflows.ts`/`walletview.ts`：测试网/模拟链的 P2P 付款/签名/账单语义；主网只读展示；不得生成主网转账指引或广播。
+6. **内置钱包**：隔离/模拟环境实现创建、恢复、锁定、敏感导出；明确标注“非生产级安全”，默认不承载真实资产；密钥存储/导出方案单独安全评审。
+7. **外置钱包/多扩展**：检测到多个浏览器钱包扩展时必须由用户明确选择一个；不自动挑、不自动切链；签名前核对链/合约/收款人/金额。
+8. **自动充值策略**：上限、暂停条件、审批条件可配置；只对测试网/模拟链执行；主网只展示策略，不发送、不入账、不授信。
+9. **主网红线**：56/8453 发送/授信（含人工逐笔确认）一律禁止；不新增任何主网入账或抬 cap 路径。C 不实现“人工逐笔授信”。
+10. **价格锁定阻塞**（ARCHITECTURE Known blocker #1）与峰谷价：未解决前不得承载真实资金；本轮 `peak` 先 fail-closed。
 
 ## 9. 账本（Ledger）
 
@@ -390,23 +395,28 @@
 | 7 | B 建 Remote Magpie；模型发现；chat streaming/responses/messages；原生 routing group | Phase 9 完成 Remote Magpie、模型发现、原生 Test models；Phase 3/4 有跨主机请求证据 | **部分满足**：本轮没有外部客户端经消费者网关的 streaming/responses/messages 新证据；routing group 未重测 |
 | 8 | 插件/host bridge 能力与限制 | Phase 8/9 的 CSP、options bridge、宿主重启、页面不能联网证据；`docs/validation/phase8-csp.md`、`phase9-security.md` | **满足（0.1.2120/0.1.2171 范围）**；0.1.2289 未重测，`host.js/pluginpage.go` 是否变化未证实 |
 
-**结论**：PR13 的既有验证**足以支撑“开始 Phase 10 的 A/B 代码工作”**（安全入口、ACL、Key 路径、控制台隔离都有可引用证据），但**不足以支撑把 C 直接推向主网真实资金**，也**不足以把 0.1.2289 当作已测版本**。Phase 10 需要 D 门做一次“目标版本重钉 + 峰谷价 + 401/429/限额/重启”的最小重测，而不是重跑全部 Phase 6。
+**结论**：PR13 的既有验证**足以支撑开始 Phase 10 的 A/B 实现**（安全入口、ACL、Key 路径、控制台隔离都有可引用证据），但**不足以支撑把 C 直接推向主网真实资金**，也**不足以把 0.1.2289 当作已测版本**。所有实现前需要 **P0 基础单元**做一次“0.1.2289 隔离副本 + 峰谷价 fail-closed + 测试时钟 + 401/429/限额/重启”的最小重测，而不是重跑全部 Phase 6；**D 是 C 之后的真实资金独立审查**，不是版本门。
 
 ## 15. Phase 10 开始条件（建议门）
 
-**可以立即开始（在 D 门并行/前置下）**
+**可以立即开始（P0 并行）**
 
-- A：控制台内的流程压缩、文案、状态聚合；不改 Service 的安全判定。
-- B：`plugin/console/style.css` + `index.html` + 渲染函数的视觉重做；不改动作名/传输/安全语义。
+- A：5 页 IA、三字段首次、端口/邻居状态、贴纸视觉；不改 Service 的安全判定。
+- B：控制通道/加密/请求 schema 的设计与单元测试；真实联调等 P0。
+- C：钱包/主网准备的抽象与隔离模拟；主网发送/授信仍不实现。
 
-**必须先满足才能开始**
+**必须先满足才能开始（P0）**
 
-- C 的任何“可入账主网资产”代码：目标 Magpie 版本已选定；峰谷价处理完成；主网最终性/资产/汇率方案有实测依据；人工授信门设计通过安全评审。
-- D：修复测试时钟；明确 0.1.2171 还是 0.1.2289；在目标版本上重跑最小 401/429/limit/top-up/restart 证据；记录 CI 与本机差异。
+- P0-1：0.1.2289 + EasyTier 2.6.4 隔离副本（不改用户安装）。
+- P0-2：含 `peak` 的价格先 fail-closed 拒绝；后续单独实现峰谷价。
+- P0-3：测试时钟；`bun run test` 全绿。
+- P0-4：目标版本最小 401/429/limit/top-up/restart 证据。
+- C 的主网只读边界、内置/外置钱包、敏感导出与自动充值策略通过安全评审；主网发送/授信不实现。
 
 **仍然 NO-GO（任何阶段）**
 
-- 真实资金、主网自动授信、自动充值、热钱包/私钥托管、C2C 法币、代币发行、中心化中转 API、暴露 Magpie 管理界面。
+- 真实资金、主网发送/授信（含人工逐笔）、C2C 法币、代币发行、中心化中转 API、暴露 Magpie 管理界面。
+- 隔离模拟钱包、内置钱包、敏感导出、自动充值策略是 C 的开发范围，**不能**一并禁止。
 - 用本地模拟 RPC/签名器冒充公链付款；用 Test models 结果冒充完整外部客户端 streaming 证据。
 - 把 0.1.2038/0.1.2171 的结论写成 0.1.2289 的结论。
 
@@ -437,8 +447,8 @@ python3 docs/validation/lab/phase9/harness.py cleanup --runtime /tmp/<lab>/runti
 
 ## 17. 需要主代理/用户确认的问题
 
-1. **D 的定义**：本盘点把 D 设为“版本重钉 + 证据门”。若父任务里 D 是别的（例如“文档/交付”），请指出，我只改 FLOWS 的边界表。
-2. **A 的邀请文件能否包含网络密码**：极简流程最有效的一步是把 `networkName/networkSecret/listenAddr/catalog` 放进一个“加入卡片”。这会把当前只在口头/聊天中传递的网络秘密落到文件；需要明确是否允许，以及是否要求二次确认、一次性、默认不勾选。
-3. **C 的“主网钱包升级”边界**：是“主网只读/可配置但人工确认入账”，还是“完整自动入账（与 NO-GO 冲突）”？本盘点按前者设计，后者不实现。
-4. **目标 Magpie 版本**：继续 0.1.2171（复用 Phase 9 证据）还是升级到本机 0.1.2289（需要重测峰谷价/CLI/Key 语义）？在答复前，所有 C 的实现都只做与版本无关的抽象。
+1. **A 的“三字段”具体是哪三个**：本盘点按“网络名称、网络密码、连接节点”记录，端口与邻居状态是展示/高级项。若用户指的是别的三字段，只需改 FLOWS 的 A 小节。
+2. **B 的加密授权通道**：允许新增一个覆盖网内、非 Magpie 管理、非 AI 网关的插件控制端口吗？还是必须复用现有目录/转发路径？这决定 B 的实现形态。
+3. **C 的主网准备边界**：56/8453 只读平权、默认空选、严格资产、内置/外置钱包、敏感导出、P2P 付款/签名、自动充值策略；主网发送/授信硬禁止，真实资金由 D 独立审查。
+4. **目标版本**：已决定 0.1.2289 + EasyTier 2.6.4（隔离副本）；0.1.2038/0.1.2171 只作历史证据。
 5. **是否允许在 Phase 10 修测试时钟**（`test/support/wallet-lab.ts` + 相关断言）：这是恢复本地门禁的最小改动，但会触碰既有测试。
