@@ -225,13 +225,18 @@ second approval layer.
   the same approval adopts it and a different approval is refused;
 - `reconcileApproval` is read-only. It returns binding evidence
   (consumerNodeId/requestHash/approvalId/generation/knownKeyId/observedAt/source).
-  `keyReady` needs a matching durable journal + active Provisioner key.
+  `keyReady` requires a matching durable journal + Magpie key-management readback:
+  `source:"magpie-key-readback"`, `checked:["keys","keyId","models","costLimit"]`,
+  `nativeKeyIds` containing the target, key name `ohmyaihub-<consumer>`, matching
+  models/cap, and evidence observed within 5 minutes. A pending journal plus a
+  matching native key is a keyReady (interrupted approval adoption).
   `noSideEffect` is allowed only when a durable pending journal exists, the local
-  Provisioner record is absent, **and** Magpie's key-management readback
-  (`keyByName` for the deterministic plugin name) shows no key; a missing journal,
-  a key-management readback error, or a named key without a local record is
-  `unknown`, never `noSideEffect`. This is Magpie management state, not a remote
-  gateway 401 and not the AI gateway;
+  Provisioner record is absent, **and** the Magpie key list (`keyList`/`keyByName`,
+  not just `provisioner.find`) has no key with the deterministic plugin name; source
+  is `provisioner-journal:magpie-readback`, checked `["journal","keys"]`.
+  A missing journal, a key-management readback error, a named key without a local
+  record, or stale evidence is `unknown`, never `noSideEffect`. This is Magpie key
+  management state, not a remote gateway 401 and not the AI gateway;
 - enforced revoke: remove success, rotation fallback, a rotation whose old secret
   is still accepted is not claimed, transport/5xx/bad-JSON readback is unknown, a
   missing local key row with a working secret is not confirmed, wrong key/generation
