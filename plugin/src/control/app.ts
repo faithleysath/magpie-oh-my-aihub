@@ -454,6 +454,23 @@ export class ControlApp {
     return target;
   }
 
+  /**
+   * Ensure a live control session to a peer exists. C payment outbound uses the
+   * same authenticated session path as a request: a queued frame must not sit in
+   * the outbox merely because the last poll session closed.
+   */
+  async ensureSession(nodeId: string): Promise<void> {
+    const peer = this.service.catalogStatus().peers.find((p) => p.nodeId === nodeId);
+    if (!peer?.mappedCidr) throw new Error(`no signed catalogue entry for ${nodeId}`);
+    let target: P2pHelloTarget | null = null;
+    try { target = this.targetOf(nodeId); } catch { /* no presence endpoint yet */ }
+    if (target && this.node.hasLiveSession({ nodeId: target.nodeId, fingerprint: target.fingerprint })) return;
+    await this.discover(nodeId);
+    target = this.targetOf(nodeId);
+    if (this.node.hasLiveSession({ nodeId: target.nodeId, fingerprint: target.fingerprint })) return;
+    await this.node.openSession(target);
+  }
+
   async request(input: ControlActionInput): Promise<{ requestId: string; state: "pending" }> {
     const nodeId = text(input.nodeId, "nodeId", 64);
     const models = modelsOf(input.models);

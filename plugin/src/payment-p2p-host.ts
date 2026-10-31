@@ -181,6 +181,10 @@ function createNodePaymentPort(app: ControlApp): P2pPaymentMessagePort & { stop(
   return {
     onPaymentMessage(next) { handler = next; },
     async sendPaymentMessage(to, input) {
+      // Open the authenticated control session first; the B outbox only sends
+      // due frames on a live session, so a closed poll session must not strand
+      // a payment request/status.
+      await app.ensureSession(to.nodeId);
       return app.node.sendPaymentMessage(to, input);
     },
     stop() { /* the node owns the hook lifetime */ },
@@ -301,6 +305,7 @@ export class PaymentP2pHost {
     setPaymentObligationResolver(service, consumer.obligationResolver() as TrustedObligationResolver);
     coordinator.start();
     host.startObservationTick();
+    logger.info(`payment-p2p host started for node ${node.nodeId} (provider assets ${assets.length}, networks ${allowedNetworks.join(",") || "none"})`);
     return host;
   }
 
@@ -508,6 +513,7 @@ export class PaymentP2pHost {
     this.ticker = null;
     this.port.stop();
     this.store.close();
+    logger.info("payment-p2p host stopped");
   }
 }
 

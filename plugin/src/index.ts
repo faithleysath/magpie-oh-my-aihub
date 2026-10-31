@@ -82,6 +82,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     const isStopped = () => stopped || parentGone();
     const ensureRunning = () => { if (isStopped()) throw new Error("plugin host stopped before startup completed"); };
     const shutdown = () => {
+      logger.info("host shutdown requested (owned cleanup starting)");
       stopped = true;
       launcher?.stop(); consoleServer?.stop(); api?.stop();
       if (service) disposeWalletLocalService(service);
@@ -114,12 +115,27 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
       if (failure) throw failure;
     };
     const onExit = () => { try { shutdown(); } finally { lock?.release(); } };
-    const onSignal = () => { stopped = true; void stopHost().then(() => process.exit(0), () => process.exit(1)); };
+    const onSignal = (signal: NodeJS.Signals) => {
+      logger.info(`host received ${signal}; stopping`);
+      stopped = true;
+      void stopHost().then(() => process.exit(0), () => process.exit(1));
+    };
+    process.on("uncaughtException", (error) => {
+      logger.error(`host uncaught exception: ${String((error as Error)?.stack ?? error).slice(0, 2000)}`);
+    });
+    process.on("unhandledRejection", (reason) => {
+      logger.error(`host unhandled rejection: ${String((reason as Error)?.stack ?? reason).slice(0, 2000)}`);
+    });
+    process.on("beforeExit", (code) => logger.info(`host beforeExit ${code}`));
     // Install before ownership wait, Service construction, or any async startup.
     process.on("exit", onExit);
-    process.on("SIGTERM", onSignal); process.on("SIGINT", onSignal);
+    process.on("SIGTERM", () => onSignal("SIGTERM")); process.on("SIGINT", () => onSignal("SIGINT"));
     const orphanWatch = setInterval(() => {
-      if (parentGone()) { stopped = true; void stopHost().then(() => process.exit(0), () => process.exit(1)); }
+      if (parentGone()) {
+        logger.info("host parent is gone; stopping");
+        stopped = true;
+        void stopHost().then(() => process.exit(0), () => process.exit(1));
+      }
     }, 500);
     orphanWatch.unref?.();
     failedBootCleanup = async () => {

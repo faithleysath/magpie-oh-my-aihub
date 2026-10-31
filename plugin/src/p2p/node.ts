@@ -646,6 +646,11 @@ export class P2pNode {
     return results;
   }
 
+  /** Whether a live, unexpired session to this peer is already open. */
+  hasLiveSession(peer: { nodeId: string; fingerprint: string }): boolean {
+    return this.newestSessionFor(peer.nodeId, peer.fingerprint) !== null;
+  }
+
   // --- inbound frames --------------------------------------------------------
 
   /**
