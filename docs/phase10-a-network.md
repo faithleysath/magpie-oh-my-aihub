@@ -191,6 +191,20 @@ ERROR stopping easytier-core: refusing to serve: ...
 
 解释：新核心没抢到 RPC，`waitForRpc` 连到了**别人的** 17888 并读到对方配置；ACL 校验发现网络名不符且非分享节点出现 proxy/forward，于是 fail-closed 停核心。**REPRODUCED**。这条证据支持两点：不要 probe-close-bind 后盲目使用端口；启动前必须迁移/启动后必须验证“是我们的子进程持有”。本分支的 `ensureConfiguredPorts()` + `verifyOwnedPort()` 就是对此的实现（Service 级迁移在注入 binder 的测试中复现，见 §5）。
 
+### 4.3b 受控的真实“外部核心占用 RPC”负向实验（修正后）
+
+环境里恰好还有另一个无关的 Magpie preview EasyTier 核心占用 `127.0.0.1:17888`（pid 39806，非本任务进程，只读观察，不触碰）。用修正后的 supervisor 以 `rpcPort=17888` 启动一个自己的真实 `easytier-core`（不同随机测试网络），并用一个“计数包装”的 `easytier-cli` 记录任何 RPC 读取：
+
+```
+run.log: ERROR easytier-core exited unexpectedly (code 1)
+          ERROR easytier-core exited before its RPC answered on 127.0.0.1:17888
+result.json: {"error":"easytier-core exited before its RPC answered on 127.0.0.1:17888","running":false}
+cli.calls: 文件不存在（0 次调用）
+foreign pid 39806: 实验前后均存活、命令行未变
+```
+
+结论：自己的核心抢占失败即退出；`waitForRpc` **没有**向外部核心发出任何 CLI 读取，也没有进入崩溃重启循环，直接以明确错误失败。原始（脱敏）文件保留在 `/tmp/oma-phase10-evidence/foreign/{run.log,result.json}`；`cli.calls` 不存在即零调用。**REPRODUCED**
+
 ### 4.4 审查修正后的真实复测（OS owner 必须先于 CLI）
 
 在收到主审“verifyOwnedPort 仅 reported+bind 不可用就 stable、waitForRpc 先 CLI 后校验”的阻断后，本分支新增修正提交（不改写历史，原审 head 保留）：`waitForRpc()` 在**任何** CLI 调用前要求 OS 把 RPC 监听 socket 归属到刚 spawn 的 PID，并要求返回配置的 `instance_id`/`network_name` 一致；`refresh()` 每次复核 RPC/SOCKS5 的监听 PID；Service 的 `forwards-owned` 检查同样按 PID；OS 查询不可用即 fail-closed。

@@ -34,6 +34,7 @@ let dir: string;
 let bins: { core: string; cli: string; verified: boolean };
 let pidFile: string;
 let callsFile: string;
+let spawnsFile: string;
 let nodeJson: string;
 const supervisors: EasytierSupervisor[] = [];
 const extra: { pid: number }[] = [];
@@ -49,7 +50,7 @@ beforeEach(() => {
   writeFileSync(
     core,
     '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "easytier-core 2.6.4-fake"; exit 0; fi\n' +
-      'echo $$ > "$CORE_PID_FILE"\ntrap "exit 0" TERM INT\nwhile :; do sleep 0.1; done\n',
+      'echo $$ > "$CORE_PID_FILE"\necho spawn >> "$CORE_SPAWNS"\ntrap "exit 0" TERM INT\nwhile :; do sleep 0.1; done\n',
   );
   writeFileSync(cli, '#!/bin/sh\necho call >> "$CLI_CALLS"\ncat "$NODE_JSON"\n');
   chmodSync(core, 0o755);
@@ -57,15 +58,18 @@ beforeEach(() => {
   bins = { core, cli, verified: true };
   pidFile = join(dir, "core.pid");
   callsFile = join(dir, "cli.calls");
+  spawnsFile = join(dir, "core.spawns");
   nodeJson = join(dir, "node.json");
   process.env.CORE_PID_FILE = pidFile;
   process.env.CLI_CALLS = callsFile;
+  process.env.CORE_SPAWNS = spawnsFile;
   process.env.NODE_JSON = nodeJson;
 });
 
 afterEach(async () => {
   delete process.env.CORE_PID_FILE;
   delete process.env.CLI_CALLS;
+  delete process.env.CORE_SPAWNS;
   delete process.env.NODE_JSON;
   for (const sup of supervisors.splice(0)) await sup.stop().catch(() => {});
   for (const p of extra.splice(0)) {
@@ -90,6 +94,11 @@ function ownerPids(read: () => number[]): NonNullable<SupervisorOptions["probe"]
       },
     },
   };
+}
+
+function coreSpawns(): number {
+  if (!existsSync(spawnsFile)) return 0;
+  return readFileSync(spawnsFile, "utf8").split("\n").filter(Boolean).length;
 }
 
 function cliCalls(): number {
@@ -123,7 +132,14 @@ describe("RPC portal ownership", () => {
     await expect(sup.start(cfg)).rejects.toThrow(/RPC/);
     expect(cliCalls()).toBe(0);
     expect(sup.snapshot().running).toBe(false);
-    expect(sup.snapshot().lastError).toMatch(/RPC/);
+    // The live child never owns the port, so this is the bounded timeout case.
+    expect(sup.snapshot().lastError).toMatch(/did not answer its RPC/);
+    // A failed first start must not enter the crash-restart loop into the same
+    // foreign port while the error is still being reported.
+    await new Promise((r) => setTimeout(r, 1300));
+    expect(coreSpawns()).toBe(1);
+    expect(sup.snapshot().restarts).toBe(0);
+    expect(cliCalls()).toBe(0);
   });
 
   test("a live child that does not own the port is refused after a bounded wait", async () => {
