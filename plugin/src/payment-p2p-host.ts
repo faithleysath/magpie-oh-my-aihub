@@ -172,7 +172,13 @@ function loadAutoPolicy(path: string): PaymentAutoPolicy {
 function createNodePaymentPort(app: ControlApp): P2pPaymentMessagePort & { stop(): void } {
   let handler: ((ctx: P2pAuthenticatedPaymentContext) => Promise<{ code: string; detail?: string | null }>) | null = null;
   const hook = {
-    quoteHashFor: () => app.service.catalogStatus().quote?.contentHash ?? null,
+    // The authenticated context's quote hash belongs to the SENDER's
+    // catalogue (the payer validates the provider's terms against the
+    // provider's own quote). Returning the local node's quote made a payer
+    // that also shares a model compare the provider's terms with its own
+    // catalogue and reject every payment.
+    quoteHashFor: ({ nodeId }: { nodeId: string }) =>
+      app.service.catalogStatus().peers.find((peer) => peer.nodeId === nodeId)?.quoteHash ?? null,
     async onPaymentMessage(ctx: unknown) {
       if (!handler) return { code: "role", detail: "no-payment-handler" };
       return handler(ctx as P2pAuthenticatedPaymentContext);

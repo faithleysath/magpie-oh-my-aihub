@@ -1,4 +1,4 @@
-import { redact } from "./log.ts";
+import { logger, redact } from "./log.ts";
 import { ConsoleInputError, type ConsoleActionContext } from "./console-server.ts";
 import { PAYMENT_LOCAL_ACTIONS, paymentLocalAction } from "./payment-local-service.ts";
 import { configureInput } from "./server.ts";
@@ -124,6 +124,10 @@ export async function consoleAction(
           if (/already has an active approval|revoke it before/i.test(message)) throw new ConsoleInputError(message, "active_approval", 409);
           if (/tofu|untrusted|accept|trust/i.test(message)) throw new ConsoleInputError(message, "tofu_required", 403);
           if (/must|choose|required|invalid|list|amount|cap/i.test(message)) throw new ConsoleInputError(message, "invalid_input", 400);
+          // A refusal that matches none of the known classes still must be
+          // visible to the operator's log; a generic UI message alone cannot be
+          // diagnosed and invites a blind retry.
+          logger.warn(`p2p action ${name} failed: ${message.slice(0, 300)}`);
           throw error;
         }
       };

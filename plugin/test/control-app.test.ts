@@ -97,6 +97,23 @@ test("the signed endpoint host follows the mapped export, not a stale bind host"
   await app!.stop();
 });
 
+test("enabling sharing after start lets the live listener accept the mapped Host", async () => {
+  // Regression: the listener used a startup snapshot of the allowed Host list,
+  // so a provider that shared models after the control app started rejected the
+  // consumer's mapped-Host request with 403 until the whole host restarted.
+  const { service } = fakeService();
+  const cfg = (service.config as unknown as () => Record<string, unknown>)();
+  const app = await startControlApp(service, { host: "127.0.0.1", port: 35631 });
+  apps.push(app!);
+  const before = await fetch(`http://127.0.0.1:${app!.port}/p2p/v1/health`, { headers: { host: `10.66.7.8:${app!.port}` } });
+  expect(before.status).toBe(403);
+  Object.assign(cfg, { sharingEnabled: true, mappedCidr: "10.66.7.8/32", proxyCidr: "192.0.2.10/32" });
+  await app!.sync();
+  const after = await fetch(`http://127.0.0.1:${app!.port}/p2p/v1/health`, { headers: { host: `10.66.7.8:${app!.port}` } });
+  expect(after.status).toBe(200);
+  await app!.stop();
+});
+
 function neighbourPresence(identity: CatalogIdentity, over: Partial<PresenceBody> = {}): PresenceBody {
   return {
     schema: PRESENCE_SCHEMA,

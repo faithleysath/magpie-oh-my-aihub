@@ -230,12 +230,16 @@ export class ControlApp {
       now: app.now,
     });
     (app as { node: P2pNode }).node = node;
-    const allowedHosts = app.allowedHostsFor(cfg, host, port);
+    // The allowed Host values must follow a later topology change: a node that
+    // starts unshared is only bound to its own LAN host, and enabling sharing
+    // creates the mapped export afterwards. Passing a snapshot here made the
+    // live listener keep rejecting the mapped Host with 403 until a restart.
+    app.allowedHosts = app.allowedHostsFor(cfg, host, port);
     const server = startControlServer({
       host,
       port,
       listener: host === "127.0.0.1" || host === "localhost" || host === "::1" ? "loopback-only" : "lan-reachable",
-      allowedHosts,
+      allowedHosts: () => app.allowedHosts,
       node: {
         acceptHello: (hello) => node.acceptHello(hello).then((r) => r.serverHello),
         handleFrame: (sessionId, frame) => node.handleFrame(sessionId, frame),

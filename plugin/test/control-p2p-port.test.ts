@@ -283,6 +283,65 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(lookupControlApproval(APPROVAL, approvalFile)?.state).toBe("approved");
   });
 
+  test("an approval whose native key was revoked elsewhere is converged, never replayed", async () => {
+    // The console also exposes the legacy operator revoke. That path removes
+    // the Magpie key but does not know the P2P approval id. The persisted
+    // approval row must not keep pretending the dead key is an active
+    // authorization, and a retry must not return that approval's materials.
+    const { svc, magpie } = realService();
+    const approvalFile = join(process.cwd(), "control-approvals.json");
+    const port = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    const consumer = { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) };
+    const first = await port.approve({
+      approvalId: APPROVAL,
+      generation: 1,
+      requestHash: HASH,
+      request: requestDocument() as any,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    await svc.provisioner.revokeEnforced("alice", first.keyId);
+    expect(svc.provisioner.find("alice")!.revokedAt).not.toBeNull();
+    const versionsBefore = JSON.parse(readFileSync(approvalFile, "utf8")).approvals.length;
+    await expect(port.approve({
+      approvalId: APPROVAL,
+      generation: 1,
+      requestHash: HASH,
+      request: requestDocument() as any,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    })).rejects.toThrow(/native key is gone/);
+    // Revocation is terminal for a consumer id (ledger account revoked): a new
+    // approval of the same consumer is refused explicitly, not as an unknown
+    // outcome, and creates no second key.
+    await expect(port.approve({
+      approvalId: APPROVAL2,
+      generation: 2,
+      requestHash: "9".repeat(64),
+      request: requestDocument() as any,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: "new generation after an external revoke",
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    })).rejects.toThrow(/already has a different authorization|was revoked/);
+    expect(magpie.keys.size).toBe(0); // the revoked key stays gone; no second key was created
+    const versionsAfter = JSON.parse(readFileSync(approvalFile, "utf8")).approvals;
+    // The refused attempt is retained as a non-approved record (never a second
+    // live key), and the externally-revoked approval is converged to revoked.
+    expect(versionsAfter.find((a: any) => a.approvalId === APPROVAL).state).toBe("revoked");
+    const attempted = versionsAfter.find((a: any) => a.approvalId === APPROVAL2);
+    expect(attempted.state).not.toBe("approved");
+    expect(attempted.keyId).toBeNull();
+    expect(versionsAfter.length).toBeGreaterThanOrEqual(versionsBefore);
+  });
+
   test("reconcileApproval is read-only and recovers only a proven keyReady", async () => {
     const { svc, magpie } = realService();
     const approvalFile = join(process.cwd(), "control-approvals.json");
