@@ -1,6 +1,6 @@
 # Phase 10 A/B 修改前证据交付包
 
-本包由 Console 审查代理（6a326f2b）生成，供 `docs/phase10/evidence/` 收录；**不含应用代码改动**。文中 `$MAIN_WORKTREE`、`<lab-root>` 是已脱敏的实验路径占位符。
+本目录由 Phase 10 审查/验证代理提供材料、文档代理统一收录；**不含应用代码改动**。文中 `$MAIN_WORKTREE`、`<lab-root>`、`<integration-worktree>` 是已脱敏的实验路径占位符。
 
 ## 目录
 
@@ -10,7 +10,13 @@ docs/phase10/evidence/
 ├── 2026-10-31-current-console-before.md     ← 当前 Console 修改前 UI 审查（事实版）
 ├── 2026-10-31-reference-review.md           ← 参考仓库设计体系研究（事实版）
 ├── 2026-10-31-external-wallet-test-plan.md  ← 外置钱包真实扩展验收计划（附录；BLOCKED/UNKNOWN）
-└── screenshots/                             ← 16 张实拍 + SHA256SUMS
+├── 2026-10-31-integration-cc0d740-validation.md      ← cc0 组合软件验证（845/8→853/0；非产品 GO）
+├── 2026-10-31-integration-cc0d740-host.md             ← cc0 真实宿主加载/首配/会话证据（非 Visual GO）
+├── 2026-10-31-integration-cc0d740-host-env.txt        ← PID/端口/argv 脱敏摘录
+├── 2026-10-31-integration-cc0d740-console.sha256     ← cc0 Console 5 文件 hash
+├── 2026-10-31-integration-cc0d740-host.SHA256SUMS    ← 上述文件 + 7 图 hash
+├── screenshots/                             ← 16 张修改前实拍 + SHA256SUMS
+└── screenshots/cc0d740/                     ← cc0 真实宿主 7 张（hash 见 host.SHA256SUMS）
 ```
 
 两份主报告均已删除自拟产品方案；目标信息架构、页面划分与流程一律指向主任务与 `docs/phase10/FLOWS.md`。
@@ -72,5 +78,17 @@ docs/phase10/evidence/
 - `docs/phase10/evidence/2026-10-31-reference-review.md`
 - `docs/phase10/evidence/2026-10-31-external-wallet-test-plan.md`（外置钱包测试计划；BLOCKED/UNKNOWN，不是验收）
 - `docs/phase10/evidence/screenshots/`（16 张 PNG + `SHA256SUMS`）
+- `docs/phase10/evidence/2026-10-31-integration-cc0d740-validation.md`
+- `docs/phase10/evidence/2026-10-31-integration-cc0d740-host.md`
+- `docs/phase10/evidence/2026-10-31-integration-cc0d740-host-env.txt`
+- `docs/phase10/evidence/2026-10-31-integration-cc0d740-console.sha256`
+- `docs/phase10/evidence/2026-10-31-integration-cc0d740-host.SHA256SUMS`
+- `docs/phase10/evidence/screenshots/cc0d740/`（7 张 PNG）
+
+## cc0 与 next 证据边界
+
+- **cc0 `cc0d740`**：组合软件验证 845 pass/8 fail（全部 `EADDRNOTAVAIL`，`TIME_WAIT` 16 244/16 384）→ 恢复后 853/0；frozen install/typecheck/boot/secret PASS。真实宿主以**本地目录**安装，5 个 UI 文件 hash、ownerPid/status.pid/listener/argv 一致；三字段/主题/焦点/390/logout PASS；**5 页业务/join/share/payment UNKNOWN**。tracked 源 clean，但宿主会写 ignored 运行期文件，不能称“源完全未写”。**非产品 GO**。
+- **next `87a72c6`**：只接 #28 安全工具 delta；gitleaks 12 selftest、pack --selftest、组合 worktree scan 0。**与 cc0 的 116 raw findings 分开记**，不混称。
+- **#24 Windows 子集**与 **#31 dynamic ports** 是两项独立证据；报告列表不得写成“Windows #31”。
 
 收录时保留“实验临时标识非密钥”的说明，并注明完整原始截图与 innerText 未入库。

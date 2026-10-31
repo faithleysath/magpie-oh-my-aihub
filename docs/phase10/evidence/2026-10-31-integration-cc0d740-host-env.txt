@@ -1,0 +1,11 @@
+# Integration cc0d740 isolated host — cleanup evidence (redacted)
+# No credential of any kind is recorded here.
+magpie_pid=75721
+host_pid_first=78241
+host_pid_after_restart=88922
+ports=39051,57261
+<user> 75721 ... TCP 127.0.0.1:39051 (LISTEN)   magpie
+<user> 88922 ... TCP 127.0.0.1:57261 (LISTEN)   magpie-bun (host)
+75721 1 <isolated-app>/Contents/MacOS/magpie web --addr 127.0.0.1:39051 --no-open
+after host restart: ownerPid=88922 status.pid=88922 listener=88922 port=57261
+cleanup: kill 75721; 39051=0 listeners; 57261=0 listeners; no oma-int-cc0d740 process

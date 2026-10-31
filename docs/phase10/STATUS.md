@@ -17,6 +17,8 @@
 | 开发/文档分支 | `feature/phase10-simplified-p2p-ux` @ docs 最新提交（= PR14 head；仅 docs） |
 | 集成分支 | `feature/phase10-integration` @ `cc0d740`（worktree `/tmp/oma-phase10-integration`；含批准 15/29/17/16/18/27/25/30/24/31） |
 | 冻结证据 HEAD | `cc0d740876e5a667f1789e1ae3b4966ecf8cef9f`：f63b 独立临时组合测试 + `6a326f2b` 干净真实 Magpie 仅会话/5页/布局空态；**禁止 join/share/payment；22 未批**；本轮不接新业务 |
+| cc0 组合验证 | 845 pass/8 fail（EADDRNOTAVAIL，TIME_WAIT 16244/16384）→ 恢复后 853/0；frozen install/typecheck/boot/secret PASS；**非产品 GO**；报告 `docs/phase10/evidence/2026-10-31-integration-cc0d740-validation.md` |
+| cc0 真实宿主 | 本地目录直链安装（非 GitHub 升级包）；5 UI 文件 hash + ownerPid/status.pid/listener/argv 一致；三字段/主题/焦点/390/logout PASS；**5 页/join/share/payment UNKNOWN**；**非 Visual GO** |
 | next integration（28） | `feature/phase10-integration-next` @ `87a72c6`（worktree `/tmp/oma-phase10-integration-next`；从 cc0 开发，只接 28 自身 delta；**与 cc0 证据分开**） |
 | 盘点工作树 | `/Users/laysath/Projects/magpie-oh-my-aihub-import` |
 | 纯 main 只读工作树 | `/tmp/oma-phase10-main-8ce5c57`（detached @ `8ce5c57`） |
@@ -245,6 +247,9 @@
 | 2026-10-31 | A32/33/34 独立审重派 | 先前调用失败，已重派 | 独立审 | 待结果；不据此通过 |
 | 2026-10-31 | 28 安全工具集成 | 源 `10ca2e7` → next `87a72c6`；gitleaks 12 selftest PASS；pack --selftest PASS；组合 worktree scan 0；typecheck；synthetic fixture 精确指纹 | PR #28 / integration-next | 工具集成；非产品 GO；与 cc0 证据分开 |
 | 2026-10-31 | PR31 测试集成 | 源 `ac7bfd0`+`659d8b3` base approved17 → `cc0d740`；service 41/0；CLI 35/0；typecheck；secret-scan；clean | PR #31 / integration | 非产品 GO；动态端口意图 |
+| 2026-10-31 | cc0 组合软件验证 | 报告 sha256 `aaf8a1dbe44af1dc3f04edbf9a8e17501d2686b66b643a90affce8cc58d6c5ba`；845/8→853/0；EADDRNOTAVAIL/TIME_WAIT 归因；frozen/typecheck/boot/secret PASS | `docs/phase10/evidence/2026-10-31-integration-cc0d740-validation.md` | 非产品 GO；未起 Magpie/ET |
+| 2026-10-31 | cc0 真实宿主证据 | 报告 sha256 `58271a2fd365e132b05624bf21486e9b0eeaf904e8e16b2f23edd2889c82feb0`；本地目录安装；5 UI hash/PID/argv；三字段/主题/焦点/390/logout PASS；5 页/join/share/payment UNKNOWN | `docs/phase10/evidence/2026-10-31-integration-cc0d740-host.md` + `host-env.txt` + `console.sha256` + `screenshots/cc0d740/` + `host.SHA256SUMS` | 非 Visual GO；非 GitHub 升级包验收；tracked clean 但 ignored 运行期文件由宿主写入 |
+| 2026-10-31 | 证据包统计 | 原始 11 files（README/report/ENV/SHA/7 PNG）；仓库只收 md/env/hash/7 PNG，不含 tar/logs/HOME | `docs/phase10/evidence/` | 按真实 find 清单，不用错误“10 个” |
 | 2026-10-31 | C-wallet 历史 1a8a | 41 模块测试；未 UI/真实资金 | PR #23 | 历史；当前 9393b12c |
 | 2026-10-31 | P0 报告命名 | P0-clock 属 P0，不沿用 D2 名称 | 主审说明 | VERIFIED |
 | 2026-10-31 | 改动前 UI 审查证据 | 3 份事实报告 + 16 张截图 + SHA256SUMS 已入库；无 HOME/app/凭据；0.1.2289 空网络 | `docs/phase10/evidence/` | REPRODUCED / 已审查；非 Visual UX GO |
