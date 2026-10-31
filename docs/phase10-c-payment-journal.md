@@ -201,7 +201,7 @@ payloadHash = sha256("..../payload/v1\n" + canonical({
 
 安全：
 
-- 文件 0600、目录 0700；`PRAGMA journal_mode=WAL`、`synchronous=FULL`、`foreign_keys=ON`、`busy_timeout=5000`；`PRAGMA user_version=1`。
+- 数据库文件与其 `-wal`/`-shm` sidecar 都是 0600（sidecar 含同样的付款元数据，不能只 chmod 主文件）；目录 0700；`PRAGMA journal_mode=WAL`、`synchronous=FULL`、`foreign_keys=ON`、`busy_timeout=5000`；`PRAGMA user_version=1`。
 - **不存** seed、私钥、签名、raw tx、calldata 本体；输入的额外字段直接拒绝（防夹带 `signature` 等）。
 - reason 会脱敏/截断为 `[A-Za-z0-9._:-]{1,64}`；release evidence 的 reference 只存 SHA-256。
 - 本模块没有日志输出；不写 console/snapshot。
@@ -248,9 +248,9 @@ bun test ./test/payment-operations.test.ts
 结果（本次代码 `42589a1` + `450936d`）：
 
 ```text
-39 pass
+40 pass
 0 fail
-254 expect() calls
+260 expect() calls
 Ran 38 tests across 1 file. [~1.7s]
 ```
 
@@ -262,7 +262,7 @@ Ran 38 tests across 1 file. [~1.7s]
 - 发送门：错误 reservationId、篡改 amount/recipient/chain/asset/contract/intentHash、错误 calldata、过期、旧 provider identity/generation、撤销、asset disabled/unregistered、closed journal、CAS 丢失 → 全部在发送前失败。
 - 崩溃恢复：mark 后关闭 journal 再重开 → `broadcasting`，新 session 不能 reserve 成 `reserved`，不能再次 mark；reserved 不会无证据重新 claim；owner-restarted 释放要求精确旧 reservation + previous owner。
 - unknown：timeout/500/invalid hash 终态；`recordHash` 可把 unknown 升为 broadcast（recoveredFromUnknown=true）；unknown 不覆盖已有哈希；4001/USER_REJECTED 同类，先 unknown，必须带证据 release 才能 attempt+1；超时/500/WALLET_ERROR 不能走 rejection release。
-- 存储：WAL/FULL/0600/0700；DB 中不含 calldata、签名字段或原文 reference；事件表无敏感数据且 detail ≤512。
+- 存储：WAL/FULL；DB、`-wal`、`-shm` 都 0600，目录 0700；DB 中不含 calldata、签名字段或原文 reference；事件表无敏感数据且 detail ≤512。
 - 恢复查询：`query/lookup/pending` 读回 `unknown` + 已知 hash；不同 tuple 返回 null；`reserved`/`broadcasting`/`unknown` 都不会因为查询变成可发送。
 
 ### 10.2 与 approved external 模块的集成探针（REPRODUCED，未提交）
@@ -297,7 +297,7 @@ cd plugin
 bun test ./test ./console ../docs/validation/lab/phase9/wallet-fixture
 ```
 
-结果：**794 pass / 0 fail / 6242 expect / 54 files / 29.26s**（macOS arm64，Bun 1.4.3，SQLite 3.50.6；包含本模块 39 个定向测试）。一次中间重跑遇到过既有 `magpie.test.ts > detectVersion()` 的 3 秒进程超时（单独重跑 4/4 通过，与本模块无关）；最终在空闲机器上重跑为 794/0。CI run `41162966689` @ `450936ddffd17d23477321a9dd94666af9ddd7a6`：**linux pass 41s，macOS pass 38s**（两 job 都跑 typecheck + 全量 `bun run test` + boot-check + secret-scan）；后续 docs-only head 不改变代码。
+上次本机全量（新增 `-wal`/`-shm` 0600 测试之前）：**794 pass / 0 fail / 6242 expect / 54 files / 29.26s**（macOS arm64，Bun 1.4.3，SQLite 3.50.6）。按主审要求不重复本机全量，新 head 由 CI 跑全量。此前 CI run `41163057126` @ `450936d`：**linux pass 38s，macOS pass 48s**；新的 sidecar 权限测试会让计数 +1，以新 head CI 为准。
 
 > 全量通过只说明本机 hermetic 测试通过，不等于真实 Magpie/EasyTier、真实扩展或真实链验收。
 

@@ -946,10 +946,23 @@ export class PaymentOperationJournal {
     }
     this.db.exec(SCHEMA);
     if (version < PAYMENT_OPERATION_DB_VERSION) this.db.exec(`PRAGMA user_version = ${PAYMENT_OPERATION_DB_VERSION};`);
-    try {
-      chmodSync(path, 0o600);
-    } catch {
-      /* a filesystem without POSIX modes: the directory is still 0700 */
+    this.secureFiles();
+  }
+
+  /**
+   * SQLite's WAL and SHM sidecars contain pages of the same payment metadata.
+   * They are created with the process umask, so a normal 022 umask would leave
+   * them 0644 even though the main database is 0600. Keep all three private.
+   * Only the files are chmodded: the caller may have chosen a shared directory,
+   * and changing that directory's mode is not this module's business.
+   */
+  private secureFiles(): void {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try {
+        chmodSync(`${this.path}${suffix}`, 0o600);
+      } catch {
+        /* the sidecar does not exist yet, or the filesystem has no POSIX modes */
+      }
     }
   }
 
@@ -1131,6 +1144,8 @@ export class PaymentOperationJournal {
     try {
       const result = fn();
       this.db.exec("COMMIT;");
+      // A first write may have just created the WAL/SHM sidecars.
+      this.secureFiles();
       return result;
     } catch (error) {
       try {
@@ -1138,6 +1153,7 @@ export class PaymentOperationJournal {
       } catch {
         /* the transaction is already gone */
       }
+      this.secureFiles();
       throw error;
     }
   }

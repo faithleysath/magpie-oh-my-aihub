@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -948,6 +948,20 @@ describe("local storage safety", () => {
     if (process.platform !== "win32") {
       expect(diagnostics.fileMode).toBe(0o600);
       expect(statSync(join(dir, "state")).mode & 0o777).toBe(0o700);
+    }
+  });
+
+  test("the WAL and SHM sidecars are 0600 after a write", async () => {
+    const j = openJournal();
+    const { port, op, reservationId } = await reservedPort(j);
+    await port.markBroadcasting({ reservationId, operation: op });
+    if (process.platform !== "win32") {
+      expect(statSync(j.path).mode & 0o777).toBe(0o600);
+      for (const suffix of ["-wal", "-shm"]) {
+        const file = `${j.path}${suffix}`;
+        expect(existsSync(file)).toBe(true);
+        expect(statSync(file).mode & 0o777).toBe(0o600);
+      }
     }
   });
 
