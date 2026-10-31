@@ -325,7 +325,7 @@ bun run boot-check   PASS
 bun run secret-scan  PASS: no credentials in the working tree
 ```
 
-本机全量（新增 A/B/C/D/E 测试之前）：**794 pass / 0 fail / 6242 expect / 54 files / 29.26s**。按主审要求本轮不重复全量，新 head 由 CI 跑全量。历史 CI `41163498408` @ `b2ab34b`：linux 795 pass / 0 fail / 6248 expect / 796 tests；macOS 794 pass / 0 fail / 6245 expect / 795 tests。`ead291f` 的 CI 以 PR head run 为准。
+本机全量（新增 A/B/C/D/E 测试之前）：**794 pass / 0 fail / 6242 expect / 54 files / 29.26s**。按主审要求本轮不重复本机全量，CI 跑全量。CI `41164489619` @ `85b3fc8`（code `ead291f`）：**linux 795 pass / 0 fail / 6275 expect / 796 tests；macOS 794 pass / 0 fail / 6272 expect / 795 tests；均 success**。历史 CI `41163498408` @ `b2ab34b`：linux 795/0/6248，macOS 794/0/6245。
 
 > 全量通过只说明本机 hermetic 测试通过，不等于真实 Magpie/EasyTier、真实扩展或真实链验收。
 
