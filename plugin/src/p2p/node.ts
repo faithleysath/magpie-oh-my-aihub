@@ -423,6 +423,7 @@ export class P2pNode {
   private readonly approvalTtlMs: number;
   private readonly deliveryTtlMs: number;
   private readonly sessions = new Map<string, P2pSession>();
+  private readonly pollAuthorized = new Set<string>();
   private readonly helloCache = new Map<string, { clientHelloId: string; serverHello: P2pServerHello; session: P2pSession }>();
   private recoveryReport: P2pRecoveryReport | null = null;
   private readonly recoveredAtBoot: boolean;
@@ -483,6 +484,7 @@ export class P2pNode {
     const serverHello = buildServerHello({ hello, identity: this.identity, ephemeral, now: this.clock() });
     const material = completeHandshake({ role: "provider", clientHello: hello, serverHello, ephemeral, now: this.clock() });
     const session = P2pSession.establish({ material, store: this.store, now: this.clock });
+    if (opts.rejectReplay) this.pollAuthorized.add(session.sessionId);
     this.store.putTombstone("hello-nonce", hello.clientNonce, "consumed hello nonce", this.clock(), 2 * 60 * 60_000);
     this.helloCache.set(hello.sessionId, { clientHelloId: hello.id, serverHello, session });
     if (this.helloCache.size > 32) {
@@ -538,6 +540,7 @@ export class P2pNode {
     });
     const session = this.sessions.get(sessionId);
     if (!session || session.closedReason) fail("session_closed", "the poll session is not open");
+    if (!this.pollAuthorized.has(sessionId)) fail("untrusted_peer", "this session was not opened by an authenticated poll hello");
     // A lost HTTP poll response must not permanently consume the approval. The
     // next authenticated poll re-arms the same generation's still-unacked rows;
     // this is safe because approval/delivery are idempotent by generation/hash.
@@ -569,6 +572,7 @@ export class P2pNode {
       if (session.closedReason || Date.parse(session.expiresAt) <= now) {
         if (!session.closedReason) session.close("pruned");
         this.sessions.delete(id);
+        this.pollAuthorized.delete(id);
       }
     }
     if (this.sessions.size <= max) return;
@@ -576,6 +580,7 @@ export class P2pNode {
     for (const [id, session] of oldest.slice(0, oldest.length - max)) {
       if (!session.closedReason) session.close("pruned");
       this.sessions.delete(id);
+      this.pollAuthorized.delete(id);
     }
   }
 
@@ -1771,6 +1776,8 @@ export class P2pNode {
       const recovered: P2pRecoveryReport | null = this.recoveryReport;
       this.recoveryReport = null;
       const sessionsExpired = this.store.expireSessions(at);
+      this.store.purgeSessions?.(at, 24 * 60 * 60_000);
+      this.store.purgeTombstones(at);
       for (const session of this.sessions.values()) {
         if (!session.closedReason && Date.parse(session.expiresAt) <= at.getTime()) session.close("expired");
       }

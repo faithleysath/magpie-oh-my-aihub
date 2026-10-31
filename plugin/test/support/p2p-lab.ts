@@ -132,7 +132,7 @@ export class P2pLab {
     const transport = (self: "A" | "B"): P2pTransport => ({
       hello: async (target, hello) => {
         const targetNode = self === "A" ? this.B : this.A;
-        const result = await targetNode.acceptHello(hello);
+        const result = await targetNode.acceptHello(hello, { rejectReplay: true });
         return result.serverHello;
       },
       canPush: (peer) => !(self === "B" && this.faults.disableProviderPush),
@@ -145,7 +145,7 @@ export class P2pLab {
       poll: async (target, hello) => {
         this.pollHellos.push(hello);
         const targetNode = self === "A" ? this.B : this.A;
-        const result = await targetNode.acceptHello(hello);
+        const result = await targetNode.acceptHello(hello, { rejectReplay: true });
         const frames = await targetNode.pullFrames(result.sessionId);
         return { serverHello: result.serverHello, frames: frames.map((f) => f.toString("base64")) };
       },

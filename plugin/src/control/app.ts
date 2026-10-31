@@ -256,6 +256,13 @@ export class ControlApp {
     this.service.setControlPresence(() => signPresence(this.presenceBody(), this.identity));
   }
 
+  private async dropForward(nodeId: string): Promise<void> {
+    const forward = this.controlForwards.get(nodeId);
+    if (!forward) return;
+    await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
+    this.controlForwards.delete(nodeId);
+  }
+
   registerPeer(nodeId: string, endpoint: Endpoint, target?: P2pHelloTarget): void {
     if (!/^[a-f0-9]{8,64}$/.test(nodeId)) throw new Error("invalid peer node id");
     this.endpoints.set(nodeId, { ...endpoint });
@@ -269,11 +276,15 @@ export class ControlApp {
     if (!cfg || !peer || !peer.mappedCidr || !peer.catalogPort) throw new Error(`no signed catalogue entry for ${nodeId}`);
     if (!peer.identity?.fingerprint || !peer.quoteHash) throw new Error(`peer ${nodeId} has no accepted identity/quote`);
     const existing = this.endpoints.get(nodeId);
-    if (existing && (peer.status === "identity-changed" || existing.fingerprint !== peer.identity.fingerprint)) {
-      this.endpoints.delete(nodeId);
-    } else if (existing?.expiresAt && Date.parse(existing.expiresAt) - this.now().getTime() > 60_000) {
-      return existing;
-    } else if (existing) {
+    const stale =
+      !existing ||
+      peer.status === "identity-changed" ||
+      existing.fingerprint !== peer.identity.fingerprint ||
+      !existing.expiresAt ||
+      Date.parse(existing.expiresAt) - this.now().getTime() <= 60_000;
+    if (!stale) return existing!;
+    if (existing) {
+      await this.dropForward(nodeId);
       this.endpoints.delete(nodeId);
     }
     const res = await socksHttpGet({
@@ -462,9 +473,13 @@ export class ControlApp {
 
   private async pollTick(): Promise<void> {
     for (const nodeId of this.targets) {
-      const target = this.peers.get(nodeId);
-      if (!target) continue;
       try {
+        const cached = this.endpoints.get(nodeId);
+        if (!cached?.expiresAt || Date.parse(cached.expiresAt) - this.now().getTime() <= 60_000) {
+          await this.discover(nodeId);
+        }
+        const target = this.peers.get(nodeId);
+        if (!target) continue;
         await this.node.poll(target);
       } catch {
         // The next bounded tick retries; no action is created from a poll error.

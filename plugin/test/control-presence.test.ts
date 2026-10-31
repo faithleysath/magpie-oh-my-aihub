@@ -52,6 +52,8 @@ describe("signed control presence", () => {
       const forged = signPresence({ ...body(), endpoint: { ...body().endpoint, host } }, id);
       expect(() => verifyPresence(forged, now, { expectedMappedCidr: "10.66.1.2/32" })).toThrow();
     }
+    const lan = signPresence({ ...body(), endpoint: { host: "192.168.1.1", mappedCidr: null, controlPort: 35210, ready: true } }, id);
+    expect(() => verifyPresence(lan, now)).toThrow(/private LAN/);
     expect(() => verifyPresence(doc, new Date("2026-10-31T12:05:00.000Z"))).toThrow(/current/);
     const future = signPresence({ ...body(), issuedAt: "2026-10-31T12:00:00.000Z", expiresAt: "2026-10-31T12:01:00.000Z" }, id);
     expect(() => verifyPresence(future, new Date("2026-10-31T11:50:00.000Z"))).toThrow();
