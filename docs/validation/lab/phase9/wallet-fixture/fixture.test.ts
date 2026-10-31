@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { connect } from "node:net";
 import { mkdtempSync, readFileSync, writeFileSync, statSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,6 +15,18 @@ import { DEFAULT_NETWORKS, assetIdOf } from "../../../../../plugin/src/networks.
 import type { AssetRecord } from "../../../../../plugin/src/networks.ts";
 import { buildIntent, intentDigest, intentTypedData, verifyIntentSignature } from "../../../../../plugin/src/deposits.ts";
 import { finalityVerdict } from "../../../../../plugin/src/watcher.ts";
+
+/** A real TCP connect that must fail: the fixture's listener is gone. */
+async function portClosed(origin: string): Promise<boolean> {
+  const url = new URL(origin);
+  return new Promise((resolve) => {
+    const socket = connect({ host: url.hostname, port: Number(url.port) });
+    const done = (closed: boolean) => { socket.destroy(); resolve(closed); };
+    socket.once("connect", () => done(false));
+    socket.once("error", () => done(true));
+    socket.setTimeout(1000, () => done(true));
+  });
+}
 
 const folders: string[] = [];
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
@@ -203,7 +216,10 @@ describe("private standalone HTTP adapter", () => {
       expect(Number(BigInt((await client.block("finalized")).number))).toBe(DEFAULT_HEIGHT_BASE);
       expect(fixture.runtime.label).toBe(SIMULATION_LABEL);
     } finally { fixture.stop(); }
-    await expect(fetch(fixture.runtime.origin)).rejects.toThrow();
+    // Real socket, not fetch: the fixture is stopped, so the port must refuse a
+    // connection (the hermetic guard would otherwise block the fetch first and
+    // this would prove nothing about the listener).
+    expect(await portClosed(fixture.runtime.origin)).toBe(true);
   });
 
   test("production watcher with no assets advances existing public-height cursor to sparse fixture head without scanning historical pages", async () => {

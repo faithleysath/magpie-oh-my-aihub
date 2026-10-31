@@ -114,6 +114,8 @@ beforeEach(async () => {
           return json(status(null, []));
         case "GET /checks":
           return json({ checks: [{ name: "configured", ok: true, detail: "ok" }] });
+        case "POST /supervisor/start":
+          return json({ ok: true });
         case "POST /configure":
           return json(status(baseConfig({ networkName: body.networkName })));
         default:
@@ -138,7 +140,9 @@ describe("phase 8 prompt journeys", () => {
       return status(baseConfig({ sharingEnabled: body.sharingEnabled, consumingEnabled: body.consumingEnabled, networkName: body.networkName }));
     });
     const io = scriptedIO(["prompt-net", "2", "prompt-secret", "tcp://relay.example:11010", "", "n"]);
-    const code = await runSetup([], dataDir, io);
+    const code = await runSetup([], dataDir, io, {
+      preflight: { lan: "127.0.0.1", fetchImpl: async () => new Response("", { status: 401 }) },
+    });
     expect(code).toBe(0);
     const configure = calls.find((c) => c.path === "/configure");
     expect(configure!.body).toMatchObject({
@@ -152,6 +156,29 @@ describe("phase 8 prompt journeys", () => {
     expect(io.prompts.some((p) => p.question.includes("Role"))).toBe(true);
     expect(io.prompts.some((p) => p.question.includes("Initial peer"))).toBe(true);
     expect(io.prompts.some((p) => p.opts?.secret === true)).toBe(true);
+  });
+
+  test("check and resume take the injected preflight transport and the named gateway port", async () => {
+    // Regression: resumeOrCheck() used to build its own preflight and drop
+    // deps.preflight, so `--check`/`resume`/`preflight`/`doctor` ignored both the
+    // fixture transport and OH_MY_AIHUB_PREFLIGHT_LAN=none and still probed the
+    // real LAN gateway on the default port.
+    const seen: string[] = [];
+    const fetchImpl = async (url: string) => {
+      seen.push(url);
+      return new Response("", { status: 401 });
+    };
+    const io = scriptedIO([]);
+    const preflight = { lan: "127.0.0.1", fetchImpl };
+
+    const check = await runSetup(["--check", "--gateway-port", "39999", "--json"], dataDir, io, { preflight });
+    expect(check).toBe(0);
+    expect(seen).toEqual(["http://127.0.0.1:39999/v1/models"]);
+
+    seen.length = 0;
+    const resume = await runSetup(["--resume", "--gateway-port", "39999", "--json"], dataDir, io, { preflight });
+    expect(resume).toBe(0);
+    expect(seen).toEqual(["http://127.0.0.1:39999/v1/models"]);
   });
 
   test("share setup rejects an invalid number instead of silently selecting all priced", async () => {
