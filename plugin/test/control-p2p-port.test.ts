@@ -322,8 +322,17 @@ describe("B-core P2pBusinessPort mapping", () => {
       expect(none.keyId).toBeNull();
       expect(none.evidence.source).toBe("provisioner-journal:magpie-readback");
       expect(none.evidence.checked).toEqual(["journal", "keys"]);
+      expect(Array.isArray(none.evidence.nativeKeyIds)).toBe(true);
       expect(none.consumerNodeId).toBe("nobody");
     }
+    // A restart re-reads the same journal; the truly absent intent remains a
+    // noSideEffect, not a fresh approval attempt.
+    const restarted = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    const afterRestart = await restarted.reconcileApproval!({
+      requestHash: "8".repeat(64), approvalId: other, generation: 1,
+      consumer: { accountId: "8".repeat(64), nodeId: "nobody", hostname: "ohmyaihub-nobody", fingerprint: "8".repeat(64) }, keyId: null,
+    });
+    expect(afterRestart.state).toBe("noSideEffect");
 
     // A Magpie key with the deterministic consumer name but no local record is
     // still an unknown, not proof of no side effect.
@@ -336,6 +345,18 @@ describe("B-core P2pBusinessPort mapping", () => {
       consumer: { accountId: "7".repeat(64), nodeId: "native-only", hostname: "ohmyaihub-native-only", fingerprint: "7".repeat(64) }, keyId: null,
     });
     expect(ambiguous.state).toBe("unknown");
+  });
+
+  test("reconcileApproval returns unknown when Magpie key management cannot be read", async () => {
+    const { svc } = realService();
+    const approvalFile = join(process.cwd(), "control-approvals.json");
+    const port = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    (svc.provisioner as any).nativeKeySnapshot = async () => { throw new Error("Magpie key list unreadable"); };
+    const result = await port.reconcileApproval!({
+      requestHash: HASH, approvalId: APPROVAL, generation: 1,
+      consumer: { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) }, keyId: null,
+    });
+    expect(result.state).toBe("unknown");
   });
 
   test("reconcileApproval treats a corrupt journal as unknown, not noSideEffect", async () => {
