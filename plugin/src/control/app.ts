@@ -4,7 +4,7 @@
 // Service. It intentionally exposes only narrow local actions; no remote payload
 // can name an action, endpoint, file, port or Magpie admin operation.
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { lanIPv4, statePath } from "../paths.ts";
 import {
   loadOrCreateCatalogIdentity,
@@ -474,6 +474,10 @@ export class ControlApp {
     const target = this.targetOf(nodeId);
     const session = await this.node.openSession(target);
     const request: P2pRequestDocument = {
+      // A new human request gets a new identity; the outbox retry reuses this
+      // exact document, so retries stay idempotent while an expired request can
+      // be asked again.
+      nonce: randomBytes(8).toString("hex"),
       consumer: { nodeId: this.service.config()!.nodeId, hostname: `ohmyaihub-${this.service.config()!.nodeId}` },
       provider: {
         nodeId,

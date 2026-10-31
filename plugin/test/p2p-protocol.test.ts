@@ -55,6 +55,22 @@ function requestDocument(overrides: Partial<P2pRequestDocument> = {}): P2pReques
   };
 }
 
+describe("a request nonce distinguishes a new request from an idempotent retry", () => {
+  test("the hash changes with the nonce and a malformed nonce is refused", () => {
+    const a = requestHashOf(requestDocument({ nonce: "a".repeat(16) }));
+    const b = requestHashOf(requestDocument({ nonce: "b".repeat(16) }));
+    expect(a).not.toBe(b);
+    expect(requestHashOf(requestDocument({ nonce: "a".repeat(16) }))).toBe(a);
+    // A document without a nonce (legacy shape) still hashes deterministically.
+    expect(requestHashOf(requestDocument())).toBe(requestHashOf(requestDocument()));
+    const request = requestDocument({ nonce: "a".repeat(16) });
+    const body = { requestHash: requestHashOf(request), request };
+    expect(() => verify(sign(unsignedFor("connection_request", body)))).not.toThrow();
+    const bad = { ...request, nonce: "zz" };
+    expectCode(() => verify(sign(unsignedFor("connection_request", { requestHash: requestHashOf(bad as never), request: bad }))), "malformed");
+  });
+});
+
 function unsignedFor(type: P2pMessageType = "connection_request", body?: unknown, options: { from?: P2pIdentity; to?: P2pIdentity; time?: string; expires?: string } = {}): Omit<P2pEnvelope, "auth"> {
   const from = options.from ?? A;
   const to = options.to ?? B;

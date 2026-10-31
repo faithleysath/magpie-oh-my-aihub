@@ -545,6 +545,13 @@ export function businessRequestHash(type: P2pMessageType, body: unknown): string
 // --- bodies ------------------------------------------------------------------
 
 export interface P2pRequestDocument {
+  /**
+   * A fresh client nonce per human request. It makes a new request after an
+   * expiry/rejection distinct, while a retry of the same pending request (the
+   * outbox reuses the stored document) stays idempotent. Optional so a legacy
+   * document stored by an older build still validates.
+   */
+  nonce?: string;
   consumer: { nodeId: string; hostname: string };
   provider: { nodeId: string; hostname: string; mappedCidr: string; gatewayPort: number; catalogPort: number };
   models: string[];
@@ -705,7 +712,12 @@ const NULLABLE_MEMO = MEMO_RE;
 
 function validateRequestDocument(raw: unknown): P2pRequestDocument {
   const o = objectOf(raw, "body.request");
-  assertKeys(o, ["consumer", "provider", "models", "quote", "acceptance"], "body.request");
+  assertKeys(o, ["nonce", "consumer", "provider", "models", "quote", "acceptance"], "body.request");
+  let nonce: string | undefined;
+  if (o.nonce !== undefined) {
+    nonce = textOf(o.nonce, "body.request.nonce", 16, 32);
+    if (!/^[0-9a-f]{16,32}$/.test(nonce)) fail("malformed", "the request nonce is invalid");
+  }
 
   const consumer = objectOf(o.consumer, "body.request.consumer");
   assertKeys(consumer, ["nodeId", "hostname"], "body.request.consumer");
@@ -744,6 +756,7 @@ function validateRequestDocument(raw: unknown): P2pRequestDocument {
   if (acceptance.priceVersion !== quote.priceVersion) fail("quote_mismatch", "the acceptance price version differs from the quote");
 
   return {
+    ...(nonce ? { nonce } : {}),
     consumer: { nodeId: consumerNodeId, hostname: consumerHostname },
     provider: { nodeId: providerNodeId, hostname: providerHostname, mappedCidr: provider.mappedCidr, gatewayPort, catalogPort },
     models,
