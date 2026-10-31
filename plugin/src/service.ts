@@ -439,6 +439,10 @@ export class Service {
   private cachedChecksError: string | null = null;
   private binder: PortBinder;
   private ownership: SocketOwnershipProbe;
+  /** one core restart at a time for forward recovery; avoids nested serialize */
+  private forwardMigrationBusy = false;
+  /** per-provider backoff so a stuck recovery cannot restart the core every tick */
+  private readonly forwardRecoveryBackoff = new Map<string, number>();
   private clock: () => Date;
   private lastNetworkRefreshAt = 0;
 
@@ -3034,6 +3038,247 @@ export class Service {
     return this.status();
   }
 
+  /** Combo with provider models evidence: never leave a pre-migration read-back "current". */
+  private invalidateMigrationEvidence(conn: ProviderConnection, reason: string): void {
+    const e = (conn as unknown as { modelsEvidence?: Record<string, unknown> | null }).modelsEvidence;
+    if (!e) return;
+    e.status = "stale";
+    e.modelCount = null;
+    e.callable = "unknown";
+    e.error = reason.slice(0, 300);
+  }
+
+  private refreshMigrationEvidence(conn: ProviderConnection, models: string[]): void {
+    const e = (conn as unknown as { modelsEvidence?: Record<string, unknown> | null }).modelsEvidence;
+    if (!e) return;
+    const at = new Date().toISOString();
+    e.status = "current";
+    e.source = "reconcile";
+    e.readAt = at;
+    e.expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    e.models = [...models];
+    e.modelCount = models.length;
+    e.callable = "yes";
+    e.generation = (Number(e.generation) || 0) + 1;
+    e.keyGeneration = (conn as unknown as { keyGeneration?: number }).keyGeneration ?? e.keyGeneration;
+    e.error = null;
+  }
+
+  /**
+   * Existing, plugin-owned Remote: its loopback forward became foreign/dead.
+   *
+   * One bounded attempt per call (plus a backoff) that: allocates Q, rewrites
+   * the forward config and restarts the core, proves Q belongs to the core
+   * BEFORE any Gateway Key is sent, re-reads models/limit with the same key,
+   * and only then re-registers the native Remote at Q. A `foreign` entry is
+   * never edited; the key, identity and ledger are never rotated or reset. If
+   * the old port cannot be proven, its registration is removed instead of being
+   * restored to somebody else's socket.
+   */
+  private async migrateProviderForward(conn: ProviderConnection, key: string, reason: string): Promise<boolean> {
+    const cfg = this.state.config;
+    if (!cfg) return true;
+    if (this.forwardMigrationBusy || this.mutating > 0) {
+      conn.status = "degraded";
+      conn.detail = `forward recovery is waiting for another core operation: ${reason}`.slice(0, 300);
+      conn.updatedAt = new Date().toISOString();
+      return true;
+    }
+    const now = Date.now();
+    const until = this.forwardRecoveryBackoff.get(conn.id) ?? 0;
+    if (now < until) {
+      conn.status = "degraded";
+      conn.detail = `forward recovery is backing off after a failed attempt: ${reason}`.slice(0, 300);
+      conn.updatedAt = new Date().toISOString();
+      return true;
+    }
+    const magpiePort = this.ownedLoopbackPort(conn.id, key);
+    if (magpiePort === "foreign") {
+      conn.status = "degraded";
+      conn.detail = "forward recovery refused: the Magpie entry is not owned by this plugin";
+      conn.updatedAt = new Date().toISOString();
+      return true;
+    }
+    this.forwardMigrationBusy = true;
+    const fromPort = conn.localPort;
+    let nextPort: number;
+    try {
+      nextPort = await this.allocLocalPort();
+    } catch (e) {
+      this.forwardMigrationBusy = false;
+      this.forwardRecoveryBackoff.set(conn.id, now + 60_000);
+      conn.status = "degraded";
+      conn.detail = `forward recovery could not allocate a loopback port: ${(e as Error).message}`.slice(0, 300);
+      conn.updatedAt = new Date().toISOString();
+      return true;
+    }
+    // Persist the intent before the native registration or the core changes.
+    // A crash at any later boundary can then converge from state.
+    conn.forwardPending = { from: fromPort, to: nextPort, at: new Date().toISOString() };
+    this.invalidateMigrationEvidence(conn, `forward migration ${fromPort} -> ${nextPort} in progress`);
+    saveState(this.state);
+    // Never let Magpie keep routing consumers with the stored key to the old
+    // port while that listener is gone/foreign. Remove our own entry first; a
+    // failure here aborts before the core restart.
+    if (magpiePort !== null) {
+      // Magpie stores the Gateway Key. Retargeting that entry to another local
+      // port would just make Magpie hand the key to whoever listens there, so
+      // the only safe transition is a verified remove: no entry, no key route.
+      let removalError: string | null = null;
+      try {
+        await this.deps.magpie.removeProvider(conn.id);
+      } catch (e) {
+        removalError = (e as Error).message;
+      }
+      if (this.deps.magpie.providerById(conn.id)) {
+        conn.status = "degraded";
+        conn.detail = (
+          `forward recovery aborted: the old Magpie registration could not be removed` +
+          `${removalError ? ` (${removalError})` : " (still present after remove)"}; ` +
+          `the core was not restarted and the entry was not retargeted. Remove it in Magpie before retrying`
+        ).slice(0, 300);
+        conn.updatedAt = new Date().toISOString();
+        this.forwardMigrationBusy = false;
+        this.forwardRecoveryBackoff.set(conn.id, Date.now() + 120_000);
+        saveState(this.state);
+        return true;
+      }
+    }
+    conn.localPort = nextPort;
+    let magpieChanged = false;
+    try {
+      this.supervisor.setForwards(this.forwardSpecs());
+      await this.applyConfig(cfg);
+      const proof = await this.proveForwardOwner(conn.id, nextPort);
+      if (proof.state !== "stable") {
+        throw new Error(`127.0.0.1:${nextPort} is not owned by the core (${proof.state}: ${proof.detail ?? "no evidence"})`);
+      }
+      // No Gateway Key before the proof above; the two unkeyed probes only.
+      if (!(await this.waitForStatus("127.0.0.1", nextPort, 401))) {
+        throw new Error(`127.0.0.1:${nextPort} did not answer 401 without a key`);
+      }
+      const wrong = `sk-ohmyaihub-probe-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+      if (!(await this.waitForStatus("127.0.0.1", nextPort, 401, wrong))) {
+        throw new Error(`127.0.0.1:${nextPort} did not refuse a wrong key`);
+      }
+      const models = await this.probes.remoteModelIds(nextPort, key, 15_000);
+      if (!models || models.length === 0) throw new Error("the provider served no model for the stored key");
+      if (conn.models.length > 0 && !sameSet(models, conn.models)) {
+        throw new Error("the provider's model scope changed; refusing to rewrite the connection silently");
+      }
+      const limit = limitView(await this.probes.remoteLimit(nextPort, key, 8000));
+      await this.deps.magpie.addRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${nextPort}`, key });
+      magpieChanged = true;
+      if (!(await this.waitLocalModels(conn.id, 15_000))) {
+        throw new Error(`Magpie did not list any ${conn.id}/ model after re-registration`);
+      }
+      const at = new Date().toISOString();
+      conn.models = [...models];
+      conn.limit = limit;
+      conn.forwardPending = null;
+      this.refreshMigrationEvidence(conn, models);
+      conn.status = "connected";
+      conn.detail = `forward recovered ${fromPort} -> ${nextPort}: ${reason}`.slice(0, 300);
+      conn.updatedAt = at;
+      conn.lastConnectedAt = at;
+      this.persistLedger(
+        recordPortMigration(this.portLedger(), {
+          at,
+          purpose: "forward",
+          from: fromPort,
+          to: nextPort,
+          reason: `provider ${conn.id}: ${reason}`.slice(0, 300),
+        }),
+      );
+      this.state.ports = {
+        ...this.portLedger(),
+        evidence: this.portLedger().evidence.filter((e) => !(e.purpose === "forward" && e.port === fromPort)),
+      };
+      this.forwardRecoveryBackoff.delete(conn.id);
+      saveState(this.state);
+      logger.warn(`provider ${conn.id}: ${conn.detail}`);
+      return true;
+    } catch (e) {
+      const why = (e as Error)?.message ?? String(e);
+      if (magpieChanged) {
+        // The registration already points at the proven next port: commit it so
+        // state and Magpie agree, but show the verification failure honestly.
+        conn.localPort = nextPort;
+        conn.forwardPending = null;
+        this.invalidateMigrationEvidence(conn, `forward moved to ${nextPort} but verification failed: ${why}`);
+        conn.status = "degraded";
+        conn.detail = `forward moved to ${nextPort} and was re-registered, but verification failed: ${why}`.slice(0, 300);
+        conn.updatedAt = new Date().toISOString();
+        this.persistLedger(
+          recordPortMigration(this.portLedger(), {
+            at: conn.updatedAt,
+            purpose: "forward",
+            from: fromPort,
+            to: nextPort,
+            reason: `provider ${conn.id}: ${why}`.slice(0, 300),
+          }),
+        );
+        this.forwardRecoveryBackoff.set(conn.id, Date.now() + 120_000);
+        saveState(this.state);
+        logger.error(`provider ${conn.id}: ${conn.detail}`);
+        return true;
+      }
+
+      // Magpie was not touched. Put the old port back and prove it; a port that
+      // is no longer ours must not keep a registration (Magpie would send the
+      // stored key to whoever holds it).
+      conn.localPort = fromPort;
+      conn.forwardPending = null;
+      let restored = false;
+      try {
+        this.supervisor.setForwards(this.forwardSpecs());
+        await this.applyConfig(cfg);
+        restored = true;
+      } catch (restoreError) {
+        logger.error(`provider ${conn.id}: restoring the old forward failed: ${String(restoreError)}`);
+        await this.supervisor.stop().catch(() => {});
+      }
+      const oldProof = restored ? await this.proveForwardOwner(conn.id, fromPort) : null;
+      this.invalidateMigrationEvidence(conn, `forward recovery failed: ${why}`);
+      if (!oldProof || oldProof.state !== "stable") {
+        conn.status = "degraded";
+        conn.detail =
+          `forward recovery failed (${why}); the old port ${fromPort} is not provably owned, ` +
+          `so its registration was removed instead of restored`;
+      } else {
+        try {
+          await this.deps.magpie.addRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${fromPort}`, key });
+          conn.status = "degraded";
+          conn.detail = `forward recovery failed (${why}); the old forward ${fromPort} was restored after proving its owner`.slice(0, 300);
+        } catch (restoreRegistration) {
+          conn.status = "degraded";
+          conn.detail =
+            `forward recovery failed (${why}); the old forward ${fromPort} is owned but re-registering it failed: ` +
+            `${(restoreRegistration as Error).message}`.slice(0, 300);
+        }
+      }
+      conn.updatedAt = new Date().toISOString();
+      // The failed candidate must never be chosen again by allocLocalPort().
+      this.persistLedger(
+        recordPortEvidence(this.portLedger(), {
+          purpose: "forward",
+          port: nextPort,
+          host: "127.0.0.1",
+          owner: "easytier",
+          state: "failed",
+          verifiedAt: conn.updatedAt,
+          detail: `forward recovery failed: ${why}`.slice(0, 300),
+        }),
+      );
+      this.forwardRecoveryBackoff.set(conn.id, Date.now() + 120_000);
+      saveState(this.state);
+      logger.error(`provider ${conn.id}: ${conn.detail}`);
+      return true;
+    } finally {
+      this.forwardMigrationBusy = false;
+    }
+  }
+
   /**
    * Re-checks every remote provider independently. A provider that is down or
    * changed does not disturb the others: each one gets its own status, and the
@@ -3151,22 +3396,10 @@ export class Service {
       return changed;
     }
 
-    const bind = `127.0.0.1:${conn.localPort}`;
-    const dst = `${mappedHost(conn.mappedCidr)}:${conn.providerPort}`;
-    if (forwards && !forwards.some((f) => f.bindAddr === bind && f.dstAddr === dst)) {
-      try {
-        await this.supervisor.addPortForward(bind, dst);
-        this.supervisor.setForwards(this.forwardSpecs());
-      } catch (e) {
-        conn.status = "degraded";
-        conn.detail = `cannot restore the loopback forward: ${(e as Error).message}`.slice(0, 300);
-        conn.updatedAt = new Date().toISOString();
-        return true;
-      }
-    }
-
-    const ownership = this.ownershipOf(conn.id, conn.localPort, key);
-    if (ownership === "foreign") {
+    const cfg = this.state.config;
+    if (!cfg) return changed;
+    const owned = this.ownedLoopbackPort(conn.id, key);
+    if (owned === "foreign") {
       // Something else now holds this id. It is not ours to edit, and routing
       // through it with our key would be wrong: report it and stop.
       conn.status = "degraded";
@@ -3177,7 +3410,76 @@ export class Service {
       logger.error(`provider ${conn.id}: ${conn.detail}`);
       return true;
     }
-    if (ownership === "absent") {
+
+    const bind = `127.0.0.1:${conn.localPort}`;
+    const dst = `${mappedHost(conn.mappedCidr)}:${conn.providerPort}`;
+    if (forwards && !forwards.some((f) => f.bindAddr === bind && f.dstAddr === dst)) {
+      try {
+        await this.supervisor.addPortForward(bind, dst);
+        this.supervisor.setForwards(this.forwardSpecs());
+      } catch (e) {
+        // A port that cannot be restored may be occupied by somebody else; a
+        // recovery is one bounded restart, not an endless "degraded" label.
+        return await this.migrateProviderForward(conn, key, `cannot restore the loopback forward: ${(e as Error).message}`);
+      }
+    }
+
+    let forwardOwner = await this.proveForwardOwner(conn.id, conn.localPort);
+    if (forwardOwner.state !== "stable" && owned !== null && owned !== conn.localPort) {
+      // Crash between the Magpie registration and the state commit (either
+      // order): our own entry names another loopback port. If that port is
+      // provably ours, adopt it instead of migrating again.
+      const stored = await this.proveForwardOwner(conn.id, owned);
+      if (stored.state === "stable") {
+        const adoptedFrom = conn.localPort;
+        conn.localPort = owned;
+        try {
+          this.supervisor.setForwards(this.forwardSpecs());
+          await this.applyConfig(cfg);
+        } catch (e) {
+          logger.warn(`provider ${conn.id}: could not apply the adopted forward port: ${String(e)}`);
+        }
+        const after = await this.proveForwardOwner(conn.id, owned);
+        if (after.state === "stable") {
+          this.persistLedger(
+            recordPortMigration(this.portLedger(), {
+              at: new Date().toISOString(),
+              purpose: "forward",
+              from: adoptedFrom,
+              to: owned,
+              reason: `provider ${conn.id}: adopted the already-registered loopback port after a restart`,
+            }),
+          );
+          conn.forwardPending = null;
+          this.invalidateMigrationEvidence(conn, `adopted loopback port ${owned} after a restart; re-reading the key scope`);
+          conn.status = "degraded";
+          conn.detail = `adopted the registered loopback port ${owned} after a restart; re-reading the key scope`;
+          conn.updatedAt = new Date().toISOString();
+          changed = true;
+          forwardOwner = after;
+          saveState(this.state);
+        } else {
+          conn.localPort = adoptedFrom;
+        }
+      }
+    }
+    if (forwardOwner.state === "stable" && conn.forwardPending) {
+      // The crash happened before the core was restarted: the old forward is
+      // still valid, so no migration is needed.
+      conn.forwardPending = null;
+      changed = true;
+      saveState(this.state);
+    }
+    if (forwardOwner.state !== "stable") {
+      return await this.migrateProviderForward(
+        conn,
+        key,
+        `loopback ${conn.localPort} is not owned by the core (${forwardOwner.state}: ${forwardOwner.detail ?? "no evidence"})`,
+      );
+    }
+
+    // Registration only after the owner proof; replace only our own entry.
+    if (owned === null) {
       try {
         await this.deps.magpie.addRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${conn.localPort}`, key });
         changed = true;
@@ -3187,16 +3489,16 @@ export class Service {
         conn.updatedAt = new Date().toISOString();
         return true;
       }
-    }
-
-    const forwardOwner = await this.proveForwardOwner(conn.id, conn.localPort);
-    if (forwardOwner.state !== "stable") {
-      conn.status = "degraded";
-      conn.detail =
-        `127.0.0.1:${conn.localPort} is not provably owned by the supervised core ` +
-        `(${forwardOwner.state}: ${forwardOwner.detail ?? "no evidence"}); not sending the Gateway Key`;
-      conn.updatedAt = new Date().toISOString();
-      return true;
+    } else if (owned !== conn.localPort) {
+      try {
+        await this.deps.magpie.replaceRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${conn.localPort}`, key });
+        changed = true;
+      } catch (e) {
+        conn.status = "degraded";
+        conn.detail = `cannot update the Remote Magpie URL: ${(e as Error).message}`.slice(0, 300);
+        conn.updatedAt = new Date().toISOString();
+        return true;
+      }
     }
 
     const keyed = await this.probes.statusWith("127.0.0.1", conn.localPort, 200, key);
@@ -3965,6 +4267,33 @@ export class Service {
    * Key in the key store are what the plugin put there. A native provider, a
    * different Remote Magpie, or an entry edited by hand does not match.
    */
+  /**
+   * The loopback port the *plugin-owned* Magpie entry currently points at.
+   * `null` = absent, `"foreign"` = somebody else's entry (never touch it).
+   * This is what makes a crash between "register at the new port" and "commit
+   * the new port in state" recoverable without treating our own entry as foreign.
+   */
+  private ownedLoopbackPort(id: string, key: string | null | undefined): number | "foreign" | null {
+    const entry = this.deps.magpie.providerById(id);
+    if (!entry) return null;
+    if (entry.preset !== "remote-magpie" || !key || entry.key !== key) return "foreign";
+    const match = /^http:\/\/127\.0\.0\.1:(\d{1,5})\/v1$/.exec(typeof entry.chat === "string" ? entry.chat : "");
+    if (!match) return "foreign";
+    const port = Number(match[1]);
+    if (!Number.isInteger(port) || port <= 0 || port >= 65536) return "foreign";
+    // Only a port this plugin knows about can be "ours": the recorded desired
+    // port, or the from/to of a persisted recovery. An entry edited by hand to
+    // an arbitrary loopback port stays foreign and is never rewritten.
+    const rec = this.provider(id);
+    const known = new Set<number>();
+    if (rec?.localPort) known.add(rec.localPort);
+    if (rec?.forwardPending) {
+      known.add(rec.forwardPending.from);
+      known.add(rec.forwardPending.to);
+    }
+    return known.has(port) ? port : "foreign";
+  }
+
   private ownershipOf(id: string, localPort: number, key: string | null | undefined): Ownership {
     const entry = this.deps.magpie.providerById(id);
     if (!entry) return "absent";
