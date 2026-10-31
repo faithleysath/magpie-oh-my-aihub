@@ -419,6 +419,7 @@ describe("zero-file P2P UI (assembly draft contract, mocked state)", () => {
       schema: "ohmyaihub/p2p-state/1", enabled: true,
       listener: { state: "ready", host: "127.0.0.1", port: 41999, reachability: "loopback", verified: true, detail: null },
       inboundRequests: [inbound()], outboundRequests: [], approvals: [], connections: [],
+      presence: [{ nodeId: peer.nodeId, hostname: "伙伴甲", fingerprint, endpoint: { host: "127.0.0.1", mappedCidr: "10.126.126.2", controlPort: 41999 }, capability: { control: true, sharing: "enabled", providesModels: true }, expiresAt: "2099-01-01T00:00:00.000Z", verified: true }],
       counts: { pendingInbound: 1, awaitingApproval: 0, connected: 0, actionNeeded: 0 },
       ...over,
     };
@@ -437,10 +438,12 @@ describe("zero-file P2P UI (assembly draft contract, mocked state)", () => {
       const cap = all(r.dialog, "input").find((node) => node.type === "number");
       boxes[0].checked = true; await boxes[0].emit("change");
       boxes[1].checked = true; await boxes[1].emit("change");
-      boxes[2].checked = true; await boxes[2].emit("change");
       cap.value = "0.0005";
       await find(r.dialog, "button", "确认批准").click(); await flush();
-      expect(r.calls).toEqual([{ name: "p2p-approve", input: { requestId: "req-1", models: [model.id], capUsd: 0.0005, acceptFingerprint: fp } }]);
+      expect(r.calls).toEqual([{ name: "p2p-approve", input: {
+        requestId: "req-1", consumerFingerprint: fp, quoteHash, priceVersion: "f".repeat(64),
+        generation: null, models: [model.id], capUsd: 0.0005, acceptFingerprint: fp,
+      } }]);
     } finally { r.cleanup(); }
   });
 
@@ -450,10 +453,103 @@ describe("zero-file P2P UI (assembly draft contract, mocked state)", () => {
       await find(r.roots["sharing-panel"], "button", "核对并批准").click(); await flush();
       const boxes = checkboxes(r.dialog);
       boxes[0].checked = true; await boxes[0].emit("change");
+      all(r.dialog, "input").find((node) => node.type === "number").value = "1";
+      await find(r.dialog, "button", "确认批准").click(); await flush();
+      expect(r.calls).toEqual([{ name: "p2p-approve", input: {
+        requestId: "req-1", consumerFingerprint: fp, quoteHash, priceVersion: "f".repeat(64),
+        generation: null, models: [model.id], capUsd: 1,
+      } }]);
+      // acceptFingerprint is absent because the identity was already accepted.
+      expect(r.calls[0].input).not.toHaveProperty("acceptFingerprint");
+    } finally { r.cleanup(); }
+  });
+
+  test("zero-file is unavailable without a signed, fresh, model-sharing presence", async () => {
+    const noPresence = withP2p({ presence: [] });
+    const r1 = runtime(noPresence);
+    try {
+      const panel = r1.roots["discovery-panel"];
+      expect(find(panel, "button", "申请使用（无文件）").disabled).toBeTrue();
+      expect(panel.textContent).toContain("还没有可用的签名控制通道");
+    } finally { r1.cleanup(); }
+    const controlOnly = withP2p({ presence: [{ nodeId: peer.nodeId, hostname: "伙伴甲", fingerprint, endpoint: { host: "127.0.0.1", mappedCidr: null, controlPort: 41999 }, capability: { control: true, sharing: "disabled", providesModels: false }, expiresAt: "2099-01-01T00:00:00.000Z", verified: true }] });
+    const r2 = runtime(controlOnly);
+    try {
+      expect(find(r2.roots["discovery-panel"], "button", "申请使用（无文件）").disabled).toBeTrue();
+      expect(r2.roots["discovery-panel"].textContent).toContain("可请求，但不提供模型");
+    } finally { r2.cleanup(); }
+    const expired = withP2p({ presence: [{ nodeId: peer.nodeId, hostname: "伙伴甲", fingerprint, endpoint: { host: "127.0.0.1", mappedCidr: null, controlPort: 41999 }, capability: { control: true, sharing: "enabled", providesModels: true }, expiresAt: "2020-01-01T00:00:00.000Z", verified: true }] });
+    const r3 = runtime(expired);
+    try {
+      expect(find(r3.roots["discovery-panel"], "button", "申请使用（无文件）").disabled).toBeTrue();
+    } finally { r3.cleanup(); }
+  });
+
+  test("a re-approval binds the current approval generation", async () => {
+    const r = runtime(withP2p({ inboundRequests: [inbound({ tofu: "accepted", generation: 3 })] }));
+    try {
+      await find(r.roots["sharing-panel"], "button", "核对并批准").click(); await flush();
+      const boxes = checkboxes(r.dialog);
+      boxes[0].checked = true; await boxes[0].emit("change");
+      all(r.dialog, "input").find((node) => node.type === "number").value = "1";
+      await find(r.dialog, "button", "确认批准").click(); await flush();
+      expect(r.calls[0]).toMatchObject({ name: "p2p-approve", input: { generation: 3, consumerFingerprint: fp, quoteHash, priceVersion: "f".repeat(64) } });
+    } finally { r.cleanup(); }
+  });
+
+  test("a stale binding is shown once and never retried", async () => {
+    const r = runtime(withP2p(), async (name) => {
+      if (name === "p2p-approve") throw Object.assign(new Error("报价或代次已过期，请重新加载请求后再决定"), { status: 409 });
+      return {};
+    });
+    try {
+      await find(r.roots["sharing-panel"], "button", "核对并批准").click(); await flush();
+      const boxes = checkboxes(r.dialog);
+      boxes[0].checked = true; await boxes[0].emit("change");
       boxes[1].checked = true; await boxes[1].emit("change");
       all(r.dialog, "input").find((node) => node.type === "number").value = "1";
       await find(r.dialog, "button", "确认批准").click(); await flush();
-      expect(r.calls).toEqual([{ name: "p2p-approve", input: { requestId: "req-1", models: [model.id], capUsd: 1 } }]);
+      expect(r.calls.map((call) => call.name)).toEqual(["p2p-approve"]);
+      expect(r.notices.at(-1)[0]).toContain("过期");
+    } finally { r.cleanup(); }
+  });
+
+  test("a 400 or 500 approval outcome is shown once and never retried", async () => {
+    for (const status of [400, 500]) {
+      const r = runtime(withP2p(), async (name) => {
+        if (name === "p2p-approve") throw Object.assign(new Error(status === 500 ? "操作未完成，结果未知" : "输入未通过检查"), { status });
+        return {};
+      });
+      try {
+        await find(r.roots["sharing-panel"], "button", "核对并批准").click(); await flush();
+        const boxes = checkboxes(r.dialog);
+        boxes[0].checked = true; await boxes[0].emit("change");
+        boxes[1].checked = true; await boxes[1].emit("change");
+        all(r.dialog, "input").find((node) => node.type === "number").value = "1";
+        await find(r.dialog, "button", "确认批准").click(); await flush();
+        expect(r.calls.map((call) => call.name), String(status)).toEqual(["p2p-approve"]);
+        expect(r.notices.at(-1)[0], String(status)).not.toContain("操作已完成");
+      } finally { r.cleanup(); }
+    }
+  });
+
+  test("recovery copy is bounded resume, not a read-only or re-approval promise", async () => {
+    const approval = {
+      approvalId: "ap-r", requestId: "req-r", consumerNodeId: "c".repeat(16), consumerFingerprint: fp,
+      providerNodeId: "p".repeat(16), providerFingerprint: "a".repeat(64), models: [model.id], capUsd: 1,
+      quoteHash, priceVersion: "f".repeat(64), generation: 2, keyId: "key-opaque", state: "uncertain",
+      delivery: { state: "uncertain", lastError: "timeout" }, createdAt: "2026-10-31T00:00:00.000Z",
+      approvedAt: "2026-10-31T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z", detail: null,
+    };
+    const r = runtime(withP2p({ inboundRequests: [], approvals: [approval] }));
+    try {
+      const panel = r.roots["sharing-panel"];
+      await find(panel, "button", "技术恢复（有界续传/对账）").click(); await flush();
+      const text = r.dialog.textContent;
+      expect(text).toContain("有界恢复");
+      expect(text).toContain("不会重新批准");
+      expect(text).toContain("不会创建第二个密钥");
+      expect(text).not.toContain("只读");
     } finally { r.cleanup(); }
   });
 
@@ -493,9 +589,9 @@ describe("zero-file P2P UI (assembly draft contract, mocked state)", () => {
     try {
       const panel = r.roots["sharing-panel"];
       expect(panel.textContent).toContain("不会自动重发或创建第二个密钥");
-      await find(panel, "button", "技术恢复（只读优先）").click(); await flush();
+      await find(panel, "button", "技术恢复（有界续传/对账）").click(); await flush();
       const agree = checkboxes(r.dialog)[0]; agree.checked = true; await agree.emit("change");
-      await find(r.dialog, "button", "技术恢复（只读优先）").click(); await flush();
+      await find(r.dialog, "button", "技术恢复（有界续传/对账）").click(); await flush();
       expect(r.calls).toEqual([{ name: "p2p-recover", input: { approvalId: "ap-1" } }]);
       await find(panel, "button", "撤销此授权").click(); await flush();
       const revokeAgree = checkboxes(r.dialog)[0]; revokeAgree.checked = true; await revokeAgree.emit("change");

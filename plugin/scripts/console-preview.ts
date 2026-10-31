@@ -147,6 +147,20 @@ function configuredState(): any {
           createdAt: new Date().toISOString(), approvedAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + 86_400_000).toISOString(), detail: null,
         }],
+        presence: [
+          {
+            nodeId: "a".repeat(16), hostname: "partner-harbor", fingerprint: "f".repeat(64),
+            endpoint: { host: "127.0.0.1", mappedCidr: "10.126.126.2", controlPort: 41999 },
+            capability: { control: true, sharing: "enabled", providesModels: true },
+            expiresAt: new Date(Date.now() + 120_000).toISOString(), verified: true,
+          },
+          {
+            nodeId: "c".repeat(16), hostname: "partner-new", fingerprint: "e".repeat(64),
+            endpoint: { host: "127.0.0.1", mappedCidr: "10.126.126.3", controlPort: 42000 },
+            capability: { control: true, sharing: "enabled", providesModels: true },
+            expiresAt: new Date(Date.now() + 120_000).toISOString(), verified: true,
+          },
+        ],
         connections: [{
           providerNodeId: "a".repeat(16), providerHostname: "partner-harbor", providerId: "provider-harbor",
           state: "connected", models: ["qwen/qwen3-32b"], capUsd: 2.5,
