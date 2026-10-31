@@ -495,6 +495,10 @@ export interface PreflightOptions {
   /** live checks are opt-in; the snapshot's own cached checks are always read */
   liveChecks?: boolean;
   timeoutMs?: number;
+  /** the LAN address the gateway probe uses; tests pass one with a stub fetch */
+  lan?: string | null;
+  /** the gateway probe's transport; tests inject it so no real gateway is read */
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
 }
 
 export async function preflight(opts: PreflightOptions): Promise<Preflight> {
@@ -566,10 +570,15 @@ export async function preflight(opts: PreflightOptions): Promise<Preflight> {
   const et = status?.easytier;
   let lan: string | null = null;
   let lanError: string | null = null;
-  try {
-    lan = lanIPv4();
-  } catch (e) {
-    lanError = (e as Error).message;
+  if (opts.lan !== undefined) {
+    lan = opts.lan;
+    if (!lan) lanError = "no LAN address supplied";
+  } else {
+    try {
+      lan = lanIPv4();
+    } catch (e) {
+      lanError = (e as Error).message;
+    }
   }
   if (!lan && state.configured) warnings.push(`no usable LAN IPv4: ${lanError ?? "none"}; sharing cannot be published`);
 
@@ -584,7 +593,7 @@ export async function preflight(opts: PreflightOptions): Promise<Preflight> {
   let gatewayKeyRequired: boolean | null = null;
   if (lan) {
     try {
-      const res = await fetch(`http://${lan}:${gatewayPort}/v1/models`, {
+      const res = await (opts.fetchImpl ?? fetch)(`http://${lan}:${gatewayPort}/v1/models`, {
         signal: AbortSignal.timeout(2_000),
       });
       gatewayKeyRequired = res.status === 401;

@@ -175,7 +175,7 @@ afterEach(() => {
 async function cli(args: string[], timeoutMs = 10_000): Promise<{ out: string; err: string; code: number }> {
   const proc = Bun.spawn(["bun", "bin/ohmyaihub.ts", "--data", dataDir, ...args], {
     cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, OH_MY_AIHUB_MAGPIE: join(binDir, "magpie") },
+    env: { ...process.env, OH_MY_AIHUB_MAGPIE: join(binDir, "magpie"), OH_MY_AIHUB_PREFLIGHT_LAN: "none" },
     stdout: "pipe",
     stderr: "pipe",
   });
