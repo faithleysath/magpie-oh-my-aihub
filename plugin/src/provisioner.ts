@@ -5,6 +5,7 @@ import { logger, registerSecret } from "./log.ts";
 import type { Magpie, LimitStatus } from "./magpie.ts";
 import { readJsonWithBackup, writeJsonAtomic } from "./store.ts";
 import { Ledger, usageLogPath, type LedgerWindow } from "./ledger.ts";
+import { assertCreditSourceNotMainnet } from "./mainnet-gate.ts";
 import {
   GRID_NANOS,
   floorGrid,
@@ -1344,6 +1345,8 @@ export class Provisioner {
       const ledger = this.ledger!;
       const booked = ledger.deposit(input.id);
       if (!booked) throw new Error(`deposit ${input.id} was not booked before it was applied`);
+      // Defence in depth at the only chain-credit → Magpie-cap bridge.
+      assertCreditSourceNotMainnet(booked.source);
       if (booked.consumerId !== input.consumerId) throw new Error(`deposit ${input.id} belongs to ${booked.consumerId}`);
       if (booked.amountNanos !== input.amountNanos) {
         throw new Error(`deposit ${input.id} was booked at ${booked.amountNanos} nanos, not ${input.amountNanos}`);

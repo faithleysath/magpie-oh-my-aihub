@@ -67,7 +67,9 @@ export function planWalletIntent(input: {
   const { consumer, providerId, network, asset, pending } = input;
   if (consumer.revokedAt) walletBad("消费者授权已撤销，请选择有效授权");
   if (!network.enabled || network.networkType !== "testnet") walletBad("请选择已启用的测试网络");
-  if (!asset.enabled || asset.chainId !== network.chainId || !asset.testnetOnly) walletBad("请选择此网络已登记的测试代币");
+  if (!asset.enabled || asset.chainId !== network.chainId || !asset.testnetOnly || !asset.credit || asset.pricing.kind !== "fixed-test-rate") {
+    walletBad("请选择此网络已登记、可授信的测试代币");
+  }
   const recipientAddress = walletAddress(input.recipientAddress);
   if (!Number.isInteger(input.ttlSec) || input.ttlSec < 60 || input.ttlSec > 604800) walletBad("请求有效期必须在 60 秒至 7 天之间");
   if (typeof input.amount !== "string" || input.amount.length > 120) walletBad("请填写代币数量");

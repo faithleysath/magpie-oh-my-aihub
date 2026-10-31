@@ -22,6 +22,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSy
 import { dirname, join, resolve } from "node:path";
 import { magpieDataDir, statePath } from "./paths.ts";
 import { costNanos, parsePriceSnapshot, type PriceSnapshot, type UsageTokens } from "./pricing.ts";
+import { assertCreditSourceNotMainnet } from "./mainnet-gate.ts";
 
 export type AccountStatus = "active" | "paused" | "revoked";
 export type WindowStatus = "open" | "draining" | "closed";
@@ -583,6 +584,9 @@ export class Ledger {
    * must never add the credit until the cap read-back confirms it.
    */
   depositIntent(input: { id: string; consumerId: string; amountNanos: number; source: string; at?: string }): { deposit: LedgerDeposit; created: boolean } {
+    // A second, durable mainnet gate: no future watcher/CLI bug can book a
+    // `chain:56` or `chain:8453` credit even if it reaches the ledger directly.
+    assertCreditSourceNotMainnet(input.source);
     if (!Number.isInteger(input.amountNanos) || input.amountNanos <= 0) throw new Error("a deposit must be a positive integer amount");
     return this.tx(() => {
       const existing = this.deposit(input.id);
