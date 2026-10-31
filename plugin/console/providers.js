@@ -53,7 +53,10 @@ const QUOTE_UNUSABLE_TEXT = {
 export function peerAcceptance(peer) {
   return { nodeId: peer.nodeId || peer.quote?.node?.id, fingerprint: peer.pendingFingerprint || peer.identity?.fingerprint || peer.quote?.identity?.fingerprint, quoteHash: peer.quoteHash || peer.quote?.contentHash };
 }
-export function peerNextStep(status, peer = null) {
+export function peerNextStep(status, peer = null, presence = null) {
+  if (presence && presence.capability?.providesModels === false && (peer?.catalog === "withdrawn" || status === "no-catalog")) {
+    return "这个伙伴在网络中，但尚未共享模型；现在没有可申请的模型。";
+  }
   if (peer && peer.catalog === "withdrawn") {
     return "伙伴网络在线，但已停止共享或撤下目录；旧模型与报价不能再申请，刷新后这一步会消失。";
   }
@@ -395,7 +398,13 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   roots.discovery.append(discoveryIntro, discoveryList);
   function renderDiscovery() {
     if (!state) return;
-    const presence = new Map(items(p2pOf().presence).map((row) => [row.nodeId, row]));
+    // Control-only neighbours have no signed catalogue node id yet, so the
+    // presence index also carries the overlay hostname.
+    const presence = new Map();
+    for (const row of items(p2pOf().presence)) {
+      if (row.nodeId) presence.set(row.nodeId, row);
+      if (row.hostname) presence.set(row.hostname, row);
+    }
     discoverToggle.textContent = state.status.config.catalog?.discoveryEnabled ? "关闭目录发现" : "开启目录发现";
     discoveryList.replaceChildren();
     const peers = items(state.status.catalog?.peers).filter((peer) => peer.status !== "self");
@@ -407,6 +416,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     }
     for (const peer of matches) {
       const card = el("article", null, "card workflow-section");
+      const presenceEntry = presence.get(peer.nodeId) || presence.get(peer.hostname) || null;
       const top = toolbar(peer.quote?.node?.displayName || peer.hostname || "网络伙伴");
       top.append(badge(statusNames[peer.status] || "尚未验证", peer.status === "verified" || peer.status === "connected" ? "good" : "warn"));
       const catalogFact = peer.catalog === "withdrawn"
@@ -418,7 +428,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       card.append(top, paragraph(`${catalogFact} · ${networkFact} · ${peer.quote?.node?.contact || "未提供联系方式"}`));
       const acceptance = peerAcceptance(peer);
       card.append(details("查看完整身份与报价", [["身份指纹", acceptance.fingerprint], ["报价指纹", acceptance.quoteHash], ["报价版本", peer.quote?.publication?.version], ["更新时间", peer.quote?.publication?.updatedAt], ["身份说明", "自签名 TOFU，仅证明同一密钥签名，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
-      card.append(paragraph(peerNextStep(peer.status, peer)));
+      card.append(paragraph(peerNextStep(peer.status, peer, presenceEntry)));
       if (peer.detail) card.append(details("查看目录技术详情", [["原始诊断", peer.detail]]));
       const models = el("div", null, "discovery-models");
       for (const model of items(peer.quote?.models).filter((model) => !query || [model.id, model.displayName, peer.hostname, peer.quote?.node?.displayName].join(" ").toLowerCase().includes(query))) {
@@ -430,7 +440,6 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       if (peer.quote && peer.nodeId) {
         // Zero-file requests need a signed, fresh presence with control ready.
         // Catalog trust alone is not enough, and no port is ever user-entered.
-        const presenceEntry = presence.get(peer.nodeId) || null;
         const presenceFresh = Boolean(presenceEntry) && (!presenceEntry.expiresAt || Date.parse(presenceEntry.expiresAt) > Date.now());
         const security = presenceEntry ? presenceSecurity(presenceEntry, peer) : { signature: "unknown", tofu: "pending" };
         const endpoint = record(presenceEntry?.endpoint);
@@ -476,6 +485,25 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         const legacyActions = el("div", null, "workflow-actions"); legacyActions.append(fileRequest, connect);
         legacy.append(paragraph("旧版需要下载/导入 JSON 或手工交付密钥；仅在没有可用的无文件连接时使用。"), legacyActions);
         card.append(legacy);
+      } else if (presenceEntry) {
+        // Signed control-only presence: the node is here and reachable, but it
+        // offers no models. Nothing here can request or connect.
+        const security = presenceSecurity(presenceEntry, peer);
+        actions.append(paragraph("控制通道签名有效；对方没有开放模型。"));
+        if (security.tofu !== "accepted") {
+          const trust = button(security.tofu === "changed" ? "核对新身份" : "核对身份", async () => {
+            await run("trust-peer", { nodeId: presenceEntry.nodeId, fingerprint: presenceEntry.fingerprint }, () => notice("已记录这个伙伴的身份指纹。", "good"));
+          });
+          actions.append(trust, paragraph(`完整指纹：${presenceEntry.fingerprint}`));
+        }
+        actions.append(details("控制通道与能力（只读）", [
+          ["控制端点", presenceEntry.endpoint?.host ? `${presenceEntry.endpoint.host}${presenceEntry.endpoint.controlPort ? `:${presenceEntry.endpoint.controlPort}` : ""}` : "未报告"],
+          ["覆盖网地址", presenceEntry.endpoint?.mappedCidr || "未报告"],
+          ["共享状态", presenceEntry.capability?.sharing || "未报告"],
+          ["提供模型", presenceEntry.capability?.providesModels === true ? "是" : "否"],
+          ["身份", P2P_TOFU_LABELS[security.tofu] || "尚未确认"],
+          ["presence 到期", presenceEntry.expiresAt ? when(presenceEntry.expiresAt) : "未报告"],
+        ]));
       }
       card.append(actions); discoveryList.append(card);
     }

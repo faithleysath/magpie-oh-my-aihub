@@ -189,6 +189,8 @@ interface FakeServer {
   started: number;
   stopped: number;
   doc: SignedCatalog | null;
+  presence: (() => unknown | null) | null;
+  document: () => SignedCatalog | null;
   stop: () => void;
 }
 
@@ -314,7 +316,15 @@ function probes(extra: Partial<Probes> = {}): Partial<Probes> {
     },
     catalogServer: (opts) => {
       serverStarts += 1;
-      fakeServer = { port: opts.port, started: 1, stopped: 0, doc: null, stop: () => { fakeServer!.stopped += 1; } };
+      fakeServer = {
+        port: opts.port,
+        started: 1,
+        stopped: 0,
+        doc: null,
+        presence: opts.presence ?? null,
+        document: opts.document,
+        stop: () => { fakeServer!.stopped += 1; },
+      };
       const handle = {
         port: opts.port,
         stop: () => fakeServer?.stop(),
@@ -787,6 +797,41 @@ describe("a core stopped by a failed safety check is degraded and recoverable", 
     const after = sup.starts;
     await s.recoverCoreIfHalted();
     expect(sup.starts).toBe(after);
+  });
+});
+
+describe("control-only publication for a node that shares no models", () => {
+  test("exports exactly the presence and control ports, never the gateway", async () => {
+    const s = await service({ sharing: false, catalog: false });
+    s.setControlActive(true);
+    const port = await s.ensureControlPort();
+    expect(port).toBeGreaterThan(0);
+    s.setControlPresence(() => ({ schema: "ohmyaihub.presence/v1", marker: "signed-presence" }));
+    await s.applyControlPublication();
+
+    const cfg = s.config()!;
+    expect(cfg.sharingEnabled).toBe(false);
+    expect(cfg.mappedCidr).not.toBeNull();
+    expect(cfg.proxyCidr).not.toBeNull();
+    const et = sup.cfg!;
+    expect(et.sharingEnabled).toBe(false);
+    expect(et.publishedPorts.sort((a, b) => a - b)).toEqual([cfg.catalog.port, port!].sort((a, b) => a - b));
+    // The gateway port is never forwarded by a control-only node.
+    expect(et.publishedPorts).not.toContain(3425);
+    // The presence listener serves only the signed presence, never a catalogue.
+    expect(fakeServer).not.toBeNull();
+    expect(fakeServer!.document()).toBeNull();
+    expect(fakeServer!.presence?.()).toEqual({ schema: "ohmyaihub.presence/v1", marker: "signed-presence" });
+    // No quote, key or model list is published by this path.
+    expect(s.catalogStatus().quote).toBeNull();
+    expect(JSON.stringify(s.catalogStatus())).not.toContain("sk-");
+
+    // Starting to share replaces the control-only set with the real one.
+    s.setControlActive(false);
+    await s.applyControlPublication();
+    expect(sup.cfg!.publishedPorts).toEqual([]);
+    expect(sup.cfg!.proxyCidr).toBeNull();
+    expect(fakeServer!.stopped).toBeGreaterThan(0);
   });
 });
 

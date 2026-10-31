@@ -481,6 +481,12 @@ export class Service {
   private accountingTimeoutMs: number;
   private catalogServer: CatalogServerHandle | null = null;
   private controlPresenceProvider: (() => unknown | null) | null = null;
+  /** the P2P control listener is running for this Service instance */
+  private controlActive = false;
+  /** presence-only listener used when the node does not share a catalogue */
+  private presenceServer: CatalogServerHandle | null = null;
+  /** called after a successful configure/sharing change so the control plane can re-sync */
+  private topologyListener: (() => Promise<void>) | null = null;
   private catalogServerError: string | null = null;
   private catalogQuote: SignedCatalog | null = null;
   private catalogQuoteHash: string | null = null;
@@ -1358,6 +1364,7 @@ export class Service {
     if (this.accountingTimer) clearInterval(this.accountingTimer);
     this.accountingTimer = null;
     this.stopCatalogServer();
+    this.stopPresenceServer();
     this.walletInstance?.stop();
     await this.supervisor.stop();
   }
@@ -1550,6 +1557,7 @@ export class Service {
         // after every fallible step, so a failed status read cannot leave the
         // old config restored but its registrations already dropped.
         if (!consumingEnabled) await this.dropRemoteRegistrations("consumption disabled");
+        this.notifyTopology();
         return snapshot;
       } catch (e) {
         const why = (e as Error)?.message ?? String(e);
@@ -1761,6 +1769,7 @@ export class Service {
         throw new Error(`stopping sharing failed: ${(e as Error).message}; the overlay core was stopped`);
       }
       logger.info("sharing stopped: the export and the catalogue were withdrawn; keys and records were kept");
+      this.notifyTopology();
       return this.status();
     });
   }
@@ -2024,8 +2033,8 @@ export class Service {
       overlayCidr: cfg.overlayCidr,
       listenAddr: cfg.listenAddr,
       rpcPort: cfg.rpcPort,
-      proxyCidr: cfg.sharingEnabled ? cfg.proxyCidr : null,
-      mappedCidr: cfg.sharingEnabled ? cfg.mappedCidr : null,
+      proxyCidr: cfg.sharingEnabled || this.controlOnlyPublication() ? cfg.proxyCidr : null,
+      mappedCidr: cfg.sharingEnabled || this.controlOnlyPublication() ? cfg.mappedCidr : null,
       publishedPorts: this.publishedPorts(cfg),
       socks5Proxy: cfg.catalog.discoveryEnabled ? `socks5://127.0.0.1:${cfg.catalog.socksPort}` : null,
       portForwards: cfg.consumingEnabled ? this.forwardSpecs() : [],
@@ -2036,10 +2045,28 @@ export class Service {
 
   /** The Forward ACL's ports: the gateway plus the catalogue only while it is published. */
   private publishedPorts(cfg: PluginConfig): number[] {
-    if (!cfg.sharingEnabled) return [];
-    const ports = [...cfg.publishedPorts];
-    if (this.catalogPublishing()) ports.push(cfg.catalog.port);
-    return [...new Set(ports)];
+    if (cfg.sharingEnabled) {
+      const ports = [...cfg.publishedPorts];
+      if (this.catalogPublishing()) ports.push(cfg.catalog.port);
+      // The control listener is a bounded P2P endpoint, never the AI gateway.
+      if (this.controlActive && cfg.controlEnabled && cfg.controlPort) ports.push(cfg.controlPort);
+      return [...new Set(ports)];
+    }
+    // Control-only: the node exports nothing of its Magpie. Exactly the
+    // presence endpoint and the bounded control listener are forwarded.
+    if (!this.controlOnlyPublication()) return [];
+    return [...new Set([cfg.catalog.port, cfg.controlPort!])];
+  }
+
+  /**
+   * A configured node that is not sharing models still takes part in the P2P
+   * control plane: it publishes a signed presence and forwards only its
+   * presence + control ports. That publication never includes the Magpie
+   * gateway or a catalogue, and Inbound stays Drop with zero rules.
+   */
+  private controlOnlyPublication(): boolean {
+    const cfg = this.state.config;
+    return Boolean(cfg && cfg.controlEnabled && this.controlActive && cfg.controlPort && !cfg.sharingEnabled);
   }
 
   private forwardSpecs(): ForwardSpec[] {
@@ -2087,6 +2114,7 @@ export class Service {
         await this.publishCatalogNow().catch((e) => logger.warn(`catalogue rebuild after enabling sharing: ${String(e)}`));
       }
       logger.info(enabled ? "sharing enabled: the gateway is published on the overlay" : "sharing disabled: the network publication was withdrawn");
+      this.notifyTopology();
       return this.status();
     });
   }
@@ -2289,6 +2317,110 @@ export class Service {
   setControlPresence(presence: (() => unknown | null) | null): void {
     this.controlPresenceProvider = presence;
     this.catalogServer?.setPresence?.(presence);
+  }
+
+  /** The control listener started (or stopped): re-evaluate what may be published. */
+  setControlActive(active: boolean): void {
+    this.controlActive = active;
+  }
+
+  /** Registers a re-sync callback for successful topology changes. */
+  setTopologyListener(listener: (() => Promise<void>) | null): void {
+    this.topologyListener = listener;
+  }
+
+  private notifyTopology(): void {
+    if (!this.topologyListener) return;
+    void this.topologyListener().catch((e) => logger.warn(`control plane re-sync failed: ${String(e)}`));
+  }
+
+  /** Persists the control port so the Forward ACL and the next boot use it. */
+  setControlPort(port: number): void {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("invalid control port");
+    const cfg = this.state.config;
+    if (!cfg) return;
+    if (cfg.controlPort === port) return;
+    cfg.controlPort = port;
+    saveState(this.state);
+  }
+
+  /** Allocates and persists a control port before the core starts, when none is set. */
+  async ensureControlPort(): Promise<number | null> {
+    const cfg = this.state.config;
+    if (!cfg?.controlEnabled) return null;
+    if (cfg.controlPort) return cfg.controlPort;
+    const claim = await claimFreePort(this.binder, "127.0.0.1", portRange(35000, 35099));
+    const port = claim.reservation.port;
+    await claim.reservation.release();
+    this.setControlPort(port);
+    return port;
+  }
+
+  /**
+   * Applies the control plane's publication: the control port when sharing, or
+   * the presence + control ports when the node shares no models. A change to
+   * the exported address or the Forward set is a config change and therefore a
+   * supervised restart (EasyTier 2.6.4 has no hot ACL edit).
+   */
+  async applyControlPublication(): Promise<void> {
+    const cfg = this.state.config;
+    if (!cfg) return;
+    if (this.controlActive && cfg.controlEnabled && !cfg.sharingEnabled) {
+      if (!cfg.mappedCidr) cfg.mappedCidr = randomMappedCidr();
+      if (!cfg.proxyCidr && this.lanIp()) cfg.proxyCidr = `${this.lanIp()}/32`;
+      saveState(this.state);
+    }
+    const desired = this.publishedPorts(cfg);
+    const et = this.supervisor.snapshot();
+    const samePorts = desired.length === et.publishedPorts.length && desired.every((p) => et.publishedPorts.includes(p));
+    const sameExport =
+      (cfg.sharingEnabled || this.controlOnlyPublication())
+        ? et.mappedCidr === cfg.mappedCidr
+        : et.mappedCidr === null;
+    if (!samePorts || !sameExport) await this.applyConfig(cfg);
+    await this.applyCatalog();
+    await this.applyPresenceOnly();
+  }
+
+  /** Starts or stops the presence-only listener used by control-only nodes. */
+  private async applyPresenceOnly(): Promise<void> {
+    const cfg = this.state.config;
+    const wanted = Boolean(cfg && this.controlActive && cfg.controlEnabled && !this.catalogPublishing());
+    if (!wanted) {
+      this.stopPresenceServer();
+      return;
+    }
+    const host = this.lanIp();
+    if (!host) {
+      this.stopPresenceServer();
+      logger.warn("no LAN address for the signed presence; the control-only node will not be discoverable");
+      return;
+    }
+    if (this.presenceServer && this.presenceServer.port === cfg!.catalog.port) return;
+    this.stopPresenceServer();
+    try {
+      this.presenceServer = this.probes.catalogServer({
+        hostname: host,
+        port: cfg!.catalog.port,
+        // No catalogue document: only the signed presence is served.
+        document: () => null,
+        presence: () => this.controlPresenceProvider?.() ?? null,
+      });
+      logger.info(`signed presence published on ${host}:${cfg!.catalog.port} (no models shared)`);
+    } catch (e) {
+      logger.error(`cannot publish the signed presence on ${host}:${cfg!.catalog.port}: ${String(e)}`);
+      this.presenceServer = null;
+    }
+  }
+
+  private stopPresenceServer(): void {
+    if (!this.presenceServer) return;
+    try {
+      this.presenceServer.stop();
+    } catch {
+      /* already gone */
+    }
+    this.presenceServer = null;
   }
 
   /** Whether the catalogue should be on the network right now. */
@@ -2623,8 +2755,14 @@ export class Service {
       this.catalogQuoteHash = null;
       this.catalogServerError = null;
       this.writeSnapshot();
+      // A node that does not publish a catalogue may still publish a signed
+      // presence for the control plane.
+      await this.applyPresenceOnly();
       return;
     }
+    // While the catalogue runs it serves /p2p/v1/presence itself; a separate
+    // presence-only listener on the same port would fail to bind.
+    this.stopPresenceServer();
     const host = this.lanIp();
     if (!host) {
       this.catalogServerError = "no usable LAN address to bind the catalogue";
@@ -2643,6 +2781,7 @@ export class Service {
             hostname: host,
             port: cfg.catalog.port,
             document: () => this.localCatalog(),
+            presence: () => this.controlPresenceProvider?.() ?? null,
           });
         }
         await this.publishCatalogNow();

@@ -29,6 +29,7 @@ interface NodeInfo {
   models: string[];
   sharingEnabled: boolean;
   mappedCidr: string | null;
+  publishedPorts: number[];
   gatewayPort: number;
   catalogPort: number;
   providerId: string;
@@ -273,7 +274,11 @@ describe("real HTTP two-Service journey", () => {
   test("request -> approve -> consumer pull -> native Remote readback -> ACK", async () => {
     const j = await setupJourney();
     expect(j.consumer.info.sharingEnabled).toBe(false);
-    expect(j.consumer.info.mappedCidr).toBeNull();
+    // An unshared node joins the control plane with a control-only export: a
+    // mapped address exists, but the Magpie gateway is never in its Forward set.
+    expect(j.consumer.info.mappedCidr).not.toBeNull();
+    expect(j.consumer.info.publishedPorts.length).toBeGreaterThan(0);
+    expect(j.consumer.info.publishedPorts).not.toContain(j.consumer.info.gatewayPort);
 
     await pollUntilConnected(j);
     try { await j.consumer.action("poll"); } catch { /* already acked */ }

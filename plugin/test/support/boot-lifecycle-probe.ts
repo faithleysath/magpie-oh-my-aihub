@@ -14,6 +14,8 @@ mock.module(join(src, "log.ts"), () => ({ redact: (s: string) => s, logger: { in
 mock.module(join(src, "magpie.ts"), () => ({ Magpie: class { version() { return "fixture"; } } }));
 mock.module(join(src, "easytier.ts"), () => ({ ownsProcess: () => false }));
 mock.module(join(src, "console-api.ts"), () => ({ CONSOLE_ACTIONS: [], consoleState: async () => ({}), consoleAction: async () => ({}) }));
+// The P2P control plane is a separate listener; boot must not open it here.
+mock.module(join(src, "control", "app.ts"), () => ({ startControlApp: async () => null, controlAppFor: () => null }));
 const consoleFixture = () => {
   calls.push("console");
   return { port: 12346, issueTicket: () => "unused", pendingPairings: () => [], approvePairing: () => false, stop() {} };
@@ -30,6 +32,8 @@ mock.module(join(src, "service.ts"), () => ({ Service: class {
   supervisor = { snapshot: () => ({ pid: null }) };
   constructor() { calls.push("construct"); constructors++; if (mode === "constructor" && constructors === 1) throw new Error("fixture constructor fail"); }
   config() { return null; }
+  setTopologyListener() {}
+  async ensureControlPort() { return null; }
   async start() {
     calls.push("start");
     if (mode === "pending-signal") { console.log("START_PENDING"); await new Promise(() => {}); }

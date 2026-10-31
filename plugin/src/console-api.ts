@@ -174,7 +174,21 @@ export async function consoleAction(service: Service, name: string, input: Recor
         if(input.minTopUpUsd !== undefined) { if(typeof input.minTopUpUsd !== "number" || !Number.isFinite(input.minTopUpUsd) || input.minTopUpUsd < .0001 || input.minTopUpUsd > 1_000_000) return refuse("minimum credit must be at least $0.0001 and at most $1000000"); options.minTopUpUsd=input.minTopUpUsd; }
         await service.setCatalogOptions(options); return consoleState(service);
       }
-      case "trust-peer": fields(input,["nodeId","fingerprint"]); if(!hex64(input.fingerprint)) return refuse("the exact fingerprint is required"); return clean(await service.trustCatalogPeer(text(input.nodeId,"nodeId"),input.fingerprint));
+      case "trust-peer": {
+        fields(input,["nodeId","fingerprint"]);
+        if(!hex64(input.fingerprint)) return refuse("the exact fingerprint is required");
+        const nodeId = text(input.nodeId,"nodeId");
+        try {
+          return clean(await service.trustCatalogPeer(nodeId,input.fingerprint));
+        } catch (error) {
+          // A node that shares no models has no catalogue entry; its signed
+          // presence is pinned by the control plane instead.
+          const message = String((error as Error)?.message ?? error);
+          const app = controlAppFor(service);
+          if (app && /no discovered catalogue peer/i.test(message)) return app.trustPresence(nodeId, input.fingerprint as string);
+          throw error;
+        }
+      }
       case "connection-request": fields(input,["nodeId","models","fingerprint","quoteHash"]); return clean(service.catalogRequest(text(input.nodeId,"nodeId"),modelList(input.models),acceptance(input)));
       case "request-import": fields(input,["document"]); return clean(await w().importRequest(input.document));
       case "request-approve": fields(input,["requestId","capUsd","models"]); return clean(await w().approve(text(input.requestId,"requestId"),input.capUsd as number,modelList(input.models)));

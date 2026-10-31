@@ -209,7 +209,26 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     // configure() applies an overlay patch; every fresh host must also recover
     // issued keys, reconcile Remote Magpies and start its chain watchers.
     ensureRunning();
+    // The control port is persisted before the core starts, so the Forward ACL
+    // names it from the first start instead of needing a second restart.
+    if (service.config()?.controlEnabled) {
+      await service.ensureControlPort().catch((e) => logger.warn(`control port allocation: ${String(e)}`));
+    }
     await service.start();
+    ensureRunning();
+    const startControl = async () => {
+      if (!service!.config()?.controlEnabled) return;
+      try {
+        if (!controlApp) controlApp = (await startControlApp(service!)) ?? undefined;
+        else await controlApp.sync();
+      } catch (e) {
+        // A failed control plane degrades the P2P features, never the model
+        // gateway or the console: it is reported, not silently ignored.
+        logger.error(`P2P control plane is not running: ${String(e)}`);
+      }
+    };
+    service.setTopologyListener(startControl);
+    await startControl();
     ensureRunning();
 
     api = startApi({ port: opt.apiPort ? Number(opt.apiPort) : undefined, service });

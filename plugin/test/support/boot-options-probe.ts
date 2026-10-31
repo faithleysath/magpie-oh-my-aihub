@@ -33,6 +33,7 @@ mock.module(join(src, "console-api.ts"), () => ({
   CONSOLE_ACTIONS: ["configure", "checks"], consoleState: async () => ({}), consoleAction: async () => ({}),
 }));
 mock.module(join(src, "server.ts"), () => ({ startApi: () => ({ port: 12345, stop() {} }) }));
+mock.module(join(src, "control", "app.ts"), () => ({ startControlApp: async () => null, controlAppFor: () => null }));
 mock.module(join(src, "service.ts"), () => ({
   Service: class {
     supervisor = { snapshot: () => ({ pid: null }) };
@@ -44,6 +45,9 @@ mock.module(join(src, "service.ts"), () => ({
       return {};
     }
     async start() { calls.push({ method: "start" }); }
+    async stop() {}
+    setTopologyListener() {}
+    async ensureControlPort() { return null; }
     writeSnapshot() {}
   },
 }));

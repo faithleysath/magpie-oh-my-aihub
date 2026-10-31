@@ -1072,3 +1072,52 @@ describe("a network neighbour is not a published catalogue", () => {
     } finally { r.cleanup(); }
   });
 });
+
+describe("control-only presence is a neighbour, not an offer", () => {
+  const nodeId = "b".repeat(16);
+  const fp = "c".repeat(64);
+  const stateWithPresence = () => {
+    const state = baseState();
+    const p = state.status.catalog.peers[0];
+    Object.assign(p, {
+      nodeId: null, status: "no-catalog", online: true, catalog: "withdrawn",
+      quote: null, quoteHash: null, identity: null, fetchedAt: null, quoteFresh: false, quoteExpiresAt: null,
+    });
+    state.status.p2p = {
+      presence: [{
+        nodeId, hostname: "伙伴甲", fingerprint: fp,
+        endpoint: { host: "10.66.1.3", mappedCidr: "10.66.1.3/32", controlPort: 35210 },
+        capability: { control: true, sharing: "disabled", providesModels: false },
+        expiresAt: "2099-01-01T00:00:00.000Z", signature: "valid", tofu: "pending", verified: true,
+      }],
+      counts: {},
+    };
+    return state;
+  };
+
+  test("shows the signed channel and the exact fingerprint, with no request action", async () => {
+    const r = runtime(stateWithPresence());
+    try {
+      const panel = r.roots["discovery-panel"];
+      expect(panel.textContent).toContain("尚未共享模型");
+      expect(panel.textContent).toContain(fp);
+      expect(panel.textContent).toContain("10.66.1.3:35210");
+      expect(find(panel, "button", "申请使用（无文件）")).toBeUndefined();
+      expect(find(panel, "button", "选择模型并生成文件")).toBeUndefined();
+      await find(panel, "button", "核对身份").click();
+      await flush();
+      expect(r.calls).toEqual([{ name: "trust-peer", input: { nodeId, fingerprint: fp } }]);
+    } finally { r.cleanup(); }
+  });
+
+  test("a changed presence key is labelled and cannot be silently accepted", () => {
+    const state = stateWithPresence();
+    state.status.p2p.presence[0].tofu = "changed";
+    const r = runtime(state);
+    try {
+      const panel = r.roots["discovery-panel"];
+      expect(panel.textContent).toContain("身份已变化");
+      expect(find(panel, "button", "核对新身份")).toBeDefined();
+    } finally { r.cleanup(); }
+  });
+});

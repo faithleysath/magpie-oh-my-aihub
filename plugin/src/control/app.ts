@@ -18,6 +18,7 @@ import { catalogQuoteUsability, type Service } from "../service.ts";
 import { startControlServer, type ControlServerHandle } from "./http.ts";
 import { createP2pBusinessPort } from "./p2p-port.ts";
 import { PRESENCE_PATH, signPresence, verifyPresence, type PresenceBody } from "./presence.ts";
+import { loadPresenceTrust, presenceTofu, savePresenceTrust, type PresencePin, type PresenceTofu } from "./presence-trust.ts";
 import {
   P2pNode,
   type P2pApprovalView,
@@ -49,6 +50,8 @@ export interface ControlAppOptions {
   now?: () => Date;
   /** tests only: allow a direct LAN/loopback presence endpoint without an ET forward */
   allowLanDirect?: boolean;
+  /** injected read for presence probes; production uses the overlay SOCKS5 path */
+  presenceHttpGet?: (input: { socksPort: number; host: string; port: number; path: string; timeoutMs: number }) => Promise<{ status: number; body: string }>;
 }
 
 export interface ControlActionInput {
@@ -153,10 +156,13 @@ export class ControlApp {
   private readonly peers = new Map<string, P2pHelloTarget>();
   private readonly targets = new Set<string>();
   private readonly seenPresence = new Map<string, PresenceBody>();
+  /** how each seen presence's key relates to the local TOFU pin */
+  private readonly presenceTofu = new Map<string, PresenceTofu>();
+  /** bounded probe bookkeeping for control-only neighbours (no catalogue) */
+  private readonly presenceProbed = new Map<string, { at: number; port: number | null; detail: string | null }>();
   private readonly controlForwards = new Map<string, { localPort: number; dst: string }>();
   private readonly retiredForwards = new Map<number, string>();
   private publishedHost = "127.0.0.1";
-  private previousPublishedPorts: number[] | null = null;
   private stopped = false;
   private readonly allowLanDirect: boolean;
   private constructor(
@@ -169,6 +175,7 @@ export class ControlApp {
     private readonly now: () => Date,
     private readonly tickMs: number,
     allowLanDirect = false,
+    private readonly presenceHttpGet: NonNullable<ControlAppOptions["presenceHttpGet"]> = socksHttpGet,
   ) {
     this.allowLanDirect = allowLanDirect;
   }
@@ -177,11 +184,15 @@ export class ControlApp {
     const cfg = service.config();
     if (!cfg?.nodeId || !cfg.controlEnabled) return null;
     const host = (options.host ?? lanIPv4() ?? "127.0.0.1").trim();
+    // The port is persisted before the core starts (service.ensureControlPort)
+    // so the Forward ACL can name it without an extra restart. A caller may
+    // still pass an explicit test port.
     let port = options.port ?? cfg.controlPort ?? null;
     if (!port) {
       const claim = await claimFreePort(new SocketBinder(), host, portRange(35000, 35099));
       port = claim.reservation.port;
       await claim.reservation.release();
+      service.setControlPort(port);
     }
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("control port allocation failed");
     const identity = loadOrCreateCatalogIdentity();
@@ -196,7 +207,18 @@ export class ControlApp {
     };
     const p2pIdentity = p2pIdentityFromCatalog(identity, binding);
     const store = new P2pStore(statePath("p2p.sqlite"));
-    const app = new ControlApp(service, null as unknown as P2pNode, identity, null as unknown as ControlServerHandle, host, port, options.now ?? (() => new Date()), options.tickMs ?? 4000, options.allowLanDirect ?? false);
+    const app = new ControlApp(
+      service,
+      null as unknown as P2pNode,
+      identity,
+      null as unknown as ControlServerHandle,
+      host,
+      port,
+      options.now ?? (() => new Date()),
+      options.tickMs ?? 4000,
+      options.allowLanDirect ?? false,
+      options.presenceHttpGet,
+    );
     const transport = createHttpTransport(app.endpoints);
     const node = new P2pNode({
       identity: p2pIdentity,
@@ -226,27 +248,21 @@ export class ControlApp {
       now: () => app.now().getTime(),
     });
     (app as { server: ControlServerHandle }).server = server;
-    app.publishedHost = cfg.sharingEnabled && cfg.mappedCidr ? mappedHost(cfg.mappedCidr) : host;
-    app.publishPresence();
-    // Publish the control listener through the existing no-TUN export/Forward
-    // ACL. Inbound stays Drop with zero rules; only this exact port is added to
-    // the provider's Forward allow-list.
-    if (cfg.sharingEnabled && cfg.mappedCidr && typeof (service as { configure?: unknown }).configure === "function") {
-      const current = service.config();
-      if (current && !current.publishedPorts.includes(port)) {
-        app.previousPublishedPorts = [...current.publishedPorts];
-        try {
-          await service.configure({ publishedPorts: [...new Set([...current.publishedPorts, port])] });
-          app.publishPresence();
-        } catch (error) {
-          server.stop();
-          service.setControlPresence(null);
-          node.close();
-          if (typeof service.configure === "function") await service.configure({ publishedPorts: app.previousPublishedPorts }).catch(() => {});
-          throw error;
-        }
-      }
+    service.setControlActive(true);
+    try {
+      // Publish the control listener through the existing no-TUN export/Forward
+      // ACL. Sharing nodes add this one port to their published set; a node
+      // that shares no models exports only presence + control, never the
+      // Magpie gateway. Inbound stays Drop with zero rules either way.
+      await service.applyControlPublication();
+    } catch (error) {
+      service.setControlActive(false);
+      server.stop();
+      service.setControlPresence(null);
+      node.close();
+      throw error;
     }
+    app.publishPresence();
     app.ticker = setInterval(() => {
       void app.pollTick();
     }, app.tickMs);
@@ -254,6 +270,26 @@ export class ControlApp {
     byService.set(service, app);
     active = app;
     return app;
+  }
+
+  /**
+   * Re-applies the control plane after a topology change (configure, sharing
+   * on/off). The publication set, the exported address and the presence-only
+   * listener all follow the current config; nothing here creates a key or
+   * changes an authorization.
+   */
+  async sync(): Promise<void> {
+    if (this.stopped) return;
+    const cfg = this.service.config();
+    if (!cfg?.controlEnabled) {
+      this.service.setControlActive(false);
+      await this.service.applyControlPublication().catch(() => {});
+      return;
+    }
+    const sharing = cfg.sharingEnabled && cfg.mappedCidr;
+    this.publishedHost = sharing ? mappedHost(cfg.mappedCidr!) : this.host;
+    await this.service.applyControlPublication();
+    this.publishPresence();
   }
 
   private presenceBody(): PresenceBody {
@@ -516,6 +552,7 @@ export class ControlApp {
   }
 
   private async pollTick(): Promise<void> {
+    await this.probeControlOnlyNeighbours().catch(() => {});
     for (const nodeId of this.targets) {
       try {
         const cached = this.endpoints.get(nodeId);
@@ -543,6 +580,134 @@ export class ControlApp {
     } catch {
       /* surfaced by status/action-needed, never retried as a new write here */
     }
+  }
+
+  /**
+   * A configured node that shares no models still publishes a signed presence
+   * on its catalogue port (control-only publication). Its catalogue is empty,
+   * so it never appears as a model offer; this probe only discovers that the
+   * node exists, is reachable and what it is willing to accept. Bounded: one
+   * probe per peer per 10 s, at most 2 new probes per tick, and never a model
+   * request.
+   */
+  private async probeControlOnlyNeighbours(): Promise<void> {
+    const cfg = this.service.config();
+    if (!cfg) return;
+    const peers = this.service.catalogStatus().peers;
+    let budget = 2;
+    for (const peer of peers) {
+      if (budget <= 0) break;
+      if (peer.status === "self" || peer.status === "conflict") continue;
+      if (!peer.mappedCidr || peer.online !== true) continue;
+      if (peer.quote) continue; // a published catalogue has its own discovery path
+      if (this.seenPresence.has(peer.nodeId ?? "")) continue;
+      const key = peer.hostname;
+      const last = this.presenceProbed.get(key);
+      const now = this.now().getTime();
+      if (last && now - last.at < 10_000) continue;
+      budget -= 1;
+      this.presenceProbed.set(key, { at: now, port: null, detail: null });
+      try {
+        await this.probePresence(peer.mappedCidr, cfg.catalog.port);
+        this.presenceProbed.set(key, { at: now, port: this.presenceProbed.get(key)?.port ?? null, detail: null });
+      } catch (error) {
+        this.presenceProbed.set(key, { at: now, port: null, detail: String((error as Error)?.message ?? error).slice(0, 200) });
+      }
+    }
+  }
+
+  /**
+   * Reads and verifies a peer's signed presence from its mapped address. The
+   * signature, the node id/hostname binding and the mapped address are checked
+   * before anything is remembered; the key is pinned on first sight and a
+   * change is reported, never accepted.
+   */
+  async probePresence(mappedCidr: string, basePort: number): Promise<PresenceBody> {
+    const cfg = this.service.config();
+    if (!cfg) throw new Error("configure this node first");
+    let lastDetail = "no presence answer";
+    for (const port of [basePort, basePort + 1, basePort + 2, basePort + 3, basePort + 4].filter((p) => p <= 65535)) {
+      let res: { status: number; body: string };
+      try {
+        res = await this.presenceHttpGet({
+          socksPort: cfg.catalog.socksPort,
+          host: mappedHost(mappedCidr),
+          port,
+          path: PRESENCE_PATH,
+          timeoutMs: 4000,
+        });
+      } catch (e) {
+        lastDetail = `no signed presence through the overlay: ${(e as Error).message}`;
+        continue;
+      }
+      if (res.status !== 200) {
+        lastDetail = `presence HTTP ${res.status} on port ${port}`;
+        continue;
+      }
+      let presence: PresenceBody;
+      try {
+        presence = verifyPresence(JSON.parse(res.body), this.now(), { expectedMappedCidr: mappedCidr });
+      } catch (e) {
+        lastDetail = `invalid presence: ${(e as Error).message}`;
+        continue;
+      }
+      const pins = loadPresenceTrust();
+      const existing = pins[presence.node.nodeId];
+      const state = presenceTofu(existing, presence.node.fingerprint);
+      const now = this.now().toISOString();
+      if (!existing) {
+        pins[presence.node.nodeId] = {
+          nodeId: presence.node.nodeId,
+          fingerprint: presence.node.fingerprint,
+          publicKey: presence.node.publicKey,
+          firstSeenAt: now,
+          lastSeenAt: now,
+          accepted: false,
+          pending: null,
+        };
+      } else if (existing.fingerprint !== presence.node.fingerprint) {
+        existing.pending = { fingerprint: presence.node.fingerprint, publicKey: presence.node.publicKey, seenAt: now };
+        existing.lastSeenAt = now;
+      } else {
+        existing.lastSeenAt = now;
+      }
+      savePresenceTrust(pins);
+      this.seenPresence.set(presence.node.nodeId, presence);
+      this.presenceTofu.set(presence.node.nodeId, state);
+      this.presenceProbed.set(presence.node.hostname, { at: this.now().getTime(), port, detail: null });
+      return presence;
+    }
+    throw new Error(lastDetail);
+  }
+
+  /** Human acceptance of a control-only peer's full fingerprint (TOFU). */
+  trustPresence(nodeId: string, fingerprint: string): { nodeId: string; fingerprint: string; accepted: true } {
+    if (!/^[a-f0-9]{8,64}$/.test(nodeId)) throw new Error("invalid node id");
+    if (!/^[0-9a-f]{64}$/.test(fingerprint)) throw new Error("the exact 64-hex fingerprint is required");
+    const pins = loadPresenceTrust();
+    const pin: PresencePin | undefined = Object.hasOwn(pins, nodeId) ? pins[nodeId] : undefined;
+    if (!pin) throw new Error(`no signed presence from ${nodeId} has been read yet`);
+    const pendingMatches = pin.pending?.fingerprint === fingerprint;
+    if (!pendingMatches && pin.fingerprint !== fingerprint) {
+      throw new Error(`the observed fingerprint of ${nodeId} is ${pin.pending?.fingerprint ?? pin.fingerprint}, not ${fingerprint}`);
+    }
+    if (!pendingMatches && pin.fingerprint === fingerprint && pin.pending) {
+      // Re-accepting the key that is already trusted does not confirm the new
+      // key; the change warning stays until the new fingerprint is accepted.
+      return { nodeId, fingerprint, accepted: true };
+    }
+    pins[nodeId] = {
+      ...pin,
+      fingerprint,
+      publicKey: pendingMatches ? pin.pending!.publicKey : pin.publicKey,
+      accepted: true,
+      pending: null,
+      lastSeenAt: this.now().toISOString(),
+    };
+    savePresenceTrust(pins);
+    const seen = this.seenPresence.get(nodeId);
+    if (seen && seen.node.fingerprint === fingerprint) this.presenceTofu.set(nodeId, "accepted");
+    return { nodeId, fingerprint, accepted: true };
   }
 
   async state(): Promise<Record<string, unknown>> {
@@ -625,10 +790,14 @@ export class ControlApp {
       })),
       presence: [...this.seenPresence.values()].map((p) => {
         const catalogPeer = this.service.catalogStatus().peers.find((x) => x.nodeId === p.node.nodeId);
+        const probed = this.presenceProbed.get(p.node.hostname);
+        // A control-only peer has no catalogue entry; its TOFU state comes from
+        // the persisted presence pin. A catalogue identity, when present, is
+        // stricter and wins.
         const tofu =
           catalogPeer?.status === "verified" || catalogPeer?.status === "connected" ? "accepted"
           : catalogPeer?.status === "identity-changed" ? "changed"
-          : catalogPeer ? "pending" : "unknown";
+          : this.presenceTofu.get(p.node.nodeId) ?? (catalogPeer ? "pending" : "unknown");
         return {
           nodeId: p.node.nodeId,
           hostname: p.node.hostname,
@@ -639,6 +808,8 @@ export class ControlApp {
           signature: "valid",
           tofu,
           verified: true,
+          catalogQuoteHash: catalogPeer?.quoteHash ?? null,
+          presencePort: probed?.port ?? null,
         };
       }),
       counts: {
@@ -683,21 +854,22 @@ export class ControlApp {
       }
     }
     this.node.close();
-    const published = this.previousPublishedPorts;
-    if (published && typeof (this.service as { configure?: unknown }).configure === "function") {
-      try {
-        await this.service.configure({ publishedPorts: published });
-      } catch (error) {
-        degraded = `control port ACL restore failed: ${String((error as Error)?.message ?? error)}`;
-      }
+    this.service.setControlActive(false);
+    try {
+      // Withdraw the control-only export / control port. Model sharing, keys
+      // and the catalogue are untouched: this only removes the P2P endpoint.
+      await this.service.applyControlPublication();
+    } catch (error) {
+      degraded = `control publication withdrawal failed: ${String((error as Error)?.message ?? error)}`;
     }
-    if (degraded) throw new Error(degraded);
+    // Clear the in-memory ownership first: a degraded stop still releases this
+    // instance, so a retry starts from a clean app rather than a half-dead one.
     this.controlForwards.clear();
     this.retiredForwards.clear();
-    this.previousPublishedPorts = null;
     active = null;
     byService.delete(this.service);
     this.stopped = true;
+    if (degraded) throw new Error(degraded);
   }
 }
 

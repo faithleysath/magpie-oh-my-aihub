@@ -341,6 +341,7 @@ console.log(
       models: [LAB_MODEL],
       sharingEnabled: config.sharingEnabled,
       mappedCidr: config.mappedCidr,
+      publishedPorts: (sup as unknown as { cfg?: { publishedPorts?: number[] } }).cfg?.publishedPorts ?? [],
       gatewayPort,
       catalogPort,
       providerId: providerIdFor(providerNodeId),

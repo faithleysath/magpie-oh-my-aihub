@@ -265,7 +265,9 @@ export function renderConfig(cfg: EasytierConfig): string {
   lines.push(`ipv4 = ${tomlString(cfg.virtualIpv4)}`);
   if (cfg.listenAddr) lines.push(`listeners = [${tomlString(cfg.listenAddr.startsWith("tcp://") || cfg.listenAddr.includes("://") ? cfg.listenAddr : `tcp://${cfg.listenAddr}`)}]`);
   if (cfg.peers.length > 0) lines.push(`peer = [${cfg.peers.map((p) => `{ uri = ${tomlString(p)} }`).join(", ")}]`);
-  if (cfg.sharingEnabled && cfg.proxyCidr && cfg.mappedCidr) {
+  // The export is what makes the node reachable at its mapped address. It can
+  // carry a shared Magpie, or only the bounded P2P presence/control ports.
+  if (cfg.proxyCidr && cfg.mappedCidr) {
     lines.push(
       `proxy_network = [{ cidr = ${tomlString(cfg.proxyCidr)}, mapped_cidr = ${tomlString(cfg.mappedCidr)} }]`,
     );
@@ -307,7 +309,7 @@ export function renderConfig(cfg: EasytierConfig): string {
   }
   lines.push("");
   lines.push("[acl.acl_v1]");
-  if (cfg.sharingEnabled) {
+  if (cfg.publishedPorts.length > 0) {
     lines.push("# Forward: the subnet-proxy path a consumer reaches; exactly the published ports.");
     lines.push("[[acl.acl_v1.chains]]");
     lines.push('name = "Forward"');
@@ -340,9 +342,10 @@ export function renderConfig(cfg: EasytierConfig): string {
 function expectationsOf(cfg: EasytierConfig): AclExpectation {
   return {
     sharingEnabled: cfg.sharingEnabled,
-    publishedPorts: cfg.sharingEnabled ? cfg.publishedPorts : [],
+    exportEnabled: Boolean(cfg.proxyCidr && cfg.mappedCidr),
+    publishedPorts: cfg.proxyCidr && cfg.mappedCidr ? cfg.publishedPorts : [],
     proxy:
-      cfg.sharingEnabled && cfg.proxyCidr && cfg.mappedCidr
+      cfg.proxyCidr && cfg.mappedCidr
         ? { cidr: cfg.proxyCidr, mappedCidr: cfg.mappedCidr }
         : null,
     portForwards: cfg.consumingEnabled ? cfg.portForwards : [],
@@ -1067,7 +1070,7 @@ export class EasytierSupervisor {
       const effective = extractToml(node.config, "network_secret");
       if (effective) registerSecret(effective);
 
-      if (this.cfg?.sharingEnabled && this.cfg.mappedCidr) {
+      if (this.cfg?.mappedCidr) {
         const want = mappedHost(this.cfg.mappedCidr);
         // An unmapped export is listed as "10.0.0.1"; a mapped one as
         // "192.0.2.10->10.66.1.2" (real->dialled), so compare the dialled side.
@@ -1167,7 +1170,7 @@ export class EasytierSupervisor {
    * move, so a flapping interface does not restart the core in a loop.
    */
   async relocateProxy(): Promise<SupervisorState> {
-    if (!this.cfg || !this.cfg.sharingEnabled) return this.snapshot();
+    if (!this.cfg || !this.cfg.proxyCidr) return this.snapshot();
     const ip = this.lanIpSource();
     if (!ip || !this.cfg.proxyCidr) return this.snapshot();
     const next = `${ip}/32`;
@@ -1186,7 +1189,7 @@ export class EasytierSupervisor {
 
   /** Watches the provider's own address; called by the monitor. */
   private maybeRelocate(): void {
-    if (!this.cfg || !this.cfg.sharingEnabled || !this.cfg.proxyCidr) return;
+    if (!this.cfg || !this.cfg.proxyCidr) return;
     const ip = this.lanIpSource();
     const decision = relocationDecision({
       current: this.cfg.proxyCidr,
