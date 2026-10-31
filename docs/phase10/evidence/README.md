@@ -15,6 +15,10 @@ docs/phase10/evidence/
 ├── 2026-10-31-integration-cc0d740-host-env.txt        ← PID/端口/argv 脱敏摘录
 ├── 2026-10-31-integration-cc0d740-console.sha256     ← cc0 Console 5 文件 hash
 ├── 2026-10-31-integration-cc0d740-host.SHA256SUMS    ← 上述文件 + 7 图 hash
+├── 2026-10-31-a-lab-1c14ec4-e2e.md                    ← A-lab 同机 loopback E2E（协议 PASS / UX NO-GO）
+├── 2026-10-31-a-lab-1c14ec4-browser.md                ← A-lab 真实宿主浏览器验收（F1/F2）
+├── a-lab-1c14ec4/                                    ← sanitized protocol/PID/cleanup evidence + SHA256SUMS
+└── a-lab-1c14ec4/screenshots/                        ← 10 张 A-lab 精选图
 ├── screenshots/                             ← 16 张修改前实拍 + SHA256SUMS
 └── screenshots/cc0d740/                     ← cc0 真实宿主 7 张（hash 见 host.SHA256SUMS）
 ```
@@ -84,11 +88,27 @@ docs/phase10/evidence/
 - `docs/phase10/evidence/2026-10-31-integration-cc0d740-console.sha256`
 - `docs/phase10/evidence/2026-10-31-integration-cc0d740-host.SHA256SUMS`
 - `docs/phase10/evidence/screenshots/cc0d740/`（7 张 PNG）
+- `docs/phase10/evidence/2026-10-31-a-lab-1c14ec4-e2e.md`
+- `docs/phase10/evidence/2026-10-31-a-lab-1c14ec4-browser.md`
+- `docs/phase10/evidence/a-lab-1c14ec4/`（sanitized evidence + `SHA256SUMS`）
+- `docs/phase10/evidence/a-lab-1c14ec4/screenshots/`（10 张）
 
 ## cc0 与 next 证据边界
 
 - **cc0 `cc0d740`**：组合软件验证 845 pass/8 fail（全部 `EADDRNOTAVAIL`，`TIME_WAIT` 16 244/16 384）→ 恢复后 853/0；frozen install/typecheck/boot/secret PASS。真实宿主以**本地目录**安装，5 个 UI 文件 hash、ownerPid/status.pid/listener/argv 一致；三字段/主题/焦点/390/logout PASS；**5 页业务/join/share/payment UNKNOWN**。tracked 源 clean，但宿主会写 ignored 运行期文件，不能称“源完全未写”。**非产品 GO**。
 - **next `87a72c6`**：只接 #28 安全工具 delta；gitleaks 12 selftest、pack --selftest、组合 worktree scan 0。**与 cc0 的 116 raw findings 分开记**，不混称。
 - **#24 Windows 子集**与 **#31 dynamic ports** 是两项独立证据；报告列表不得写成“Windows #31”。
+
+## A-lab 1c14ec4 证据边界
+
+- 同机 loopback ET 链路，**不是 NAT/relay/WAN**；真实 Magpie 0.1.2289 + EasyTier 2.6.4。
+- 协议层：三字段双 join、目录真实发现、ACL/管理隔离、401/401/200、原生 429、同 key cap forward 13425→13426 再 restart、evidence gen3 PASS。
+- Remote 由 f63b 内部实验动作准备，是 **synthetic fixture**，不是 B 文件/ZeroFile GO，也不是普通用户授权路径。
+- 浏览器：F1 勾选后分享按钮不同步、F2 hidden CSS 让停止共享可见，**A 总 UX NO-GO**；分享结果不能标正常路径 PASS。
+- 清理：8 PID manifest、9 lab ports free、lab root 删除；原始 secret/state 不入库。
+- 原始报告 hash：E2E `d5c9a9eb…`，browser `5f025b97…`；仓库脱敏副本 hash：E2E `65d6f70d…`，browser `6a6d2803…`；证据文件 hash 见 `a-lab-1c14ec4/SHA256SUMS`。
+- `copy-manifest-reconstructed.json` = `130542f5…`，是从冻结 HEAD 在 lab root 删除后重建，**不是原始 per-node manifest**；删除前 76 文件 0 mismatch 记录在 E2E 报告。
+- `cleanup-proof.json` = `e0c2787b…`，第二次 cleanup 覆盖导致 `before` 为空；真实 PID 在 `cleanup-last.json`/`pid-manifest.json`。`http-transcript-sanitized.json` 是摘要，不是 byte-exact raw。
+- 只收录 8 张精选图；未精选 22 张未入库。A-lab 无活动环境，协议主路径 PASS 但 F1/F2 使 A 分享 UX 不判 PASS。
 
 收录时保留“实验临时标识非密钥”的说明，并注明完整原始截图与 innerText 未入库。

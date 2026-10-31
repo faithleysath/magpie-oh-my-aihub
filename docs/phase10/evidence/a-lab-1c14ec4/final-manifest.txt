@@ -1,0 +1,25 @@
+== final manifest 2026-10-31T04:02:21Z ==
+17798     1 /private<lab-root>/provider/Magpie.app/Contents/MacOS/magpie web --addr 127.0.0.1:39219 --no-open
+19029 46163 /private<lab-root>/provider/data/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private<lab-root>/provider/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17930
+46163 17798 /private<lab-root>/provider/data/cache/bun/1.4.4/magpie-bun run /private<lab-root>/provider/data/cache/plugin-host/host-57e4026712e7.js
+73091     1 /private<lab-root>/consumer/Magpie.app/Contents/MacOS/magpie web --addr 127.0.0.1:33009 --no-open
+85576 73091 /private<lab-root>/consumer/data/cache/bun/1.4.4/magpie-bun run /private<lab-root>/consumer/data/cache/plugin-host/host-57e4026712e7.js
+85581 85576 /private<lab-root>/consumer/data/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private<lab-root>/consumer/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17929
+== listeners (lab ports) ==
+== known lab ports ==
+39219: magpie 17798 127.0.0.1:39219
+33009: magpie 73091 127.0.0.1:33009
+33060: magpie 17798 192.168.43.86:33060
+25759: magpie 73091 192.168.43.86:25759
+3426: magpie-bu 46163 192.168.43.86:3426
+13401: easytier- 19029 127.0.0.1:13401
+13402: easytier- 85581 127.0.0.1:13402
+11010: easytier- 19029 *:11010
+11011: easytier- 85581 *:11011
+13426: easytier- 85581 127.0.0.1:13426
+17929: easytier- 85581 127.0.0.1:17929
+17930: easytier- 19029 127.0.0.1:17930
+34517: magpie-bu 46163 127.0.0.1:34517
+34518: magpie-bu 85576 127.0.0.1:34518
+55659: magpie-bu 46163 127.0.0.1:55659
+56555: magpie-bu 85576 127.0.0.1:56555

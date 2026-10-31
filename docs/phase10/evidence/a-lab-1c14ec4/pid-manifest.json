@@ -1,0 +1,93 @@
+{
+ "labRoot": "<lab-root>",
+ "note": "root deleted after export; cleanup-last.json was captured BEFORE `cleanup --delete` so the second cleanup did not overwrite these PIDs",
+ "finalProcesses": {
+  "provider": [
+   {
+    "role": "upstream",
+    "pid": 17529
+   },
+   {
+    "role": "magpie-web",
+    "pid": 17798,
+    "argv": "/private<lab-root>/provider/Magpie.app/Contents/MacOS/magpie web --addr 127.0.0.1:39219 --no-open"
+   },
+   {
+    "role": "plugin-host",
+    "pid": 46163,
+    "argv": "magpie-bun run /private<lab-root>/provider/data/cache/plugin-host/host-57e4026712e7.js"
+   },
+   {
+    "role": "easytier-core",
+    "pid": 19029,
+    "argv": "easytier-core -c /private<lab-root>/provider/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17930"
+   }
+  ],
+  "consumer": [
+   {
+    "role": "upstream",
+    "pid": 73081
+   },
+   {
+    "role": "magpie-web",
+    "pid": 73091,
+    "argv": "/private<lab-root>/consumer/Magpie.app/Contents/MacOS/magpie web --addr 127.0.0.1:33009 --no-open"
+   },
+   {
+    "role": "plugin-host",
+    "pid": 85576,
+    "argv": "magpie-bun run /private<lab-root>/consumer/data/cache/plugin-host/host-57e4026712e7.js"
+   },
+   {
+    "role": "easytier-core",
+    "pid": 85581,
+    "argv": "easytier-core -c /private<lab-root>/consumer/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17929"
+   }
+  ]
+ },
+ "cleanup": {
+  "at": "2026-10-31T04:02:27Z",
+  "nodes": {
+   "provider": {
+    "before": [
+     17529,
+     17798,
+     19029,
+     46163
+    ],
+    "remaining": [],
+    "portsFree": {
+     "web": true,
+     "gateway": true,
+     "upstream": true,
+     "listen": true,
+     "catalog": true,
+     "socks": true,
+     "api-port": true,
+     "console-port": true,
+     "rpc": true
+    }
+   },
+   "consumer": {
+    "before": [
+     73081,
+     73091,
+     85576,
+     85581
+    ],
+    "remaining": [],
+    "portsFree": {
+     "web": true,
+     "gateway": true,
+     "upstream": true,
+     "listen": true,
+     "catalog": true,
+     "socks": true,
+     "api-port": true,
+     "console-port": true,
+     "rpc": true
+    }
+   }
+  }
+ }
+}

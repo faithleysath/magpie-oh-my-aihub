@@ -1,0 +1,15 @@
+== provider ==
+web pid: 17798 argv: /private<lab-root>/provider/Magpie.app/Contents/MacOS/magpie web --addr 127.0.0.1:39219 --no-open
+core pid: 19029 argv: /private<lab-root>/provider/data/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private<lab-root>/provider/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17930
+upstream pid: 17529
+== consumer ==
+web pid: 73091 argv: /private<lab-root>/consumer/Magpie.app/Contents/MacOS/magpie web --addr 127.0.0.1:33009 --no-open
+core pid: 73112 argv: /private<lab-root>/consumer/data/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private<lab-root>/consumer/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17929
+upstream pid: 73081
+-- all processes whose command mentions the lab root --
+17798     1 /private<lab-root>/provider/Magpie.app/Contents/MacOS/magpie web --addr 127.0.0.1:39219 --no-open
+19029 46163 /private<lab-root>/provider/data/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private<lab-root>/provider/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17930
+46163 17798 /private<lab-root>/provider/data/cache/bun/1.4.4/magpie-bun run /private<lab-root>/provider/data/cache/plugin-host/host-57e4026712e7.js
+73091     1 /private<lab-root>/consumer/Magpie.app/Contents/MacOS/magpie web --addr 127.0.0.1:33009 --no-open
+73108 73091 /private<lab-root>/consumer/data/cache/bun/1.4.4/magpie-bun run /private<lab-root>/consumer/data/cache/plugin-host/host-57e4026712e7.js
+73112 73108 /private<lab-root>/consumer/data/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private<lab-root>/consumer/data/oh-my-aihub/easytier/current.toml -r 127.0.0.1:17929
