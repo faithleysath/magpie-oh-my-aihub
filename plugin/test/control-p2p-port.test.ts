@@ -91,6 +91,9 @@ function realService() {
   });
   svc.requestApprovalContext = context;
   svc.writeSnapshot = () => {};
+  // The assembly's full network projection needs a complete catalog fixture;
+  // this adapter test only needs the sharing gate.
+  (svc as any).statusSnapshotForTest = () => ({ config: { sharingEnabled: true, shareSuspended: null } });
   // The real gateway refuses an unknown secret with 401; the shared fake uses
   // a plain "no such key" message, which the revoke proof deliberately treats
   // as UNKNOWN, not as evidence of revocation.
