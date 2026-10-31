@@ -23,6 +23,8 @@
 export const EIP6963_ANNOUNCE = "eip6963:announceProvider";
 export const EIP6963_REQUEST = "eip6963:requestProvider";
 export const TESTNET_CHAIN_IDS = Object.freeze([97, 84532]);
+/** Core credit allowlist: unknown chain defaults to deny, never infer from networkType. */
+export const CREDIT_CHAIN_IDS = Object.freeze([97, 84532]);
 export const MAINNET_CHAIN_IDS = Object.freeze([56, 8453]);
 
 /** Local copy of the C-registry hard set until plugin/src/mainnet-surface.ts merges. */
@@ -494,37 +496,13 @@ export function typedDataDigest(data) {
 /* Untrusted EIP-6963 info and icon handling                           */
 /* ------------------------------------------------------------------ */
 
-const SVG_DANGER = [
-  /<script\b/i, /<foreignobject\b/i, /<iframe\b/i, /<object\b/i, /<embed\b/i,
-  /\son[a-z]+\s*=/i, /javascript:/i, /@import\b/i, /url\s*\(/i, /expression\s*\(/i,
-  /<!doctype/i, /<!entity/i, /<(?:image|use)\b[^>]*(?:href|src)\s*=\s*["']https?:/i,
-];
-
-function base64ToBytes(text) {
-  if (typeof globalThis.atob !== "function") return null;
-  try {
-    const binary = globalThis.atob(text);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  } catch {
-    return null;
-  }
-}
-
-/** Returns a base64 data URL safe to assign to an <img>, or null. */
-export function safeWalletIcon(value) {
-  if (typeof value !== "string" || value.length > 160000) return null;
-  const match = /^data:image\/(png|webp|svg\+xml);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
-  if (!match) return null;
-  const bytes = base64ToBytes(match[2]);
-  if (!bytes || bytes.length === 0 || bytes.length > 120000) return null;
-  if (match[1] === "svg+xml") {
-    let text;
-    try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return null; }
-    if (SVG_DANGER.some((pattern) => pattern.test(text))) return null;
-  }
-  return `data:image/${match[1]};base64,${match[2]}`;
+/**
+ * Data/SVG icons are intentionally not used. Remote wallet-supplied images are
+ * an unnecessary rendering/XSS surface; callers must show the sanitized name or
+ * its initial. Kept as a null-returning compatibility export.
+ */
+export function safeWalletIcon() {
+  return null;
 }
 
 /**
@@ -543,14 +521,14 @@ export function sanitizeWalletInfo(info) {
   }
   let name = cleanText(raw.name, 80);
   if (!name) name = "未命名钱包";
-  const icon = safeWalletIcon(raw.icon);
-  if (raw.icon && !icon) warnings.push("icon-rejected");
-  if (!raw.icon) warnings.push("missing-icon");
-  return Object.freeze({ uuid, name, rdns, icon, identity: "unverified", source: "eip6963", warnings: Object.freeze(warnings) });
+  // Never render remote data:/SVG icons. The UI uses the name or this initial.
+  if (raw.icon) warnings.push("icon-not-rendered");
+  const initial = Array.from(name)[0] ?? "?";
+  return Object.freeze({ uuid, name, rdns, icon: null, initial, identity: "unverified", source: "eip6963", warnings: Object.freeze(warnings) });
 }
 
 function legacyInfo() {
-  return Object.freeze({ uuid: "", name: "旧式浏览器钱包（window.ethereum）", rdns: "", icon: null, identity: "unverified", source: "legacy", warnings: Object.freeze(["legacy-no-eip6963"]) });
+  return Object.freeze({ uuid: "", name: "旧式浏览器钱包（window.ethereum）", rdns: "", icon: null, initial: "旧", identity: "unverified", source: "legacy", warnings: Object.freeze(["legacy-no-eip6963"]) });
 }
 
 /**
@@ -578,6 +556,7 @@ export function createWalletDiscovery(options = {}) {
       name: record.info.name,
       rdns: record.info.rdns,
       icon: record.info.icon,
+      initial: record.info.initial,
       identity: "unverified",
       source: record.info.source,
       warnings: Object.freeze([...record.info.warnings]),
@@ -796,6 +775,7 @@ function assertSendableNetwork(network, allowedChainIds) {
   // ChainId is the hard gate: a forged networkType="testnet" on 56/8453 still
   // fails here. Do not replace this with a metadata-only check.
   assertNoMainnetSend(network.chainId);
+  if (!CREDIT_CHAIN_IDS.includes(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "不在核心 credit 链 allowlist（只允许 97/84532）");
   if (network.networkType !== "testnet") throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "只允许测试网");
   if (!allowedChainIds.has(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "该测试网不在允许列表");
   if (!network.enabled) throw fail(WALLET_ERROR.CHAIN_DISABLED, `chainId ${network.chainId} 未启用`);
@@ -817,6 +797,7 @@ function assertDepositNetworkKnown(registry, chainId) {
   if (registry === undefined || registry === null) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "签名需要本地网络登记；未提供注册表");
   const network = findNetwork(registry, chainId);
   assertNoMainnetSend(chainId);
+  if (!CREDIT_CHAIN_IDS.includes(chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "签名不在核心 credit 链 allowlist（只允许 97/84532）");
   if (network.networkType !== "testnet") throw fail(WALLET_ERROR.MAINNET_BLOCKED, "主网签名请求被阻断");
   if (!network.enabled || network.support !== "credit" || !network.receivable) throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该测试网当前只读或未开启收款，不能签名");
 }
@@ -852,6 +833,7 @@ export function validateDepositDocument(document, options = {}) {
   if (d.schema !== "ohmyaihub.deposit-request/v1") throw fail(WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT, "不是充值请求文件");
   if (!Number.isSafeInteger(d.chainId) || d.chainId <= 0) throw fail(WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT, "chainId 无效");
   assertNoMainnetSend(d.chainId);
+  if (!CREDIT_CHAIN_IDS.includes(d.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "请求不在核心 credit 链 allowlist（只允许 97/84532）");
   if (!allowed.has(d.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "请求不是允许的测试网络");
   if (options.expectedChainId !== undefined && options.expectedChainId !== d.chainId) throw fail(WALLET_ERROR.CHAIN_MISMATCH, "请求网络与预期不一致");
   const invoiceId = textValue(d.invoiceId, "请求编号");
@@ -1013,7 +995,7 @@ export function createExternalWallet(options = {}) {
       status, account, accounts: Object.freeze([...accounts]), chainId, generation, disposed, lastError,
       selection: Object.freeze({
         id: selection.id, name: selection.info.name, rdns: selection.info.rdns, uuid: selection.info.uuid,
-        identity: "unverified", source: selection.info.source, warnings: Object.freeze([...(selection.info.warnings ?? [])]),
+        initial: selection.info.initial, identity: "unverified", source: selection.info.source, warnings: Object.freeze([...(selection.info.warnings ?? [])]),
       }),
     });
   }
@@ -1150,6 +1132,7 @@ export function createExternalWallet(options = {}) {
       if (network.networkType !== "mainnet" || network.support !== "read-only") throw fail(WALLET_ERROR.INVALID_REGISTRY, "目标不是已登记的只读主网");
     } else {
       const network = findNetwork(registry, target);
+      if (!CREDIT_CHAIN_IDS.includes(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "目标不在核心 credit 链 allowlist（只允许 97/84532）");
       if (!allowedChainIds.has(network.chainId) || network.networkType !== "testnet") throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "目标测试网不在允许列表");
     }
     if (chainId === target) return Object.freeze({ chainId, already: true, generation });
@@ -1180,8 +1163,9 @@ export function createExternalWallet(options = {}) {
       if (!allowMainnetRead) throw fail(WALLET_ERROR.MAINNET_BLOCKED, "主网只读需要显式允许");
       if (network.support !== "read-only") throw fail(WALLET_ERROR.INVALID_REGISTRY, "主网记录不是 read-only，拒绝读取");
     }
-    const readOnly = mainnet || network.support === "read-only";
-    const creditEligible = !mainnet && network.networkType === "testnet" && network.enabled && network.support === "credit" && network.receivable;
+    const coreCreditChain = CREDIT_CHAIN_IDS.includes(network.chainId);
+    const readOnly = mainnet || network.support === "read-only" || !coreCreditChain;
+    const creditEligible = !mainnet && coreCreditChain && network.networkType === "testnet" && network.enabled && network.support === "credit" && network.receivable;
     const wanted = options.assetId;
     let asset = null;
     if (wanted !== undefined) {
@@ -1394,8 +1378,8 @@ export function createExternalWallet(options = {}) {
       const staleAfterSend = generation !== preview.generation;
       return Object.freeze({
         hash, chainId: preview.chainId, from: preview.account, to: preview.contractAddress, amountRaw: preview.amountRaw,
-        broadcast: true, alreadySent: false, credited: false, transferVerified: false, finality: "unknown",
-        warning: "已广播；回执和 calldata/收款人/日志仍未核验，不代表预期转账或入账。", staleAfterSend, generation,
+        broadcast: true, alreadySent: false, executionStatus: "broadcast", credited: false, transferVerified: false, paymentStatus: "unverified", finality: "unknown",
+        warning: "已广播；回执执行状态和 calldata/收款人/日志仍未核验，不代表预期转账或入账。", staleAfterSend, generation,
       });
     })();
     return state.promise;
@@ -1404,14 +1388,14 @@ export function createExternalWallet(options = {}) {
   async function getReceipt(hash) {
     if (typeof hash !== "string" || !HEX_32_RE.test(hash)) throw fail(WALLET_ERROR.INVALID_TX_HASH, "交易哈希无效");
     const receipt = await providerRequest("eth_getTransactionReceipt", [hash], rpcMs);
-    if (receipt === null) return Object.freeze({ state: "pending", hash, evidence: "chain-receipt", broadcast: true, credited: false, transferVerified: false, finality: "unknown", warning: "回执只证明该交易哈希的链上执行结果；未核验 from/to/input/日志，不证明预期转账或入账。" });
+    if (receipt === null) return Object.freeze({ state: "pending", executionStatus: "pending", hash, evidence: "chain-receipt", broadcast: true, credited: false, transferVerified: false, paymentStatus: "unverified", finality: "unknown", warning: "回执只证明该交易哈希的链上执行结果；未核验 from/to/input/日志，不证明预期转账或入账。" });
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw fail(WALLET_ERROR.RPC_UNKNOWN, "回执返回值无法识别；未重发");
     if (typeof receipt.transactionHash !== "string" || receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) throw fail(WALLET_ERROR.RECEIPT_MISMATCH, "回执交易哈希不匹配；未重发");
     const statusValue = typeof receipt.status === "string" ? receipt.status.toLowerCase() : "";
     const state = statusValue === "0x1" ? "success" : statusValue === "0x0" ? "reverted" : "unknown";
     return Object.freeze({
-      state, hash: receipt.transactionHash, blockNumber: typeof receipt.blockNumber === "string" ? receipt.blockNumber : null,
-      evidence: "chain-receipt", broadcast: true, credited: false, transferVerified: false, finality: "unknown",
+      state, executionStatus: state, hash: receipt.transactionHash, blockNumber: typeof receipt.blockNumber === "string" ? receipt.blockNumber : null,
+      evidence: "chain-receipt", broadcast: true, credited: false, transferVerified: false, paymentStatus: "unverified", finality: "unknown",
       warning: "回执只证明该交易哈希的链上执行结果；未核验 from/to/input/日志，不证明预期转账或入账。",
     });
   }
