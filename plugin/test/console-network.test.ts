@@ -1,6 +1,6 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setSystemTime, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConsoleHandler, ConsoleInputError } from "../src/console-server.ts";
@@ -8,12 +8,12 @@ import { NETWORK_LOCAL_ACTIONS, consoleNetworkAction, consoleNetworkState } from
 import { CONSOLE_ACTIONS, consoleAction } from "../src/console-api.ts";
 import { ChainStore } from "../src/chainstore.ts";
 import { Wallet } from "../src/wallet.ts";
-import { productRegistry } from "../src/networks.ts";
+import { productRegistry, NetworkRegistry } from "../src/networks.ts";
 import type { Service } from "../src/service.ts";
 import type { CreditSink } from "../src/watcher.ts";
 
 const dirs: string[] = [];
-afterAll(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); });
+afterAll(() => { setSystemTime(); for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); });
 function temp(): string { const dir = mkdtempSync(join(tmpdir(), "network-local-")); dirs.push(dir); return dir; }
 
 const ADDRESS = "0x3d80c477021e3fa568e91c73baec8e806518d9a6";
@@ -146,6 +146,74 @@ describe("network-local product projection", () => {
     wallet.close();
   });
 
+  test("corrupt/invalid receiving selection is projected as unavailable, not a 500 or a fake empty selection", async () => {
+    const { service, wallet, dir } = fixture();
+    writeFileSync(join(dir, "receiving.json"), "{ not json");
+    const corrupt = consoleNetworkState(service);
+    expect(corrupt.available).toBe(true);
+    expect(corrupt.configured).toBe(true);
+    expect(corrupt.product.networks.map((n) => n.chainId)).toEqual([56, 8453]);
+    expect(corrupt.receiving).toMatchObject({ providerId: "local-node", chainIds: [], available: false, errorCode: "receiving_selection_unreadable" });
+    await expect(act(service, "network-local-watch-address", { address: ADDRESS })).resolves.toMatchObject({ receiving: { available: false, errorCode: "receiving_selection_unreadable" } });
+    expect(await consoleAction(service, "network-local-state", {})).toMatchObject({ receiving: { available: false, errorCode: "receiving_selection_unreadable" } });
+    const h = createConsoleHandler({
+      state: async () => ({ networkLocal: consoleNetworkState(service) }),
+      action: async (name, input) => consoleNetworkAction(service, name, input),
+      allowedActions: NETWORK_LOCAL_ACTIONS,
+    }, 39993);
+    const session = await open(h);
+    const corruptPoll = await h.handle(request(h, "/ui/api/state", { cookie: session.cookie, csrf: session.csrf }));
+    expect(corruptPoll.status).toBe(200);
+    expect(JSON.stringify(await corruptPoll.json())).toContain("receiving_selection_unreadable");
+
+    writeFileSync(join(dir, "receiving.json"), JSON.stringify({ version: 1, providers: { "local-node": { chainIds: [97], updatedAt: "2026-10-31T00:00:00Z" } } }));
+    const invalid = consoleNetworkState(service);
+    expect(invalid.receiving).toMatchObject({ chainIds: [], available: false, errorCode: "receiving_selection_unreadable" });
+    expect(invalid.receiving).not.toMatchObject({ chainIds: [97] });
+    expect(consoleNetworkState(service).product.networks.map((n) => n.chainId)).toEqual([56, 8453]);
+
+    const invalidPoll = await h.handle(request(h, "/ui/api/state", { cookie: session.cookie, csrf: session.csrf }));
+    expect(invalidPoll.status).toBe(200);
+    expect(JSON.stringify(await invalidPoll.json())).toContain("receiving_selection_unreadable");
+    wallet.close();
+  });
+
+  test("product projection and refresh are exactly 56/8453 even if a local registry adds read-only 999", async () => {
+    const dir = temp();
+    const doc = productRegistry().document();
+    doc.networks.push({
+      chainId: 999,
+      displayName: "Local read-only",
+      family: "evm",
+      networkType: "mainnet",
+      support: "read-only",
+      receivable: true,
+      rpcEndpoints: ["https://local.invalid/rpc"],
+      blockExplorer: "https://local.invalid",
+      nativeSymbol: "ETH",
+      nativeDecimals: 18,
+      enabled: false,
+      finality: { mode: "read-only", confirmations: 0, reorgDepth: 0, rationale: "local adapter test" },
+      scanIntervalSec: 2,
+      maxBlockRange: 1000,
+      notes: null,
+      evidence: { source: "test", url: "https://local.invalid/docs", checkedAt: "2026-10-31", note: "test" },
+    });
+    const registry = new NetworkRegistry(doc);
+    const wallet = new Wallet({
+      credit: { depositIntent: () => ({ created: true }), applyDeposit: async () => {}, freezeConsumer: async () => {}, balance: () => ({ depositedNanos: 0, consumedNanos: 0, balanceNanos: 0 }) },
+      registry,
+      store: new ChainStore(join(dir, "chain.sqlite")),
+      receivingPath: join(dir, "receiving.json"),
+      readOnlyFetch: new MockRpc().fetch as typeof fetch,
+    });
+    const service = { config: () => ({ nodeId: "local-node" }), walletForConfiguration: () => wallet } as unknown as Service;
+    expect(consoleNetworkState(service).product.networks.map((n) => n.chainId)).toEqual([56, 8453]);
+    await act(service, "network-local-watch-address", { address: ADDRESS });
+    await expect(act(service, "network-local-balance-refresh", { chainId: 999, address: ADDRESS, addressSource: "watch" })).rejects.toBeInstanceOf(ConsoleInputError);
+    wallet.close();
+  });
+
   test("unselected chain remains refused for payment requests and selected mainnet is still credit-forbidden", async () => {
     const { service, wallet } = fixture();
     expect(wallet.paymentRequestVerdict("local-node", 56)).toMatchObject({ allowed: false, code: "receiving-network-not-selected" });
@@ -191,6 +259,35 @@ describe("network-local product projection", () => {
     rpc.reportedChainId = 8453;
     const usdc = await act(service, "network-local-balance-refresh", { chainId: 8453, address: ADDRESS, assetId: BASE_USDC, addressSource: "watch" }) as { balance: any };
     expect(usdc.balance).toMatchObject({ state: "ok", chainId: 8453, asset: expect.objectContaining({ assetId: BASE_USDC, symbol: "USDC" }), creditEligible: false, usdValue: null });
+    wallet.close();
+  });
+
+  test("balance cache is explicitly watch/read-only, fresh for 5 minutes, then historical stale with zero-RPC polls", async () => {
+    setSystemTime(new Date("2026-10-31T00:00:00.000Z"));
+    try {
+      const { service, wallet, rpc } = fixture();
+      await act(service, "network-local-watch-address", { address: ADDRESS });
+      const refreshed = await act(service, "network-local-balance-refresh", { chainId: 8453, address: ADDRESS, assetId: BASE_USDC, addressSource: "watch" }) as { balance: any };
+      expect(refreshed.balance).toMatchObject({ addressSource: "watch", fresh: true, stale: false, needsRefresh: false });
+      expect(Date.parse(refreshed.balance.expiresAt)).toBe(Date.parse("2026-10-31T00:05:00.000Z"));
+      const calls = rpc.calls;
+      setSystemTime(new Date("2026-10-31T00:05:00.001Z"));
+      const polled = consoleNetworkState(service);
+      expect(polled.lastBalance).toMatchObject({ state: "ok", balanceRaw: "1234567", fresh: false, stale: true, needsRefresh: true, addressSource: "watch" });
+      expect(rpc.calls).toBe(calls);
+      wallet.close();
+    } finally { setSystemTime(); }
+  });
+
+  test("watch list is deduplicated and bounded at 32 stable entries", async () => {
+    const { service, wallet } = fixture();
+    const address = (i: number) => `0x${i.toString(16).padStart(40, "0")}`;
+    await act(service, "network-local-watch-address", { address: address(1) });
+    await act(service, "network-local-watch-address", { address: address(1) });
+    for (let i = 2; i <= 32; i++) await act(service, "network-local-watch-address", { address: address(i) });
+    expect(consoleNetworkState(service).watchAddresses).toHaveLength(32);
+    await expect(act(service, "network-local-watch-address", { address: address(33) })).rejects.toBeInstanceOf(ConsoleInputError);
+    expect(consoleNetworkState(service).watchAddresses).toHaveLength(32);
     wallet.close();
   });
 

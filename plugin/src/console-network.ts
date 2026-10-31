@@ -13,6 +13,10 @@ import type { Service } from "./service.ts";
 import type { Wallet } from "./wallet.ts";
 import type { AssetRecord, NetworkRecord } from "./networks.ts";
 
+const PRODUCT_CHAIN_IDS = [56, 8453] as const;
+const BALANCE_TTL_MS = 5 * 60 * 1000;
+const WATCH_LIMIT = 32;
+
 export const NETWORK_LOCAL_ACTIONS = [
   "network-local-state",
   "network-local-watch-address",
@@ -54,10 +58,15 @@ export interface NetworkLocalBalanceOk {
   decimals: number;
   balanceTokens: string;
   blockNumber: number;
+  addressSource: "watch";
   readOnly: true;
   creditEligible: false;
   usdValue: null;
   observedAt: string;
+  expiresAt: string;
+  fresh: boolean;
+  stale: boolean;
+  needsRefresh: boolean;
 }
 
 export interface NetworkLocalBalanceUnknown {
@@ -66,11 +75,16 @@ export interface NetworkLocalBalanceUnknown {
   chainId: number;
   address: string;
   assetId: string | null;
+  addressSource: "watch";
   readOnly: true;
   creditEligible: false;
   usdValue: null;
   errorCode: "balance_unavailable";
   observedAt: string;
+  expiresAt: string;
+  fresh: boolean;
+  stale: boolean;
+  needsRefresh: boolean;
 }
 
 export type NetworkLocalBalance = NetworkLocalBalanceOk | NetworkLocalBalanceUnknown;
@@ -82,7 +96,14 @@ export interface NetworkLocalState {
   configured: boolean;
   reason: string | null;
   product: { networks: NetworkLocalNetwork[]; assets: NetworkLocalAsset[] };
-  receiving: { providerId: string | null; chainIds: number[]; updatedAt: string | null };
+  receiving: {
+    providerId: string | null;
+    chainIds: number[];
+    updatedAt: string | null;
+    /** false means [] is not a user empty selection; it is unavailable */
+    available: boolean;
+    errorCode: "not_configured" | "receiving_selection_unreadable" | "wallet_unavailable" | null;
+  };
   watchAddresses: string[];
   lastBalance: NetworkLocalBalance | null;
   readOnly: true;
@@ -115,9 +136,15 @@ function walletAddress(value: unknown): string {
   return value.toLowerCase();
 }
 
+function productNetworks(wallet: Wallet): NetworkRecord[] {
+  return wallet
+    .productNetworks()
+    .filter((n) => (PRODUCT_CHAIN_IDS as readonly number[]).includes(n.chainId) && n.networkType === "mainnet" && n.support === "read-only");
+}
+
 function productNetwork(wallet: Wallet, chainId: number): NetworkRecord {
-  const network = wallet.productNetworks().find((n) => n.chainId === chainId);
-  if (!network) refuse(`chain ${chainId} is not a product read-only network`);
+  const network = productNetworks(wallet).find((n) => n.chainId === chainId);
+  if (!network) refuse(`chain ${chainId} is not an exact product read-only network`);
   return network;
 }
 
@@ -163,9 +190,9 @@ class NetworkLocalAdapter {
       configured: false,
       reason: "wallet_unavailable",
       product: { networks: [], assets: [] },
-      receiving: { providerId: null, chainIds: [], updatedAt: null },
+      receiving: { providerId: null, chainIds: [], updatedAt: null, available: false, errorCode: "wallet_unavailable" },
       watchAddresses: [...this.watchAddresses].sort(),
-      lastBalance: this.lastBalance,
+      lastBalance: this.lastBalance ? this.withFreshness(this.lastBalance) : null,
       readOnly: true,
       creditEligible: false,
       usdValue: null,
@@ -173,10 +200,23 @@ class NetworkLocalAdapter {
     const wallet = this.wallet();
     if (!wallet) return base;
     const providerId = this.providerId();
-    let receiving: NetworkLocalState["receiving"] = { providerId: null, chainIds: [], updatedAt: null };
+    let receiving: NetworkLocalState["receiving"] = {
+      providerId,
+      chainIds: [],
+      updatedAt: null,
+      available: false,
+      errorCode: providerId ? "receiving_selection_unreadable" : "not_configured",
+    };
     if (providerId) {
-      const selection = wallet.receivingSelection(providerId);
-      receiving = { providerId, chainIds: selection.chainIds, updatedAt: selection.updatedAt };
+      try {
+        const selection = wallet.receivingSelection(providerId);
+        receiving = { providerId, chainIds: selection.chainIds, updatedAt: selection.updatedAt, available: true, errorCode: null };
+      } catch {
+        // The core policy deliberately fails closed on a corrupt/invalid file.
+        // Project that as an error, not as a user empty selection, and never let
+        // the whole console state poll fail.
+        receiving = { providerId, chainIds: [], updatedAt: null, available: false, errorCode: "receiving_selection_unreadable" };
+      }
     }
     return {
       ...base,
@@ -184,7 +224,7 @@ class NetworkLocalAdapter {
       configured: Boolean(providerId),
       reason: null,
       product: {
-        networks: wallet.productNetworks().map((n) => ({
+        networks: productNetworks(wallet).map((n) => ({
           chainId: n.chainId,
           displayName: n.displayName,
           networkType: n.networkType,
@@ -194,7 +234,7 @@ class NetworkLocalAdapter {
           nativeDecimals: n.nativeDecimals,
           blockExplorer: n.blockExplorer,
         })),
-        assets: wallet.productNetworks().flatMap((n) =>
+        assets: productNetworks(wallet).flatMap((n) =>
           wallet
             .registryView()
             .assetsForChain(n.chainId)
@@ -213,6 +253,7 @@ class NetworkLocalAdapter {
         ),
       },
       receiving,
+      lastBalance: this.lastBalance ? this.withFreshness(this.lastBalance) : null,
     };
   }
 
@@ -236,11 +277,21 @@ class NetworkLocalAdapter {
       decimals: balance.decimals,
       balanceTokens: balance.balanceTokens,
       blockNumber: balance.blockNumber,
+      addressSource: "watch",
       readOnly: true,
       creditEligible: false,
       usdValue: null,
       observedAt: balance.observedAt,
+      expiresAt: new Date(Date.parse(balance.observedAt) + BALANCE_TTL_MS).toISOString(),
+      fresh: true,
+      stale: false,
+      needsRefresh: false,
     };
+  }
+
+  private withFreshness(balance: NetworkLocalBalance): NetworkLocalBalance {
+    const fresh = Date.now() < Date.parse(balance.expiresAt);
+    return { ...balance, fresh, stale: !fresh, needsRefresh: !fresh };
   }
 
   private unknown(chainId: number, address: string, assetId: string | null): NetworkLocalBalanceUnknown {
@@ -250,11 +301,16 @@ class NetworkLocalAdapter {
       chainId,
       address,
       assetId,
+      addressSource: "watch",
       readOnly: true,
       creditEligible: false,
       usdValue: null,
       errorCode: "balance_unavailable",
       observedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + BALANCE_TTL_MS).toISOString(),
+      fresh: true,
+      stale: false,
+      needsRefresh: false,
     };
   }
 
@@ -265,7 +321,11 @@ class NetworkLocalAdapter {
         return this.state();
       case "network-local-watch-address": {
         onlyFields(input, ["address"]);
-        this.watchAddresses.add(walletAddress(input.address));
+        const address = walletAddress(input.address);
+        if (!this.watchAddresses.has(address) && this.watchAddresses.size >= WATCH_LIMIT) {
+          refuse(`watch list is full (${WATCH_LIMIT}); remove or restart the local session before adding another address`);
+        }
+        this.watchAddresses.add(address);
         return this.state();
       }
       case "network-local-receiving-set": {
