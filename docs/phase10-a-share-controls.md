@@ -59,7 +59,11 @@ ego-browser nodejs < plugin/scripts/share-controls-check.mjs
 ```
 
 - **修复前（fa20a02）**：`failed: 3` —— 未共享时停止按钮 `display:flex`、可聚焦（3 项失败）。
-- **修复后**：`failed: 0` —— 清理全部选中后分享禁用、选 1 个启用、过滤往返不丢选择、启用后能打开确认弹窗；未共享时停止按钮 `display:none`、`offsetParent === null`、`focus()` 不生效。
+- **修复后**：`failed: 0`（14 项）：
+  - 初始选中保持分享可用；清理全部选中后禁用；选 1 个启用；过滤到无匹配再清空搜索，已选集合不丢、按钮仍可用；
+  - 隐藏的 tab 面板 `display:none`、激活面板可见、隐藏 notice 不显示（确认 `[hidden]` 全局规则无回归）；
+  - 分享确认弹窗能打开并正常关闭；
+  - 未共享时停止按钮 `display:none`、`offsetParent === null`、`focus()` 不生效。
 
 截图：`docs/phase10-a-share-controls/`（分享选中、未共享停止按钮不可见）。
 
