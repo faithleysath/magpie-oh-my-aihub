@@ -476,7 +476,9 @@ describe("available-model evidence (simulated status.providers, no backend)", ()
       expect(summary.entries[0]).toMatchObject({ counted: false, status });
       expect(summary.entries[0].models.length, status).toBeGreaterThan(0);
     }
-    // after resuming, only a new current readback counts again
+    // The UI is a pure projection: after the Service marks the old evidence
+    // stale/unknown (pause, resume, identity change), a new current readback
+    // counts again. The client has no resume epoch of its own.
     expect(summaryOf([provider()])).toMatchObject({ state: "current", count: 2 });
   });
 
