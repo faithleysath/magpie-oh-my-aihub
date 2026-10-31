@@ -445,10 +445,11 @@ export class Provisioner {
         status = null;
       }
     }
-    if (opts.requireKnownUsage) {
-      if (!status || typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
-        throw new Error("native used cost is unknown; refusing to seed an opening balance");
-      }
+    // Every seed path (new key, status, ensure, reissue, hand-over) must prove
+    // the native used cost before writing an opening credit. A missing/unknown
+    // value is not zero. lastCheck is a display cache, never a seed source.
+    if (!status || typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
+      throw new Error("native used cost is unknown; refusing to seed an opening balance");
     }
     // A price source that cannot be read must not seed a window: an "unpriced"
     // window would make every later charge free. The accounting check turns
@@ -460,7 +461,7 @@ export class Provisioner {
         models: [...rec.models].sort(),
         prices: {},
       };
-    const usedNanos = usdToNanos(status?.limit?.cost ?? rec.lastCheck?.usedUsd ?? 0);
+    const usedNanos = usdToNanos(status.limit.cost);
     const capNanos = usdToNanos(rec.capUsd);
     const bounds = this.windowBounds(rec.window);
     const window = this.ledger.ensureAccount({
@@ -1833,8 +1834,16 @@ export class Provisioner {
       }
       const held = status.limit?.costLimit;
       if (typeof held !== "number" || Math.abs(held - input.capUsd) > 1e-9) throw new Error("the native key's cap does not match the approval");
-      if (typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
-        throw new Error("native used cost is unknown; refusing to create an adoption record/opening credit");
+      if (
+        typeof status.limit?.cost !== "number" ||
+        !Number.isFinite(status.limit.cost) ||
+        status.limit.cost < 0 ||
+        Math.abs(Math.round(status.limit.cost * 1e9) / 1e9 - status.limit.cost) > 1e-9
+      ) {
+        throw new Error("native used cost is invalid/unknown; refusing to create an adoption record/opening credit");
+      }
+      if (typeof status.limit?.days === "number" && status.limit.days !== 3650) {
+        throw new Error("the native key window does not match the adoption window");
       }
       const rec: ConsumerRecord = {
         consumerId: input.consumerId,

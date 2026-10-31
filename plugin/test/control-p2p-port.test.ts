@@ -559,11 +559,30 @@ describe("B-core P2pBusinessPort mapping", () => {
       requestHash: "5".repeat(64), models: [LAB_MODEL], capUsd: 1,
       quote: { contentHash: HASH, priceVersion: price, identityFingerprint: FP },
       keyId: key.id, keyName: "ohmyaihub-bad-used",
-    })).rejects.toThrow(/used cost is unknown/);
+    })).rejects.toThrow(/used cost is invalid\/unknown|used cost is unknown/);
     expect(svc.provisioner.find("bad-used") ?? null).toBeNull();
     expect(svc.ledger?.account("bad-used") ?? null).toBeNull();
     await expect(svc.provisioner.status("bad-used")).rejects.toThrow(/no consumer/);
     expect(svc.ledger?.account("bad-used") ?? null).toBeNull();
+  });
+
+  test("a legacy adopted record with unknown used cannot open credit via status/recover", async () => {
+    const { svc, magpie } = realService();
+    const key = await magpie.addKey("ohmyaihub-old-adopt");
+    await magpie.setModels(key.id, [LAB_MODEL]);
+    await magpie.setCostLimit(key.id, "3650d", 1);
+    const rec = {
+      consumerId: "old-adopt", keyName: "ohmyaihub-old-adopt", keyId: key.id, secret: key.secret,
+      models: [LAB_MODEL], window: "3650d", capUsd: 1, creditedUsd: 0, deposits: [], pending: null,
+      paused: null, priceVersion: "p".repeat(64), acceptedQuoteHash: HASH,
+      createdAt: "2026-10-31T00:00:00.000Z", revokedAt: null, adoptedFromNative: true, lastCheck: null,
+    };
+    (svc.provisioner as any).list.push(rec);
+    (magpie as any).limitStatus = async () => ({ limited: true, key: "x", limit: { costLimit: 1 } });
+    await expect(svc.provisioner.status("old-adopt")).rejects.toThrow(/used cost is unknown/);
+    expect(svc.ledger?.account("old-adopt") ?? null).toBeNull();
+    await svc.provisioner.recover();
+    expect(svc.ledger?.account("old-adopt") ?? null).toBeNull();
   });
 
   test("reconcileApproval returns unknown when Magpie key management cannot be read", async () => {
