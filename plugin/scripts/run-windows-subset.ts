@@ -64,7 +64,7 @@ if (pass < 0 || failures < 0) {
   process.exit(1);
 }
 const assertions = Number(ASSERTIONS.exec(text)?.[1] ?? 0);
-const skipped = [...text.matchAll(/^\(skip\)\s+(.+)$/gm)].map((m) => m[1]!.trim());
+const skipped = [...new Set([...text.matchAll(/^\(skip\)\s+(.+)$/gm)].map((m) => m[1]!.trim()))];
 const unexpected = skipped.filter((name) => !ALLOWED_SKIPS.some((allowed) => name.endsWith(allowed)));
 
 const problems: string[] = [];
