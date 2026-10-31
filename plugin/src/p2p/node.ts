@@ -40,6 +40,7 @@ import {
   keyHashOf,
   modelListOf,
   P2P_B1_UNSUPPORTED,
+  P2P_MAX_FRAME_BYTES,
   P2P_MAX_TTL_MS,
   P2P_PROTOCOL,
   P2P_VERSION,
@@ -299,6 +300,13 @@ export interface P2pTransport {
   hello(target: P2pHelloTarget, hello: unknown): Promise<unknown>;
   /** POST one sealed frame to the peer of the session. */
   frame(session: { sessionId: string; peer: P2pPeerIdentity }, frame: Buffer): Promise<void>;
+  /**
+   * Pull-style transport: send a signed hello and receive the server_hello plus
+   * a bounded list of sealed frames already addressed to this consumer. This
+   * avoids requiring a reverse consumer endpoint; authentication is the hello
+   * signature and the frames are AEAD-sealed to the new session.
+   */
+  poll?(target: P2pHelloTarget, hello: unknown): Promise<{ serverHello: unknown; frames: string[] }>;
 }
 
 export type P2pTrustLookup = (provider: { nodeId: string; fingerprint: string }) => P2pTrustVerdict;
@@ -507,6 +515,66 @@ export class P2pNode {
     const session = P2pSession.establish({ material, store: this.store, now: this.clock });
     this.sessions.set(session.sessionId, session);
     return { sessionId: session.sessionId, peer: session.peer };
+  }
+
+  /**
+   * Provider side: materialize and return the bounded outbox frames addressed to
+   * this authenticated session. The caller has already accepted a signed hello,
+   * so a random session id alone cannot pull anything. Frames are marked sent;
+   * ACK loss is handled by the existing rearm/tick path, not by a second key.
+   */
+  async pullFrames(sessionId: string, limit = 10): Promise<Buffer[]> {
+    this.assertOpen();
+    await this.serial(async () => {
+      // no-op barrier: a pull must not race approve/revoke state transitions
+    });
+    const session = this.sessions.get(sessionId);
+    if (!session || session.closedReason) fail("session_closed", "the poll session is not open");
+    const out: Buffer[] = [];
+    for (const row of this.dueForSession(session, Math.max(1, Math.min(limit, 20)))) {
+      if (row.type === "authorization_delivery" && !this.approvedWasSent(row)) continue;
+      if (!this.store.markOutboxSending(row.messageId, this.clock())) continue;
+      try {
+        out.push(await this.materialize(row, session));
+        this.store.markOutboxSent(row.messageId, this.clock());
+      } catch (e) {
+        this.store.markOutboxRetry(row.messageId, this.clock(), e instanceof Error ? e.message : String(e), this.retry);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Consumer side: authenticate a fresh signed hello, complete the session, and
+   * process a bounded set of provider frames returned in the same poll response.
+   * The session is a normal P2pSession; seq/AEAD/recipient/expiry/replay checks
+   * are the same as the push path. ACKs are queued normally and sent by tick().
+   */
+  async poll(target: P2pHelloTarget): Promise<P2pFrameResult[]> {
+    this.assertOpen();
+    if (!this.transport?.poll) fail("internal", "the transport does not support pull/poll");
+    const client: ClientHandshake = buildClientHello({ identity: this.identity, target, now: this.clock() });
+    const response = await this.transport.poll(target, client.hello);
+    if (!response || !Array.isArray(response.frames) || response.frames.length > 20) fail("malformed", "poll returned an invalid frame list");
+    const verdict = this.trust({ nodeId: target.nodeId, fingerprint: target.fingerprint });
+    if (verdict !== "accepted" && verdict !== "pending") fail("untrusted_peer", `the provider identity is ${verdict}; read and accept its catalogue key first`);
+    const serverHello = validateServerHello(response.serverHello, {
+      now: this.clock(),
+      client: client.hello,
+      expectedProvider: { nodeId: target.nodeId, fingerprint: target.fingerprint },
+    });
+    const material = completeHandshake({ role: "consumer", clientHello: client.hello, serverHello, ephemeral: client.ephemeral, now: this.clock() });
+    const session = P2pSession.establish({ material, store: this.store, now: this.clock });
+    this.sessions.set(session.sessionId, session);
+    const results: P2pFrameResult[] = [];
+    for (const encoded of response.frames) {
+      if (typeof encoded !== "string" || encoded.length > P2P_MAX_FRAME_BYTES * 2) fail("malformed", "poll frame is invalid");
+      const frame = Buffer.from(encoded, "base64");
+      if (frame.length === 0 || frame.length > P2P_MAX_FRAME_BYTES) fail("malformed", "poll frame is too large");
+      results.push(await this.handleFrame(session.sessionId, frame));
+    }
+    if (results.length) await this.tick();
+    return results;
   }
 
   // --- inbound frames --------------------------------------------------------
@@ -2145,7 +2213,7 @@ export class P2pNode {
   private dueForSession(session: P2pSession, limit = 10): P2pOutboxRow[] {
     return this.store
       .dueOutbox(this.clock(), 50)
-      .filter((row) => row.peerNodeId === session.peer.nodeId && row.peerFingerprint === session.peer.fingerprint && (row.sessionId === null || row.sessionId === session.sessionId))
+      .filter((row) => row.peerNodeId === session.peer.nodeId && row.peerFingerprint === session.peer.fingerprint)
       .sort((a, b) => outboxPriority(a.type) - outboxPriority(b.type))
       .slice(0, limit);
   }

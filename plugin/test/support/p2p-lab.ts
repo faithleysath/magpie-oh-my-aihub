@@ -69,7 +69,7 @@ export class P2pLab {
   storeB: P2pStore;
   A!: P2pNode;
   B!: P2pNode;
-  readonly faults: LabFaults = {};
+  readonly faults: LabFaults & { disableProviderPush?: boolean } = {};
   readonly calls = {
     validate: 0,
     approve: 0,
@@ -136,8 +136,15 @@ export class P2pLab {
       },
       frame: async (session, frame) => {
         this.sentFrames.push({ sessionId: session.sessionId, from: self, frame: Buffer.from(frame) });
+        if (self === "B" && this.faults.disableProviderPush) throw new Error("provider push disabled for poll test");
         const targetNode = self === "A" ? this.B : this.A;
         await targetNode.handleFrame(session.sessionId, frame);
+      },
+      poll: async (target, hello) => {
+        const targetNode = self === "A" ? this.B : this.A;
+        const result = await targetNode.acceptHello(hello);
+        const frames = await targetNode.pullFrames(result.sessionId);
+        return { serverHello: result.serverHello, frames: frames.map((f) => f.toString("base64")) };
       },
     });
     const port = this.port();

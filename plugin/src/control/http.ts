@@ -29,6 +29,12 @@ export interface ControlNode {
    * until the returned promise settles, even if the signal fires.
    */
   handleFrame(sessionId: string, frame: Uint8Array, signal?: AbortSignal): Promise<unknown>;
+  /**
+   * Pull/poll transport: a signed hello is itself the authentication; return the
+   * server_hello plus bounded AEAD frames addressed to that consumer. No random
+   * session id is accepted as a poll credential.
+   */
+  acceptPoll?(hello: unknown, signal?: AbortSignal): Promise<{ serverHello: unknown; frames: string[] }>;
 }
 
 export interface RateRule {
@@ -206,11 +212,15 @@ function targetOf(req: Request): ParsedTarget | null {
   return { rawPath, url };
 }
 
-type Route = "health" | "hello" | "frame";
+type Route = "health" | "hello" | "frame" | "poll";
 
 function routeOf(method: string, path: string): Route | "method" | null {
   const route: Route | null =
-    path === "/p2p/v1/health" ? "health" : path === "/p2p/v1/hello" ? "hello" : path === "/p2p/v1/frame" ? "frame" : null;
+    path === "/p2p/v1/health" ? "health"
+    : path === "/p2p/v1/hello" ? "hello"
+    : path === "/p2p/v1/frame" ? "frame"
+    : path === "/p2p/v1/poll" ? "poll"
+    : null;
   if (!route) return null;
   if (route === "health") return method === "GET" ? route : "method";
   return method === "POST" ? route : "method";
@@ -463,7 +473,7 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
       if (route === null) return errorResponse(404, "not_found");
       if (route === "method") return errorResponse(405, "method_not_allowed", { allow: target.rawPath === "/p2p/v1/health" ? "GET" : "POST" });
 
-      const routeRule = route === "health" ? limits.health : route === "hello" ? limits.hello : limits.frame;
+      const routeRule = route === "health" ? limits.health : route === "hello" || route === "poll" ? limits.hello : limits.frame;
       const perPeer = buckets.take(`${route}:${peer}`, routeRule);
       if (!perPeer.ok) return errorResponse(429, "rate_limited", { "retry-after": String(Math.ceil(perPeer.retryAfterMs / 1000)) });
 
@@ -484,7 +494,7 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
       if (req.signal) req.signal.addEventListener("abort", abortFromClient, { once: true });
       try {
         const startedAt = now();
-        const bodyLimit = route === "hello" ? limits.maxHelloBytes : route === "frame" ? limits.maxFrameBytes : 0;
+        const bodyLimit = route === "hello" || route === "poll" ? limits.maxHelloBytes : route === "frame" ? limits.maxFrameBytes : 0;
 
         if (route === "health") {
           if (target.url.search !== "") return errorResponse(400, "malformed");
@@ -496,7 +506,7 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
         }
 
         if (!contentEncodingIsIdentity(req)) return errorResponse(415, "unsupported_encoding");
-        if (route === "hello") {
+        if (route === "hello" || route === "poll") {
           if (target.url.search !== "") return errorResponse(400, "malformed");
           if (!jsonContentType(req)) return errorResponse(415, "unsupported_media_type");
         } else {
@@ -519,7 +529,7 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
         }
 
         let work: Promise<Response>;
-        if (route === "hello") {
+        if (route === "hello" || route === "poll") {
           if (bytes.byteLength === 0) return errorResponse(400, "malformed");
           let parsed: unknown;
           try {
@@ -528,7 +538,12 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
             return errorResponse(400, "malformed");
           }
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return errorResponse(400, "malformed");
-          work = (async () => responseBody(await options.node.acceptHello(parsed, controller.signal)))();
+          if (route === "hello") {
+            work = (async () => responseBody(await options.node.acceptHello(parsed, controller.signal)))();
+          } else {
+            if (!options.node.acceptPoll) return errorResponse(404, "not_found");
+            work = (async () => responseBody(await options.node.acceptPoll!(parsed, controller.signal), 1024 * 1024))();
+          }
         } else {
           const sessionId = target.url.searchParams.get("session")!;
           if (bytes.byteLength === 0) return errorResponse(400, "malformed");
@@ -543,7 +558,7 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
         // Hand ownership of the execution slot to the business promise. If the
         // HTTP response times out, the slot stays held until the promise settles.
         handedOff = true;
-        const workTimeout = route === "hello" ? limits.helloTimeoutMs : limits.frameTimeoutMs;
+        const workTimeout = route === "hello" || route === "poll" ? limits.helloTimeoutMs : limits.frameTimeoutMs;
         return await settleWithTimeout(work, workTimeout, release, () => controller.abort(new Error("HTTP response timeout")));
       } catch (error) {
         return refusal(error);

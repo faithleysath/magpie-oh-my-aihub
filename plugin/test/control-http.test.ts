@@ -260,6 +260,22 @@ describe("control HTTP surface", () => {
     await Bun.sleep(1);
   });
 
+  test("poll is authenticated by the hello body and returns bounded sealed frames", async () => {
+    const node = {
+      async acceptHello() { return {}; },
+      async handleFrame() { return {}; },
+      async acceptPoll(hello: unknown) { return { serverHello: { hello }, frames: ["AQID", "BAUG"] }; },
+    };
+    const { h } = handler(node);
+    const ok = await h.handle(request("/p2p/v1/poll", { body: JSON.stringify({ kind: "hello" }), headers: { "content-type": "application/json" } }));
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ serverHello: { hello: { kind: "hello" } }, frames: ["AQID", "BAUG"] });
+    expect((await h.handle(request("/p2p/v1/poll", { body: "{}", headers: { "content-type": "text/plain" } }))).status).toBe(415);
+    expect((await h.handle(request("/p2p/v1/poll?session=" + SESSION, { body: "{}", headers: { "content-type": "application/json" } }))).status).toBe(400);
+    const without = handler(fakeNode().node).h;
+    expect((await without.handle(request("/p2p/v1/poll", { body: "{}", headers: { "content-type": "application/json" } }))).status).toBe(404);
+  });
+
   test("startControlServer refuses a wildcard bind and a false loopback claim", () => {
     const { node } = fakeNode();
     expect(() => startControlServer({ node, host: "0.0.0.0", port: 0, allowedHosts: [HOST], listener: "lan-reachable" })).toThrow(/wildcard/);

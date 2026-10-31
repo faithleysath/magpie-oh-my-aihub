@@ -879,6 +879,8 @@ export interface CatalogServerOptions {
   port: number;
   /** the signed document, or null while the host cannot publish one */
   document: () => SignedCatalog | null;
+  /** optional signed control-presence document; a separate path, never v1 fields */
+  presence?: () => unknown | null;
   maxBytes?: number;
   maxConcurrent?: number;
 }
@@ -886,6 +888,8 @@ export interface CatalogServerOptions {
 export interface CatalogServerHandle {
   port: number;
   stop: () => void;
+  /** attach/replace the separate signed presence document */
+  setPresence?: (presence: (() => unknown | null) | null) => void;
 }
 
 interface Bucket {
@@ -917,6 +921,31 @@ export class CatalogServer {
       fetch: (req) => {
         const url = new URL(req.url);
         if (req.method !== "GET") return text(405, "method not allowed");
+        if (url.pathname === "/p2p/v1/presence" && url.search === "") {
+          const source = this.sourceOf(req);
+          if (!this.allow(source)) return text(429, "too many requests");
+          if (this.active >= maxConcurrent) return text(503, "busy");
+          this.active += 1;
+          try {
+            const doc = this.opts.presence?.();
+            if (!doc) return text(503, "presence is not published");
+            const body = JSON.stringify(doc);
+            if (Buffer.byteLength(body) > 16 * 1024) return text(503, "presence is too large");
+            return new Response(body, {
+              status: 200,
+              headers: {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": String(Buffer.byteLength(body)),
+                "cache-control": "no-store",
+                "x-content-type-options": "nosniff",
+                "referrer-policy": "no-referrer",
+                "content-security-policy": "default-src 'none'",
+              },
+            });
+          } finally {
+            this.active -= 1;
+          }
+        }
         if (url.pathname !== CATALOG_PATH || url.search) return text(404, "not found");
         const source = this.sourceOf(req);
         if (!this.allow(source)) return text(429, "too many requests");
@@ -947,7 +976,13 @@ export class CatalogServer {
       },
     });
     logger.info(`read-only catalogue listening on ${this.opts.hostname}:${this.opts.port}${CATALOG_PATH}`);
-    return { port: this.opts.port, stop: () => this.stop() };
+    return {
+      port: this.opts.port,
+      stop: () => this.stop(),
+      setPresence: (presence) => {
+        this.opts.presence = presence ?? undefined;
+      },
+    };
   }
 
   stop(): void {

@@ -143,7 +143,12 @@ export interface Probes {
   /** one GET through EasyTier's loopback SOCKS5 listener */
   catalogHttpGet: (opts: { socksPort: number; host: string; port: number; path: string; timeoutMs: number }) => Promise<{ status: number; body: string }>;
   /** a local catalogue server; injectable so a unit test keeps the LAN untouched */
-  catalogServer: (opts: { hostname: string; port: number; document: () => SignedCatalog | null }) => CatalogServerHandle;
+  catalogServer: (opts: {
+    hostname: string;
+    port: number;
+    document: () => SignedCatalog | null;
+    presence?: () => unknown | null;
+  }) => CatalogServerHandle;
 }
 
 export interface ServiceDeps {
@@ -416,6 +421,7 @@ export class Service {
   private accountingFailureBudget: number;
   private accountingTimeoutMs: number;
   private catalogServer: CatalogServerHandle | null = null;
+  private controlPresenceProvider: (() => unknown | null) | null = null;
   private catalogServerError: string | null = null;
   private catalogQuote: SignedCatalog | null = null;
   private catalogQuoteHash: string | null = null;
@@ -2058,6 +2064,12 @@ export class Service {
   }
 
   // --- read-only catalogue ---------------------------------------------------
+
+  /** Attach the signed control-presence document to the read-only catalog listener. */
+  setControlPresence(presence: (() => unknown | null) | null): void {
+    this.controlPresenceProvider = presence;
+    this.catalogServer?.setPresence?.(presence);
+  }
 
   /** Whether the catalogue should be on the network right now. */
   private catalogPublishing(): boolean {
