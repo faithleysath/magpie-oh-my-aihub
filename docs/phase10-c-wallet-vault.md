@@ -295,6 +295,7 @@ bun install --frozen-lockfile
 - **共享 Bun 宿主可读解密内存**：任何同进程插件/扩展都能在解锁期间读取 HDNodeWallet；capability/facade 不是沙箱。
 - **JS 无法保证内存擦除**：GC、堆快照、swap、core dump、崩溃转储可能保留 key；没有 Keychain/TPM/安全 enclave。
 - **离线暴力破解**：keystore 被复制后，密码强度决定安全；scrypt 只提高成本，不阻止弱密码。
+- **x-ethers mnemonic 完整性**：标准 V3 MAC 认证的是私钥密文/密码，不单独认证 `x-ethers.mnemonicCiphertext`。篡改 mnemonic 密文不会变成“另一个有效钱包”而不被发现：ethers 会用派生地址/私钥与 mnemonic 复核，失败时本模块 fail closed（拒绝导出/解锁）。但这不是一个独立的 mnemonic MAC；不要把“能导出助记词”当成该密文未被篡改的证明。
 - **文件系统/OS**：Windows 权限与目录 fsync 未测；磁盘/SSD 安全擦除、备份软件、Time Machine、云同步可能复制旧密文。
 - **标准互操作**：`x-ethers` 扩展的助记词保留只验证了 ethers；geth/MetaMask/Rabby 等对 x-ethers 的行为 UNKNOWN。仅私钥的 V3 读取是标准，但本 vault 的 `restore()` 要求 x-ethers mnemonic；只接受 scrypt 备份，要求新密码至少 12 字符，PBKDF2/短密码外部备份不能直接 restore。
 - **EIP-712 字段范围**：purpose 签名只支持 primitive 字段（address/bool/string/bytesN/uint/int）；C-external 的 deposit document 若含 nested struct/array，内置路径需要扩展 purpose 或继续走外置钱包路径。`previewTypedData()` 可预览 nested 类型，但 preview 永不签名。
