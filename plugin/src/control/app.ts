@@ -156,6 +156,7 @@ export class ControlApp {
   private readonly controlForwards = new Map<string, { localPort: number; dst: string }>();
   private readonly retiredForwards = new Set<number>();
   private publishedHost = "127.0.0.1";
+  private previousPublishedPorts: number[] | null = null;
   private readonly allowLanDirect: boolean;
   private constructor(
     readonly service: Service,
@@ -226,6 +227,17 @@ export class ControlApp {
     (app as { server: ControlServerHandle }).server = server;
     app.publishedHost = cfg.sharingEnabled && cfg.mappedCidr ? mappedHost(cfg.mappedCidr) : host;
     app.publishPresence();
+    // Publish the control listener through the existing no-TUN export/Forward
+    // ACL. Inbound stays Drop with zero rules; only this exact port is added to
+    // the provider's Forward allow-list.
+    if (cfg.sharingEnabled && cfg.mappedCidr && typeof (service as { configure?: unknown }).configure === "function") {
+      const current = service.config();
+      if (current && !current.publishedPorts.includes(port)) {
+        app.previousPublishedPorts = [...current.publishedPorts];
+        await service.configure({ publishedPorts: [...new Set([...current.publishedPorts, port])] });
+        app.publishPresence();
+      }
+    }
     app.ticker = setInterval(() => {
       void app.pollTick();
     }, app.tickMs);
@@ -629,6 +641,12 @@ export class ControlApp {
     this.retiredForwards.clear();
     this.server.stop();
     this.node.close();
+    if (this.previousPublishedPorts && typeof (this.service as { configure?: unknown }).configure === "function") {
+      // Best effort: withdraw only the port this app added; do not touch other
+      // provider ports. The process is stopping; a failure is logged by Service.
+      void this.service.configure({ publishedPorts: this.previousPublishedPorts }).catch(() => {});
+      this.previousPublishedPorts = null;
+    }
     active = null;
     byService.delete(this.service);
   }
