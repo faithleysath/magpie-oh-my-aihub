@@ -1617,12 +1617,15 @@ export class Provisioner {
   }> {
     return this.withLock(consumerId, async () => {
       const keys = this.magpie.keyList();
+      if (keys.length > 100) {
+        throw new Error("Magpie has more than 100 keys; refusing an incomplete reconcile evidence snapshot");
+      }
       const rec = this.find(consumerId);
       const named = this.magpie.keyByName(Provisioner.keyName(consumerId));
       const targetKey = named ?? (rec?.keyId ? this.magpie.keyById(rec.keyId) : undefined);
       const cost = targetKey?.limit?.cost;
       return {
-        nativeKeyIds: keys.map((k) => String(k.id)).slice(0, 100),
+        nativeKeyIds: keys.map((k) => String(k.id)),
         target: targetKey
           ? {
               keyId: String(targetKey.id),
@@ -1648,6 +1651,79 @@ export class Provisioner {
       const rec = this.find(consumerId);
       if (rec?.keyId && this.magpie.keyById(rec.keyId)) return false;
       return true;
+    });
+  }
+
+  /**
+   * Reconstructs the local Provisioner record/ledger for a native key that a
+   * previous approval created before the local consumer write. This is an
+   * adoption, not ensure: it never creates, rotates, removes, recaps or rewrites
+   * the native key. It requires the exact native id/name/models/cap and seeds the
+   * ledger through the existing seed path. Failure leaves the key unrecovered
+   * (the caller stays uncertain); it never manufactures a second key.
+   */
+  async adoptControlKey(input: {
+    consumerId: string;
+    keyId: string;
+    keyName: string;
+    models: string[];
+    capUsd: number;
+    quoteHash: string;
+    priceVersion: string;
+  }): Promise<void> {
+    return this.withLock(input.consumerId, async () => {
+      const expectedName = Provisioner.keyName(input.consumerId);
+      if (input.keyName !== expectedName) throw new Error("the native key name does not match this consumer");
+      const existing = this.find(input.consumerId);
+      if (existing) {
+        const existingModelsMatch =
+          existing.models.length === input.models.length && existing.models.every((m) => input.models.includes(m));
+        if (existing.revokedAt || existing.keyId !== input.keyId || existing.keyName !== input.keyName || !existingModelsMatch || Math.abs(existing.capUsd - input.capUsd) > 1e-9) {
+          throw new Error("the local Provisioner record does not match the native adoption binding");
+        }
+        return;
+      }
+      const key = this.magpie.keyByName(expectedName) ?? this.magpie.keyById(input.keyId);
+      if (!key || key.id !== input.keyId || key.name !== expectedName) throw new Error("the native key is not present under the expected id/name");
+      const models = Array.isArray(key.models) ? key.models.map(String) : [];
+      const modelsMatch = models.length === input.models.length && models.every((m) => input.models.includes(m));
+      if (models.length === 0 || !modelsMatch) throw new Error("the native key's model list does not match the approval");
+      let status: LimitStatus;
+      try {
+        status = await this.magpie.limitStatus(key.secret);
+      } catch (e) {
+        throw new Error(`the native key's cap could not be read back: ${String((e as Error)?.message ?? e)}`);
+      }
+      const held = status.limit?.costLimit;
+      if (typeof held !== "number" || Math.abs(held - input.capUsd) > 1e-9) throw new Error("the native key's cap does not match the approval");
+      const rec: ConsumerRecord = {
+        consumerId: input.consumerId,
+        keyName: input.keyName,
+        keyId: input.keyId,
+        secret: key.secret,
+        models: [...models],
+        window: "3650d",
+        capUsd: input.capUsd,
+        creditedUsd: 0,
+        deposits: [],
+        pending: null,
+        paused: null,
+        priceVersion: input.priceVersion,
+        acceptedQuoteHash: input.quoteHash,
+        createdAt: new Date().toISOString(),
+        revokedAt: null,
+        lastCheck: null,
+      };
+      this.list.push(rec);
+      try {
+        this.persist();
+      } catch (e) {
+        const idx = this.list.findIndex((c) => c.consumerId === input.consumerId);
+        if (idx >= 0) this.list.splice(idx, 1);
+        throw e;
+      }
+      await this.seedLedger(rec);
+      logger.info(`adopted native gateway key ${rec.keyName} (${rec.keyId}) for ${input.consumerId} without creating a key`);
     });
   }
 

@@ -773,14 +773,10 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           // otherwise adopting only metadata would leave ledger/consumer state
           // inconsistent. Native-only keys stay unknown and require explicit
           // recovery (or noSideEffect when the durable intent truly has no key).
-          const recovered = recoverApproval(record, service, observedAt);
           const targetMatches =
-            Boolean(consumer) &&
-            Boolean(recovered) &&
             target &&
             native.nativeKeyIds.includes(target.keyId) &&
             target.keyName === expectedName &&
-            target.keyId === recovered!.keyId &&
             (!record.keyId || target.keyId === record.keyId) &&
             target.models.length > 0 &&
             sameSet(target.models, record.models) &&
@@ -803,8 +799,8 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
               keyName: target.keyName,
               models: [...target.models],
               capUsd: record.capUsd,
-              priceVersion: recovered!.priceVersion,
-              expiresAt: recovered!.expiresAt,
+              priceVersion: record.priceVersion,
+              expiresAt: record.expiresAt,
               evidence: {
                 source: "magpie-key-readback",
                 observedAt,
@@ -867,10 +863,8 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           if (record.state !== "pending" && record.state !== "uncertain") {
             throw new ControlServiceRefusal("conflict", "this approval is not in a deliverable state");
           }
-          const recovered = recoverApproval(record, service, now().toISOString());
           const native = await service.provisioner.nativeKeySnapshot(input.consumerNodeId).catch(() => null);
           if (
-            !recovered ||
             !native?.target ||
             native.target.keyId !== input.keyId ||
             native.target.keyName !== input.keyName ||
@@ -881,14 +875,29 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           ) {
             throw new ControlServiceRefusal("conflict", "reconcileApproval's key binding is not proven by the native key list; refuse a second key");
           }
+          // Reconstruct the local Provisioner/ledger state for this exact native
+          // key. This is an adoption, not ensure: no key is created or mutated.
+          const quote = service.catalogStatus().quote;
+          const selectedVersion = quote ? catalogPriceVersion(quote.models.filter((m) => input.models.includes(m.id))) : null;
+          const priceVersion = record.priceVersion || selectedVersion;
+          if (!priceVersion) throw new ControlServiceRefusal("quote_mismatch", "the adopted key has no price version binding");
+          await service.provisioner.adoptControlKey({
+            consumerId: input.consumerNodeId,
+            keyId: input.keyId,
+            keyName: input.keyName,
+            models: input.models,
+            capUsd: input.capUsd,
+            quoteHash: record.quoteHash,
+            priceVersion,
+          });
           const promoted: ApprovalRecord = {
             ...record,
             keyId: input.keyId,
             keyName: input.keyName,
             models: [...input.models],
             capUsd: input.capUsd,
-            priceVersion: recovered.priceVersion,
-            expiresAt: record.expiresAt || recovered.expiresAt,
+            priceVersion,
+            expiresAt: record.expiresAt || new Date(now().getTime() + 10 * 60_000).toISOString(),
             state: "approved",
             error: null,
             updatedAt: now().toISOString(),

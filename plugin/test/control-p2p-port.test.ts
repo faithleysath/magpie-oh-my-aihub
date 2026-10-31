@@ -359,17 +359,93 @@ describe("B-core P2pBusinessPort mapping", () => {
     });
     expect(afterRestart.state).toBe("noSideEffect");
 
-    // A Magpie key with the deterministic consumer name but no local record is
-    // still an unknown, not proof of no side effect.
+    // A native key from an interrupted approval with no local record is
+    // keyReady; takeAuthorization must adopt the same key (Provisioner+ledger)
+    // and never call ensure.
     const nativeOnly = "7".repeat(32);
-    const pendingNative = { ...pending, approvalId: nativeOnly, consumerNodeId: "native-only", consumerFingerprint: "7".repeat(64) };
+    const nativePrice = catalogPriceVersion([models[0]!])!;
+    const pendingNative = {
+      ...pending,
+      approvalId: nativeOnly,
+      consumerNodeId: "native-only",
+      consumerFingerprint: "7".repeat(64),
+      priceVersion: nativePrice,
+      expiresAt: "2026-10-31T00:10:00.000Z",
+    };
     writeFileSync(approvalFile, JSON.stringify({ version: 1, approvals: [pendingNative] }));
-    await magpie.addKey("ohmyaihub-native-only");
+    const nativeKey = await magpie.addKey("ohmyaihub-native-only");
+    await magpie.setModels(nativeKey.id, [LAB_MODEL]);
+    await magpie.setCostLimit(nativeKey.id, "3650d", 1);
+    const countBefore = magpie.keys.size;
+    const nativeConsumer = { accountId: "7".repeat(64), nodeId: "native-only", hostname: "ohmyaihub-native-only", fingerprint: "7".repeat(64) };
     const ambiguous = await port.reconcileApproval!({
       requestHash: "8".repeat(64), approvalId: nativeOnly, generation: 1,
-      consumer: { accountId: "7".repeat(64), nodeId: "native-only", hostname: "ohmyaihub-native-only", fingerprint: "7".repeat(64) }, keyId: null,
+      consumer: nativeConsumer, keyId: null,
     });
-    expect(ambiguous.state).toBe("unknown");
+    const concurrent = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        port.reconcileApproval!({
+          requestHash: "8".repeat(64), approvalId: nativeOnly, generation: 1,
+          consumer: nativeConsumer, keyId: null,
+        }),
+      ),
+    );
+    for (const result of concurrent) {
+      expect(result.state).toBe("keyReady");
+      if (result.state === "keyReady") expect(result.keyId).toBe(nativeKey.id);
+    }
+    expect(magpie.keys.size).toBe(countBefore);
+    expect(ambiguous.state).toBe("keyReady");
+    if (ambiguous.state === "keyReady") expect(ambiguous.keyId).toBe(nativeKey.id);
+    const adopted = await port.takeAuthorization({
+      approvalId: nativeOnly,
+      generation: 1,
+      consumerNodeId: "native-only",
+      consumerFingerprint: "7".repeat(64),
+      requestHash: "8".repeat(64),
+      models: [LAB_MODEL],
+      capUsd: 1,
+      quote: { contentHash: HASH, priceVersion: nativePrice, identityFingerprint: FP },
+      keyId: nativeKey.id,
+      keyName: "ohmyaihub-native-only",
+    });
+    expect(adopted.key).toBe(nativeKey.secret);
+    expect(magpie.keys.size).toBe(countBefore); // no second key
+    expect(svc.provisioner.find("native-only")?.keyId).toBe(nativeKey.id);
+    expect(svc.ledger?.account("native-only")).toBeDefined();
+    const concurrentTakes = await Promise.all([
+      port.takeAuthorization({
+        approvalId: nativeOnly, generation: 1, consumerNodeId: "native-only", consumerFingerprint: "7".repeat(64),
+        requestHash: "8".repeat(64), models: [LAB_MODEL], capUsd: 1,
+        quote: { contentHash: HASH, priceVersion: nativePrice, identityFingerprint: FP },
+        keyId: nativeKey.id, keyName: "ohmyaihub-native-only",
+      }),
+      port.takeAuthorization({
+        approvalId: nativeOnly, generation: 1, consumerNodeId: "native-only", consumerFingerprint: "7".repeat(64),
+        requestHash: "8".repeat(64), models: [LAB_MODEL], capUsd: 1,
+        quote: { contentHash: HASH, priceVersion: nativePrice, identityFingerprint: FP },
+        keyId: nativeKey.id, keyName: "ohmyaihub-native-only",
+      }),
+    ]);
+    expect(concurrentTakes.every((r) => r.key === nativeKey.secret)).toBe(true);
+    expect(magpie.keys.size).toBe(countBefore);
+
+    // Restart and take again: same approval/key, still no ensure.
+    const restartedNative = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    const adoptedAgain = await restartedNative.takeAuthorization({
+      approvalId: nativeOnly,
+      generation: 1,
+      consumerNodeId: "native-only",
+      consumerFingerprint: "7".repeat(64),
+      requestHash: "8".repeat(64),
+      models: [LAB_MODEL],
+      capUsd: 1,
+      quote: { contentHash: HASH, priceVersion: nativePrice, identityFingerprint: FP },
+      keyId: nativeKey.id,
+      keyName: "ohmyaihub-native-only",
+    });
+    expect(adoptedAgain.key).toBe(nativeKey.secret);
+    expect(magpie.keys.size).toBe(countBefore);
   });
 
   test("reconcileApproval returns unknown when Magpie key management cannot be read", async () => {
