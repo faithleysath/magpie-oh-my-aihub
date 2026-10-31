@@ -10,6 +10,7 @@
  *   bun run plugin/scripts/console-preview.ts --scenario first-run --port 61391
  *   bun run plugin/scripts/console-preview.ts --scenario stale --port 61392
  *   bun run plugin/scripts/console-preview.ts --scenario paused --port 61394
+ *   bun run plugin/scripts/console-preview.ts --scenario unshared --port 61396
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -193,6 +194,14 @@ function staleEvidenceState() {
   provider.modelsEvidence = { ...provider.modelsEvidence, status: "stale", callable: "unknown", modelCount: null, models: [], readAt: "2026-10-30T21:00:00.000Z", expiresAt: "2026-10-30T21:05:00.000Z" };
   return state;
 }
+function unsharedState() {
+  const state = configuredState();
+  state.status.config.sharingEnabled = false;
+  state.status.config.sharingActive = false;
+  state.status.config.share = { models: [] };
+  state.status.config.catalog = { ...state.status.config.catalog, enabled: false };
+  return state;
+}
 function pausedEvidenceState() {
   const state = configuredState();
   // Historical list kept for diagnosis, but the connection is not usable.
@@ -202,6 +211,7 @@ function pausedEvidenceState() {
 let current: any = scenario === "first-run" ? firstRunState()
   : scenario === "stale" ? staleEvidenceState()
   : scenario === "paused" ? pausedEvidenceState()
+  : scenario === "unshared" ? unsharedState()
   : configuredState();
 const csrf = "0".repeat(32);
 const instance = "preview-instance";
