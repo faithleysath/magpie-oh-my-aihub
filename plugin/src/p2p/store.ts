@@ -160,6 +160,10 @@ export interface P2pApprovalRow {
   authorizationHash: string | null;
   deliveredAt: string | null;
   error: string | null;
+  /** durable proof that a typed revoke enforcement was obtained */
+  enforcedAt: string | null;
+  enforcement: string | null;
+  enforcedKeyId: string | null;
 }
 
 export interface P2pDeliveryRow {
@@ -224,6 +228,11 @@ export interface P2pRecoveryReport {
 }
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS p2p_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS p2p_peer_trust (
   node_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
@@ -323,6 +332,9 @@ CREATE TABLE IF NOT EXISTS p2p_approvals (
   authorization_hash TEXT,
   delivered_at TEXT,
   error TEXT,
+  enforced_at TEXT,
+  enforcement TEXT,
+  enforced_key_id TEXT,
   UNIQUE (request_hash, generation)
 );
 -- At most one live approval per request; a revoked/expired generation does not
@@ -442,6 +454,30 @@ export class P2pStore {
     if (path !== ":memory:") chmodSync(path, 0o600);
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /**
+   * Idempotent additive migration for a p2p.sqlite created by an earlier B-core
+   * build. Columns are nullable/defaulted; no row is rewritten or deleted.
+   */
+  private migrate(): void {
+    const add = (table: string, column: string, ddl: string): void => {
+      const columns = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    };
+    add("p2p_requests", "eligible_json", "eligible_json TEXT");
+    add("p2p_approvals", "generation", "generation INTEGER NOT NULL DEFAULT 1");
+    add("p2p_approvals", "provider_node_id", "provider_node_id TEXT");
+    add("p2p_approvals", "provider_fingerprint", "provider_fingerprint TEXT");
+    add("p2p_approvals", "memo", "memo TEXT");
+    add("p2p_approvals", "enforced_at", "enforced_at TEXT");
+    add("p2p_approvals", "enforcement", "enforcement TEXT");
+    add("p2p_approvals", "enforced_key_id", "enforced_key_id TEXT");
+    add("p2p_deliveries", "key_hash", "key_hash TEXT");
+    add("p2p_outbox", "payload_json", "payload_json TEXT");
+    add("p2p_inbox", "last_error", "last_error TEXT");
+    this.db.query("INSERT OR REPLACE INTO p2p_meta (key, value) VALUES ('schema_version', '2')").run();
   }
 
   close(): void {
@@ -823,8 +859,8 @@ export class P2pStore {
     try {
       this.db
         .query(
-          `INSERT INTO p2p_approvals (approval_id, request_hash, generation, provider_node_id, provider_fingerprint, consumer_account_id, consumer_node_id, consumer_fingerprint, quote_hash, price_version, models_json, cap_usd, memo, state, created_at, approved_at, expires_at, key_id, key_name, authorization_hash, delivered_at, error)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO p2p_approvals (approval_id, request_hash, generation, provider_node_id, provider_fingerprint, consumer_account_id, consumer_node_id, consumer_fingerprint, quote_hash, price_version, models_json, cap_usd, memo, state, created_at, approved_at, expires_at, key_id, key_name, authorization_hash, delivered_at, error, enforced_at, enforcement, enforced_key_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .run(
           row.approvalId,
@@ -849,6 +885,9 @@ export class P2pStore {
           row.authorizationHash,
           row.deliveredAt,
           row.error,
+          row.enforcedAt,
+          row.enforcement,
+          row.enforcedKeyId,
         );
     } catch (e) {
       if (/UNIQUE|PRIMARY/i.test(String(e))) fail("conflict", "this request already has a live approval");
@@ -890,16 +929,24 @@ export class P2pStore {
   }
 
   /** Compare-and-set on state; a concurrent revoke/approve loses cleanly. */
-  transitionApproval(approvalId: string, from: readonly P2pApprovalState[], to: P2pApprovalState, patch: Partial<Pick<P2pApprovalRow, "approvedAt" | "keyId" | "keyName" | "authorizationHash" | "deliveredAt" | "error" | "expiresAt" | "priceVersion">> = {}): boolean {
+  transitionApproval(approvalId: string, from: readonly P2pApprovalState[], to: P2pApprovalState, patch: Partial<Pick<P2pApprovalRow, "approvedAt" | "keyId" | "keyName" | "authorizationHash" | "deliveredAt" | "error" | "expiresAt" | "priceVersion" | "enforcedAt" | "enforcement" | "enforcedKeyId">> = {}): boolean {
     const placeholders = from.map(() => "?").join(",");
     const res = this.db
       .query(
         `UPDATE p2p_approvals SET state = ?, approved_at = COALESCE(?, approved_at), key_id = COALESCE(?, key_id), key_name = COALESCE(?, key_name),
-           authorization_hash = COALESCE(?, authorization_hash), delivered_at = COALESCE(?, delivered_at), error = COALESCE(?, error), expires_at = COALESCE(?, expires_at), price_version = COALESCE(?, price_version)
+           authorization_hash = COALESCE(?, authorization_hash), delivered_at = COALESCE(?, delivered_at), error = COALESCE(?, error), expires_at = COALESCE(?, expires_at), price_version = COALESCE(?, price_version),
+           enforced_at = COALESCE(?, enforced_at), enforcement = COALESCE(?, enforcement), enforced_key_id = COALESCE(?, enforced_key_id)
          WHERE approval_id = ? AND state IN (${placeholders})`,
       )
-      .run(to, patch.approvedAt ?? null, patch.keyId ?? null, patch.keyName ?? null, patch.authorizationHash ?? null, patch.deliveredAt ?? null, patch.error ?? null, patch.expiresAt ?? null, patch.priceVersion ?? null, approvalId, ...from);
+      .run(to, patch.approvedAt ?? null, patch.keyId ?? null, patch.keyName ?? null, patch.authorizationHash ?? null, patch.deliveredAt ?? null, patch.error ?? null, patch.expiresAt ?? null, patch.priceVersion ?? null, patch.enforcedAt ?? null, patch.enforcement ?? null, patch.enforcedKeyId ?? null, approvalId, ...from);
     return res.changes === 1;
+  }
+
+  /** Records the typed enforcement on a row that is already/now revoked. */
+  recordEnforcement(approvalId: string, input: { enforcedAt: string; enforcement: string; enforcedKeyId: string }): boolean {
+    return this.db
+      .query("UPDATE p2p_approvals SET enforced_at = ?, enforcement = ?, enforced_key_id = ? WHERE approval_id = ? AND state = 'revoked'")
+      .run(input.enforcedAt, input.enforcement, input.enforcedKeyId, approvalId).changes === 1;
   }
 
   // --- deliveries ------------------------------------------------------------
@@ -1150,6 +1197,9 @@ function approvalRow(raw: Record<string, unknown>): P2pApprovalRow {
     authorizationHash: raw.authorization_hash === null ? null : String(raw.authorization_hash),
     deliveredAt: raw.delivered_at === null ? null : String(raw.delivered_at),
     error: raw.error === null ? null : String(raw.error),
+    enforcedAt: raw.enforced_at === null || raw.enforced_at === undefined ? null : String(raw.enforced_at),
+    enforcement: raw.enforcement === null || raw.enforcement === undefined ? null : String(raw.enforcement),
+    enforcedKeyId: raw.enforced_key_id === null || raw.enforced_key_id === undefined ? null : String(raw.enforced_key_id),
   };
 }
 

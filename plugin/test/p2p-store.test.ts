@@ -61,6 +61,9 @@ function approval(overrides: Partial<P2pApprovalRow> = {}): P2pApprovalRow {
     authorizationHash: null,
     deliveredAt: null,
     error: null,
+    enforcedAt: null,
+    enforcement: null,
+    enforcedKeyId: null,
     ...overrides,
   };
 }

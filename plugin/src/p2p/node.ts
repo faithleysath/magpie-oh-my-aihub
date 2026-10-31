@@ -158,9 +158,29 @@ export interface P2pApprovalReconcileInput {
   keyId: string | null;
 }
 
+export interface P2pReconcileEvidence {
+  /** read-only source, e.g. "magpie-key-readback" or "provisioner-record" */
+  source: string;
+  /** when the adapter observed the real state; stale evidence is refused */
+  observedAt: string;
+  /** the fields actually read back, e.g. ["keys","costLimit","models"] */
+  checked: string[];
+  /** native key ids the adapter saw; no key material */
+  nativeKeyIds?: string[];
+}
+
+export interface P2pReconcileBindings {
+  requestHash: string;
+  approvalId: string;
+  generation: number;
+  consumerNodeId: string;
+  consumerFingerprint: string;
+  keyId: string | null;
+}
+
 export type P2pApprovalReconcile =
-  | { state: "keyReady"; keyId: string; keyName: string; models: string[]; capUsd: number; priceVersion: string; expiresAt: string; detail?: string | null }
-  | { state: "noSideEffect"; detail?: string | null }
+  | ({ state: "keyReady"; keyId: string; keyName: string; models: string[]; capUsd: number; priceVersion: string; expiresAt: string; detail?: string | null } & Omit<P2pReconcileBindings, "keyId"> & { keyId: string; evidence: P2pReconcileEvidence })
+  | ({ state: "noSideEffect"; detail?: string | null } & P2pReconcileBindings & { evidence: P2pReconcileEvidence })
   | { state: "unknown"; detail: string | null };
 
 export interface P2pApprovedMaterials {
@@ -820,6 +840,9 @@ export class P2pNode {
         authorizationHash: null,
         deliveredAt: null,
         error: null,
+        enforcedAt: null,
+        enforcement: null,
+        enforcedKeyId: null,
       });
       approval = this.store.getApproval(body.approvalId);
     }
@@ -1169,6 +1192,9 @@ export class P2pNode {
       // Runs on every approval path (pending cleared, restart, same identity):
       // a historic identity whose key is not confirmed revoked blocks this.
       this.assertNoUnresolvedLegacyIdentity(request.consumerNodeId, peer.fingerprint, "approval");
+      // A second request from the same identity must not mint another key while
+      // any other approval for this consumer has an unconfirmed key.
+      this.assertNoOtherUnresolvedApproval(peer.nodeId, requestHash);
       if (!models.every((m) => JSON.parse(request.modelsJson).includes(m))) fail("conflict", "approved models must be a subset of the request");
 
       const active = this.store.activeApprovalByRequest(requestHash);
@@ -1235,6 +1261,9 @@ export class P2pNode {
         authorizationHash: null,
         deliveredAt: null,
         error: null,
+        enforcedAt: null,
+        enforcement: null,
+        enforcedKeyId: null,
       });
       return this.runApprovalAttempt(this.store.getApproval(approvalId)!, peer, document);
     });
@@ -1298,6 +1327,57 @@ export class P2pNode {
    * same approvalId/generation may be retried; anything unknown keeps the row
    * uncertain and blocks a new generation.
    */
+  /**
+   * A reconcile result is only usable if it echoes this exact attempt and the
+   * adapter's readback. Missing/mismatched bindings or stale/absent evidence
+   * keep the approval uncertain; they never authorize a retry.
+   */
+  private reconcileBindingError(result: P2pApprovalReconcile, approval: P2pApprovalRow): string | null {
+    if (result.state === "unknown") return "the reconcile result is unknown";
+    if (result.requestHash !== approval.requestHash) return "reconcile request hash mismatch";
+    if (result.approvalId !== approval.approvalId) return "reconcile approval id mismatch";
+    if (result.generation !== approval.generation) return "reconcile generation mismatch";
+    if (result.consumerNodeId !== approval.consumerNodeId) return "reconcile consumer node mismatch";
+    if (result.consumerFingerprint !== approval.consumerFingerprint) return "reconcile consumer fingerprint mismatch";
+    if (result.state === "keyReady") {
+      if (!result.keyId) return "reconcile keyReady has no key id";
+      if (approval.keyId && result.keyId !== approval.keyId) return "reconcile key id mismatch";
+    } else if ((result.keyId ?? null) !== (approval.keyId ?? null)) {
+      return "noSideEffect contradicts the recorded key id";
+    }
+    const evidence = result.evidence;
+    if (!evidence || typeof evidence !== "object") return "reconcile evidence is missing";
+    if (typeof evidence.source !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(evidence.source)) return "reconcile evidence source is invalid";
+    if (typeof evidence.observedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(evidence.observedAt)) return "reconcile evidence timestamp is invalid";
+    const observed = Date.parse(evidence.observedAt);
+    if (!Number.isFinite(observed) || Math.abs(this.clock().getTime() - observed) > 5 * 60_000) return "reconcile evidence is stale";
+    if (!Array.isArray(evidence.checked) || evidence.checked.length < 1 || evidence.checked.length > 20) return "reconcile evidence fields are missing";
+    if (evidence.checked.some((field) => typeof field !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(field))) return "reconcile evidence fields are invalid";
+    if (evidence.nativeKeyIds !== undefined) {
+      if (!Array.isArray(evidence.nativeKeyIds) || evidence.nativeKeyIds.length > 100) return "reconcile native key list is invalid";
+      if (evidence.nativeKeyIds.some((id) => typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(id))) return "reconcile native key list is invalid";
+    }
+    if (result.state === "keyReady") {
+      if (evidence.source !== "magpie-key-readback") return "keyReady needs magpie-key-readback evidence";
+      for (const field of ["keys", "keyId", "models", "costLimit"]) {
+        if (!evidence.checked.includes(field)) return "keyReady evidence did not read " + field;
+      }
+      if (!evidence.nativeKeyIds || !evidence.nativeKeyIds.includes(result.keyId)) return "keyReady evidence does not include the key id";
+    } else {
+      if (evidence.source !== "provisioner-journal:magpie-readback") return "noSideEffect needs the provisioner journal plus a Magpie key readback";
+      for (const field of ["journal", "keys"]) {
+        if (!evidence.checked.includes(field)) return "noSideEffect evidence did not read " + field;
+      }
+      if (approval.keyId && evidence.nativeKeyIds?.includes(approval.keyId)) return "noSideEffect contradicts the native key list";
+    }
+    try {
+      assertNoSecretMaterial(evidence, "reconcile evidence");
+    } catch {
+      return "reconcile evidence contains credential material";
+    }
+    return null;
+  }
+
   private async reconcileApprovalAttempt(approval: P2pApprovalRow, peer: P2pPeerView, document: P2pRequestDocument): Promise<P2pApprovalView | null> {
     if (!this.port.reconcileApproval) {
       fail("conflict", "an approval attempt is unresolved and the port has no read-only reconcile; refusing to create a new key");
@@ -1317,6 +1397,8 @@ export class P2pNode {
     if (result.state === "unknown") {
       fail("conflict", `the unresolved approval is still unknown${result.detail ? ` (${result.detail.slice(0, 120)})` : ""}; reconcile or revoke it explicitly`);
     }
+    const bindingError = this.reconcileBindingError(result, approval);
+    if (bindingError) fail("conflict", bindingError + "; the approval stays uncertain");
     if (result.state === "noSideEffect") return null;
 
     const materials: P2pApprovedMaterials = {
@@ -1394,7 +1476,9 @@ export class P2pNode {
     await this.serial(async () => {
       const approval = this.store.getApproval(approvalId);
       if (!approval) fail("not_found", "no such approval");
-      if (approval.state === "revoked") return;
+      // A revoked row with a durable enforcement record is done. A revoked row
+      // without one (old data) is re-confirmed so the gate cannot dead-end.
+      if (approval.state === "revoked" && approval.enforcedAt) return;
       let outcome: P2pRevokeOutcome | null | undefined;
       try {
         outcome = await this.port.revoke({
@@ -1421,6 +1505,14 @@ export class P2pNode {
         const current = this.store.getApproval(approvalId);
         if (current?.state !== "revoked") fail("conflict", `the approval cannot be revoked from ${current?.state ?? "unknown"}`);
       }
+      // Durable, never-purged proof of typed enforcement (the tombstone may be
+      // purged by TTL; the gate must not depend on it).
+      const confirmedOutcome = outcome as P2pRevokeConfirmed;
+      this.store.recordEnforcement(approvalId, {
+        enforcedAt: this.clock().toISOString(),
+        enforcement: confirmedOutcome.enforcement,
+        enforcedKeyId: confirmedOutcome.keyId,
+      });
       // The request becomes re-approvable as a NEW generation; the old one is
       // tombstoned and its key is already gone. No key is reissued here.
       this.store.setRequestState(approval.requestHash, "revoked", this.clock(), { note: reason });
@@ -1687,6 +1779,12 @@ export class P2pNode {
       }
       // Only now is the local state allowed to claim the key is gone.
       this.store.transitionApproval(approval.approvalId, [...REVOCABLE_STATES], "revoked", { error: "consumer identity changed" });
+      const confirmedOutcome = outcome as P2pRevokeConfirmed;
+      this.store.recordEnforcement(approval.approvalId, {
+        enforcedAt: this.clock().toISOString(),
+        enforcement: confirmedOutcome.enforcement,
+        enforcedKeyId: confirmedOutcome.keyId,
+      });
       this.store.setDeliveryState(approval.approvalId, "revoked", this.clock(), "consumer identity changed");
       this.store.putTombstone("authorization", approval.approvalId, "consumer identity changed", this.clock());
       this.store.cancelOutboxForApproval(approval.approvalId, this.clock());
@@ -1711,7 +1809,10 @@ export class P2pNode {
       if (approval.consumerFingerprint === currentFingerprint) continue;
       if (approval.state === "rejected" && !approval.keyId) continue;
       if (approval.state === "expired" && !approval.keyId) continue;
-      if (approval.state === "revoked" && this.store.hasTombstone("authorization", approval.approvalId)) continue;
+      // Positive typed enforcement is recorded durably (enforced_at/method/key);
+      // state=revoked is only reachable after that check, and the TTL-purged
+      // tombstone must not re-open the gate.
+      if (approval.state === "revoked") continue;
       return approval;
     }
     return null;
@@ -1724,6 +1825,19 @@ export class P2pNode {
       "conflict",
       `previous identity approval ${legacy.approvalId} is ${legacy.state} and not confirmed revoked; reconcile before ${action}`,
     );
+  }
+
+  /** Same identity, another request: an unconfirmed key blocks a new key too. */
+  private assertNoOtherUnresolvedApproval(nodeId: string, requestHash: string): void {
+    for (const approval of this.store.listApprovals(nodeId)) {
+      if (approval.requestHash === requestHash) continue;
+      if (approval.state === "approving" || approval.state === "uncertain") {
+        fail(
+          "conflict",
+          `another approval for this consumer (${approval.approvalId}) has an unconfirmed key; reconcile or revoke it first`,
+        );
+      }
+    }
   }
 
   private revokeConfirmation(outcome: P2pRevokeOutcome | null | undefined, approval: P2pApprovalRow): { ok: true } | { ok: false; reason: string } {

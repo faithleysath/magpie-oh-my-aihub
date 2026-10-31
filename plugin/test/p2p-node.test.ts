@@ -416,6 +416,59 @@ describe("interrupted approval attempts", () => {
   });
 });
 
+describe("reconcile evidence and same-identity gate", () => {
+  test("reconcile with a mismatched binding does not authorize a retry", async () => {
+    lab = P2pLab.create();
+    const sessionId = await lab.establish();
+    const { requestHash } = await lab.sendRequest(sessionId);
+    lab.faults.failApprove = true;
+    await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true })).rejects.toThrow();
+    lab.faults.failApprove = false;
+    lab.faults.reconcileMode = "noSideEffect";
+    lab.faults.reconcileBadBinding = true;
+    const before = lab.calls.approve;
+    await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2 })).rejects.toBeInstanceOf(P2pError);
+    expect(lab.calls.approve).toBe(before);
+    expect((await lab.B.listApprovals())[0]?.state).toBe("uncertain");
+  });
+
+  test("stale reconcile evidence does not authorize a retry", async () => {
+    lab = P2pLab.create();
+    const sessionId = await lab.establish();
+    const { requestHash } = await lab.sendRequest(sessionId);
+    lab.faults.failApprove = true;
+    await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true })).rejects.toThrow();
+    lab.faults.failApprove = false;
+    lab.faults.reconcileMode = "noSideEffect";
+    lab.faults.reconcileStale = true;
+    const before = lab.calls.approve;
+    await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2 })).rejects.toBeInstanceOf(P2pError);
+    expect(lab.calls.approve).toBe(before);
+  });
+
+  test("an unresolved key for one request blocks a new request from the same identity", async () => {
+    lab = P2pLab.create();
+    const sessionId = await lab.establish();
+    const first = await lab.sendRequest(sessionId);
+    const second = await lab.sendRequest(sessionId, lab.requestDocument({ models: ["beta/y"] }));
+    lab.faults.failApprove = true;
+    await expect(lab.B.approve(first.requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true })).rejects.toThrow();
+    lab.faults.failApprove = false;
+    const before = lab.calls.approve;
+    await expect(lab.B.approve(second.requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true })).rejects.toBeInstanceOf(P2pError);
+    expect(lab.calls.approve).toBe(before);
+
+    // Resolve the first attempt by adopting its original key, then the second
+    // request may get its own explicit generation/key.
+    lab.faults.reconcileMode = "keyReady";
+    await lab.B.approve(first.requestHash, { models: ["alpha/x"], capUsd: 2 });
+    lab.faults.approveKeyId = "key-b";
+    lab.faults.takeKey = "secret-b";
+    const view = await lab.B.approve(second.requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true });
+    expect(view.state).not.toBe("rejected");
+  });
+});
+
 describe("historic identity gate", () => {
   test("a new identity cannot approve while an old identity's key is uncertain, even after pending is cleared or a restart", async () => {
     lab = P2pLab.create();
@@ -446,6 +499,27 @@ describe("historic identity gate", () => {
     const view = await lab.B.approve(requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true });
     expect(view.state).not.toBe("rejected");
     expect(lab.calls.approve).toBe(before + 1);
+  });
+  test("a purged authorization tombstone after 31 minutes and a restart does not re-block a typed-revoked identity", async () => {
+    lab = P2pLab.create();
+    const { approval } = await lab.deliver();
+    await lab.A.tick();
+    const alien = alienIdentity();
+    lab.storeB.recordPeerSeen(alien.peer, lab.clock.now);
+    const invalidation = await lab.B.acceptConsumer("aaaa1111", alien.peer.fingerprint);
+    expect(invalidation.revoked).toEqual([approval.approvalId]);
+    expect(lab.storeB.hasTombstone("authorization", approval.approvalId)).toBe(true);
+    const requestHash = insertAlienRequest(lab, alien, ["beta/y"]);
+
+    lab.faults.approveKeyId = "key-new-0001";
+    lab.faults.takeKey = "new-gateway-secret-0001";
+    lab.advance(31 * 60_000);
+    lab.restart();
+    expect(lab.storeB.hasTombstone("authorization", approval.approvalId)).toBe(false);
+
+    const view = await lab.B.approve(requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true });
+    expect(view.state).not.toBe("rejected");
+    expect(lab.calls.approve).toBeGreaterThan(0);
   });
 });
 

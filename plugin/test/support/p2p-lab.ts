@@ -15,6 +15,8 @@ import { P2pStore } from "../../src/p2p/store.ts";
 import {
   P2pNode,
   requestCorrelation,
+  type P2pApprovalReconcile,
+  type P2pApprovalReconcileInput,
   type P2pApprovalRequest,
   type P2pApprovalView,
   type P2pApprovedMaterials,
@@ -49,6 +51,8 @@ export interface LabFaults {
   approveKeyId?: string;
   takeKey?: string;
   reconcileMode?: "unknown" | "keyReady" | "noSideEffect";
+  reconcileBadBinding?: boolean;
+  reconcileStale?: boolean;
   readbackModels?: string[] | null;
   readbackCapUsd?: number | null;
 }
@@ -250,21 +254,39 @@ export class P2pLab {
           memo: input.memo,
         };
       },
-      async reconcileApproval(input: { approvalId: string; generation: number; keyId: string | null }) {
-        self.calls.reconcile = (self.calls.reconcile ?? 0) + 1;
+      async reconcileApproval(input: P2pApprovalReconcileInput): Promise<P2pApprovalReconcile> {
+        self.calls.reconcile += 1;
         const mode = self.faults.reconcileMode ?? "unknown";
-        if (mode === "unknown") return { state: "unknown" as const, detail: "not reconciled" };
-        if (mode === "noSideEffect") return { state: "noSideEffect" as const, detail: null };
+        if (mode === "unknown") return { state: "unknown", detail: "not reconciled" };
         const approval = self.storeB.getApproval(input.approvalId);
-        if (!approval) return { state: "unknown" as const, detail: "approval missing" };
+        if (!approval) return { state: "unknown", detail: "approval missing" };
+        const evidence = {
+          source: mode === "keyReady" ? "magpie-key-readback" : "provisioner-journal:magpie-readback",
+          observedAt: (self.faults.reconcileStale ? new Date(self.clock.now.getTime() - 10 * 60_000) : self.clock.now).toISOString(),
+          checked: mode === "keyReady" ? ["keys", "keyId", "models", "costLimit"] : ["journal", "keys"],
+          nativeKeyIds: [] as string[],
+        };
+        const bindings = {
+          requestHash: self.faults.reconcileBadBinding ? "0".repeat(64) : input.requestHash,
+          approvalId: input.approvalId,
+          generation: input.generation,
+          consumerNodeId: input.consumer.nodeId,
+          consumerFingerprint: input.consumer.fingerprint,
+        };
+        if (mode === "noSideEffect") {
+          return { state: "noSideEffect", ...bindings, keyId: input.keyId, evidence, detail: null };
+        }
+        const keyId = self.faults.approveKeyId ?? KEY_ID;
         return {
-          state: "keyReady" as const,
-          keyId: self.faults.approveKeyId ?? KEY_ID,
+          state: "keyReady",
+          ...bindings,
+          keyId,
           keyName: KEY_NAME,
           models: JSON.parse(approval.modelsJson) as string[],
           capUsd: approval.capUsd,
           priceVersion: sha256Hex(canonicalJson({ selected: JSON.parse(approval.modelsJson) as string[] })).slice(0, 64),
           expiresAt: approval.expiresAt,
+          evidence: { ...evidence, nativeKeyIds: [keyId] },
           detail: null,
         };
       },
