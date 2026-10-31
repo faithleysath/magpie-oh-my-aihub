@@ -702,7 +702,7 @@ export class WalletVault {
         id: nodeRandomBytes(16).toString("hex"),
         wallet,
         address: wallet.address,
-        expiresAt: this.options.now() + this.options.sessionTtlMs,
+        expiresAt: this.currentTime() + this.options.sessionTtlMs,
       };
       this.publicAddress = wallet.address;
       return this.snapshot();
@@ -740,7 +740,7 @@ export class WalletVault {
     }
     const purpose = validateExportPurpose(input.kind, input.purpose);
     const ttlMs = boundedTtl(input.ttlMs, DEFAULT_EXPORT_CAPABILITY_TTL_MS, MAX_EXPORT_CAPABILITY_TTL_MS);
-    const now = this.options.now();
+    const now = this.currentTime();
     const capability = mintExportCapability({
       vaultId: this.vaultId,
       sessionId: this.session!.id,
@@ -865,7 +865,7 @@ export class WalletVault {
         purpose: purpose.id,
         chainId: purpose.chainId,
         bindingHash: record.digest,
-        expiresAt: this.options.now() + ttlMs,
+        expiresAt: this.currentTime() + ttlMs,
         maxUses,
         used: 0,
         maxPerPaymentWei: null,
@@ -899,7 +899,7 @@ export class WalletVault {
       purpose: input.purpose,
       chainId: record.transaction.chainId,
       bindingHash: paymentIntentHash(record.prepared),
-      expiresAt: this.options.now() + ttlMs,
+      expiresAt: this.currentTime() + ttlMs,
       maxUses,
       used: 0,
       maxPerPaymentWei: maxPer,
@@ -1089,7 +1089,7 @@ export class WalletVault {
     }
     if (record.kind !== expectedKind) fail("export-purpose-mismatch", "export capability kind does not match");
     if (record.used) fail("export-capability-used", "export capability was already used");
-    if (this.options.now() >= record.expiresAt) fail("export-capability-expired", "export capability expired");
+    if (this.currentTime() >= record.expiresAt) fail("export-capability-expired", "export capability expired");
     record.used = true;
     return record;
   }
@@ -1115,7 +1115,7 @@ export class WalletVault {
     if (record.bindingHash !== bindingHash) {
       fail("signing-permit-invalid", "signing permit is bound to a different intent");
     }
-    if (this.options.now() >= record.expiresAt) fail("signing-permit-expired", "signing permit expired");
+    if (this.currentTime() >= record.expiresAt) fail("signing-permit-expired", "signing permit expired");
     if (record.used >= record.maxUses) fail("signing-permit-exhausted", "signing permit has no uses left");
     if (valueWei === null) {
       if (record.maxPerPaymentWei !== null) fail("signing-permit-invalid", "typed-data permit has payment limits");
@@ -1172,8 +1172,16 @@ export class WalletVault {
     this.lockInternal();
   }
 
+  private currentTime(): number {
+    const value = this.options.now();
+    if (!Number.isSafeInteger(value) || value < 0) {
+      fail("config-invalid", "wallet clock returned an invalid timestamp");
+    }
+    return value;
+  }
+
   private expireSessionIfNeeded(): void {
-    if (this.session && this.options.now() >= this.session.expiresAt) this.lockInternal();
+    if (this.session && this.currentTime() >= this.session.expiresAt) this.lockInternal();
   }
 
   private lockInternal(): void {
@@ -1920,6 +1928,9 @@ export function validateAutoRechargePolicy(
   options: { now: number; chainPolicy: WalletChainPolicy; maxTtlMs?: number },
 ): AutoRechargePolicy {
   if (!input || typeof input !== "object") fail("auto-recharge-invalid", "auto-recharge policy must be an object");
+  if (!Number.isSafeInteger(options.now) || options.now < 0) {
+    fail("auto-recharge-invalid", "auto-recharge validation needs a valid clock");
+  }
   if (input.version !== 1) fail("auto-recharge-invalid", "unsupported auto-recharge policy version");
   assertSignableChain(input.chainId, options.chainPolicy);
   if (!/^eip155:[0-9]+:0x[0-9a-fA-F]{40}$/.test(input.assetId)) {

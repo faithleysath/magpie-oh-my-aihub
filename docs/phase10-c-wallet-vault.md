@@ -241,9 +241,9 @@ bun install --frozen-lockfile
 | `bun run secret-scan` | PASS | 工作树无凭据模式 |
 | `bun install --frozen-lockfile` | PASS（no changes） | lock 可复现 |
 | `npm audit --omit=dev`（公共 registry） | 0 known vulnerabilities | 不是完整供应链审计 |
-| GitHub Actions `plugin` run `41158492240`（commit `4801374`，当时模块测试 39 个） | 779 pass / 1 skip / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块测试全部 pass |
+| GitHub Actions `plugin` run `41158830365`（commit `a3c327a`，模块测试 41 个） | Linux 781 pass / **5 fail**；macOS 780 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 41 个测试全部 pass |
 
-**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `4801374` 上跑全量得到 779 pass / 1 skip / 5 fail，5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
+**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `a3c327a` 上跑全量，Linux 781 pass / 5 fail、macOS 780 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
 
 ### 覆盖矩阵
 
@@ -296,7 +296,8 @@ bun install --frozen-lockfile
 - **JS 无法保证内存擦除**：GC、堆快照、swap、core dump、崩溃转储可能保留 key；没有 Keychain/TPM/安全 enclave。
 - **离线暴力破解**：keystore 被复制后，密码强度决定安全；scrypt 只提高成本，不阻止弱密码。
 - **文件系统/OS**：Windows 权限与目录 fsync 未测；磁盘/SSD 安全擦除、备份软件、Time Machine、云同步可能复制旧密文。
-- **标准互操作**：`x-ethers` 扩展的助记词保留只验证了 ethers；geth/MetaMask/Rabby 等对 x-ethers 的行为 UNKNOWN。仅私钥的 V3 读取是标准，但本 vault 的 `restore()` 要求 x-ethers mnemonic。
+- **标准互操作**：`x-ethers` 扩展的助记词保留只验证了 ethers；geth/MetaMask/Rabby 等对 x-ethers 的行为 UNKNOWN。仅私钥的 V3 读取是标准，但本 vault 的 `restore()` 要求 x-ethers mnemonic；只接受 scrypt 备份，要求新密码至少 12 字符，PBKDF2/短密码外部备份不能直接 restore。
+- **EIP-712 字段范围**：purpose 签名只支持 primitive 字段（address/bool/string/bytesN/uint/int）；C-external 的 deposit document 若含 nested struct/array，内置路径需要扩展 purpose 或继续走外置钱包路径。`previewTypedData()` 可预览 nested 类型，但 preview 永不签名。
 - **真实链**：没有真实 testnet RPC、没有广播、没有 Magpie/EasyTier、没有真实资金；所有签名结果只是本地模拟/离线签名。
 - **时序/侧信道**：未做 KDF/签名时序分析；未做故障注入、功耗、冷启动。
 - **依赖审计**：只审查了 ethers 的 keystore/BIP39/scrypt 相关源码；没有完整供应链审计，没有正式第三方审计。
