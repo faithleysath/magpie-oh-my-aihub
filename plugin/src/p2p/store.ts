@@ -984,6 +984,13 @@ export class P2pStore {
     return this.db.query("UPDATE p2p_outbox SET state = 'pending', next_attempt_at = ?, updated_at = ? WHERE message_id = ? AND state = 'sent'").run(nextAttemptAt, now.toISOString(), messageId).changes === 1;
   }
 
+  /** Stops queued messages that would announce a revoked approval/generation. */
+  cancelOutboxForApproval(approvalId: string, now: Date): number {
+    return this.db
+      .query("UPDATE p2p_outbox SET state = 'dead', updated_at = ?, last_error = 'approval revoked' WHERE correlation = ? AND state IN ('pending','sending')")
+      .run(now.toISOString(), approvalId).changes;
+  }
+
   outboxPendingCount(): number {
     const raw = this.db.query("SELECT COUNT(*) AS n FROM p2p_outbox WHERE state IN ('pending','sending')").get() as { n: number };
     return numberOr(raw?.n, 0);

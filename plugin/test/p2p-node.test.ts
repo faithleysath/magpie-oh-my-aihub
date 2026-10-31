@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { canonicalJson, loadOrCreateCatalogIdentity, sha256Hex } from "../src/catalog.ts";
 import { P2pLab, KEY, KEY_ID } from "./support/p2p-lab.ts";
 import { p2pIdentityFromCatalog, type P2pIdentity } from "../src/p2p/identity.ts";
-import { P2pError } from "../src/p2p/protocol.ts";
+import { P2pError, requestHashOf } from "../src/p2p/protocol.ts";
+import { QUOTE_HASH, PRICE_VERSION } from "./support/p2p-lab.ts";
 
 let lab: P2pLab | null = null;
 afterEach(() => {
@@ -201,8 +202,16 @@ describe("TOFU key change", () => {
     lab.storeB.recordPeerSeen(alien.peer, lab.clock.now);
     expect((await lab.B.listRequests()).find((r) => r.requestHash === requestHash)?.trust).toBe("changed");
 
-    expect(() => lab!.B.acceptConsumer("aaaa1111", "0".repeat(64))).toThrow(P2pError);
-    lab.B.acceptConsumer("aaaa1111", alien.peer.fingerprint);
+    await expect(lab.B.acceptConsumer("aaaa1111", "0".repeat(64))).rejects.toBeInstanceOf(P2pError);
+    const queued = lab.storeB.outboxByIdempotency("authorization_delivery", expectedDeliveryIdempotency(approval.approvalId))!;
+    lab.storeB.rearmOutbox(queued.messageId, lab.clock.now.toISOString(), lab.clock.now);
+    expect(lab.storeB.getOutbox(queued.messageId)?.state).toBe("pending");
+
+    const invalidation = await lab.B.acceptConsumer("aaaa1111", alien.peer.fingerprint);
+    expect(invalidation.accepted).toBe(alien.peer.fingerprint);
+    expect(invalidation.revoked).toEqual([approval.approvalId]);
+    expect(lab.calls.revoke).toBe(1);
+    expect(lab.storeB.getOutbox(queued.messageId)?.state).toBe("dead");
     expect(lab.storeB.getPeer("aaaa1111")?.fingerprint).toBe(alien.peer.fingerprint);
     expect(lab.storeB.getPeer("aaaa1111")?.pendingJson).toBeNull();
     expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("revoked");
@@ -211,6 +220,70 @@ describe("TOFU key change", () => {
 
     // The old key cannot approve its old request any more.
     await expect(lab.B.approve(requestHash, { models: ["alpha/x"], capUsd: 2, acceptConsumer: true })).rejects.toBeInstanceOf(P2pError);
+  });
+
+  test("if the native key cannot be revoked, the old generation is uncertain and recoverable, not locally revoked", async () => {
+    lab = P2pLab.create();
+    const { approval } = await lab.deliver(); // delivery registered, ACK not yet: no tombstone
+    const alien = alienIdentity();
+    lab.storeB.recordPeerSeen(alien.peer, lab.clock.now);
+
+    lab.faults.revokeUnconfirmed = true;
+    const invalidation = await lab.B.acceptConsumer("aaaa1111", alien.peer.fingerprint);
+    expect(invalidation.revoked).toEqual([]);
+    expect(invalidation.uncertain).toEqual([approval.approvalId]);
+    expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("uncertain");
+    expect(lab.storeB.getDelivery(approval.approvalId)?.state).not.toBe("revoked");
+    expect(lab.storeB.hasTombstone("authorization", approval.approvalId)).toBe(false);
+    expect(lab.storeB.getPeer("aaaa1111")?.fingerprint).toBe(alien.peer.fingerprint);
+
+    // A later confirmed revoke of the same approval converges and tombstones.
+    lab.faults.revokeUnconfirmed = false;
+    await lab.B.revoke(approval.approvalId, "operator-revoked");
+    expect((await lab.B.approvalView(approval.approvalId))?.state).toBe("revoked");
+    expect(lab.storeB.getDelivery(approval.approvalId)?.state).toBe("revoked");
+    expect(lab.storeB.hasTombstone("authorization", approval.approvalId)).toBe(true);
+  });
+
+  test("a new identity cannot receive a key that belonged to the replaced identity", async () => {
+    lab = P2pLab.create();
+    const { approval } = await lab.deliver();
+    await lab.A.tick();
+    const alien = alienIdentity();
+    lab.storeB.recordPeerSeen(alien.peer, lab.clock.now);
+    await lab.B.acceptConsumer("aaaa1111", alien.peer.fingerprint);
+
+    const request = lab.requestDocument({ models: ["beta/y"] });
+    const requestHash = requestHashOf(request);
+    lab.storeB.insertRequest({
+      requestHash,
+      sessionId: "9".repeat(32),
+      consumerAccountId: alien.peer.accountId,
+      consumerNodeId: "aaaa1111",
+      consumerFingerprint: alien.peer.fingerprint,
+      providerNodeId: "bbbb2222",
+      providerFingerprint: lab.identityB.peer.fingerprint,
+      quoteHash: QUOTE_HASH,
+      priceVersion: PRICE_VERSION,
+      modelsJson: JSON.stringify(request.models),
+      eligibleJson: null,
+      documentJson: JSON.stringify(request),
+      state: "awaiting-approval",
+      receivedAt: lab.clock.now.toISOString(),
+      expiresAt: new Date(lab.clock.now.getTime() + 10 * 60_000).toISOString(),
+      approvalId: null,
+      note: null,
+    });
+
+    // The port still returns the old key id: the core must refuse to deliver it.
+    await expect(lab.B.approve(requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true })).rejects.toBeInstanceOf(P2pError);
+    expect((await lab.B.listApprovals()).some((a) => a.requestHash === requestHash && a.state === "uncertain")).toBe(true);
+
+    lab.faults.approveKeyId = "key-new-0001";
+    const fresh = await lab.B.approve(requestHash, { models: ["beta/y"], capUsd: 2, acceptConsumer: true });
+    expect(fresh.keyId).toBe("key-new-0001");
+    expect(fresh.generation).toBe(2);
+    expect(fresh.approvalId).not.toBe(approval.approvalId);
   });
 });
 

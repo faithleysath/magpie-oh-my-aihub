@@ -40,6 +40,7 @@ export interface LabFaults {
   failRevoke?: boolean;
   revokeUnconfirmed?: boolean;
   narrowModels?: string[] | null;
+  approveKeyId?: string;
   readbackModels?: string[] | null;
   readbackCapUsd?: number | null;
 }
@@ -233,7 +234,7 @@ export class P2pLab {
           // deliberately a DIFFERENT version from the request's full-set one
           priceVersion: sha256Hex(canonicalJson({ selected: input.models })).slice(0, 64),
           expiresAt: new Date(self.clock.now.getTime() + 10 * 60_000).toISOString(),
-          keyId: KEY_ID,
+          keyId: self.faults.approveKeyId ?? KEY_ID,
           keyName: KEY_NAME,
           memo: input.memo,
         };

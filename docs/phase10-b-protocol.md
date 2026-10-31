@@ -48,9 +48,13 @@ The source-scan test asserts that `src/p2p/*` does not import `ledger.ts`,
 - A pending key change blocks the **old** key too. Accepting it requires the
   exact fingerprint the human reviewed (`acceptConsumer(nodeId, fingerprint)` /
   `P2pStore.acceptPendingPeer(nodeId, fingerprint)`); passing the old row cannot
-  clear it. Acceptance closes the old key's live sessions, revokes its live
-  approval generations, writes authorization tombstones and records an identity
-  tombstone, so neither the old session nor the old generation can revive.
+  clear it. Acceptance closes the old key's live sessions, then asks the port to
+  revoke **every live old generation's native key**. Only a confirmed revoke
+  writes the authorization tombstone and turns the generation `revoked`; a
+  refusal/failure leaves it `uncertain` (recoverable, no fake success). Queued
+  old approved/delivery frames are marked dead, and an identity tombstone records
+  the replacement. A new identity cannot receive a key id that belonged to the
+  replaced identity (core check over the port's result).
 - The Ed25519 private key is read from the Catalogue file; it is never copied.
   Session X25519 keys exist only in memory and are wiped on close.
 
@@ -354,7 +358,7 @@ The tests use a temp directory, a fixed clock and an in-process overlay; they do
 not resolve the LAN IP, open a port, read the production Magpie state or call a
 public RPC.
 
-Expected result at this commit: `52 pass / 0 fail`, typecheck clean.
+Expected result at this commit: `54 pass / 0 fail`, typecheck clean.
 
 ## 12. Not verified (UNKNOWN)
 
@@ -378,6 +382,10 @@ Expected result at this commit: `52 pass / 0 fail`, typecheck clean.
   contract decision.
 - Approval expiry vs. a long ACK-loss window is bounded but not tuned against a
   real operator workflow.
+- The exact Magpie effect of `Service.handover` on a revoked generation and the
+  B-service `importAuthorization` cleanup of the old Remote are not exercised
+  here; the core only guarantees it never seals/delivers after a confirmed
+  revoke and never reuses a replaced key id.
 - A node that publishes no model catalogue has a control endpoint in B-service,
   but this core has no signed presence/reverse-reachability message yet. The
   current flow relies on the consumer keeping a session open; if it is lost, the
