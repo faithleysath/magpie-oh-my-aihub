@@ -13,7 +13,7 @@ import {
 } from "../catalog.ts";
 import { mappedHost } from "../addresses.ts";
 import { catalogPriceVersion } from "../pricing.ts";
-import { claimFreePort, portRange, SocketBinder } from "../ports.ts";
+import { claimFreePort, OsSocketOwnership, portRange, SocketBinder, verifyOwnedPort } from "../ports.ts";
 import type { Service } from "../service.ts";
 import { startControlServer, type ControlServerHandle } from "./http.ts";
 import { createP2pBusinessPort } from "./p2p-port.ts";
@@ -33,6 +33,8 @@ import type { P2pTransport } from "../p2p/node.ts";
 interface Endpoint {
   host: string;
   port: number;
+  /** Host header the provider's listener expects (mapped address for overlay forwards). */
+  hostHeader?: string;
   mappedCidr: string | null;
   quoteHash: string | null;
   fingerprint: string;
@@ -44,6 +46,8 @@ export interface ControlAppOptions {
   endpoints?: Record<string, Endpoint>;
   tickMs?: number;
   now?: () => Date;
+  /** tests only: allow a direct LAN/loopback presence endpoint without an ET forward */
+  allowLanDirect?: boolean;
 }
 
 export interface ControlActionInput {
@@ -104,7 +108,7 @@ export function createHttpTransport(endpoints: Map<string, Endpoint>): P2pTransp
     if (!ep) throw new Error(`no ready control endpoint for ${peer.nodeId}`);
     return ep;
   };
-  const hostHeader = (ep: Endpoint) => `${ep.host}:${ep.port}`;
+  const hostHeader = (ep: Endpoint) => ep.hostHeader ?? `${ep.host}:${ep.port}`;
   return {
     async hello(target, hello) {
       const ep = endpointOf(target);
@@ -143,6 +147,9 @@ export class ControlApp {
   private readonly peers = new Map<string, P2pHelloTarget>();
   private readonly targets = new Set<string>();
   private readonly seenPresence = new Map<string, PresenceBody>();
+  private readonly controlForwards = new Map<string, { localPort: number; dst: string }>();
+  private publishedHost = "127.0.0.1";
+  private readonly allowLanDirect: boolean;
   private constructor(
     readonly service: Service,
     readonly node: P2pNode,
@@ -152,7 +159,10 @@ export class ControlApp {
     readonly port: number,
     private readonly now: () => Date,
     private readonly tickMs: number,
-  ) {}
+    allowLanDirect = false,
+  ) {
+    this.allowLanDirect = allowLanDirect;
+  }
 
   static async start(service: Service, options: ControlAppOptions = {}): Promise<ControlApp | null> {
     const cfg = service.config();
@@ -177,7 +187,7 @@ export class ControlApp {
     };
     const p2pIdentity = p2pIdentityFromCatalog(identity, binding);
     const store = new P2pStore(statePath("p2p.sqlite"));
-    const app = new ControlApp(service, null as unknown as P2pNode, identity, null as unknown as ControlServerHandle, host, port, options.now ?? (() => new Date()), options.tickMs ?? 4000);
+    const app = new ControlApp(service, null as unknown as P2pNode, identity, null as unknown as ControlServerHandle, host, port, options.now ?? (() => new Date()), options.tickMs ?? 4000, options.allowLanDirect ?? false);
     const transport = createHttpTransport(app.endpoints);
     const node = new P2pNode({
       identity: p2pIdentity,
@@ -207,6 +217,7 @@ export class ControlApp {
       now: () => app.now().getTime(),
     });
     (app as { server: ControlServerHandle }).server = server;
+    app.publishedHost = cfg.sharingEnabled && cfg.mappedCidr ? mappedHost(cfg.mappedCidr) : host;
     app.publishPresence();
     app.ticker = setInterval(() => {
       void app.pollTick();
@@ -228,7 +239,7 @@ export class ControlApp {
         fingerprint: this.identity.summary.fingerprint,
         publicKey: this.identity.summary.publicKey,
       },
-      endpoint: { host: this.host, mappedCidr: cfg.mappedCidr, controlPort: this.port, ready: true },
+      endpoint: { host: this.publishedHost, mappedCidr: cfg.mappedCidr, controlPort: this.port, ready: true },
       capability: { control: true, sharing: cfg.sharingEnabled ? "enabled" : "disabled", providesModels: Boolean(cfg.sharingEnabled) },
       issuedAt: new Date(now.getTime() - 10_000).toISOString(),
       expiresAt: new Date(now.getTime() + 120_000).toISOString(),
@@ -265,13 +276,55 @@ export class ControlApp {
     if (presence.node.nodeId !== peer.nodeId || presence.node.fingerprint !== peer.identity.fingerprint) {
       throw new Error("presence identity differs from the signed catalogue identity");
     }
-    const endpoint: Endpoint = {
-      host: presence.endpoint.host,
-      port: presence.endpoint.controlPort,
-      mappedCidr: presence.endpoint.mappedCidr,
-      quoteHash: peer.quoteHash,
-      fingerprint: presence.node.fingerprint,
-    };
+    let endpoint: Endpoint;
+    const mapped = presence.endpoint.mappedCidr ?? peer.mappedCidr;
+    if (mapped) {
+      // The signed endpoint is the mapped overlay address. Use the existing
+      // EasyTier Forward path to a local owner-proven loopback port; never fall
+      // back to a LAN address in production.
+      const claim = await claimFreePort(new SocketBinder(), "127.0.0.1", portRange(35100, 35199));
+      const localPort = claim.reservation.port;
+      await claim.reservation.release();
+      const dst = `${mappedHost(mapped)}:${presence.endpoint.controlPort}`;
+      const added = await this.service.supervisor.addPortForward(`127.0.0.1:${localPort}`, dst);
+      if (!added && !this.service.supervisor.listPortForwards) {
+        throw new Error("the overlay control forward could not be installed");
+      }
+      const corePid = this.service.supervisor.snapshot().pid;
+      const proof = await verifyOwnedPort({
+        ownership: new OsSocketOwnership(),
+        purpose: "control",
+        host: "127.0.0.1",
+        port: localPort,
+        owner: "easytier",
+        reported: true,
+        expectedPids: corePid ? [corePid] : [],
+        now: this.now,
+      });
+      if (proof.state !== "stable") {
+        await this.service.supervisor.removePortForward(`127.0.0.1:${localPort}`).catch(() => {});
+        throw new Error(`the overlay control forward is not owner-proven: ${proof.state}`);
+      }
+      this.controlForwards.set(presence.node.nodeId, { localPort, dst });
+      endpoint = {
+        host: "127.0.0.1",
+        port: localPort,
+        hostHeader: `${mappedHost(mapped)}:${presence.endpoint.controlPort}`,
+        mappedCidr: mapped,
+        quoteHash: peer.quoteHash,
+        fingerprint: presence.node.fingerprint,
+      };
+    } else if (this.allowLanDirect) {
+      endpoint = {
+        host: presence.endpoint.host,
+        port: presence.endpoint.controlPort,
+        mappedCidr: null,
+        quoteHash: peer.quoteHash,
+        fingerprint: presence.node.fingerprint,
+      };
+    } else {
+      throw new Error("the provider published no mapped endpoint; LAN fallback is disabled");
+    }
     this.seenPresence.set(presence.node.nodeId, presence);
     this.registerPeer(presence.node.nodeId, endpoint, {
       accountId: presence.node.fingerprint,
