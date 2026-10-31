@@ -117,11 +117,13 @@ bun test ./test ./console ../docs/validation/lab/phase9/wallet-fixture
 806 pass / 0 fail / 6396 expect / 56 files / 33.75s
 ```
 
+CI `41166092027` @ `13d0d2c`: **linux 806 pass / 0 fail / 6396 expect / 807 tests; macOS 805 pass / 0 fail / 6393 expect / 806 tests; both success**. The one-test platform difference is the existing skip; no new failure.
+
 Not covered / UNKNOWN: real MetaMask/Rabby extension, real testnet transaction, real P2P request from B, page UI wiring, receipt/credit. Mainnet 56/8453, real funds, automatic top-up: **NO-GO**.
 
 ## 6. Remaining integration work
 
 - Wallet UI `3820537e`: render the signed local intent, call `payment-obligation-preview`, pass the returned fields to `createExternalWallet`, and use `createConsolePaymentPort`. Do not add a second session/context hook.
 - Local vault `01060df1`: PR #38 already uses `{sessionId, assertActive, isActive}`; the console-server/console-api hunk overlap is a merge point. The default resolver reads the wallet/receiving-address persistence; no vault secret is exposed.
-- B assembly `8dd0cf10`: persist authenticated P2P payment requests and implement the resolver. Do not use an offline JSON document as the production obligation path.
+- B assembly `8dd0cf10`: persist authenticated P2P payment requests and implement the resolver. Do not use an offline JSON document as the production obligation path. The B assembly PR #40 message describes presence/control/approval actions but does **not** deliver a payment-obligation record/resolver; this branch therefore remains default-deny for a real P2P obligation until that interface exists.
 - Service/UI page integration, receipt verification and Ledger credit remain separate units. This service does not send, sign, credit or release unknown rows.
