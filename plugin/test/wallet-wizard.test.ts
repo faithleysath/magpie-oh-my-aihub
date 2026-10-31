@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runWalletWizard, WizardApiError, type WizardApi, type WizardIO } from "../bin/wallet-wizard.ts";
 import { formatTokenAmount, parseTokenAmount, rawForUsd, usdForRaw } from "../src/walletamount.ts";
-import { createLab, ensureConsumer, PROVIDER_ID, RECIPIENT, type Lab } from "./support/wallet-lab.ts";
+import { createLab, ensureConsumer, labNow, PROVIDER_ID, RECIPIENT, type Lab } from "./support/wallet-lab.ts";
 import { signDigest, TEST_PAYER } from "./support/signer.ts";
 import type { WalletStatus } from "../src/wallet.ts";
 
@@ -115,6 +115,7 @@ describe("wallet wizard", () => {
       let paid = false;
 
       const code = await runWalletWizard({
+        now: labNow(lab),
         api,
         io,
         argv: ["--consumer", "alice", "--provider", PROVIDER_ID, "--chain", "97", "--amount", "1", "--yes", "--ttl", "3600"],
@@ -171,6 +172,7 @@ describe("wallet wizard", () => {
       const { io, out } = scriptedIO(["n"]);
 
       const code = await runWalletWizard({
+        now: labNow(lab),
         api,
         io,
         argv: ["--consumer", "alice", "--provider", PROVIDER_ID, "--chain", "97", "--amount", "1", "--yes"],
@@ -205,6 +207,7 @@ describe("wallet wizard", () => {
       const { io, out } = scriptedIO([]);
 
       const code = await runWalletWizard({
+        now: labNow(lab),
         api: failing,
         io,
         argv: ["--consumer", "alice", "--provider", PROVIDER_ID, "--chain", "97", "--amount", "1", "--yes"],
@@ -237,6 +240,7 @@ describe("wallet wizard", () => {
       };
 
       const code = await runWalletWizard({
+        now: labNow(lab),
         api,
         io,
         argv: ["--consumer", "alice", "--provider", PROVIDER_ID, "--chain", "97", "--amount", "1", "--yes"],
@@ -264,6 +268,7 @@ describe("wallet wizard", () => {
       const { io, out } = scriptedIO(["n"]);
 
       const code = await runWalletWizard({
+        now: labNow(lab),
         api,
         io,
         argv: ["--consumer", "alice", "--provider", PROVIDER_ID, "--chain", "97", "--amount", "1", "--yes"],
@@ -287,6 +292,7 @@ describe("wallet wizard", () => {
       const { api, calls } = labApi(lab);
 
       const noChain = await runWalletWizard({
+        now: labNow(lab),
         api,
         io: scriptedIO([]).io,
         argv: ["--consumer", "alice", "--provider", PROVIDER_ID, "--amount", "1", "--yes", "--non-interactive"],
@@ -296,6 +302,7 @@ describe("wallet wizard", () => {
       expect(calls.some((c) => c.method === "POST")).toBe(false);
 
       const noProvider = await runWalletWizard({
+        now: labNow(lab),
         api,
         io: scriptedIO([]).io,
         argv: ["--consumer", "alice", "--chain", "97", "--amount", "1", "--yes", "--non-interactive"],
@@ -317,6 +324,7 @@ describe("wallet wizard", () => {
       const { api, calls } = labApi(lab);
 
       const createCode = await runWalletWizard({
+        now: labNow(lab),
         api,
         io: scriptedIO([]).io,
         argv: ["--consumer", "alice", "--provider", PROVIDER_ID, "--chain", "97", "--amount", "1", "--yes", "--non-interactive"],
@@ -331,6 +339,7 @@ describe("wallet wizard", () => {
       // typed data is rebuilt with the production EIP-712 code (not empty).
       const out: string[] = [];
       const resumeCode = await runWalletWizard({
+        now: labNow(lab),
         api,
         io: { print: (l) => out.push(l), prompt: async () => "" },
         argv: ["--consumer", "alice", "--invoice", intent.invoiceId, "--non-interactive"],
@@ -350,6 +359,7 @@ describe("wallet wizard", () => {
       let paid = false;
       const signedOut: string[] = [];
       const signedCode = await runWalletWizard({
+        now: labNow(lab),
         api,
         io: { print: (l) => signedOut.push(l), prompt: async () => "" },
         argv: ["--consumer", "alice", "--invoice", intent.invoiceId, "--signature-file", sigPath, "--non-interactive"],
@@ -385,6 +395,7 @@ describe("wallet wizard", () => {
       // The signature cannot exist before the request, so create it first, then
       // resume from the file. This is the documented two-step non-interactive use.
       const createCode = await runWalletWizard({
+        now: labNow(lab),
         api,
         io: scriptedIO([]).io,
         argv: ["--consumer", "alice", "--provider", PROVIDER_ID, "--chain", "97", "--amount", "1", "--yes", "--non-interactive"],
@@ -395,6 +406,7 @@ describe("wallet wizard", () => {
       writeFileSync(sigPath, signDigest(intent.digest!));
       let paid = false;
       const code = await runWalletWizard({
+        now: labNow(lab),
         api,
         io: scriptedIO([]).io,
         argv: ["--consumer", "alice", "--invoice", intent.invoiceId, "--signature-file", sigPath, "--payer", TEST_PAYER, "--non-interactive"],

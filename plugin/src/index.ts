@@ -17,10 +17,11 @@ import { Magpie } from "./magpie.ts";
 import { resolveMagpieBin, statePath } from "./paths.ts";
 import { ownsProcess } from "./easytier.ts";
 import { waitForHostLock, type HostLock } from "./lock.ts";
-import { startConsoleServer, type ConsoleServer } from "./console-server.ts";
+import { startConsoleServerWithFallback, type ConsoleServer } from "./console-server.ts";
 import { CONSOLE_ACTIONS, consoleAction, consoleState } from "./console-api.ts";
 import { readConsolePort, saveConsolePort, readOwnPluginOptions, startConsoleLauncher, publishUnavailableLauncher } from "./console-launch.ts";
 import { Service } from "./service.ts";
+import { startControlApp, type ControlApp } from "./control/app.ts";
 import { startApi } from "./server.ts";
 import {
   decideOptions,
@@ -46,6 +47,7 @@ interface Running {
   service: Service;
   api: { port: number; stop: () => void };
   console?: ConsoleServer;
+  control?: ControlApp;
 }
 
 const g = globalThis as unknown as { __ohMyAIHub?: Promise<Running>; __ohMyAIHubStopped?: boolean };
@@ -64,6 +66,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     let service: Service | undefined;
     let api: { port: number; stop(): void } | undefined;
     let consoleServer: ConsoleServer | undefined;
+    let controlApp: ControlApp | undefined;
     let launcher: ReturnType<typeof startConsoleLauncher> | undefined;
     let stopped = false;
     const parentPid = process.ppid;
@@ -98,7 +101,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     orphanWatch.unref?.();
     failedBootCleanup = async () => {
       stopped = true;
-      launcher?.stop(); consoleServer?.stop(); api?.stop();
+      launcher?.stop(); consoleServer?.stop(); controlApp?.stop(); api?.stop();
       try { if (service) await service.stop(); }
       finally {
         shutdown(); lock?.release(); clearInterval(orphanWatch);
@@ -200,8 +203,10 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         staticModules: ["/session.js", "/providers.js", "/wallet.js"],
         pairingFile: statePath("console-pairing.json"),
       };
-      consoleServer = startConsoleServer(consoleOptions);
+      const started = startConsoleServerWithFallback(consoleOptions);
+      consoleServer = started.server;
       saveConsolePort(consoleServer.port);
+      if (started.fallback) logger.warn(`the saved console port was unavailable; the console now listens on 127.0.0.1:${consoleServer.port}`);
       launcher = startConsoleLauncher({
         port: consoleServer.port, issueTicket: () => consoleServer!.issueTicket(), options: optionsRaw,
         pendingPairings: () => consoleServer!.pendingPairings(),
@@ -231,7 +236,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
     );
 
     ensureRunning();
-    return { service, api, console: consoleServer };
+    return { service, api, console: consoleServer, control: controlApp };
   })().catch(async (error) => {
     // A failed startup must stop its partial Service before another boot can
     // take ownership. Cleanup failure deliberately leaves the lock fail-closed.

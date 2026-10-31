@@ -5,13 +5,16 @@ import { consoleWorkflows } from "./console-workflows.ts";
 import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
 import { hex64, modelList, RequestValidationError } from "./connection-request.ts";
 import type { Service } from "./service.ts";
+import { controlAppFor } from "./control/app.ts";
 
 /** Explicit browser product actions; no arbitrary path or CLI dispatch. */
 export const CONSOLE_ACTIONS = [
-  "configure", "checks", "share-candidates", "share-models", "share-toggle", "consume-toggle",
-  "catalog-publish", "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer", "connection-request",
+  "join-network", "share-native-models", "stop-sharing", "network-refresh",
+  "configure", "checks", "share-candidates", "share-models", "consume-toggle",
+  "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer", "connection-request",
   "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
+  "p2p-request", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
   ...WALLET_CONSOLE_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
@@ -24,6 +27,7 @@ export async function consoleState(service: Service) {
   const snapshot = service.consoleSnapshot();
   // Polling performs only local reads, never active probes.
   const workflows = consoleWorkflows(service).snapshot();
+  const p2p = await controlAppFor(service)?.state() ?? null;
   return clean({
     schema: "ohmyaihub/console/1" as const, at: new Date().toISOString(), configured: Boolean(snapshot.config.nodeId),
     status: {
@@ -31,7 +35,7 @@ export async function consoleState(service: Service) {
       magpie: snapshot.magpie, config: snapshot.config, easytier: snapshot.easytier, providers: snapshot.providers,
       catalog: snapshot.catalog, consumers: snapshot.consumers, accounting: snapshot.accounting,
       checks: snapshot.checks, checksAt: snapshot.checksAt, checksDurationMs: snapshot.checksDurationMs, readiness: snapshot.readiness,
-    }, ...workflows, wallet: consoleWalletState(service),
+    }, ...workflows, p2p, wallet: consoleWalletState(service),
   });
 }
 const refuse = (message: string): never => { throw new ConsoleInputError(message); };
@@ -52,20 +56,91 @@ function key(v: unknown): string { return text(v,"Gateway Key",512); }
 // stay uncertain (500 in the transport), so callers never blindly retry writes.
 function knownRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
-  return /^(no (?:active consumer|remote provider|discovered catalogue peer)|configure this node first|consumption is disabled|choose |refusing |the (?:request|accepted|effective price|provider's catalogue identity|identity of|key of)|a shared model|consumer .+ (?:is paused|was revoked|has an unconfirmed|has no)|cannot reissue|this key is bound|pass the catalogue|.* is (?:first-seen|offline|unverified|stale);|.* offered an older|.* does not offer:)/.test(message);
+  return /^(no (?:active consumer|remote provider|discovered catalogue peer)|configure this node first|consumption is disabled|choose |refusing |networkName must|networkSecret must|bad peer address|the (?:request|accepted|effective price|provider's catalogue identity|identity of|key of)|a shared model|consumer .+ (?:is paused|was revoked|has an unconfirmed|has no)|cannot reissue|this key is bound|pass the catalogue|.* is (?:first-seen|offline|unverified|stale);|.* offered an older|.* does not offer:)/.test(message);
 }
 export async function consoleAction(service: Service, name: string, input: Record<string, unknown>): Promise<unknown> {
   try {
     if ((WALLET_CONSOLE_ACTIONS as readonly string[]).includes(name)) return consoleWalletAction(service, name, input);
     const w = () => consoleWorkflows(service);
+    if (name.startsWith("p2p-")) {
+      const app = controlAppFor(service);
+      if (!app) throw new ConsoleInputError("the local P2P control service is not running");
+      switch (name) {
+        case "p2p-request":
+          fields(input, ["nodeId", "fingerprint", "quoteHash", "models"]);
+          return clean(await app.request(input));
+        case "p2p-approve":
+          fields(input, ["requestId", "consumerFingerprint", "quoteHash", "priceVersion", "generation", "models", "capUsd", "acceptFingerprint"]);
+          return clean(await app.approve(input));
+        case "p2p-reject":
+          fields(input, ["requestId", "note"]);
+          await app.reject(input);
+          return { state: "rejected" };
+        case "p2p-revoke":
+          fields(input, ["approvalId"]);
+          await app.revoke(input);
+          return { state: "revoked" };
+        case "p2p-recover":
+          fields(input, ["approvalId"]);
+          return clean(await app.recover(input));
+        default:
+          return refuse("unsupported P2P operation");
+      }
+    }
     switch (name) {
+      case "join-network": {
+        fields(input,["networkName","networkSecret","initialNode"]);
+        const networkName = text(input.networkName,"networkName",63);
+        // Editing keeps the stored secret when the field is left blank; a first
+        // join has no stored secret and the service refuses an empty one.
+        let networkSecret: string | undefined;
+        if (input.networkSecret !== undefined && input.networkSecret !== "") networkSecret = text(input.networkSecret,"networkSecret",256);
+        let initialNode: string | null = null;
+        if (input.initialNode !== undefined && input.initialNode !== null && input.initialNode !== "") {
+          initialNode = text(input.initialNode,"initialNode",255).trim();
+          if (!initialNode) return refuse("initialNode must be a peer address or empty");
+        }
+        await service.joinNetwork({ networkName, networkSecret, initialNode });
+        return consoleState(service);
+      }
+      case "share-native-models": {
+        fields(input,["models","confirm"]);
+        if (input.confirm !== true) return refuse("sharing models requires the explicit confirmation (confirm: true)");
+        await service.shareNativeModels({ models: modelList(input.models), confirm: true });
+        return consoleState(service);
+      }
+      case "stop-sharing": {
+        fields(input,["confirm"]);
+        if (input.confirm !== true) return refuse("stopping sharing requires the explicit confirmation (confirm: true)");
+        await service.stopSharing({ confirm: true });
+        return consoleState(service);
+      }
+      case "network-refresh": {
+        fields(input,[]);
+        await service.refreshNetwork();
+        return consoleState(service);
+      }
       case "configure": {
         const parsed=configureInput(input); if(typeof parsed === "string") return refuse(parsed);
-        await service.configure(parsed); return consoleState(service);
+        // The public console may not turn sharing on with a wildcard allow list:
+        // that would also share models added later without a new consent.
+        if (Array.isArray(input.shareModels) && input.shareModels.some((m) => typeof m === "string" && m.includes("*"))) {
+          return refuse("choose the exact native models with share-native-models; a wildcard shares future models without consent");
+        }
+        if (parsed.sharingEnabled === true && !parsed.shareModels && !service.config()?.share.models.length) {
+          return refuse("sharing requires an explicit native model selection (share-native-models)");
+        }
+        await service.configure(parsed, { strictShareModels: true }); return consoleState(service);
       }
       case "checks": fields(input,[]); await service.checks(); return consoleState(service);
       case "share-candidates": fields(input,[]); return clean(await w().shareCandidates());
-      case "share-models": fields(input,["models"]); await service.setConsoleShareModels(modelList(input.models)); return consoleState(service);
+      case "share-models": {
+        fields(input,["models"]);
+        const models = modelList(input.models);
+        if (models.some((m) => m.includes("*"))) return refuse("a wildcard shares future models without consent; choose exact native models");
+        await service.setConsoleShareModels(models);
+        return consoleState(service);
+      }
       case "share-toggle": fields(input,["enabled"]); await service.setSharing(bool(input.enabled)); return consoleState(service);
       case "consume-toggle": fields(input,["enabled"]); await service.setConsuming(bool(input.enabled)); return consoleState(service);
       case "catalog-publish": fields(input,["enabled"]); await service.setCatalogPublishing(bool(input.enabled)); return consoleState(service);

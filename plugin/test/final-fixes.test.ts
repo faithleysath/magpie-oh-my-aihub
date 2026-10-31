@@ -8,6 +8,7 @@ import { costNanos, priceSnapshot, usdToNanos, type PriceParts } from "../src/pr
 import { Service, type SupervisorLike } from "../src/service.ts";
 import type { EasytierConfig, PortForward, RouteRow, Peer, SupervisorState } from "../src/easytier.ts";
 import type { CatalogModelMeta, ProviderRecord } from "../src/magpie.ts";
+import { fakePortOwnership } from "./support/fake-ports.ts";
 
 // Final targeted patch: the two ways an uncertain state could be reported as
 // healthy. Every test here fails on 9bd99fa.
@@ -310,6 +311,7 @@ describe("A — an unreadable limit read is a failed check, not a pass", () => {
       magpie: fake as never,
       magpieVersion: "magpie 0.1.2038",
       supervisor: sup,
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 200,
       accountingTickMs: 30,
@@ -359,6 +361,7 @@ describe("A — an unreadable limit read is a failed check, not a pass", () => {
       magpie: fake as never,
       magpieVersion: "magpie 0.1.2038",
       supervisor: sup,
+      ports: { ownership: fakePortOwnership() },
       lanIp: () => "127.0.0.1",
       probeTimeoutMs: 200,
       accountingTickMs: 30,
