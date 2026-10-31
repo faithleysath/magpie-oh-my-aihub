@@ -40,7 +40,11 @@ export interface ConsoleHandler extends ConsoleServer {
 
 /** Backend adapters may use this for validation refusals before doing any work. No raw error text crosses HTTP. */
 export class ConsoleInputError extends Error {
-  constructor(message = "invalid console action input") {
+  constructor(
+    message = "invalid console action input",
+    readonly code = "invalid_action_input",
+    readonly status = 400,
+  ) {
     // Only an explicitly selected pre-mutation validation message is eligible.
     // Redact before truncating, or truncation could leave half a registered secret.
     super(maskSensitiveText(redact(message)).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 300));
@@ -277,7 +281,7 @@ export function createConsoleHandler(
       return { status: 200, text };
     } catch (cause) {
       if (cause instanceof ConsoleInputError) {
-        return { status: 400, text: JSON.stringify({ error: "invalid_action_input", message: cause.message }) };
+        return { status: cause.status, text: JSON.stringify({ error: cause.code, message: cause.message }) };
       }
       // Includes money/backend uncertainty. Cache this refusal; never rerun automatically.
       return { status: 500, text: JSON.stringify({ error: "action_outcome_unknown", code: "outcome_unknown" }) };
