@@ -42,9 +42,17 @@ projection; product behavior is unchanged.
   reused. Provider HTTP supports `POST /p2p/v1/poll` (hello body, bounded response).
 - Tests: presence sign/verify/tamper/expiry; HTTP poll auth/media/query; in-process
   two-node pull after a failed push (consumer registers before ACK, same Key).
-- Assembly app/lifecycle, console `p2p-*` actions, presence-driven endpoint
-  discovery wiring, and real HTTP two-node Service test are still **not** in this
-  commit.
+- Assembly app/lifecycle: `plugin/src/control/app.ts` starts the control listener
+  on an owned/ready port, publishes signed presence through the catalog callback,
+  registers discovered presence endpoints, performs consumer pull/poll in a bounded
+  background tick, and exposes narrow local actions. Console API allow-list now
+  includes `p2p-request/approve/reject/revoke/recover`; `status.p2p` projects
+  presence/requests/approvals/connections/counts. `index.ts` starts/stops it.
+- `p2p-approve` requires the full consumer fingerprint/quote/selected price
+  version/generation/model/cap bindings; TOFU acceptance is the same action.
+- Still **not** tested end-to-end: a real HTTP two-node + fake Magpie Service
+  test, unshared/control-only provider presence discovery, real EasyTier/LAN
+  transport, ACK/revoke/identity/price-change browser flows.
 
 The original reverse-delivery blocker is addressed for pull: the consumer does not
 need a reverse endpoint. Discovery still needs the assembly app to fetch/verify
