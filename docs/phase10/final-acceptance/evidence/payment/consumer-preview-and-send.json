@@ -1,0 +1,31 @@
+{
+ "preview": {
+  "schema": "ohmyaihub.wallet-send-preview/v1",
+  "invoiceId": "inv_81cc75a1-9e6f-48d5-8cd5-39f6f9e2a812",
+  "previewRef": "d013370b-4a5a-4d67-b35d-45368001e623",
+  "expiresAt": "2026-10-31T15:32:36.339Z",
+  "chainId": 84532,
+  "assetId": "eip155:84532:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+  "tokenAddress": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+  "recipientAddress": "0xedab7f268dd2e650a2e3c73282dde15fe3b976f2",
+  "amountRaw": "1500000",
+  "amountTokens": "1.5",
+  "decimals": 6,
+  "payerAddress": "0x77633c5943ea37bc6030c09a2798d4f643d52480",
+  "nonce": 0,
+  "gasLimit": "67423",
+  "maxFeePerGas": "3993582200",
+  "maxPriorityFeePerGas": "1000000000",
+  "maxGasCostWei": "269259292670600",
+  "nativeBalanceWei": "1000000000000000000",
+  "tokenBalanceRaw": "5000000",
+  "calldataHash": "0x71f4a7f02b3147652bbb508d16fa9ba21724ff823415387c9b0dfe86b357b49c",
+  "digest": "0xf1019e14e455597a12cc6795be49b981bc267a1ce75cfce047f59acd2d528f9e",
+  "nativeSymbol": "ETH",
+  "note": "Read-only preview. The transfer is sent only after an explicit confirmation; gas is capped by maxFeePerGas * gasLimit."
+ },
+ "send": {
+  "status": 200,
+  "body": "{\"result\":{\"state\":\"broadcast\",\"hash\":\"0x185f0d451063f26b72c628288a69470e1bb708d867b83c7f87121a0ecbedf336\",\"chainId\":84532,\"invoiceId\":\"inv_81cc75a1-9e6f-48d5-8cd5-39f6f9e2a812\",\"amountRaw\":\"1500000\",\"recipientAddress\":\"0xedab7f268dd2e650a2e3c73282dde15fe3b976f2\",\"broadcast\":true,\"note\":\"Broadcast is not credit. The provider's watcher must observe finality before any balance changes.\"}}"
+ }
+}

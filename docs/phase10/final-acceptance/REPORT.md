@@ -1,3 +1,115 @@
+# Post-review rework (2026-10-31 evening) — supersedes the verdicts below
+
+Functional head: `340c378045bf22ed59a24044b75aa8589a0a1736` (this addendum and the
+new evidence are committed after it). The round-1 NO-GOs were reworked as asked.
+
+## R1. F11 is fixed at the ownership/root-cause level
+
+The 64 s restart was **not** a probe killing the core. `ControlApp.discover()`
+dropped and recreated the owned control forward whenever the signed presence was
+within 60 s of its TTL (the presence is refreshed near half-life). EasyTier 2.6.4
+cannot close a live forward, so `retireControlForward` did a supervised core
+restart; the next discovery added the forward again — a restart every ~64 s.
+Round-1's trace (`trace applyConfig at retireControlForward`) proved it.
+
+Fixes:
+- a presence refresh with the same signed mapped address, control port and
+  identity **reuses** the owned forward (only the evidence timestamps update);
+- the owned control-forward set is persisted in `state.json`
+  (`controlForwards`, validated on load) so a successor host expects the same
+  canonical set and can rebuild it; add/retire persists atomically;
+- only the host-lock owner may start, adopt, restart or stop the core or rewrite
+  its config. `Service`/`EasytierSupervisor` take an `ownsHost` proof, a
+  non-owner `stop()`/`start()`/`applyConfig()`/`haltUnsafe()` is a no-op/refusal,
+  and a non-owner read-only refresh never stops the core;
+- a foreign/manual forward still fails closed (no restart, evidence retained).
+
+Regression: `plugin/test/phase10-owner-gate.test.ts` (two Service instances on
+one state: non-owner cannot start/stop; an owned control forward survives a new
+Service; a foreign forward refuses the restart).
+
+**Stability evidence:** two consecutive 5-minute samples of both nodes, spanning
+many former 64 s periods: `evidence/stability-5min-run2.txt` and
+`stability-5min-run3.txt`, both `deltaP=0 deltaC=0` and the same core PIDs for
+the whole window. Control polling and the payment session stayed live.
+
+## R2. The full zero-file payment is REPRODUCED
+
+On the same real Magpie 0.1.2289 + EasyTier 2.6.4 two-node lab and an isolated
+anvil chain id 84532 with a local mock ERC-20:
+
+request → provider terms → built-in wallet EIP-712 signature → explicit preview
+(nonce/gas/fees/balances/digest) → confirm → journal reserve → broadcast
+(`0x185f0d451063f26b72c628288a69470e1bb708d867b83c7f87121a0ecbedf336`, receipt
+status 1, block 3) → provider watcher → finality (lab: one confirmation) →
+ledger deposit applied once (1.5 tUSDC = 1_500_000_000 nanos) → Magpie key cap
+`$0.05 → $1.55` → consumer **已到账**. A provider host restart re-scanned the
+chain: one chain deposit, one credited event, cap unchanged (no double credit).
+
+The local mock token contract, deployment receipt, preview/send bodies, the
+chain event, the ledger row and the consumer record are in
+`evidence/payment/` with SHA-256 in `evidence/SHA256SUMS`. No real funds.
+
+A lab-only wallet-registry finality override (confirmations=1) was needed
+because anvil reports `finalized`/`safe` at block 0; the product Base Sepolia
+record remains `finalized-tag` and was not changed in the code.
+
+The first payment attempt also found and fixed a real defect: the provider's
+payment host read the registry once at startup, so an asset registered after the
+host started was refused ("provider does not allow this payment network"). It now
+re-reads the registry at frame time.
+
+## R3. Re-approval after revocation — implemented, delivery still partial
+
+- Explicit, human, audited re-approval: `approveConnectionRequest(...,
+  {reactivate:true})` is used only by the B human-approval path; a revoked
+  consumer gets a new key, one active key (old key removed), `revokedAt` cleared,
+  a **new ledger window** while the revoked account/window/deposit/consumption
+  rows stay append-only, and the new `priceVersion` is bound. Regression:
+  `control-p2p-port.test.ts` ("an externally revoked consumer can be re-approved
+  as a new generation") asserts the new key id, exactly one native key, the old
+  approval converged to revoked, the ledger reactivation and the price version.
+- Real lab: the provider issued a new key and reactivated the ledger after an
+  explicit re-approval (log in `evidence/reactivation.json`). The sealed key
+  delivery to the consumer was then blocked by a **B stale-session HTTP 410**
+  (the consumer's outbox reused a session the restarted provider had closed),
+  so the consumer did not register the new Remote in this lab. That transport
+  defect is open (see §7); the re-approval service path itself is verified.
+
+## R4. Other product fixes and the final visual matrix
+
+- The network headline counts only **fresh online** neighbours; last-known rows
+  are counted separately (`已连接到 N 个伙伴…另有 M 个最后已知邻居`), so a stopped
+  core/LAN presence cannot keep a node "online".
+- Terminal request history is collapsed under "历史请求（N）"; known states are
+  Chinese; raw protocol errors are no longer rendered inline (kept in the
+  technical details); the legacy file-flow revoke is behind an explicit
+  advanced disclosure ("撤销旧版授权") and the ordinary revoke is the B card.
+- New final matrix in `evidence/visual/` (40 images: 首页/发现/我的共享/钱包/网络,
+  light/dark × 1440×900/420×820, both nodes). Keyboard focus-visible (3 px ink
+  outline) and `prefers-reduced-motion` (the stylesheet's reduce block; no
+  animated element under the emulated setting) were spot-checked in the live
+  console; touch targets and the narrow bottom navigation are visible in the
+  narrow shots.
+
+## R5. Final verdicts (this HEAD)
+
+| Area | Verdict | Reason |
+| --- | --- | --- |
+| Visual UX | **GO** | final matrix post-fixes; consistent sticker style/IA, Chinese states, collapsed history, single primary action per screen; keyboard focus and reduced-motion verified |
+| Zero-file P2P | **GO (reactivation delivery partial)** | the original journey and the full payment are reproduced on real Magpie/ET; re-approval issues a new key provider-side but the B delivery after it hit the stale-session 410 (open) |
+| Wallet Usability | **NO-GO** | built-in wallet and recharge are now real and usable; the external MetaMask/Rabby product-level connect/network/EIP-712 flow is still not completed (real EIP-6963 discovery only) |
+| Mainnet Network Support | **GO — read-only/selection only** | unchanged: equal BSC 56/Base 8453 read-only, strict assets, hard gate |
+| Real-money Production | **NO-GO** | unchanged D report; soft-cap overshoot etc.; no mainnet send/credit |
+
+## R6. Evidence added after the round-1 report
+
+`evidence/payment/` (contract, deployment/funding receipts, preview/send, chain
+event, ledger, cap/duplicate), `evidence/visual/` (40 final screenshots),
+`evidence/stability-5min-run2.txt`, `evidence/stability-5min-run3.txt`,
+`evidence/reactivation.json`. `evidence/SHA256SUMS` is regenerated for all of
+them. The round-1 evidence remains as history.
+
 # Phase 10 — Final independent acceptance and Real-money D review
 
 Status tags: **REPRODUCED** (run and observed in this work), **VERIFIED** (read in

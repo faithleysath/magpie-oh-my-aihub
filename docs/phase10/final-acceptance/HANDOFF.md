@@ -4,8 +4,8 @@ Read [`REPORT.md`](REPORT.md) first; this is only the next-session shortcut.
 
 ## State
 
-- Branch `feature/phase10-final-acceptance`; functional head `970bb44`; PR
-  **#51** (draft) → `feature/phase10-wallet-closure` (#50).
+- Branch `feature/phase10-final-acceptance`; rework functional head `340c378`;
+  PR **#51** (draft) → `feature/phase10-wallet-closure` (#50).
 - #50 was retargeted to `feature/phase10-p2p-closure` (#49); #49 stays → `main`.
   Nothing is merged. #14–#48 remain open drafts (history; not closed to avoid
   losing evidence).
@@ -18,29 +18,36 @@ Three-field join, one explicit share, TOFU, zero-file request, human approval
 ($0.05 cap), encrypted key delivery, native Remote read-back, 200×5 / 429,
 revocation. Evidence in `evidence/`; verdicts in `REPORT.md` §0.
 
-## The one thing to fix first
+## Current state (rework)
 
-**F11:** a runtime-added control forward lives only in the Service instance's
-memory. Magpie's short-lived plugin-host probes do not expect it, their safety
-check stops the shared `easytier-core` about every 64 s, control sessions time
-out, and the zero-file payment cannot complete. See
-`evidence/runtime-restart-loop.log` and `REPORT.md` §3.4.
+**F11 fixed:** the restart was `discover()` retiring/re-adding the control
+forward on every presence refresh near its TTL (EasyTier 2.6.4 cannot close a
+live forward, so each retire restarted the core). The forward is reused while
+the signed endpoint is unchanged, the owned set is persisted across hosts, and
+non-owner Service/supervisor instances cannot start/adopt/restart/stop the core.
+Two 5-minute runs: `deltaP=0 deltaC=0` (`evidence/stability-5min-run*.txt`).
 
-Suggested fix: persist the owned control-forward set in the node state (and load
-it at Service construction), or make a non-owner Service instance never stop an
-adopted core. Then re-run the two-node payment end-to-end (anvil 84532 + mock
-ERC-20, no real funds) and re-run the visual matrix at the final commit.
+**Payment reproduced end-to-end** on real Magpie/ET + isolated anvil 84532:
+request → terms → EIP-712 → preview → broadcast →
+`0x185f0d451063f26b72c628288a69470e1bb708d867b83c7f87121a0ecbedf336` →
+watcher/finality → one ledger deposit → cap `$0.05→$1.55` → 已到账; restart does
+not double-credit. Evidence `evidence/payment/`.
 
-## Also open
+**Re-approval after revoke:** implemented + unit-tested (new key, one active,
+append-only ledger, price version). Real provider-side issuance works; the B key
+delivery after re-approval hits a stale-session HTTP 410 (open transport bug).
 
-- Revocation is terminal for a consumer id (no reactivation path); document or
-  implement an explicit new-generation flow.
-- Transient overlay hostname/node-id mismatch (F12) — root cause unknown.
+## Still open
+
+- B outbox/session retry after a peer host restart can return HTTP 410 instead of
+  a fresh handshake; this blocks the consumer delivery after re-approval.
+- External wallets: real MetaMask/Rabby announce EIP-6963 (evidence
+  `external-wallet-eip6963.json`); product connect/network/EIP-712 still not
+  completed.
+- F12 transient overlay hostname/node-id mismatch (not reproduced after a
+  restart; root cause unknown).
 - Windows: `test/provisioner.test.ts` excluded, executed floor 360 (comment says
   380).
-- External wallets: real MetaMask/Rabby announce EIP-6963 (evidence
-  `external-wallet-eip6963.json`), product connect/network/EIP-712 not completed.
-- Copy fix `10a3644` needs a visual re-check and re-shoot.
 
 ## Never do
 
