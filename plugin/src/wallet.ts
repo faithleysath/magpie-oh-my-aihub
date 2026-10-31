@@ -137,6 +137,7 @@ export interface WalletStatus {
       credit: boolean;
       testnetOnly: boolean;
       issuerType: string;
+      pricingKind: string;
       nanosPerToken: string;
       priceVersion: string;
     }[];
@@ -737,6 +738,7 @@ export class Wallet {
           credit: a.credit,
           testnetOnly: a.testnetOnly,
           issuerType: a.issuerType,
+          pricingKind: a.pricing.kind,
           nanosPerToken: a.pricing.nanosPerToken,
           priceVersion: a.pricing.version,
         })),
