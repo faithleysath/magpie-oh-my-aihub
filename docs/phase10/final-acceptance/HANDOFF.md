@@ -4,7 +4,7 @@ Read [`REPORT.md`](REPORT.md) first; this is only the next-session shortcut.
 
 ## State
 
-- Branch `feature/phase10-final-acceptance`; rework functional head `340c378`;
+- Branch `feature/phase10-final-acceptance`; rework functional head `340c378` (docs/CI at `d7ee008`);
   PR **#51** (draft) → `feature/phase10-wallet-closure` (#50).
 - #50 was retargeted to `feature/phase10-p2p-closure` (#49); #49 stays → `main`.
   Nothing is merged. #14–#48 remain open drafts (history; not closed to avoid

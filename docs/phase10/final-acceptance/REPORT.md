@@ -107,8 +107,14 @@ re-reads the registry at frame time.
 `evidence/payment/` (contract, deployment/funding receipts, preview/send, chain
 event, ledger, cap/duplicate), `evidence/visual/` (40 final screenshots),
 `evidence/stability-5min-run2.txt`, `evidence/stability-5min-run3.txt`,
-`evidence/reactivation.json`. `evidence/SHA256SUMS` is regenerated for all of
-them. The round-1 evidence remains as history.
+`evidence/reactivation.json`, `evidence/lab3-manifest.json` and
+`evidence/lab3-cleanup-proof.json`. `evidence/SHA256SUMS` is regenerated for all
+of them. The round-1 evidence remains as history.
+
+Final head after the gitleaks allowlist for the public test contract:
+`d7ee008b6d88c69e8c51030a8d2a318a30326a36`; PR #51 at that head has all six
+GitHub checks green (plugin Linux, plugin macOS, Windows subset, secrets working
+tree, secrets history, package contents).
 
 # Phase 10 — Final independent acceptance and Real-money D review
 
