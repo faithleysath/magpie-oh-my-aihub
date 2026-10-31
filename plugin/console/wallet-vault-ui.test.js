@@ -143,6 +143,27 @@ describe("local wallet UI", () => {
     } finally { ui.restore(); }
   });
 
+  test("real locked create snapshot still shows the one-time mnemonic, then applies locked", async () => {
+    const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: absent }), "wallet-vault-create": async () => ({ wallet: locked, mnemonic: "locked create seed words", backupRequired: true, warning: "once" }) } });
+    try {
+      await ui.show();
+      await find(ui.root, "button", "创建钱包").click(); await flush();
+      fillPasswordDialog(ui.dialog); const agree = checkAgree(ui.dialog); await agree.emit("change");
+      await find(ui.dialog, "button", "创建钱包").click(); await flush();
+      expect(ui.dialog.textContent).toContain("恢复助记词");
+      const pre = all(ui.dialog, "pre")[0];
+      expect(pre.textContent).toBe("");
+      await find(ui.dialog, "button", "显示内容").click();
+      expect(pre.textContent).toBe("locked create seed words");
+      await find(ui.dialog, "button", "结束并清除").click(); await flush();
+      expect(ui.dialog.open).toBeFalse();
+      expect(ui.dialog.textContent).not.toContain("locked create seed words");
+      expect(ui.root.textContent).toContain("已锁定");
+      expect(ui.root.textContent).toContain("未验证地址");
+      expect(find(ui.root, "button", "导出恢复助记词")).toBeUndefined();
+    } finally { ui.restore(); }
+  });
+
   test("import and restore clear secret inputs, never echo them, and require explicit confirmation", async () => {
     for (const [label, action, fieldName] of [["导入助记词", "wallet-vault-import", "mnemonic"], ["恢复加密备份", "wallet-vault-restore", "encryptedBackup"]]) {
       const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: absent }), [action]: async () => ({ wallet: locked }) } });

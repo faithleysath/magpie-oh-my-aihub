@@ -94,15 +94,19 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   let disposed = false;
   let generation = 0;
   let lateCreate = false;
+  let secretFinish = null;
 
   function report(message, tone = "warn") { try { notice(message, tone); } catch { /* notice is advisory */ } }
   function fail(message) { dialogError.textContent = message; dialogError.hidden = false; }
   function clearInputs(node = dialogBody) { for (const input of node.querySelectorAll?.("input,textarea") || []) { input.value = ""; input.checked = false; } }
   function closeDialog({ bump = true } = {}) {
+    const finish = secretFinish;
+    secretFinish = null;
     secret = null; secretKind = null; secretVisible = false;
     if (dialogBody) dialogBody.replaceChildren();
     if (dialogError) { dialogError.textContent = ""; dialogError.hidden = true; }
     if (dialog.open) dialog.close();
+    if (finish) finish();
     if (bump) generation++;
   }
   function openDialog(title, build) {
@@ -111,12 +115,19 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     build(dialogBody);
     dialog.showModal();
   }
-  function openSecretDialog(value, kind, warning, token = generation) {
+  function openSecretDialog(value, kind, warning, token = generation, createSnapshot = null) {
     // A late response from a closed/navigated/disposed flow must never reopen
     // the secret dialog or restore a secret reference.
     if (disposed || token !== generation) return false;
-    if (!wallet || wallet.status !== "unlocked" || wallet.addressVerified !== true) return false;
+    // Normal export/backup requires an unlocked+verified wallet. The only
+    // exception is the exact active create response, which may be locked and
+    // one-time; the snapshot is applied only after the backup screen is closed.
+    if (!createSnapshot && (!wallet || wallet.status !== "unlocked" || wallet.addressVerified !== true)) return false;
+    if (createSnapshot && (!createSnapshot || typeof createSnapshot !== "object")) return false;
     closeDialog({ bump: false });
+    if (createSnapshot) secretFinish = () => {
+      if (!disposed && service === "available" && getState()?.configured) applyWallet(createSnapshot);
+    };
     secret = value; secretKind = kind; secretVisible = false;
     dialogTitle.textContent = kind === "mnemonic" ? "恢复助记词 · 仅显示一次" : kind === "private-key" ? "私钥 · 仅显示一次" : "加密备份";
     dialogError.hidden = true;
@@ -134,17 +145,17 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     const end = button("结束并清除", () => closeDialog());
     actions.append(toggle, end);
     body.append(pre, status, actions);
-    try { dialog.showModal(); } catch { secret = null; secretKind = null; secretVisible = false; dialogBody.replaceChildren(); return false; }
+    try { dialog.showModal(); } catch { secretFinish = null; secret = null; secretKind = null; secretVisible = false; dialogBody.replaceChildren(); return false; }
     return true;
   }
 
-  async function action(name, input = {}, token = generation) {
+  async function action(name, input = {}, token = generation, { applyWallet: applyResult = true } = {}) {
     if (working) throw new Error("正在处理上一步操作");
     working = true;
     try {
       const result = await client.action(name, input);
       if (disposed || token !== generation) return result;
-      if (result?.wallet) applyWallet(result.wallet);
+      if (applyResult && result?.wallet) applyWallet(result.wallet);
       return result;
     } catch (error) {
       if (disposed || token !== generation) throw error;
@@ -249,7 +260,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
         const token = generation;
         submit.disabled = true;
         try {
-          const result = await action("wallet-vault-create", { password, strength: Number(strength.input.value) || 128 }, token);
+          const result = await action("wallet-vault-create", { password, strength: Number(strength.input.value) || 128 }, token, { applyWallet: false });
           if (disposed) return;
           if (token !== generation) {
             // Same active session can recover only by an explicit status read.
@@ -262,7 +273,13 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
             return;
           }
           if (typeof result?.mnemonic !== "string" || !result.mnemonic) throw new Error("钱包已创建，但没有收到一次性恢复助记词；请立即检查钱包状态并按恢复流程处理。");
-          openSecretDialog(result.mnemonic, "mnemonic", result.warning || "这是唯一一次显示恢复助记词。请立即离线备份；不要粘贴到网站、聊天或日志。", token);
+          const shown = openSecretDialog(result.mnemonic, "mnemonic", result.warning || "这是唯一一次显示恢复助记词。请立即离线备份；不要粘贴到网站、聊天或日志。", token, result.wallet);
+          if (!shown) {
+            if (!disposed && token === generation) {
+              if (result.wallet) applyWallet(result.wallet);
+              report("钱包已创建；一次性助记词无法显示。请手动刷新状态并重新解锁后导出。", "warn");
+            }
+          }
         } catch (error) { actionError(error); submit.disabled = false; }
       }, true);
       agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
