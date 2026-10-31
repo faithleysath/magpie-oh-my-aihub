@@ -15,7 +15,7 @@ Status tags: **VERIFIED** (source/config/read), **REPRODUCED** (run and observed
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| C wallet vault/UI (create, lock, unlock, backup, export, restore) | **REPRODUCED** in a real Magpie 0.1.2289 UI + ego-lite | `evidence/wallet-journey.json`, two screenshots |
+| C wallet vault/UI (create, lock, unlock, backup, export, restore) | **REPRODUCED** in a real Magpie 0.1.2289 UI + ego-lite | `evidence/wallet-journey.json`, two wallet screenshots (the mainnet result is in the JSON, below the wallet section) |
 | Mainnet BSC 56 / Base 8453 equal read-only | **REPRODUCED** (real public RPC and browser UI) | `evidence/mainnet-readonly.json` |
 | BSC USDC | **UNKNOWN / refused** (issuer evidence absent) | reader refuses the unregistered contract |
 | B zero-file request → human approval → encrypted delivery → native Remote | **REPRODUCED** on two real portable Magpie nodes | `evidence/lab-partial.json` |

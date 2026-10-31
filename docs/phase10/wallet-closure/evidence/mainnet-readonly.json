@@ -48,6 +48,6 @@
     "readOnly": true,
     "creditEligible": false,
     "usdValue": "not valued (no fake $)",
-    "screenshot": "provider-wallet-mainnet-readonly.png"
+    "screenshot": "provider-wallet-locked.png (wallet page; the read-only result is recorded in this JSON, below the wallet section)"
   }
 }

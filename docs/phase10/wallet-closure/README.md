@@ -8,7 +8,7 @@
   - `mainnet-readonly.json` — BSC/Base read-only public RPC results and the BSC USDC refusal.
   - `lab-partial.json` — pins, two-node topology, B approval/delivery and the blocked payment.
   - `secret-scan.json` — exact-byte scan of the lab tree.
-  - `provider-wallet-mainnet-readonly.png`, `consumer-wallet-locked-restored.png`.
+  - `provider-wallet-locked.png`, `consumer-wallet-locked-restored.png`.
   - `lab-cleanup-proof.json` — exported cleanup proof (added at the end of the run).
 
 The short version: the wallet and mainnet read-only surfaces are real and tested; the B

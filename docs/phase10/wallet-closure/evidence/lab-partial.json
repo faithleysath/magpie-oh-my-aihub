@@ -57,7 +57,7 @@
     "no browser extension"
   ],
   "screenshots": [
-    "provider-wallet-mainnet-readonly.png",
+    "provider-wallet-locked.png",
     "consumer-wallet-locked-restored.png"
   ]
 }
