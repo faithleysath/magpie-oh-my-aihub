@@ -12,9 +12,18 @@
 // server started in this process is listening there. "All loopback" is
 // deliberately not allowed, so a leaked fixed port (3425, 34567, …) is caught.
 //
-// Known scope: this covers `fetch` and `Bun.serve` in the test process. A test
-// that spawns another process (the CLI journeys do) is not covered by the
-// preload; those children are given explicit loopback endpoints by the test.
+// Scope and known limits — do not read this as a complete network sandbox:
+// - covered: `globalThis.fetch` and `Bun.serve` in THIS test process;
+// - not covered: `Bun.fetch`/another runtime's fetch binding, `node:http`,
+//   `node:net`/raw sockets, WebSockets and any child process the test spawns.
+//   Children are confined by their own preload (`child-network-spy.ts`) with an
+//   exact allowlist, not by this guard;
+// - attribution: `beforeEach` clears the record, so a request issued inside
+//   `beforeAll`/`afterAll` (or after a test) is not attributed to a test and can
+//   be dropped; only attempts inside a test are guaranteed to fail it;
+// - `registerTestServer()` persists for the rest of the file unless the caller
+//   removes it with `unregisterTestServer()`; a test that registers a broad or
+//   long-lived origin widens the allowlist for later tests in that file.
 
 import { afterEach, beforeEach } from "bun:test";
 
@@ -128,6 +137,15 @@ function install(): void {
 export function registerTestServer(origin: string): void {
   const parsed = new URL(origin);
   allowed.set(parsed.origin, "explicit");
+}
+
+/** Remove an origin registered with `registerTestServer()` (test-scoped use). */
+export function unregisterTestServer(origin: string): void {
+  try {
+    allowed.delete(new URL(origin).origin);
+  } catch {
+    /* an unparseable origin was never registered */
+  }
 }
 
 /** Whether the guard would let a request to this exact origin through. */
