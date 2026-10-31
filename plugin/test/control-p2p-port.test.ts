@@ -536,6 +536,36 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(svc.provisioner.find("used-unknown") ?? null).toBeNull();
   });
 
+  test("an invalid native used cost writes neither a ConsumerRecord nor an opening account", async () => {
+    const { svc, magpie } = realService();
+    const approvalFile = join(process.cwd(), "control-approvals.json");
+    const port = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    const consumer = { accountId: "5".repeat(64), nodeId: "bad-used", hostname: "ohmyaihub-bad-used", fingerprint: "5".repeat(64) };
+    const price = catalogPriceVersion([models[0]!])!;
+    const key = await magpie.addKey("ohmyaihub-bad-used");
+    await magpie.setModels(key.id, [LAB_MODEL]);
+    await magpie.setCostLimit(key.id, "3650d", 1);
+    const pending = {
+      approvalId: "5".repeat(32), requestHash: "5".repeat(64), generation: 1,
+      consumerNodeId: "bad-used", consumerFingerprint: "5".repeat(64),
+      models: [LAB_MODEL], capUsd: 1, quoteHash: HASH, priceVersion: price,
+      expiresAt: "2026-10-31T00:10:00.000Z", keyId: null, keyName: null, memo: null,
+      state: "pending", error: null, createdAt: "2026-10-31T00:00:00.000Z", updatedAt: "2026-10-31T00:00:00.000Z",
+    };
+    writeFileSync(approvalFile, JSON.stringify({ version: 1, approvals: [pending] }));
+    (magpie as any).limitStatus = async () => ({ limited: true, key: "x", limit: { costLimit: 1 } });
+    await expect(port.takeAuthorization({
+      approvalId: pending.approvalId, generation: 1, consumerNodeId: "bad-used", consumerFingerprint: "5".repeat(64),
+      requestHash: "5".repeat(64), models: [LAB_MODEL], capUsd: 1,
+      quote: { contentHash: HASH, priceVersion: price, identityFingerprint: FP },
+      keyId: key.id, keyName: "ohmyaihub-bad-used",
+    })).rejects.toThrow(/used cost is unknown/);
+    expect(svc.provisioner.find("bad-used") ?? null).toBeNull();
+    expect(svc.ledger?.account("bad-used") ?? null).toBeNull();
+    await expect(svc.provisioner.status("bad-used")).rejects.toThrow(/no consumer/);
+    expect(svc.ledger?.account("bad-used") ?? null).toBeNull();
+  });
+
   test("reconcileApproval returns unknown when Magpie key management cannot be read", async () => {
     const { svc } = realService();
     const approvalFile = join(process.cwd(), "control-approvals.json");

@@ -113,6 +113,8 @@ export interface ConsumerRecord {
   ledgerUncertain?: string | null;
   createdAt: string;
   revokedAt: string | null;
+  /** true only for a record reconstructed from an interrupted native key */
+  adoptedFromNative?: boolean;
   lastCheck: {
     at: string;
     usedUsd: number;
@@ -424,6 +426,10 @@ export class Provisioner {
     rec: ConsumerRecord,
     opts: { requireKnownUsage?: boolean; status?: LimitStatus | null } = {},
   ): Promise<LedgerWindow | null> {
+    // An adopted native key must never take the legacy "unknown used = 0"
+    // fallback from status/ensure/reissue paths. Route every seed through the
+    // strict repair path instead.
+    if (rec.adoptedFromNative) return this.seedAdoptedLedger(rec, opts.status);
     if (!this.ledger) return null;
     const existing = this.ledger.account(rec.consumerId);
     if (existing) {
@@ -1827,6 +1833,9 @@ export class Provisioner {
       }
       const held = status.limit?.costLimit;
       if (typeof held !== "number" || Math.abs(held - input.capUsd) > 1e-9) throw new Error("the native key's cap does not match the approval");
+      if (typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
+        throw new Error("native used cost is unknown; refusing to create an adoption record/opening credit");
+      }
       const rec: ConsumerRecord = {
         consumerId: input.consumerId,
         keyName: input.keyName,
@@ -1843,6 +1852,7 @@ export class Provisioner {
         acceptedQuoteHash: input.quoteHash,
         createdAt: new Date().toISOString(),
         revokedAt: null,
+        adoptedFromNative: true,
         lastCheck: null,
       };
       this.list.push(rec);
