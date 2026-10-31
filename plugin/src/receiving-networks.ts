@@ -80,6 +80,11 @@ function assertProviderId(providerId: unknown): string {
   if (typeof providerId !== "string" || !/^[\x21-\x7e]{1,64}$/.test(providerId)) {
     throw new Error("a receiving selection needs a provider id of 1-64 printable characters");
   }
+  // The document is a plain JSON object; do not let a provider id mutate its
+  // prototype or collide with inherited properties.
+  if (providerId === "__proto__" || providerId === "constructor" || providerId === "prototype") {
+    throw new Error("that provider id is reserved");
+  }
   return providerId;
 }
 
@@ -171,15 +176,21 @@ export class ReceivingNetworkPolicy {
    */
   setSelected(providerId: string, chainId: number, selected: boolean): ReceivingSelection {
     assertProviderId(providerId);
-    const net = this.registry.requireReceivableNetwork(chainId);
+    this.registry.requireReceivableNetwork(chainId);
     const current = this.doc.providers[providerId]?.chainIds ?? [];
     const has = current.includes(chainId);
     if (has === selected) return this.selection(providerId);
+    const before = JSON.parse(JSON.stringify(this.doc)) as ReceivingDocument;
     const next = selected ? [...current, chainId].sort((a, b) => a - b) : current.filter((id) => id !== chainId);
     if (next.length === 0) delete this.doc.providers[providerId];
     else this.doc.providers[providerId] = { chainIds: next, updatedAt: this.now().toISOString() };
-    this.persist();
-    void net;
+    try {
+      this.persist();
+    } catch (e) {
+      // A failed write must not leave an in-memory selection that looks saved.
+      this.doc = before;
+      throw e;
+    }
     return this.selection(providerId);
   }
 
