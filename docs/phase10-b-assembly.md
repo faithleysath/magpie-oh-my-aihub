@@ -29,13 +29,25 @@ projection; product behavior is unchanged.
   after adapting the fixture, the adapter suite is 23/23 and the combined targeted
   set is expected green (rerun recorded in the PR/CI).
 
-## Blocked / not yet implemented
+## Added after the scaffold
 
-The assembly app (control listener lifecycle, presence/discovery, pull/poll,
-console actions) is **not** included in this base commit. In particular, the
-reviewed B core's local action path needs a reachable consumer control endpoint to
-send `approved`/`authorization_delivery` back. The frozen core hello does not carry
-the consumer control endpoint, and the existing A catalogue has no control-port
-presence. A pull/poll variant or a versioned presence document is required; it is
-not invented here. No real Magpie/EasyTier run, no LAN/overlay exposure claim, no
-real funds.
+- `plugin/src/control/presence.ts`: separate `ohmyaihub.presence/v1` signed by the
+  Catalogue Ed25519 identity; strict fields, short expiry, no model ids/key/secret;
+  endpoint only when a caller marks a real ready listener.
+- A separate `/p2p/v1/presence` route on the read-only catalog listener (opt-in
+  callback), so strict Catalogue v1 is unchanged.
+- Narrow core poll extension: `P2pNode.pullFrames()` and `P2pNode.poll()` plus an
+  optional `P2pTransport.poll`; a fresh signed hello is the poll authentication,
+  frames are normal AEAD session frames, and ACK/outbox/seq/replay semantics are
+  reused. Provider HTTP supports `POST /p2p/v1/poll` (hello body, bounded response).
+- Tests: presence sign/verify/tamper/expiry; HTTP poll auth/media/query; in-process
+  two-node pull after a failed push (consumer registers before ACK, same Key).
+- Assembly app/lifecycle, console `p2p-*` actions, presence-driven endpoint
+  discovery wiring, and real HTTP two-node Service test are still **not** in this
+  commit.
+
+The original reverse-delivery blocker is addressed for pull: the consumer does not
+need a reverse endpoint. Discovery still needs the assembly app to fetch/verify
+presence and register the endpoint; unshared/control-only provider presence remains
+to be wired. No real Magpie/EasyTier run, no LAN/overlay exposure claim, no real
+funds.
