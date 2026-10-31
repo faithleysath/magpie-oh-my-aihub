@@ -168,6 +168,39 @@ function identityMatches(
   return (a.hostname ?? "") === (b.hostname ?? "") && (a.virtualIpv4 ?? "") === (b.virtualIpv4 ?? "");
 }
 
+function normalizeModelsEvidence(
+  raw: ProviderModelsEvidence | null | undefined,
+  keyRef: string,
+  keyGeneration: number,
+): ProviderModelsEvidence | null {
+  if (!raw || typeof raw !== "object") return null;
+  const status = raw.status === "current" || raw.status === "stale" ? raw.status : "unknown";
+  const source =
+    raw.source === "provider-models" || raw.source === "reconcile" ? raw.source : "connect-readback";
+  const callable = raw.callable === "yes" || raw.callable === "no" ? raw.callable : "unknown";
+  return {
+    status,
+    source,
+    readAt: typeof raw.readAt === "string" ? raw.readAt : null,
+    expiresAt: typeof raw.expiresAt === "string" ? raw.expiresAt : null,
+    models: Array.isArray(raw.models) ? raw.models.map(String) : [],
+    modelCount: Number.isInteger(raw.modelCount) ? raw.modelCount : null,
+    callable,
+    identity:
+      raw.identity && typeof raw.identity === "object"
+        ? {
+            hostname: typeof raw.identity.hostname === "string" ? raw.identity.hostname : null,
+            virtualIpv4: typeof raw.identity.virtualIpv4 === "string" ? raw.identity.virtualIpv4 : null,
+            fingerprint: typeof raw.identity.fingerprint === "string" ? raw.identity.fingerprint : null,
+          }
+        : null,
+    generation: Number.isInteger(raw.generation) && raw.generation >= 0 ? raw.generation : 0,
+    keyRef: typeof raw.keyRef === "string" && raw.keyRef ? raw.keyRef : keyRef,
+    keyGeneration: Number.isInteger(raw.keyGeneration) && raw.keyGeneration > 0 ? raw.keyGeneration : keyGeneration,
+    error: typeof raw.error === "string" ? raw.error : null,
+  };
+}
+
 /**
  * Projects stored evidence to the console. It never probes; a later poll only
  * decides whether the stored proof is still valid.
@@ -178,10 +211,24 @@ export function projectModelsEvidence(p: ProviderConnection, now = Date.now()): 
   if (!stored) return unknownModelsEvidence(p.keyRef, keyGeneration);
   const currentKey = stored.keyGeneration === keyGeneration;
   const currentIdentity = identityMatches(stored.identity, p.fingerprint, stored.identity?.fingerprint ?? null, p.acceptedFingerprint ?? null);
-  const expired = stored.expiresAt !== null && Number.isFinite(Date.parse(stored.expiresAt)) && now > Date.parse(stored.expiresAt);
+  const readAtMs = stored.readAt ? Date.parse(stored.readAt) : Number.NaN;
+  const expiresMs = stored.expiresAt ? Date.parse(stored.expiresAt) : Number.NaN;
+  const invalidReadAt = !Number.isFinite(readAtMs);
+  const futureReadAt = Number.isFinite(readAtMs) && readAtMs > now + 60_000;
+  const invalidExpiry = !Number.isFinite(expiresMs) || (Number.isFinite(readAtMs) && expiresMs < readAtMs);
+  const expired = Number.isFinite(expiresMs) && now > expiresMs;
   const notServing = p.status !== "connected";
   const status: ProviderModelsEvidence["status"] =
-    stored.status === "unknown" || !currentKey || !currentIdentity || expired || notServing ? "stale" : stored.status;
+    stored.status === "unknown" ||
+    !currentKey ||
+    !currentIdentity ||
+    invalidReadAt ||
+    futureReadAt ||
+    invalidExpiry ||
+    expired ||
+    notServing
+      ? "stale"
+      : stored.status;
   const current = status === "current";
   const callable: ProviderModelsEvidence["callable"] = current
     ? stored.models.length > 0
@@ -199,11 +246,15 @@ export function projectModelsEvidence(p: ProviderConnection, now = Date.now()): 
       status === "stale" && stored.error === null
         ? expired
           ? "the model read-back expired; read it again"
-          : !currentKey
-            ? "the Gateway Key changed; read the models again"
-            : !currentIdentity
-              ? "the provider identity changed; read the models again"
-              : "the provider is not serving"
+          : futureReadAt
+            ? "the model read-back time is in the future; read it again"
+            : invalidReadAt || invalidExpiry
+              ? "the model read-back timestamps are invalid; read it again"
+              : !currentKey
+                ? "the Gateway Key changed; read the models again"
+                : !currentIdentity
+                  ? "the provider identity changed; read the models again"
+                  : "the provider is not serving"
         : stored.error,
   };
 }
@@ -550,6 +601,18 @@ export function loadState(): LoadedState {
         keyRef: p.keyRef ?? providerKeyRef(p.id),
         fingerprint: p.fingerprint ?? null,
         models: Array.isArray(p.models) ? p.models.map(String) : [],
+        keyGeneration:
+          Number.isInteger((p as ProviderConnection).keyGeneration) && ((p as ProviderConnection).keyGeneration ?? 0) > 0
+            ? (p as ProviderConnection).keyGeneration!
+            : 1,
+        acceptedFingerprint: typeof p.acceptedFingerprint === "string" ? p.acceptedFingerprint : null,
+        modelsEvidence: normalizeModelsEvidence(
+          p.modelsEvidence,
+          p.keyRef ?? providerKeyRef(p.id),
+          Number.isInteger((p as ProviderConnection).keyGeneration) && ((p as ProviderConnection).keyGeneration ?? 0) > 0
+            ? (p as ProviderConnection).keyGeneration!
+            : 1,
+        ),
         status: p.status ?? "degraded",
         detail: p.detail ?? null,
         limit: p.limit ?? null,
