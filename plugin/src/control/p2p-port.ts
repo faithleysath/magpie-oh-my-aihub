@@ -108,6 +108,28 @@ export interface P2pApprovalRequest {
   quote: { contentHash: string; identityFingerprint: string };
 }
 
+export interface P2pApprovalReconcileInput {
+  requestHash: string;
+  approvalId: string;
+  generation: number;
+  consumer: P2pPeerView;
+  keyId: string | null;
+}
+
+export type P2pApprovalReconcile =
+  | {
+      state: "keyReady";
+      keyId: string;
+      keyName: string;
+      models: string[];
+      capUsd: number;
+      priceVersion: string;
+      expiresAt: string;
+      detail?: string | null;
+    }
+  | { state: "noSideEffect"; detail?: string | null }
+  | { state: "unknown"; detail: string | null };
+
 export interface P2pApprovedMaterials {
   approvalId: string;
   generation: number;
@@ -197,6 +219,8 @@ export interface P2pBusinessPort {
   validateRequest(input: P2pRequestValidationInput): Promise<P2pRequestValidation>;
   recordRequest(input: P2pRecordedRequest): Promise<boolean>;
   approve(input: P2pApprovalRequest): Promise<P2pApprovedMaterials>;
+  /** Read-only recovery of an interrupted approval; must not create/rotate a key. */
+  reconcileApproval?(input: P2pApprovalReconcileInput): Promise<P2pApprovalReconcile>;
   takeAuthorization(input: P2pTakeAuthorizationInput): Promise<P2pAuthorizationDocument>;
   recordAck(input: P2pAckRecord): Promise<void>;
   revoke(input: P2pRevokeRequest): Promise<P2pRevokeOutcome>;
@@ -683,6 +707,56 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
         saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, approved] });
         return materials;
       });
+    },
+
+    async reconcileApproval(input) {
+      try {
+        const state = loadApprovals(approvalStateFile);
+        const record = state.approvals.find((a) => a.approvalId === input.approvalId);
+        const consumer = service.provisioner.find(input.consumer.nodeId);
+        if (input.keyId && consumer?.keyId && consumer.keyId !== input.keyId) {
+          return { state: "unknown", detail: "the native consumer key id differs from the interrupted approval" };
+        }
+        if (record) {
+          if (
+            record.requestHash !== input.requestHash ||
+            record.generation !== input.generation ||
+            record.consumerNodeId !== input.consumer.nodeId ||
+            record.consumerFingerprint !== input.consumer.fingerprint
+          ) {
+            return { state: "unknown", detail: "the approval journal entry does not match the interrupted approval" };
+          }
+          if (record.state === "revoked") {
+            return { state: "unknown", detail: "the approval was already revoked" };
+          }
+          if (record.state === "approved" || record.state === "pending" || record.state === "uncertain") {
+            const recovered = recoverApproval(record, service, now().toISOString());
+            if (recovered && consumer) {
+              if (input.keyId && recovered.keyId !== input.keyId) {
+                return { state: "unknown", detail: "the recovered key id does not match the interrupted approval" };
+              }
+              return {
+                state: "keyReady",
+                keyId: recovered.keyId!,
+                keyName: recovered.keyName!,
+                models: recovered.models,
+                capUsd: recovered.capUsd,
+                priceVersion: recovered.priceVersion,
+                expiresAt: recovered.expiresAt,
+                detail: "recovered from the persistent approval/native key binding",
+              };
+            }
+            if (record.state === "pending" && !consumer) {
+              return { state: "noSideEffect", detail: "no Provisioner consumer exists for this approval" };
+            }
+            return { state: "unknown", detail: "the approval exists but its native key binding cannot be proven" };
+          }
+        }
+        if (!consumer) return { state: "noSideEffect", detail: "no Provisioner consumer exists for this approval" };
+        return { state: "unknown", detail: "a consumer key exists without a matching persistent approval binding" };
+      } catch (error) {
+        return { state: "unknown", detail: String((error as Error)?.message ?? error).slice(0, 200) };
+      }
     },
 
     async takeAuthorization(input) {

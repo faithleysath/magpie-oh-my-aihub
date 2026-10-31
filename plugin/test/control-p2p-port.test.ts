@@ -254,6 +254,45 @@ describe("B-core P2pBusinessPort mapping", () => {
     await expect(svc.provisioner.readHandover("alice", "wrong-key")).rejects.toThrow(/changed while/);
   });
 
+  test("reconcileApproval is read-only and recovers only a proven keyReady", async () => {
+    const { svc, magpie } = realService();
+    const approvalFile = join(process.cwd(), "control-approvals.json");
+    const port = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    const consumer = { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) };
+    expect(await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 1, consumer, keyId: null })).toEqual({ state: "noSideEffect", detail: "no Provisioner consumer exists for this approval" });
+    const approved = await port.approve({
+      approvalId: APPROVAL,
+      generation: 1,
+      requestHash: HASH,
+      request: requestDocument() as any,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    const ready = await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 1, consumer, keyId: approved.keyId });
+    expect(ready.state).toBe("keyReady");
+    if (ready.state === "keyReady") {
+      expect(ready.keyId).toBe(approved.keyId);
+      expect(ready.models).toEqual([LAB_MODEL]);
+      expect(ready.capUsd).toBe(1);
+    }
+    // A different generation/approval binding is unknown, never noSideEffect.
+    expect((await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 2, consumer, keyId: null })).state).toBe("unknown");
+    expect((await port.reconcileApproval!({ requestHash: HASH, approvalId: "9".repeat(32), generation: 1, consumer, keyId: null })).state).toBe("unknown");
+    expect(magpie.keys.size).toBe(1);
+  });
+
+  test("reconcileApproval treats a corrupt journal as unknown, not noSideEffect", async () => {
+    const { svc } = realService();
+    const approvalFile = join(process.cwd(), "control-approvals.json");
+    writeFileSync(approvalFile, "{corrupt");
+    const port = createP2pBusinessPort(svc, { approvalStateFile: approvalFile });
+    const result = await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 1, consumer: { accountId: "a".repeat(64), nodeId: "alice", hostname: "ohmyaihub-alice", fingerprint: "a".repeat(64) }, keyId: null });
+    expect(result.state).toBe("unknown");
+  });
+
   test("consumer import is generation-owned, refuses a different approval while a Remote exists, and survives restart", async () => {
     const { service, providers, calls } = fakeConsumerService();
     const stateFile = join(process.cwd(), "control-remotes.json");
