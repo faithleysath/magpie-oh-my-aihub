@@ -111,18 +111,47 @@ the consumer cleared them. That was confirmed on 2.6.4 (listener list after
 restart: only `13425`, `17890`, `54413` + one EasyTier wildcard socket). No
 product code was changed for this.
 
-## Cleanup and ownership — REPRODUCED
+## Cleanup and ownership — what is actually provable
 
-- Before: pre-existing orphan cores/mock upstreams/`*:3425` as listed in
-  `/tmp/oma-research/p0b/pre-snapshot.txt` — none touched.
-- `cleanup` stopped exactly the 8 lab-owned PIDs (4 per node: web host, plugin
-  host tree, ET core, upstream), `remaining: []`, and **every** lab port free
-  (`web`, `gateway`, `upstream`, `listen`, `catalog`, `socks`, `api-port`,
-  `console-port`, `rpc`).
-- `cleanup --delete` wrote `/tmp/oma-p0b-100718-cleanup.json` (0600) and removed
-  the lab root; the post-run snapshot contains only pre-existing/other agents'
-  processes (a new `oma-a-ui-audit` Magpie web and a `oma-phase10-evidence` ET
-  core appeared meanwhile from another workstream and were left alone).
+Committed sanitized proof: `docs/validation/lab/phase10/2026-10-31-p0b-sanitized-cleanup-proof.json`,
+sha256 `f4fbcef7863bc1d50283f5bc911017802208bdc289be0bbe9b58e197a4566fe3`
+(46 720 bytes, produced by the harness `audit()` allowlist; no key, network
+secret, login URL or ticket: checked with the same patterns the repository scan
+uses).
+
+It shows, for the recorded instant:
+
+- both nodes' ports `web`, `gateway`, `upstream`, `listen`, `catalog`, `socks`,
+  `api-port`, `console-port`, `rpc` free, and `remaining: []`;
+- the app binary sha256, EasyTier version/hashes, host Bun hash, platform;
+- readiness `webLoopbackOnly: true`, keyless **401**, wrong-key **401** per node.
+
+What it does **not** prove, and is therefore not claimed:
+
+- **No PID manifest.** The record's `cleanup.nodes.*.before` and
+  `runningPids` are empty. The second `cleanup --delete` invocation re-ran
+  `stop_node()` on already-stopped nodes and overwrote the earlier stop result
+  before the proof was copied. The PIDs printed by the first stop exist only in
+  the session log, not in a saved artifact, so this document makes **no** claim
+  such as "exactly 8 processes with this composition were stopped".
+- **No raw HTTP transcripts** and **no startup manifest**: both lived under the
+  lab root, which was deleted. They are reported as missing rather than
+  reconstructed.
+- The before/after **process/port snapshots** remain local only
+  (`/tmp/oma-research/p0b/{pre,post}-snapshot.txt`, sha256 recorded in
+  `/tmp/oma-research/P0-17-18-REVIEW-HANDOFF.md`). They are listener evidence
+  and contain unrelated processes' PIDs, so they are not committed and are not
+  used as PID proof.
+
+Net: the cleanup claim is reduced to "at the recorded time the lab reported no
+remaining owned process and all lab ports free", which is what the committed
+proof actually says. Pre-existing orphan processes were left alone; that is
+consistent with the local snapshots but is not part of the committed proof.
+
+Harness note for the next run: `cleanup` followed by `cleanup --delete`
+overwrites `lastCleanup` with an empty second stop, so the final proof loses the
+first stop's PID list. Capture the proof between the two calls, or fix the
+harness separately.
 
 ## Not covered
 
