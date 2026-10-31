@@ -56,9 +56,9 @@ status.providers[].modelsEvidence = {
    - `modelsEvidence.callable === "yes"`
    - `modelCount` 是有限非负数
    - **时间可证明**：`readAt` 与 `expiresAt` 都存在、可解析；`readAt <= now`（未来 `readAt` 一律 unknown，即使后端容忍 +60s 时钟偏差）；`expiresAt >= readAt`；`expiresAt > now`；有效窗口 `expiresAt - readAt <= 5min`（与后端 TTL 契约一致，正好 5 分钟算有效）。任一条不满足 → `unknown`，不计入，并给“重新读取”的下一步。未来 `expiresAt` 只是正常 TTL，允许计数。
-   - **连接状态**：只有 `provider.status === "connected"` 才计数。`paused` / `degraded` / `disabled` / `identity-mismatch` / `revoked` 一律不计；它们的最近清单只作为诊断显示，并标注“仅诊断，不计入当前可见模型”。恢复连接后需要新的有效读回才重新计数；`limit.spent` 不抹掉清单（额度维度单独显示）。
+   - **连接状态**：只有 `provider.status === "connected"` 才计数。`paused` / `degraded` / `disabled` / `identity-mismatch` / `revoked` 一律不计；它们的最近清单只作为诊断显示，并标注“仅诊断，不计入当前可见模型”。恢复后是否重新计数**取决于 Service 是否把 evidence 投影为 `stale`/`unknown`**；UI 没有 resume 门控，只按当前快照判断。`limit.spent` 不抹掉清单（额度维度单独显示）。
 3. 有可用 → `current`，标题「N 个当前可见模型」，详情「M 个伙伴服务 · 最近真实读回；推理额度与 429 另计，不代表可调用」，可展开列表；额度状态单独标注（正常/已用尽/待确认）。`modelCount === 0` 时为 `empty`：「已连接，但没有发现模型」+ 核对模型范围与额度。
-3b. 有当前证据但连接不是 `connected` → `inactive`：「0 个当前可见模型」+“恢复连接并重新读取后再计入，历史清单只作诊断”，列表展示历史清单并逐条标 `仅诊断`。
+3b. 有当前证据但连接不是 `connected` → `inactive`：「0 个当前可见模型」+“恢复连接并重新读取后再计入，历史清单只作诊断”，列表展示历史清单并逐条标 `仅诊断`。恢复后的重新计数依赖 Service 将旧证据置为 stale/unknown；客户端不自证。
 4. 有证据但 `callable === "no"`（401/撤销）→ `denied`：「授权未通过」+ 核验密钥与额度，不用 0 代替；若同时 stale 则显示过期。
 5. 无可用但存在 `stale` 或已过期 → 「模型清单已过期」+ 下一步“到「发现 → 我的连接」重新读取可用模型；过期清单不算可用。”
 6. 其余 → 「尚未确认」+ 下一步“到「发现 → 我的连接」读取可用模型；读取前不会计入可用数。”
@@ -100,7 +100,7 @@ bun run secret-scan    # PASS
   - 一个 stale + 一个 current → 只计 current；
   - 页面停留超过 `expiresAt` → 自动转为 stale；`expiresAt` 缺失/不可解析 → `unknown` 不计；未来 `expiresAt` → 正常计数；
   - `readAt` 在未来 / 非法 / 缺失 → `unknown` 不计；`expiresAt < readAt` → `unknown`；窗口 > 5min → `unknown`；正好 5min → 计数；
-  - `paused/disabled/degraded/identity-mismatch/revoked` → `inactive`、计数 0、历史清单只诊断；恢复后需新的 current 读回；
+  - `paused/disabled/degraded/identity-mismatch/revoked` → `inactive`、计数 0、历史清单只诊断；恢复后是否计数取决于 Service 投影（stale/unknown 后需要新 current 读回），UI 无 resume 门控；
   - current + `limit.spent` / `costLeft<=0` → 仍显示清单数，但额度行明确“额度已用尽（原生 429）”；未读额度 → “额度待确认”；
   - current 但 `modelCount === 0` → “已连接，但没有发现模型”；`callable:"no"`（401/撤销）→ “授权未通过”，不用 0；
   - 换 Key（`keyGeneration` 变化）→ `stale` 不计，只有新的 current 读回才重新计数；
