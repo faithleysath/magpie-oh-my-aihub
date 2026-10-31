@@ -98,6 +98,10 @@ export interface NetworkView {
   catalogPeers: number;
 }
 
+/** How old a peer/route read or a catalogue fetch may be before it is not "online". */
+export const PEER_EVIDENCE_MAX_MS = 60_000;
+export const CATALOG_EVIDENCE_MAX_MS = 120_000;
+
 export interface NetworkProjectionInput {
   config: PluginConfig | null;
   supervisor: SupervisorState;
@@ -110,6 +114,12 @@ export interface NetworkProjectionInput {
   consolePort?: number | null;
   apiPort?: number | null;
   now?: () => number;
+}
+
+function catalogFresh(peer: CatalogStatus["peers"][number]): boolean {
+  if (!peer.fetchedAt) return false;
+  const at = Date.parse(peer.fetchedAt);
+  return Number.isFinite(at) && Date.now() - at <= CATALOG_EVIDENCE_MAX_MS;
 }
 
 function finite(value: unknown): number | null {
@@ -215,7 +225,13 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
   const peers = et.peers ?? [];
   const peerRead = Boolean(et.peersAt);
   const routeRead = Boolean(et.routesAt);
+  const routesAtMs = et.routesAt ? Date.parse(et.routesAt) : Number.NaN;
+  const routesStaleMs = Number.isFinite(routesAtMs) ? Math.max(0, now() - routesAtMs) : null;
+  const peersFresh = peerRead && staleMs !== null && staleMs <= PEER_EVIDENCE_MAX_MS;
+  const routesFresh = routeRead && routesStaleMs !== null && routesStaleMs <= PEER_EVIDENCE_MAX_MS;
   if (cfg && et.running && !peerRead) problems.push("peer list has not been read since the core started");
+  else if (cfg && et.running && peerRead && !peersFresh) problems.push("the peer list is stale; neighbours are not shown as online");
+  else if (cfg && et.running && peerRead && !routesFresh) problems.push("the route table is stale; link types fall back to peer cost");
   else if (cfg && !et.running && peerRead) problems.push("the last peer read predates the core stopping");
   if (cfg && et.running && !routeRead) problems.push("route table has not been read since the core started");
   if (cfg && et.socks5Port !== null && !et.aclOk) problems.push("the runtime safety check has open findings");
@@ -279,8 +295,18 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
       link: link.link,
       linkBasis: link.basis,
       relayVia: link.relayVia,
-      // A peer list kept from before the core stopped is not "online now".
-      online: !et.running ? null : peer ? true : catalogPeer ? Boolean(catalogPeer.online) : null,
+      // A peer list from before the core stopped, or one older than the allowed
+      // evidence window, is not "online now"; a cached catalogue entry follows
+      // the same rule. Unknown is null, never a fake true.
+      online: !et.running || !peersFresh
+        ? null
+        : peer
+          ? true
+          : catalogPeer
+            ? catalogFresh(catalogPeer)
+              ? Boolean(catalogPeer.online)
+              : null
+            : null,
       tunnel: peer?.tunnel && peer.tunnel !== "-" ? peer.tunnel : null,
       natType: peer?.nat && peer.nat !== "-" ? peer.nat : null,
       catalogNodeId: catalogPeer?.nodeId ?? null,
@@ -439,7 +465,7 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
   else if (!running && (et.lastError || input.serviceProblem)) state = "failed";
   else if (!running) state = "offline";
   else if (!peerRead) state = "starting";
-  else if (!aclOk || !routeRead) state = "degraded";
+  else if (!peersFresh || !routesFresh || !aclOk || !routeRead) state = "degraded";
   else if (et.lastError) state = "degraded";
   else state = "online";
   const summary =

@@ -783,6 +783,46 @@ describe("stale port evidence never hides a live failure", () => {
     expect(rpc.state).not.toBe("stable");
   });
 
+  test("old peer and catalogue evidence is never shown as online", () => {
+    const now = Date.parse("2026-10-31T12:00:00.000Z");
+    const stale = new Date(now - 24 * 60 * 60_000).toISOString();
+    const view = projectNetwork({
+      config: { nodeId: "abcd1234", networkName: "lab", virtualIpv4: "10.77.0.2/24", sharingEnabled: false, catalog: {}, share: {} } as never,
+      supervisor: {
+        running: true,
+        pid: 4242,
+        rpcPort: null,
+        peersAt: stale,
+        routesAt: stale,
+        peers: [{ hostname: "old-peer", ipv4: "10.77.0.3", cost: "p2p", latencyMs: "1", loss: "0%", tunnel: "tcp", nat: "Symmetric", id: "p1" }],
+        routes: [{ ipv4: "10.77.0.3/24", hostname: "old-peer", proxyCidrs: "", nextHop: "DIRECT", pathLen: 1 }],
+        aclOk: true,
+      } as never,
+      catalog: {
+        publishing: false,
+        server: { running: false, port: null, address: null, error: null },
+        peers: [
+          {
+            hostname: "cached-peer",
+            virtualIpv4: "10.77.0.4",
+            online: true,
+            fetchedAt: stale,
+            nodeId: "cached01",
+            status: "connected",
+            quote: { models: [] },
+          },
+        ],
+      } as never,
+      providers: [],
+      gatewayPort: 3425,
+      now: () => now,
+    });
+    expect(view.state).toBe("degraded");
+    expect(view.evidence.problems.join(" ")).toMatch(/stale/);
+    expect(view.neighbors.find((n) => n.hostname === "old-peer")!.online).toBeNull();
+    expect(view.neighbors.find((n) => n.hostname === "cached-peer")!.online).toBeNull();
+  });
+
   test("console and API ports are not claimed stable by a fallback", async () => {
     const svc = await service();
     const view = projectNetwork({

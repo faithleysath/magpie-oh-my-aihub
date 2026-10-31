@@ -17,7 +17,7 @@ import { Magpie } from "./magpie.ts";
 import { resolveMagpieBin, statePath } from "./paths.ts";
 import { ownsProcess } from "./easytier.ts";
 import { waitForHostLock, type HostLock } from "./lock.ts";
-import { startConsoleServer, type ConsoleServer } from "./console-server.ts";
+import { startConsoleServerWithFallback, type ConsoleServer } from "./console-server.ts";
 import { CONSOLE_ACTIONS, consoleAction, consoleState } from "./console-api.ts";
 import { readConsolePort, saveConsolePort, readOwnPluginOptions, startConsoleLauncher, publishUnavailableLauncher } from "./console-launch.ts";
 import { Service } from "./service.ts";
@@ -200,8 +200,10 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         staticModules: ["/session.js", "/providers.js", "/wallet.js", "/external-wallet.js"],
         pairingFile: statePath("console-pairing.json"),
       };
-      consoleServer = startConsoleServer(consoleOptions);
+      const started = startConsoleServerWithFallback(consoleOptions);
+      consoleServer = started.server;
       saveConsolePort(consoleServer.port);
+      if (started.fallback) logger.warn(`the saved console port was unavailable; the console now listens on 127.0.0.1:${consoleServer.port}`);
       launcher = startConsoleLauncher({
         port: consoleServer.port, issueTicket: () => consoleServer!.issueTicket(), options: optionsRaw,
         pendingPairings: () => consoleServer!.pendingPairings(),
