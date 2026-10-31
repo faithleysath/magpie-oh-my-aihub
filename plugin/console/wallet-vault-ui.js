@@ -195,7 +195,11 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       && activeCreateSeed.status === "locked" && activeCreateSeed.addressVerified === false && activeCreateSeed.unlockExpiresAt === null
       && wallet.status === "locked" && wallet.addressVerified === false && wallet.unlockExpiresAt === null
       && (activeCreateSeed.address ?? null) === (wallet.address ?? null);
-    if (!sameCreateSeedPoll && ((invalid && (wasTrusted || secret !== null || dialog.open)) || (sessionChanged && previousAddress !== null && (secret !== null || dialog.open)))) {
+    // A create/import/connect dialog holds no secret yet. A background status
+    // poll must not close it just because the vault is still absent; only a
+    // secret-bearing dialog (or a real lifecycle change) is cleared here.
+    const secretDialog = dialog.open && (secret !== null || secretKind !== null || activeCreateSeed !== null || secretFinish !== null);
+    if (!sameCreateSeedPoll && ((invalid && (wasTrusted || secretDialog)) || (sessionChanged && previousAddress !== null && secretDialog))) {
       // A different snapshot, explicit lock/unlock, or lifecycle close must not
       // let the old create snapshot be applied by the close callback.
       secretFinish = null;

@@ -290,6 +290,22 @@ describe("local wallet UI", () => {
     } finally { ui.restore(); }
   });
 
+  test("a normal status poll does not close the create/import dialog before any secret exists", async () => {
+    const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: absent }) } });
+    try {
+      await ui.show();
+      await find(ui.root, "button", "创建钱包").click(); await flush();
+      expect(ui.dialog.open).toBeTrue();
+      // The console polls status while the user is typing; the vault is still
+      // absent, which must not be treated as a lifecycle close.
+      ui.mounted.render({ walletVault: { wallet: absent } });
+      expect(ui.dialog.open).toBeTrue();
+      expect(ui.dialog.textContent).toContain("钱包密码");
+      ui.mounted.render({ walletVault: { wallet: absent } });
+      expect(ui.dialog.open).toBeTrue();
+    } finally { ui.restore(); }
+  });
+
   test("late create after reset or dispose applies no old wallet or notice", async () => {
     for (const cancel of ["reset", "dispose"]) {
       let resolveCreate;
