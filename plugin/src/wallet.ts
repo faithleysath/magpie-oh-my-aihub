@@ -36,6 +36,9 @@ import {
 import { ChainWatcher, convertRawToNanos, type ChainHealth, type CreditSink, type ScanResult } from "./watcher.ts";
 import { EvmClient } from "./evm.ts";
 import { nanosToUsd, usdToNanos } from "./pricing.ts";
+import { ReadOnlyChainReader, type ReadOnlyBalance, type ReadOnlyBalanceInput, type ReadOnlyChainSummary } from "./readonly-balance.ts";
+import { ReceivingNetworkPolicy, type PaymentRequestVerdict, type ReceivingSelection } from "./receiving-networks.ts";
+import { assertNoMainnetCredit, isMainnetChainId } from "./mainnet-gate.ts";
 
 /** The receiving addresses a provider has published, keyed by `(providerId, chainId)`. */
 export interface ReceivingAddress {
@@ -58,6 +61,10 @@ export interface WalletDeps {
   now?: () => Date;
   /** how many blocks a first scan looks back */
   initialLookback?: number;
+  /** receiving-network selection file; defaults to the plugin state dir */
+  receivingPath?: string;
+  /** injected for read-only balance tests */
+  readOnlyFetch?: typeof fetch;
 }
 
 /** Event totals over the whole store, never over a truncated page of rows. */
@@ -112,6 +119,8 @@ export interface WalletStatus {
       chainId: number;
       displayName: string;
       networkType: string;
+      support: string;
+      receivable: boolean;
       enabled: boolean;
       blockExplorer: string;
       finality: { mode: string; confirmations: number; rationale: string };
@@ -125,6 +134,7 @@ export interface WalletStatus {
       decimals: number;
       contractAddress: string;
       enabled: boolean;
+      credit: boolean;
       testnetOnly: boolean;
       issuerType: string;
       nanosPerToken: string;
@@ -218,6 +228,10 @@ export class Wallet {
   private scanPromises = new Map<number, Promise<ScanResult>>();
   private rpcGeneration = new Map<number, number>();
   private started = false;
+  private readonly receivingPath: string | undefined;
+  private readonly readOnlyFetch: typeof fetch | undefined;
+  private selectionPolicy: ReceivingNetworkPolicy | null = null;
+  private readOnlyReader: ReadOnlyChainReader | null = null;
 
   constructor(deps: WalletDeps) {
     this.registry = deps.registry ?? loadRegistry(deps.registryPath);
@@ -226,6 +240,8 @@ export class Wallet {
     this.makeWatcher = deps.makeWatcher ?? ((d) => new ChainWatcher(d));
     this.now = deps.now ?? (() => new Date());
     this.initialLookback = deps.initialLookback ?? 5;
+    this.receivingPath = deps.receivingPath;
+    this.readOnlyFetch = deps.readOnlyFetch;
   }
 
   close(): void {
@@ -350,6 +366,7 @@ export class Wallet {
    * already controls. The plugin holds no private key for either side.
    */
   setReceivingAddress(providerId: string, chainId: number, address: string): ReceivingAddress {
+    assertNoMainnetCredit({ chainId, operation: "a receiving address / watcher credit" });
     this.registry.requireEnabledNetwork(chainId);
     if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error("a receiving address must be a 20-byte hex address");
     if (address.toLowerCase() === "0x0000000000000000000000000000000000000000") throw new Error("the zero address cannot receive");
@@ -365,6 +382,52 @@ export class Wallet {
 
   receivingAddressFor(providerId: string, chainId: number): string | null {
     return this.store.receivingAddress(providerId, chainId);
+  }
+
+  // --- product receiving networks and read-only balances ----------------------
+
+  private policy(): ReceivingNetworkPolicy {
+    if (!this.selectionPolicy) {
+      this.selectionPolicy = new ReceivingNetworkPolicy({ registry: this.registry, path: this.receivingPath, now: this.now });
+    }
+    return this.selectionPolicy;
+  }
+
+  private reader(): ReadOnlyChainReader {
+    if (!this.readOnlyReader) {
+      this.readOnlyReader = new ReadOnlyChainReader({ registry: this.registry, fetchImpl: this.readOnlyFetch, now: this.now });
+    }
+    return this.readOnlyReader;
+  }
+
+  /** BSC and Base, in registry order, with no primary/default. */
+  productNetworks(): NetworkRecord[] {
+    return this.registry.receivableNetworks();
+  }
+
+  /** The provider's explicit selection. A new provider starts empty. */
+  receivingSelection(providerId: string): ReceivingSelection {
+    return this.policy().selection(providerId);
+  }
+
+  /** Explicitly toggles one product network; never changes the other one. */
+  setReceivingNetwork(providerId: string, chainId: number, selected: boolean): ReceivingSelection {
+    return this.policy().setSelected(providerId, chainId, selected);
+  }
+
+  /** Whether a payment request would be allowed, with a reason code for the UI. */
+  paymentRequestVerdict(providerId: string, chainId: number): PaymentRequestVerdict {
+    return this.policy().paymentRequestVerdict(providerId, chainId);
+  }
+
+  /** Read-only metadata for chains whose balance may be queried. */
+  readOnlyNetworks(): ReadOnlyChainSummary[] {
+    return this.reader().networks();
+  }
+
+  /** A read-only native/token balance. It never credits, sends or prices anything. */
+  async readOnlyBalance(input: ReadOnlyBalanceInput): Promise<ReadOnlyBalance> {
+    return this.reader().balance(input);
   }
 
   // --- intents ----------------------------------------------------------------
@@ -384,11 +447,22 @@ export class Wallet {
     /** overrides the recorded receiving address; refused when none is published */
     recipientAddress?: string;
   }): SignableIntent {
+    const known = this.registry.network(input.chainId);
+    if (!known) throw new Error(`chain ${input.chainId} is not registered`);
+    if (isMainnetChainId(input.chainId) || known.support === "read-only") {
+      // The selection is checked first so an unselected chain says so; a selected
+      // mainnet then gets the read-only refusal. Neither path creates an intent.
+      const verdict = this.paymentRequestVerdict(input.providerId, input.chainId);
+      if (!verdict.allowed) throw new Error(verdict.reason);
+    }
     const net = this.registry.requireEnabledNetwork(input.chainId);
     const asset = this.registry.asset(input.assetId);
     if (!asset) throw new Error(`no asset ${input.assetId}`);
     if (asset.chainId !== input.chainId) throw new Error(`asset ${input.assetId} belongs to chain ${asset.chainId}`);
     if (!asset.enabled) throw new Error(`asset ${input.assetId} is disabled`);
+    if (!asset.credit || asset.pricing.kind !== "fixed-test-rate") {
+      throw new Error(`asset ${input.assetId} is not creditable; a mainnet or read-only asset cannot back a deposit intent`);
+    }
     const recipient = input.recipientAddress ?? this.receivingAddressFor(input.providerId, input.chainId);
     if (!recipient) {
       throw new Error(
@@ -487,6 +561,7 @@ export class Wallet {
 
   private startChain(chainId: number): void {
     if (this.running.has(chainId)) return;
+    assertNoMainnetCredit({ chainId, operation: "watcher start" });
     const net = this.registry.requireEnabledNetwork(chainId);
     const watcher = this.makeWatcher({
       network: net,
@@ -548,6 +623,7 @@ export class Wallet {
 
   /** One scan of one chain, for the CLI's "rescan now". */
   async scanNow(chainId: number): Promise<ScanResult> {
+    assertNoMainnetCredit({ chainId, operation: "a manual scan" });
     const watcher = this.watchers.get(chainId) ?? this.makeWatcher({
       network: this.registry.requireEnabledNetwork(chainId),
       registry: this.registry,
@@ -643,6 +719,8 @@ export class Wallet {
           chainId: n.chainId,
           displayName: n.displayName,
           networkType: n.networkType,
+          support: n.support,
+          receivable: n.receivable,
           enabled: n.enabled,
           blockExplorer: n.blockExplorer,
           finality: { mode: n.finality.mode, confirmations: n.finality.confirmations, rationale: n.finality.rationale },
@@ -656,6 +734,7 @@ export class Wallet {
           decimals: a.decimals,
           contractAddress: a.contractAddress,
           enabled: a.enabled,
+          credit: a.credit,
           testnetOnly: a.testnetOnly,
           issuerType: a.issuerType,
           nanosPerToken: a.pricing.nanosPerToken,

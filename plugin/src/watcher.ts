@@ -64,6 +64,9 @@ export function finalityVerdict(input: {
   finalizedBlock: number | null;
 }): FinalityVerdict {
   const { policy } = input;
+  if (policy.mode === "read-only") {
+    return { final: false, detail: "read-only network: finality is not asserted and nothing is credited", confirmations: 0 };
+  }
   if (policy.mode === "finalized-tag") {
     if (input.finalizedBlock === null) return { final: false, detail: "the chain does not answer the finalized tag", confirmations: 0 };
     const confirmations = input.finalizedBlock - input.eventBlock;
@@ -151,6 +154,9 @@ export function rateForDeposit(input: {
   intent: { rateNanosPerToken?: string | null; priceVersion: string };
   asset: AssetRecord;
 }): { ok: true; nanosPerToken: string; priceVersion: string } | { ok: false; reason: string } {
+  if (!input.asset.credit || input.asset.pricing.kind !== "fixed-test-rate") {
+    return { ok: false, reason: `asset ${input.asset.assetId} is not creditable; a mainnet/read-only asset has no USD rate` };
+  }
   const snapshot = input.intent.rateNanosPerToken;
   if (snapshot && snapshot !== "") {
     // The version on the intent is the one that was signed; a registry edit

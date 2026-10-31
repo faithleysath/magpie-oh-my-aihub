@@ -183,6 +183,9 @@ export function buildIntent(input: BuildIntentInput): DepositIntent {
   if (network.chainId !== request.chainId) throw new Error("the network does not match the requested chain");
   if (asset.assetId !== request.assetId) throw new Error("the asset does not belong to the requested chain");
   if (asset.chainId !== network.chainId) throw new Error("the asset is registered on another chain");
+  if (!asset.credit || asset.pricing.kind !== "fixed-test-rate" || asset.testnetOnly !== true) {
+    throw new Error(`asset ${asset.assetId} is not a creditable test asset; a mainnet/read-only asset cannot back a deposit intent`);
+  }
   if (!/^0x[0-9a-fA-F]{40}$/.test(request.recipientAddress)) throw new Error("a deposit needs a provider receiving address");
   if (request.recipientAddress.toLowerCase() === "0x0000000000000000000000000000000000000000") {
     throw new Error("the zero address cannot receive a deposit");
