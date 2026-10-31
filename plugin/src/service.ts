@@ -3699,6 +3699,42 @@ export class Service {
     }
   }
 
+  /**
+   * Retires one control-forward listener. EasyTier 2.6.4 can leave a removed
+   * forward listening until the supervised core restarts, so a map delete is not
+   * proof of closure. This removes only the named bind, records an owned orphan,
+   * and performs the existing supervised restart; other provider forwards and
+   * foreign processes are untouched. Returns the measured result for status.
+   */
+  async retireControlForward(bindAddr: string, dstAddr: string): Promise<{ closed: boolean; restarted: boolean; orphan: boolean }> {
+    return this.serialize(async () => {
+      const localPort = Number(bindAddr.split(":").pop());
+      if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) throw new Error("invalid control forward bind address");
+      await this.supervisor.removePortForward(bindAddr).catch(() => {});
+      let still = await this.supervisor.listPortForwards().catch(() => []);
+      if (!still.some((f) => f.bindAddr === bindAddr)) return { closed: true, restarted: false, orphan: false };
+      this.state.orphanForwards.push({ localPort, dstAddr, since: new Date().toISOString() });
+      saveState(this.state);
+      let restarted = false;
+      const cfg = this.state.config;
+      if (cfg) {
+        try {
+          await this.applyConfig(cfg);
+          restarted = true;
+        } catch (e) {
+          logger.error(`control forward ${bindAddr} could not be cleared by a supervised restart: ${String(e)}`);
+        }
+      }
+      still = await this.supervisor.listPortForwards().catch(() => []);
+      const orphan = still.some((f) => f.bindAddr === bindAddr);
+      if (!orphan) {
+        this.state.orphanForwards = this.state.orphanForwards.filter((o) => o.localPort !== localPort || o.dstAddr !== dstAddr);
+        saveState(this.state);
+      }
+      return { closed: !orphan, restarted, orphan };
+    });
+  }
+
   // --- sharing ---------------------------------------------------------------
 
   /**

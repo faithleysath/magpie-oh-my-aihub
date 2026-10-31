@@ -452,3 +452,23 @@ describe("forward recovery for an owned Remote", () => {
     expect(keyedCalls).toEqual([]);
   });
 });
+
+describe("control forward retirement", () => {
+  test("remove that leaves a live listener forces a supervised restart and keeps other forwards", async () => {
+    const svc = await service();
+    (svc as any).state.providers = [provider("peer2", 13621, "10.66.1.3", KEY2, MODELS, "peer2-host")];
+    sup.forwards = [
+      { protocol: "tcp", bindAddr: "127.0.0.1:13620", dstAddr: "10.66.1.2:41651" },
+      { protocol: "tcp", bindAddr: "127.0.0.1:13621", dstAddr: "10.66.1.3:41651" },
+    ];
+    // 2.6.4 semantics: remove does not close the listener; only start() rebuilds.
+    const result = await svc.retireControlForward("127.0.0.1:13620", "10.66.1.2:41651");
+    expect(result.closed).toBe(true);
+    expect(result.restarted).toBe(true);
+    expect(sup.starts).toBeGreaterThanOrEqual(2);
+    expect(sup.forwards.some((f) => f.bindAddr === "127.0.0.1:13620")).toBe(false);
+    // The app removed only its named bind; the supervised restart rebuilt the
+    // provider forward that is still recorded in Service state.
+    expect(sup.forwards.some((f) => f.bindAddr === "127.0.0.1:13621")).toBe(true);
+  });
+});

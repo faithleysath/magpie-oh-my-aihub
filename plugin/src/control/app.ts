@@ -272,13 +272,16 @@ export class ControlApp {
   private async dropForward(nodeId: string): Promise<void> {
     const forward = this.controlForwards.get(nodeId);
     if (!forward) return;
-    await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
     this.controlForwards.delete(nodeId);
-    // EasyTier 2.6.4 can leave a removed forward listener alive until a
-    // supervised restart. Never treat map deletion as proof of closure.
+    const retire = (this.service as { retireControlForward?: (bind: string, dst: string) => Promise<{ closed: boolean }> }).retireControlForward;
+    if (typeof retire === "function") {
+      const result = await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst);
+      if (!result.closed) this.retiredForwards.add(forward.localPort);
+      return;
+    }
+    await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
     try {
-      const free = await new SocketBinder().isFree("127.0.0.1", forward.localPort);
-      if (!free) this.retiredForwards.add(forward.localPort);
+      if (!(await new SocketBinder().isFree("127.0.0.1", forward.localPort))) this.retiredForwards.add(forward.localPort);
     } catch {
       this.retiredForwards.add(forward.localPort);
     }
@@ -630,23 +633,31 @@ export class ControlApp {
   stop(): void {
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = null;
+    // Order: withdraw presence/control first, close its listener, then remove
+    // only this app's owned forwards. Retired listeners that 2.6.4 leaves alive
+    // are tracked/retried; a supervised restart is attempted by Service.
     this.service.setControlPresence(null);
-    for (const forward of this.controlForwards.values()) {
-      void this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
-    }
-    for (const localPort of this.retiredForwards) {
-      void this.service.supervisor.removePortForward(`127.0.0.1:${localPort}`).catch(() => {});
-    }
+    this.server.stop();
+    const forwards = [...this.controlForwards.entries()];
+    const retired = [...this.retiredForwards];
     this.controlForwards.clear();
     this.retiredForwards.clear();
-    this.server.stop();
-    this.node.close();
-    if (this.previousPublishedPorts && typeof (this.service as { configure?: unknown }).configure === "function") {
-      // Best effort: withdraw only the port this app added; do not touch other
-      // provider ports. The process is stopping; a failure is logged by Service.
-      void this.service.configure({ publishedPorts: this.previousPublishedPorts }).catch(() => {});
+    void (async () => {
+      for (const [, forward] of forwards) {
+        const retire = (this.service as { retireControlForward?: (bind: string, dst: string) => Promise<unknown> }).retireControlForward;
+        if (typeof retire === "function") await retire.call(this.service, `127.0.0.1:${forward.localPort}`, forward.dst).catch(() => {});
+        else await this.service.supervisor.removePortForward(`127.0.0.1:${forward.localPort}`).catch(() => {});
+      }
+      for (const localPort of retired) {
+        await this.service.supervisor.removePortForward(`127.0.0.1:${localPort}`).catch(() => {});
+      }
+      const published = this.previousPublishedPorts;
       this.previousPublishedPorts = null;
-    }
+      if (published && typeof (this.service as { configure?: unknown }).configure === "function") {
+        await this.service.configure({ publishedPorts: published }).catch(() => {});
+      }
+    })();
+    this.node.close();
     active = null;
     byService.delete(this.service);
   }
