@@ -4,7 +4,7 @@ Status: **DOING**. This document is an implementation report, not an acceptance
 certificate. It separates what is implemented from what is only simulated and from
 what has not been run against the real Magpie 0.1.2289 / EasyTier 2.6.4 pair.
 
-Branch: `feature/phase10-b-control-service` in
+Branch: `feature/phase10-b-service-adapter` (PR #20) in
 `/Users/laysath/.paseo/worktrees/1z728cdk/b-service`.
 The branch **does not** copy, modify or run the user's installed Magpie app or data.
 
@@ -104,25 +104,24 @@ be reported as `lan-reachable`; the diagnostic must not claim overlay-only.
   fingerprint, the provider's mapped `/32` and gateway port, the request's accepted
   price version, and the current `shareCandidates()` policy/complete-price list. It
   returns only models the provider could currently approve; it creates no key.
-- `approveRequest` converts the v2 request into the existing v1 request shape **only
-  for the Service call**, then calls `Service.approveConnectionRequest`. The human
+- `approve` converts the v2 request into the existing v1 request shape **only for
+  the Service call**, then calls `Service.approveConnectionRequest`. The human
   selected models are a subset of the request. The adapter returns the selected-model
-  price version; B-core must persist it **alongside**, not instead of, the full quote
-  `billing.priceVersion` and the selected model snapshot. The current B-core code
-  stores the all-eligible validation version, which is a required fix in the
-  contract. Full quote hash, full quote price version, requested-subset version,
-  approved-subset version and the selected model list are distinct bindings; the
-  delivered authorization carries the full `contentHash` plus the selected version.
-- `readKeyMaterial` rechecks the Provisioner record (key id/name, models, cap,
+  price version; B-core persists it beside the full quote hash, full quote price
+  version, requested-subset version and selected model snapshot. The delivered
+  authorization carries the full `contentHash` plus the selected version.
+- `takeAuthorization` rechecks the Provisioner record (key id/name, models, cap,
   accepted quote hash, price version) before and after `Service.handover`; a changed
   quote, cap, model scope, key generation or paused consumer fails before a key is
-  returned for sealing.
-- `registerAuthorization` validates the v2 document binding (provider/consumer
+  returned for sealing. It does not add a second lock: approval uses the existing
+  `Service` serialization, hand-over uses the Provisioner consumer lock/read-back,
+  and the checks fail closed.
+- `importAuthorization` validates the v2 document binding (provider/consumer
   identity, approvalId/requestHash, quote, models, cap, key id/name/hash), then calls
-  `Service.addProvider` with a deterministic provider id derived from the provider
-  node id. It reads the model list and `costLimit` back with
-  `Service.providerModels`. A mismatch removes only that Remote and throws; no ACK is
-  produced.
+  `Service.addProvider` with a per-approval provider id. It reads the model list and
+  `costLimit` back with `Service.providerModels`. A mismatch removes only that Remote
+  and throws; no ACK is produced. Ownership (provider/approval/generation/keyId) is
+  persisted atomically; a different approval cannot replace a live Remote.
 - `revoke` calls `Provisioner.revokeEnforced`. Removal is the strong stop; if
   removal fails, rotation makes the old secret 401; a $0.0001 cap is not treated as
   a stop. If neither removal nor rotation works, the port returns
@@ -194,7 +193,7 @@ second approval layer.
 
 ## 6. Negative tests (implemented in this branch)
 
-`plugin/test/control-http.test.ts` (13 pass):
+`plugin/test/control-http.test.ts` (20 pass):
 
 - wrong/missing/DNS/comma/userinfo Host; browser Origin and Sec-Fetch; OPTIONS;
 - unknown routes, trailing slash, encoded path, wrong methods, queries on
@@ -241,12 +240,14 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 
 | Claim | Status | Evidence |
 | --- | --- | --- |
-| HTTP transport policy and limits | VERIFIED (unit) | 13 pass, typecheck |
+| HTTP transport policy and limits | VERIFIED (unit + real socket) | 20 pass, typecheck |
 | Approval/handover/import adapter reuses Service | VERIFIED (unit with fake Magpie / loopback gateway) | 12 pass |
+| B-core business port mapping + persistent ownership | VERIFIED (unit, fake Magpie) | 6 pass |
+| Enforced revoke remove/rotate/both-fail | VERIFIED (unit, fake Magpie) | 6 port tests |
 | PR #19 transport | PASS (reviewed 7bcf7e0, rebased on approved PR #15) | 20 real/unit tests; see PR #19 |
 | PR #20 adapter targeted | PASS (local, rebased branch) | 32 pass (12 old adapter + 20 transport) plus 6 new port tests = 38 total |
 | Full `bun run test` on the rebased PR #20 head | UNKNOWN / host contention | Not claimed after rebase; shared host port collisions; PR #19 previously ran 773/0 in a temp PR #15+#17 copy |
-| Real B-core `P2pService` stacked and compiled | UNKNOWN | B-core has not committed a reviewed base |
+| Real B-core `P2pNode` stacked and compiled | UNKNOWN (not approved) | B-core PR #26 is committed (`fdc7d4c`/`fba73c`) but not approved for stack; the local port mirrors its `P2pBusinessPort` shape and is compile-checked only in a temporary snapshot |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
 | Real EasyTier 2.6.4 two-node hello/frame/TOFU | UNKNOWN | no two-node overlay run |
 | LAN exposure boundary on this machine | UNKNOWN | listener not started with real host/port yet; diagnostic must prove it |
@@ -259,7 +260,7 @@ worktree and branch were deleted afterwards. It is evidence that transport does 
 regress the hermetic suite, not an approval to integrate P0 or a claim that the guard
 is part of B. The rebased PR #20 full suite has not been rerun successfully in this
 shared host because other agents' test processes collide on the fixed test ports.
-No real two-node pass is claimed. The next gates are: B-core's
-reviewed commit + contract confirmation, explicit stacked base approval, A-service's
-port API, then an isolated Magpie/EasyTier two-node run with sanitised logs. The full
-test suite must run only with P0-clock's hermetic guard.
+No real two-node pass is claimed. The next gates are: main approval of the exact
+B-core commit, an explicit stacked assembly, A-service's port API, then an isolated
+Magpie/EasyTier two-node run with sanitised logs. The full test suite must run only
+with the hermetic guard (PR #17 is still temporary evidence, not a dependency).
