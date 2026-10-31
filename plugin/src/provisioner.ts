@@ -511,7 +511,16 @@ export class Provisioner {
       const adjustmentId = `migration:${rec.consumerId}:${open.id}`;
       if (this.ledger.consumptionAmount(adjustmentId) !== null) {
         // Already adopted/seeded. Native usage may have grown since; do not
-        // rewrite the historical adjustment or add a second opening.
+        // rewrite the historical adjustment or add a second opening. Only
+        // repair a missing usage cursor; never move an existing one.
+        try {
+          const log = this.usageLog();
+          if (this.ledger.cursorFor(log, rec.keyId) === 0 && existsSync(log)) {
+            this.ledger.seedCursor(log, rec.keyId, statSync(log).size);
+          }
+        } catch {
+          /* unique ids still guard a later import */
+        }
         return open;
       }
       if (this.ledger.windowConsumptionCount(open.id) > 0) {
