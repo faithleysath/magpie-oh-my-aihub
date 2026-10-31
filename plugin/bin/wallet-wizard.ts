@@ -542,9 +542,12 @@ function networkRecord(wallet: WalletStatus, chainId: number): NetworkRecord {
     displayName: n.displayName,
     family: "evm",
     networkType: n.networkType as NetworkRecord["networkType"],
+    support: "credit",
+    receivable: false,
     rpcEndpoints: [...n.endpoints],
     blockExplorer: n.blockExplorer,
     nativeSymbol: "",
+    nativeDecimals: 18,
     enabled: n.enabled,
     finality: {
       mode: n.finality.mode as NetworkRecord["finality"]["mode"],
@@ -555,6 +558,7 @@ function networkRecord(wallet: WalletStatus, chainId: number): NetworkRecord {
     scanIntervalSec: 0,
     maxBlockRange: 0,
     notes: null,
+    evidence: null,
   };
 }
 
@@ -571,8 +575,10 @@ function assetRecordById(wallet: WalletStatus, assetId: string): AssetRecord {
     decimals: a.decimals,
     issuerType: a.issuerType as AssetRecord["issuerType"],
     testnetOnly: a.testnetOnly,
+    credit: true,
     enabled: a.enabled,
     pricing: { nanosPerToken: a.nanosPerToken, version: a.priceVersion, kind: "fixed-test-rate", note: "" },
+    evidence: null,
   };
 }
 

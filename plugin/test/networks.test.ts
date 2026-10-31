@@ -280,7 +280,7 @@ describe("persistence", () => {
     const path = tmp();
     const r = loadRegistry(path);
     const doc = JSON.parse(readFileSync(path, "utf8")) as RegistryDocument;
-    expect(doc.networks.map((n) => n.chainId)).toEqual([97, 84532]);
+    expect(doc.networks.map((n) => n.chainId)).toEqual([97, 84532, 56, 8453]);
     const again = loadRegistry(path);
     expect(again.networks()).toEqual(r.networks());
   });
