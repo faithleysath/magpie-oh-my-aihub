@@ -215,9 +215,9 @@ describe("real mounted workflow handlers", () => {
       r.render(next);
       expect(selected.checked).toBeFalse();
       expect(name.value).toBe("正在填写的名称");
-      await find(sharing, "button", "保存模型范围").click(); await flush();
+      await find(sharing, "button", "分享这些模型").click(); await flush();
       expect(r.calls).toHaveLength(0);
-      expect(r.notices.at(-1)[0]).toContain("至少选择一个");
+      expect(r.notices.at(-1)[0]).toContain("至少勾选");
     } finally { r.cleanup(); }
   });
 
@@ -347,5 +347,6 @@ test("all shipped workflow DOM avoids HTML injection, remote resources and brows
   expect(source).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|localStorage|sessionStorage|indexedDB|document\.cookie|eval\(/);
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   expect(html).toContain("data-1p-ignore data-bwignore");
-  expect(html).toContain("本应用不会回显已保存的密码");
+  expect(html).toContain("已保存的密码不会回显");
+  expect(html).toContain("不会写入浏览器存储");
 });
