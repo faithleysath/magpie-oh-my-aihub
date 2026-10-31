@@ -10,6 +10,7 @@ import {
   NetworkRegistry,
   PRODUCT_NETWORKS,
   productRegistry,
+  simulationRegistry,
   type AssetRecord,
   type AssetRecordInput,
   type RegistryDocument,
@@ -28,10 +29,13 @@ import {
 } from "../src/mainnet-gate.ts";
 import { ReceivingNetworkPolicy } from "../src/receiving-networks.ts";
 import { encodeBalanceOf, ReadOnlyChainReader } from "../src/readonly-balance.ts";
+import { EvmClient } from "../src/evm.ts";
 import { Wallet } from "../src/wallet.ts";
 import { ChainStore } from "../src/chainstore.ts";
 import { Ledger } from "../src/ledger.ts";
+import { Provisioner } from "../src/provisioner.ts";
 import { priceSnapshot, usdToNanos } from "../src/pricing.ts";
+import { FakeMagpie, LAB_MODEL } from "./support/fake-magpie.ts";
 import type { CreditSink } from "../src/watcher.ts";
 
 const TMP = () => mkdtempSync(join(tmpdir(), "phase10-c-"));
@@ -146,6 +150,28 @@ function v1Asset(chainId: number, contract: string): AssetRecordInput {
   };
 }
 
+
+function provisionerLab() {
+  const dir = TMP();
+  const ledger = new Ledger(join(dir, "ledger.sqlite"));
+  const magpie = new FakeMagpie();
+  const cwd = process.cwd();
+  let provisioner: Provisioner;
+  try {
+    process.chdir(dir);
+    provisioner = new Provisioner(magpie as never, {
+      ledger,
+      prices: async (models) => priceSnapshot(magpie.metas(), models),
+      usageLog: () => magpie.logPath,
+      drainMs: 0,
+      save: () => {},
+    });
+  } finally {
+    process.chdir(cwd);
+  }
+  return { dir, ledger, magpie, provisioner };
+}
+
 describe("C1 product network registry: BSC and Base are peers", () => {
   test("56 and 8453 are read-only product networks with the same record shape", () => {
     expect(PRODUCT_NETWORKS.map((n) => n.chainId)).toEqual([56, 8453]);
@@ -200,12 +226,47 @@ describe("C1 product network registry: BSC and Base are peers", () => {
     expect(() => build({ ...base, chainId: 999999, support: "credit" })).toThrow(/read-only|credit/);
   });
 
+  test("loading a v2 document validates every endpoint, including https", () => {
+    const dir = TMP();
+    const path = join(dir, "networks.json");
+    const doc = productRegistry().document();
+    doc.networks = doc.networks.map((n) => (n.chainId === 56 ? { ...n, rpcEndpoints: ["http://127.0.0.1:9"] } : n));
+    writeFileSync(path, JSON.stringify(doc));
+    expect(() => loadRegistry(path)).toThrow(/https/);
+
+    const r = productRegistry();
+    expect(() => r.setRpcEndpoints(56, ["https://user@example.test"])).toThrow(/credentials/);
+    expect(() => r.setRpcEndpoints(56, ["https://example.test/#fragment"])).toThrow(/fragment/);
+    expect(() => r.setRpcEndpoints(56, ["ftp://example.test"])).toThrow(/http/);
+  });
+
   test("a mainnet/read-only endpoint must use https", () => {
     const r = productRegistry();
     expect(() => r.setRpcEndpoints(56, ["http://127.0.0.1:8545"])).toThrow(/https/);
     expect(r.setRpcEndpoints(56, ["https://bsc-dataseed.bnbchain.org"]).rpcEndpoints).toEqual(["https://bsc-dataseed.bnbchain.org"]);
     // The testnet local-dev path still accepts http.
     expect(r.setRpcEndpoints(97, ["http://127.0.0.1:8545"]).rpcEndpoints).toEqual(["http://127.0.0.1:8545"]);
+  });
+
+  test("credit is allowlisted: chain 1 disguised as testnet/credit/enabled is refused", () => {
+    const base = DEFAULT_NETWORKS[0]!;
+    const spoof = { ...base, chainId: 1, networkType: "testnet" as const, support: "credit" as const, enabled: true };
+    expect(() => new NetworkRegistry({ version: 2, networks: [spoof], assets: [] })).toThrow(/credit allowlist/);
+    expect(() => simulationRegistry({ version: 2, networks: [spoof], assets: [] }, [1])).toThrow(/local lab ids/);
+    // The same record may be registered but not enabled/credited.
+    const disabled = new NetworkRegistry({ version: 2, networks: [{ ...spoof, enabled: false }], assets: [] });
+    expect(disabled.creditableNetworks()).toEqual([]);
+    expect(() => disabled.setNetworkEnabled(1, true)).toThrow(/credit allowlist/);
+    expect(() => disabled.requireCreditableNetwork(1)).toThrow(/disabled|credit allowlist/);
+  });
+
+  test("an unknown chain cannot be enabled for credit; a local simulation must be explicit", () => {
+    const base = DEFAULT_NETWORKS[0]!;
+    const unknown = { ...base, chainId: 424242, networkType: "testnet" as const, support: "credit" as const, enabled: true };
+    expect(() => new NetworkRegistry({ version: 2, networks: [unknown], assets: [] })).toThrow(/credit allowlist/);
+    expect(() => simulationRegistry({ version: 2, networks: [unknown], assets: [] }, [31337])).toThrow(/credit allowlist/);
+    const local = simulationRegistry({ version: 2, networks: [{ ...unknown, chainId: 31337 }], assets: [] }, [31337]);
+    expect(local.creditableNetworks().map((n) => n.chainId)).toEqual([31337]);
   });
 
   test("the hard chain-id boundary is independent of the registry", () => {
@@ -277,7 +338,7 @@ describe("C1 migration from the version-1 testnet document", () => {
     const path = join(TMP(), "networks.json");
     const old = {
       version: 1,
-      networks: [v1Network(97, false), v1Network(84532, true), v1Network(31337, true)],
+      networks: [v1Network(97, false), v1Network(84532, true), v1Network(31337, false)],
       assets: [v1Asset(97, "0x5FbDB2315678afecb367f032d93F642f64180aa3")],
     };
     writeFileSync(path, JSON.stringify(old));
@@ -285,8 +346,8 @@ describe("C1 migration from the version-1 testnet document", () => {
     expect(r.network(97)!.enabled).toBe(false);
     expect(r.network(97)!.support).toBe("credit");
     expect(r.network(84532)!.enabled).toBe(true);
-    expect(r.network(31337)!.enabled).toBe(true);
-    expect(r.enabledNetworks().map((n) => n.chainId).sort((a, b) => a - b)).toEqual([31337, 84532]);
+    expect(r.network(31337)!.enabled).toBe(false);
+    expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([84532]);
 
     for (const chainId of MAINNET_CHAIN_IDS) {
       expect(r.network(chainId)!.enabled).toBe(false);
@@ -309,7 +370,7 @@ describe("C1 migration from the version-1 testnet document", () => {
     const again = loadRegistry(path);
     expect(again.network(56)!.enabled).toBe(false);
     expect(again.asset(BASE_USDC_ID)?.credit).toBe(false);
-    expect(again.enabledNetworks().map((n) => n.chainId).sort((a, b) => a - b)).toEqual([31337, 84532]);
+    expect(again.enabledNetworks().map((n) => n.chainId)).toEqual([84532]);
   });
 
   test("a version-1 reserved-mainnet record gets evidence but keeps its disabled state", () => {
@@ -326,6 +387,14 @@ describe("C1 migration from the version-1 testnet document", () => {
     expect(r.network(56)!.receivable).toBe(true);
     expect(r.network(56)!.evidence?.url).toMatch(/^https:\/\//);
     expect(r.network(8453)!.enabled).toBe(false);
+  });
+
+  test("a version-2 document cannot smuggle chain 1 in as an enabled testnet", () => {
+    const path = join(TMP(), "networks.json");
+    const doc = productRegistry().document();
+    doc.networks.push({ ...v1Network(97, true), chainId: 1, displayName: "Ethereum spoof", networkType: "testnet", support: "credit", enabled: true });
+    writeFileSync(path, JSON.stringify(doc));
+    expect(() => loadRegistry(path)).toThrow(/credit allowlist/);
   });
 
   test("a version-2 document is authoritative: a removed product network is not resurrected", () => {
@@ -484,7 +553,16 @@ describe("C9 hard gates: mainnet send/credit/auto-recharge", () => {
   });
 
   test("a ledger source that claims a mainnet is refused even if a caller reaches the ledger directly", () => {
-    for (const source of ["chain:56", "chain:8453", "chain:56:tx", "chain:56/tx", "mainnet:8453"]) {
+    for (const source of [
+      "chain:56",
+      "chain:8453",
+      "chain:56:tx",
+      "chain:56/tx",
+      "mainnet:8453",
+      "Chain:56",
+      " chain : 56 ",
+      "CHAIN:8453",
+    ]) {
       expect(() => assertCreditSourceNotMainnet(source)).toThrow(/mainnet/);
     }
     for (const source of ["chain:97", "chain:84532", "simulated", "operator"]) {
@@ -548,7 +626,123 @@ describe("C9 ledger defence in depth", () => {
     });
     expect(ledger.depositIntent({ id: "d-97", consumerId: "alice", amountNanos: 1, source: "chain:97" }).created).toBe(true);
     expect(ledger.depositIntent({ id: "d-sim", consumerId: "alice", amountNanos: 1, source: "simulated" }).created).toBe(true);
+    for (const source of ["Chain:56", " chain : 56 ", "evm:56", "chain:0x38"]) {
+      expect(() =>
+        ledger.depositIntent({ id: `bad-${source}`, consumerId: "alice", amountNanos: 1, source }),
+      ).toThrow();
+    }
     ledger.close();
+  });
+});
+
+describe("funds provenance and pending recovery", () => {
+  test("a local top-up cannot use a chain/opening id or reuse a chain ledger row", async () => {
+    const { ledger, provisioner } = provisionerLab();
+    await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    for (const id of ["chain:synthetic", "Chain:56", "chain :56", "opening:alice", "opening:alice:1"]) {
+      await expect(provisioner.topUp("alice", 1, id)).rejects.toThrow(/reserved|local top-up/);
+    }
+    expect(ledger.deposit("chain:synthetic")).toBeNull();
+    const chain = ledger.depositIntent({ id: "dep-chain", consumerId: "alice", amountNanos: usdToNanos(1), source: "chain:97", fundsClass: "chain", chainId: 97 });
+    expect(chain.deposit.fundsClass).toBe("chain");
+    await expect(provisioner.topUp("alice", 1, "dep-chain")).rejects.toThrow(/chain deposit|local top-up/);
+    ledger.close();
+  });
+
+  test("a pending chain deposit with a missing ledger row is not re-recorded as simulated", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec = provisioner.find("alice")!;
+    magpie.keys.get(view.keyId)!.cap = 2;
+    rec.pending = { capUsd: 2, depositId: "chain:missing", usd: 1, fundsClass: "chain", chainId: 97, assetId: null, source: "chain:97" };
+    await expect(provisioner.reconcile(rec)).rejects.toThrow(/missing its ledger row|manual recovery/);
+    expect(ledger.deposit("chain:missing")).toBeNull();
+    expect(rec.pending).not.toBeNull();
+    expect(rec.creditedUsd).toBe(0);
+    ledger.close();
+  });
+
+  test("a pending manual/simulated deposit restores its same source, never a chain source", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec = provisioner.find("alice")!;
+    magpie.keys.get(view.keyId)!.cap = 2;
+    rec.pending = { capUsd: 2, depositId: "manual-pending", usd: 1, fundsClass: "simulated", chainId: null, assetId: null, source: "simulated" };
+    await provisioner.reconcile(rec);
+    expect(ledger.deposit("manual-pending")).toMatchObject({ fundsClass: "simulated", source: "simulated", status: "applied" });
+    expect(rec.pending).toBeNull();
+    ledger.close();
+  });
+
+  test("a pending chain deposit whose ledger row is a different class is refused", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec = provisioner.find("alice")!;
+    ledger.depositIntent({ id: "pending-conflict", consumerId: "alice", amountNanos: usdToNanos(1), source: "simulated" });
+    magpie.keys.get(view.keyId)!.cap = 2;
+    rec.pending = { capUsd: 2, depositId: "pending-conflict", usd: 1, fundsClass: "chain", chainId: 97, assetId: null, source: "chain:97" };
+    await expect(provisioner.reconcile(rec)).rejects.toThrow(/provenance|disagrees/);
+    expect(rec.pending).not.toBeNull();
+    ledger.close();
+  });
+
+  test("the chain apply path refuses a manual ledger row before touching Magpie", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    ledger.depositIntent({ id: "manual-row", consumerId: "alice", amountNanos: usdToNanos(1), source: "simulated" });
+    const before = magpie.keyByName("ohmyaihub-alice")!.cap;
+    await expect(provisioner.applyChainDeposit({ id: "manual-row", consumerId: "alice", amountNanos: usdToNanos(1) })).rejects.toThrow(/not chain-derived/);
+    expect(magpie.keyByName("ohmyaihub-alice")!.cap).toBe(before);
+    ledger.close();
+  });
+});
+
+describe("read-only RPC transport hardening", () => {
+  const jsonReply = (result: unknown) => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200 });
+
+  test("redirects are refused and the fetch is told not to follow them", async () => {
+    let seen: RequestInit | undefined;
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      seen = init;
+      return new Response(null, { status: 307, headers: { location: "https://evil.example/rpc" } });
+    }) as typeof fetch;
+    const client = new EvmClient({ chainId: 56, endpoints: ["https://rpc.example"], fetchImpl });
+    await expect(client.verifyChain()).rejects.toThrow(/HTTP 307/);
+    expect(seen?.redirect).toBe("error");
+  });
+
+  test("an oversized response is refused instead of parsed", async () => {
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { method: string };
+      if (body.method === "eth_chainId") return jsonReply("0x38");
+      return new Response("x".repeat(4096), { status: 200 });
+    }) as typeof fetch;
+    const client = new EvmClient({ chainId: 56, endpoints: ["https://rpc.example"], fetchImpl, maxResponseBytes: 1024 });
+    await client.verifyChain();
+    await expect(client.blockNumber()).rejects.toThrow(/exceeds 1024/);
+  });
+
+  test("failover verifies the next endpoint before using it, never returns a wrong-chain balance", async () => {
+    let bBalanceCalls = 0;
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { method: string };
+      if (url === "https://a.example") {
+        if (body.method === "eth_chainId") return jsonReply("0x38");
+        if (body.method === "eth_getBalance") return new Response("down", { status: 500 });
+      }
+      if (url === "https://b.example") {
+        if (body.method === "eth_chainId") return jsonReply("0x2105");
+        if (body.method === "eth_getBalance") {
+          bBalanceCalls += 1;
+          return jsonReply("0x1");
+        }
+      }
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+    const client = new EvmClient({ chainId: 56, endpoints: ["https://a.example", "https://b.example"], fetchImpl });
+    await client.verifyChain(); // verifies A only
+    await expect(client.call("eth_getBalance", ["0x0000000000000000000000000000000000000001", "latest"])).rejects.toThrow(/reports chainId/);
+    expect(bBalanceCalls).toBe(0);
   });
 });
 
