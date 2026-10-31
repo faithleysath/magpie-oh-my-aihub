@@ -17,7 +17,7 @@ import { Magpie } from "./magpie.ts";
 import { resolveMagpieBin, statePath } from "./paths.ts";
 import { ownsProcess } from "./easytier.ts";
 import { waitForHostLock, type HostLock } from "./lock.ts";
-import { startConsoleServer, type ConsoleServer } from "./console-server.ts";
+import { startConsoleServer, type ConsoleActionContext, type ConsoleServer } from "./console-server.ts";
 import { CONSOLE_ACTIONS, consoleAction, consoleState } from "./console-api.ts";
 import { readConsolePort, saveConsolePort, readOwnPluginOptions, startConsoleLauncher, publishUnavailableLauncher } from "./console-launch.ts";
 import { Service } from "./service.ts";
@@ -194,10 +194,10 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
       const consoleOptions = {
         port: readConsolePort(),
         state: () => consoleState(service!),
-        action: (name: string, body: Record<string, unknown>) => consoleAction(service!, name, body),
+        action: (name: string, body: Record<string, unknown>, context: ConsoleActionContext) => consoleAction(service!, name, body, context),
         allowedActions: CONSOLE_ACTIONS,
         sensitiveActions: ["key-reveal"],
-        staticModules: ["/session.js", "/providers.js", "/wallet.js"],
+        staticModules: ["/session.js", "/providers.js", "/wallet.js", "/payment-local-port.js"],
         pairingFile: statePath("console-pairing.json"),
       };
       consoleServer = startConsoleServer(consoleOptions);
