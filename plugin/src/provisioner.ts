@@ -943,6 +943,24 @@ export class Provisioner {
     const pending = c.pending;
     const dep = this.ledger?.deposit(pending.depositId) ?? null;
     const provenance = pendingProvenance(pending);
+    if (this.ledger && !provenance) {
+      await this.uncertainPending(c, `pending deposit ${pending.depositId} has no trusted provenance; refusing to apply it even if the native cap is in force`);
+    }
+    if (dep?.needsReview) {
+      await this.uncertainPending(c, `pending deposit ${pending.depositId} has an unknown-provenance ledger row; local review is required`);
+    }
+    const chainClass = provenance?.fundsClass === "chain" || dep?.fundsClass === "chain";
+    if (chainClass) {
+      const chainId = provenance?.chainId ?? dep?.chainId ?? null;
+      const assetId = provenance?.assetId ?? dep?.assetId ?? null;
+      if (chainId === null || !Number.isSafeInteger(chainId) || chainId <= 0) {
+        await this.uncertainPending(c, `pending chain deposit ${pending.depositId} has no trustworthy chain id`);
+      }
+      assertCreditChainAllowed(chainId as number);
+      if (!assetId || assetIdChainId(assetId) !== chainId) {
+        await this.uncertainPending(c, `pending chain deposit ${pending.depositId} has no valid asset on chain ${chainId}; local evidence recovery is required`);
+      }
+    }
     if (dep) {
       const expectedAmount = usdToNanos(pending.usd);
       if (dep.amountNanos !== expectedAmount) {
@@ -1192,7 +1210,7 @@ export class Provisioner {
         if (chainId === null || !Number.isSafeInteger(chainId) || chainId <= 0) {
           throw new Error(`chain cap write ${expected.depositId} has no trustworthy chain id; refusing to apply it`);
         }
-        assertCreditChainAllowed(chainId);
+        assertCreditChainAllowed(chainId as number);
         if (!pending.assetId || assetIdChainId(pending.assetId) !== chainId) {
           throw new Error(`chain cap write ${expected.depositId} has no asset id on chain ${chainId}; refusing to apply it`);
         }

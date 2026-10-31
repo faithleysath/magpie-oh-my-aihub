@@ -10,6 +10,7 @@ import {
   NetworkRegistry,
   PRODUCT_NETWORKS,
   productRegistry,
+  defaultRegistry,
   simulationRegistry,
   type AssetRecord,
   type AssetRecordInput,
@@ -31,6 +32,8 @@ import { ReceivingNetworkPolicy } from "../src/receiving-networks.ts";
 import { encodeBalanceOf, ReadOnlyChainReader } from "../src/readonly-balance.ts";
 import { EvmClient } from "../src/evm.ts";
 import { Wallet } from "../src/wallet.ts";
+import { buildIntent } from "../src/deposits.ts";
+import { recoverLegacyChainDeposit } from "../src/legacy-recovery.ts";
 import { ChainStore } from "../src/chainstore.ts";
 import { Ledger } from "../src/ledger.ts";
 import { Provisioner } from "../src/provisioner.ts";
@@ -643,7 +646,7 @@ describe("C9 ledger defence in depth", () => {
       openingNanos: usdToNanos(1),
       capNanos: usdToNanos(1),
     });
-    expect(ledger.depositIntent({ id: "d-97", consumerId: "alice", amountNanos: 1, source: "chain:97", fundsClass: "chain", chainId: 97, assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3" }).created).toBe(true);
+    expect(ledger.depositIntent({ id: "d-97", consumerId: "alice", amountNanos: 1, source: "chain:97", fundsClass: "chain", chainId: 97, assetId: "eip155:97:0x6666666666666666666666666666666666666666" }).created).toBe(true);
     expect(ledger.depositIntent({ id: "d-sim", consumerId: "alice", amountNanos: 1, source: "simulated" }).created).toBe(true);
     for (const source of ["Chain:56", " chain : 56 ", "evm:56", "chain:0x38"]) {
       expect(() =>
@@ -669,7 +672,7 @@ describe("funds provenance and pending recovery", () => {
       source: "chain:97",
       fundsClass: "chain",
       chainId: 97,
-      assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      assetId: "eip155:97:0x6666666666666666666666666666666666666666",
     });
     expect(chain.deposit.fundsClass).toBe("chain");
     await expect(provisioner.topUp("alice", 1, "dep-chain")).rejects.toThrow(/chain deposit|local top-up/);
@@ -717,7 +720,7 @@ describe("funds provenance and pending recovery", () => {
     const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
     const rec = provisioner.find("alice")!;
     magpie.keys.get(view.keyId)!.cap = 2;
-    rec.pending = { capUsd: 2, depositId: "chain:missing", usd: 1, fundsClass: "chain", chainId: 97, assetId: null, source: "chain:97" };
+    rec.pending = { capUsd: 2, depositId: "chain:missing", usd: 1, fundsClass: "chain", chainId: 97, assetId: "eip155:97:0x6666666666666666666666666666666666666666", source: "chain:97" };
     await expect(provisioner.reconcile(rec)).rejects.toThrow(/missing its ledger row|manual recovery/);
     expect(ledger.deposit("chain:missing")).toBeNull();
     expect(rec.pending).not.toBeNull();
@@ -743,7 +746,7 @@ describe("funds provenance and pending recovery", () => {
     const rec = provisioner.find("alice")!;
     ledger.depositIntent({ id: "pending-conflict", consumerId: "alice", amountNanos: usdToNanos(1), source: "simulated" });
     magpie.keys.get(view.keyId)!.cap = 2;
-    rec.pending = { capUsd: 2, depositId: "pending-conflict", usd: 1, fundsClass: "chain", chainId: 97, assetId: null, source: "chain:97" };
+    rec.pending = { capUsd: 2, depositId: "pending-conflict", usd: 1, fundsClass: "chain", chainId: 97, assetId: "eip155:97:0x6666666666666666666666666666666666666666", source: "chain:97" };
     await expect(provisioner.reconcile(rec)).rejects.toThrow(/provenance|disagrees/);
     expect(rec.pending).not.toBeNull();
     ledger.close();
@@ -761,7 +764,7 @@ describe("funds provenance and pending recovery", () => {
       source: "chain:97",
       fundsClass: "chain",
       chainId: 97,
-      assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      assetId: "eip155:97:0x6666666666666666666666666666666666666666",
     });
     rec.pending = {
       capUsd: 2,
@@ -790,7 +793,7 @@ describe("funds provenance and pending recovery", () => {
       source: "chain:97",
       fundsClass: "chain",
       chainId: 97,
-      assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      assetId: "eip155:97:0x6666666666666666666666666666666666666666",
     });
     rec2.pending = {
       capUsd: 2,
@@ -798,13 +801,74 @@ describe("funds provenance and pending recovery", () => {
       usd: 2,
       fundsClass: "chain",
       chainId: 97,
-      assetId: "eip155:97:0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      assetId: "eip155:97:0x6666666666666666666666666666666666666666",
       source: "chain:97",
     };
     await expect(second.provisioner.reconcile(rec2)).rejects.toThrow(/amount/);
     expect(rec2.creditedUsd).toBe(0);
     expect(rec2.pending).not.toBeNull();
     second.ledger.close();
+  });
+
+  test("a pending chain asset-null row with native cap in force is uncertain, not applied", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec = provisioner.find("alice")!;
+    const window = ledger.openWindowFor("alice")!;
+    const db = (ledger as unknown as { db: { query: (sql: string) => { run: (...args: unknown[]) => void } } }).db;
+    db.query("INSERT INTO deposits(id,consumer_id,amount_nanos,source,funds_class,chain_id,asset_id,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "chain:asset-null",
+      "alice",
+      usdToNanos(1),
+      "chain:97",
+      "chain",
+      97,
+      null,
+      "intent",
+      null,
+      null,
+      null,
+      "2026-10-30T00:00:00.000Z",
+      null,
+      null,
+    );
+    magpie.keys.get(view.keyId)!.cap = 2;
+    rec.pending = { capUsd: 2, depositId: "chain:asset-null", usd: 1, fundsClass: "chain", chainId: 97, assetId: null, source: "chain:97" };
+    await expect(provisioner.reconcile(rec)).rejects.toThrow(/asset|provenance|manual/);
+    expect(ledger.deposit("chain:asset-null")?.status).toBe("intent");
+    expect(rec.pending).not.toBeNull();
+    expect(rec.creditedUsd).toBe(0);
+    ledger.close();
+  });
+
+  test("a pending chain deposit with native cap in force but missing provenance is not applied", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec = provisioner.find("alice")!;
+    magpie.keys.get(view.keyId)!.cap = 2;
+    rec.pending = { capUsd: 2, depositId: "chain:no-provenance", usd: 1 };
+    await expect(provisioner.reconcile(rec)).rejects.toThrow(/provenance|manual/);
+    expect(rec.pending).not.toBeNull();
+    expect(rec.creditedUsd).toBe(0);
+    ledger.close();
+  });
+
+  test("a pending deposit whose ledger row needs review is not applied even with native cap in force", async () => {
+    const { ledger, magpie, provisioner } = provisionerLab();
+    const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec = provisioner.find("alice")!;
+    const window = ledger.openWindowFor("alice")!;
+    const db = (ledger as unknown as { db: { query: (sql: string) => { run: (...args: unknown[]) => void } } }).db;
+    db.query("INSERT INTO deposits(id,consumer_id,amount_nanos,source,funds_class,chain_id,asset_id,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "chain:needs-review", "alice", usdToNanos(1), "chain:97", "chain", 97, null, "intent", null, null, null, "2026-10-30T00:00:00.000Z", null, null,
+    );
+    magpie.keys.get(view.keyId)!.cap = 2;
+    rec.pending = { capUsd: 2, depositId: "chain:needs-review", usd: 1, fundsClass: "chain", chainId: 97, assetId: "eip155:97:0x" + "6".repeat(40), source: "chain:97" };
+    await expect(provisioner.reconcile(rec)).rejects.toThrow(/review|provenance|asset/);
+    expect(ledger.deposit("chain:needs-review")?.status).toBe("intent");
+    expect(rec.pending).not.toBeNull();
+    expect(rec.creditedUsd).toBe(0);
+    ledger.close();
   });
 
   test("a pending unknown fundsClass is refused before any cap write", async () => {
@@ -858,6 +922,72 @@ describe("funds provenance and pending recovery", () => {
     expect(reviewed.amountNanos).toBe(usdToNanos(1));
     expect(ledger.balance("alice").depositedNanos).toBe(before.depositedNanos);
     expect(ledger.balance("alice").unreviewedNanos).toBe(0);
+    ledger.close();
+  });
+
+  test("legacy chain asset-null recovery needs local ChainStore evidence; otherwise it stays readable", async () => {
+    const { dir, ledger, provisioner } = provisionerLab();
+    await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const store = new ChainStore(join(dir, "chain.sqlite"));
+    const registry = defaultRegistry();
+    const contract = `0x${"6".repeat(40)}`;
+    const asset = registry.registerTestAsset({ chainId: 97, contractAddress: contract, symbol: "tMOCK6", name: "Mock Six", decimals: 6, nanosPerToken: "1000000000", pricingNote: "1:1" });
+    const network = registry.network(97)!;
+    const intent = buildIntent({
+      request: { providerId: "p", consumerId: "alice", chainId: 97, assetId: asset.assetId, recipientAddress: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6", expectedAmountRaw: "1000000", ttlSec: 600 },
+      network,
+      asset,
+      priceVersion: "v1",
+      now: new Date("2026-10-31T00:00:00.000Z"),
+    });
+    intent.payerAddress = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+    intent.status = "signed";
+    intent.attributionStatus = "signed";
+    store.insertIntent(intent);
+    const observed = store.observeEvent({
+      chainId: 97,
+      tokenContract: contract,
+      txHash: `0x${"a".repeat(64)}`,
+      logIndex: 0,
+      blockNumber: 100,
+      blockHash: `0x${"b".repeat(64)}`,
+      from: intent.payerAddress,
+      to: intent.recipientAddress,
+      amountRaw: intent.expectedAmountRaw,
+      confirmations: 15,
+    });
+    store.claim({ eventId: observed.event.id, invoiceId: intent.invoiceId });
+    store.recordConversion({ id: observed.event.id, nanos: usdToNanos(1), nanosPerToken: "1000000000", priceVersion: "v1" });
+    const depositId = `chain:${observed.event.id}`;
+    store.markCredited(observed.event.id, depositId);
+    const window = ledger.openWindowFor("alice")!;
+    const db = (ledger as unknown as { db: { query: (sql: string) => { run: (...args: unknown[]) => void } } }).db;
+    db.query("INSERT INTO deposits(id,consumer_id,amount_nanos,source,funds_class,chain_id,asset_id,status,window_id,price_version,cap_after_nanos,created_at,applied_at,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      depositId,
+      "alice",
+      usdToNanos(1),
+      "chain:97",
+      "chain",
+      97,
+      null,
+      "applied",
+      window.id,
+      window.priceVersion,
+      usdToNanos(1),
+      "2026-10-30T00:00:00.000Z",
+      "2026-10-30T00:00:00.000Z",
+      null,
+    );
+    // No evidence/incorrect invoice: no mutation, row remains readable.
+    expect(() => recoverLegacyChainDeposit({ ledger, store, evidence: { depositId, chainId: 97, assetId: asset.assetId, invoiceId: "wrong-invoice", txHash: observed.event.txHash, logIndex: 0 } })).toThrow(/claimed|event|invoice/);
+    expect(ledger.deposit(depositId)!.assetId).toBeNull();
+    expect(ledger.depositsFor("alice").some((d) => d.id === depositId)).toBe(true);
+    const recovered = recoverLegacyChainDeposit({ ledger, store, evidence: { depositId, chainId: 97, assetId: asset.assetId, invoiceId: intent.invoiceId, txHash: observed.event.txHash, logIndex: 0 } });
+    expect(recovered.assetId).toBe(asset.assetId);
+    expect(recovered.amountNanos).toBe(usdToNanos(1));
+    expect(recovered.source).toBe("chain:97");
+    expect(recovered.fundsClass).toBe("chain");
+    store.close();
     ledger.close();
   });
 

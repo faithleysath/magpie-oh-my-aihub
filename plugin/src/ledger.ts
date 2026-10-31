@@ -772,6 +772,41 @@ export class Ledger {
   }
 
   /** Sum of applied credits minus every recorded consumption; negative means overdraft. */
+  /**
+   * Advanced local recovery for a legacy chain row whose asset id was not
+   * stored. It cannot create or relabel a chain row: the caller must first
+   * obtain ChainStore evidence (invoice/tx/log/amount/recipient/consumer) and
+   * use `recoverLegacyChainDeposit()`. This method only fills the missing asset
+   * metadata; class/source/amount/status stay untouched.
+   */
+  reviewChainDepositProvenance(input: { id: string; chainId: number; assetId: string; note: string }): LedgerDeposit {
+    if (!input.note.trim()) throw new Error("reviewing a legacy chain deposit needs an audit note");
+    assertCreditChainAllowed(input.chainId);
+    const assetChain = assetIdChainId(input.assetId);
+    if (assetChain !== input.chainId) throw new Error(`asset ${input.assetId} belongs to chain ${assetChain}, not ${input.chainId}`);
+    return this.tx(() => {
+      const row = this.db.query("SELECT * FROM deposits WHERE id=?").get(input.id) as DepositRow | null;
+      if (!row) throw new Error(`deposit ${input.id} does not exist`);
+      const current = mapDeposit(row);
+      if (current.fundsClass !== "chain") throw new Error(`deposit ${input.id} is ${current.fundsClass}, not a chain deposit`);
+      if (current.chainId !== input.chainId) throw new Error(`deposit ${input.id} is on chain ${String(current.chainId)}, not ${input.chainId}`);
+      if (current.assetId !== null && current.assetId !== input.assetId) {
+        throw new Error(`deposit ${input.id} already has asset ${current.assetId}; it cannot be rewritten`);
+      }
+      if (current.assetId === input.assetId) return current;
+      this.db.query("UPDATE deposits SET asset_id=? WHERE id=?").run(input.assetId, input.id);
+      this.event(row.consumer_id, "deposit-provenance-reviewed", {
+        depositId: input.id,
+        fundsClass: "chain",
+        chainId: input.chainId,
+        assetId: input.assetId,
+        note: input.note.slice(0, 500),
+        source: "chain-store-evidence",
+      });
+      return mapDeposit(this.db.query("SELECT * FROM deposits WHERE id=?").get(input.id) as DepositRow);
+    });
+  }
+
   balance(consumerId: string): LedgerBalance {
     const dep = this.db
       .query("SELECT COALESCE(SUM(amount_nanos),0) AS n FROM deposits WHERE consumer_id=? AND status='applied'")
@@ -820,11 +855,7 @@ export class Ledger {
       let chainId: number | null = null;
       let assetId: string | null = null;
       if (input.fundsClass === "chain") {
-        chainId = input.chainId ?? null;
-        if (chainId === null) throw new Error("a chain deposit review needs a chain id");
-        assertCreditChainAllowed(chainId);
-        assetId = input.assetId ?? null;
-        if (assetId === null || assetIdChainId(assetId) !== chainId) throw new Error("a chain deposit review needs an asset id on the same chain");
+        throw new Error("an unknown operator row cannot be relabelled as a chain deposit; use the ChainStore evidence recovery path");
       } else if (input.chainId !== undefined && input.chainId !== null) {
         throw new Error(`a ${input.fundsClass} deposit review cannot name a chain`);
       } else if (input.assetId !== undefined && input.assetId !== null) {
