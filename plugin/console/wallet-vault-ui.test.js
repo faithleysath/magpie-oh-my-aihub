@@ -242,9 +242,30 @@ describe("local wallet UI", () => {
       expect(ui.dialog.open).toBe(false);
       expect(ui.dialog.textContent).not.toContain("late create secret");
       expect(ui.root.textContent).not.toContain("late create secret");
-      expect(ui.notices.some(([message]) => message.includes("钱包已创建；恢复助记词未显示"))).toBeTrue();
-      expect(ui.root.textContent).toContain("已解锁");
+      expect(ui.notices.some(([message]) => message.includes("创建请求已返回；请手动刷新状态确认"))).toBeTrue();
+      expect(ui.root.textContent).toContain("手动刷新钱包状态");
+      expect(ui.root.textContent).not.toContain("当前会话已验证");
     } finally { ui.restore(); }
+  });
+
+  test("late create after reset or dispose applies no old wallet or notice", async () => {
+    for (const cancel of ["reset", "dispose"]) {
+      let resolveCreate;
+      const pending = new Promise((resolve) => { resolveCreate = resolve; });
+      const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: absent }), "wallet-vault-create": async () => pending } });
+      try {
+        await ui.show();
+        await find(ui.root, "button", "创建钱包").click(); await flush();
+        fillPasswordDialog(ui.dialog); const agree = checkAgree(ui.dialog); await agree.emit("change");
+        void find(ui.dialog, "button", "创建钱包").click(); await flush();
+        if (cancel === "reset") ui.mounted.reset(); else ui.mounted.dispose();
+        resolveCreate({ wallet: unlocked, mnemonic: "late reset secret", warning: "once" }); await flush();
+        expect(ui.dialog.open).toBeFalse();
+        expect(ui.root.textContent).not.toContain("当前会话已验证");
+        expect(ui.root.textContent).not.toContain("late reset secret");
+        expect(ui.notices.some(([message]) => message.includes("钱包已创建"))).toBeFalse();
+      } finally { ui.restore(); }
+    }
   });
 
   test("late reveal after clearSecrets/pagehide/dispose is discarded", async () => {

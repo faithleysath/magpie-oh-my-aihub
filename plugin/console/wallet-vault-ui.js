@@ -93,6 +93,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   let discoveryStarted = false;
   let disposed = false;
   let generation = 0;
+  let lateCreate = false;
 
   function report(message, tone = "warn") { try { notice(message, tone); } catch { /* notice is advisory */ } }
   function fail(message) { dialogError.textContent = message; dialogError.hidden = false; }
@@ -162,10 +163,14 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
 
   function applyWallet(next, renderNow = true) {
     if (!next || typeof next !== "object") return;
+    lateCreate = false;
     const wasTrusted = wallet?.status === "unlocked" && wallet.addressVerified === true;
+    const previousAddress = wallet?.address ?? null;
+    const previousExpiry = wallet?.unlockExpiresAt ?? null;
     wallet = { version: next.version, address: next.address ?? null, addressVerified: next.addressVerified === true, status: next.status, unlockExpiresAt: next.unlockExpiresAt ?? null };
     const invalid = wallet.status !== "unlocked" || wallet.addressVerified !== true;
-    if (invalid && (wasTrusted || secret !== null || dialog.open)) {
+    const sessionChanged = previousAddress !== wallet.address || previousExpiry !== wallet.unlockExpiresAt;
+    if ((invalid && (wasTrusted || secret !== null || dialog.open)) || (sessionChanged && previousAddress !== null && (secret !== null || dialog.open))) {
       generation++;
       closeDialog({ bump: false });
       clearInputs();
@@ -247,8 +252,13 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
           const result = await action("wallet-vault-create", { password, strength: Number(strength.input.value) || 128 }, token);
           if (disposed) return;
           if (token !== generation) {
-            if (result?.wallet && getState()?.configured) applyWallet(result.wallet);
-            report("钱包已创建；恢复助记词未显示。请重新解锁后导出助记词，不能自动重复创建钱包。", "warn");
+            // Same active session can recover only by an explicit status read.
+            // Never apply a late wallet/verified state or notice after reset/dispose.
+            if (!disposed && service === "available" && getState()?.configured) {
+              lateCreate = true;
+              report("创建请求已返回；请手动刷新状态确认，不会自动重复创建钱包。", "warn");
+              render();
+            }
             return;
           }
           if (typeof result?.mnemonic !== "string" || !result.mnemonic) throw new Error("钱包已创建，但没有收到一次性恢复助记词；请立即检查钱包状态并按恢复流程处理。");
@@ -389,6 +399,12 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     }
     if (!wallet || wallet.status === "absent") {
       localRoot.append(section("还没有本地钱包", "选择下面一项明确开始；创建和导入都需要密码与恢复信息保护确认。"));
+      if (lateCreate) {
+        const recovery = el("div", null, "inline-warning");
+        recovery.append(p("上次创建请求已返回；请手动刷新状态确认，页面不会自动重复创建或把旧结果当已验证钱包。"));
+        recovery.append(button("手动刷新钱包状态", () => { service = "unknown"; void loadStatus(); }));
+        localRoot.append(recovery);
+      }
       const choices = el("div", null, "wallet-choice-grid");
       choices.append(
         choice("创建新钱包", "生成新的本地测试网钱包，并一次性显示恢复助记词。", button("创建钱包", () => createWalletDialog(), true)),
@@ -509,7 +525,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   function reset() {
     clearSecrets();
     disconnectExternal();
-    wallet = null; service = "unknown"; serviceError = ""; loaded = false; loading = false; selectedProviderId = null;
+    wallet = null; service = "unknown"; serviceError = ""; loaded = false; loading = false; selectedProviderId = null; lateCreate = false;
     render();
   }
   function dispose() {
