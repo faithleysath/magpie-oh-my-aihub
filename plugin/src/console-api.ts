@@ -1,5 +1,6 @@
 import { redact } from "./log.ts";
 import { ConsoleInputError, type ConsoleActionContext } from "./console-server.ts";
+import { PAYMENT_LOCAL_ACTIONS, paymentLocalAction } from "./payment-local-service.ts";
 import { configureInput } from "./server.ts";
 import { consoleWorkflows } from "./console-workflows.ts";
 import { NETWORK_LOCAL_ACTIONS, consoleNetworkAction, consoleNetworkState } from "./console-network.ts";
@@ -20,6 +21,7 @@ export const CONSOLE_ACTIONS = [
   ...WALLET_CONSOLE_ACTIONS,
   ...WALLET_VAULT_ACTIONS,
   ...NETWORK_LOCAL_ACTIONS,
+  ...PAYMENT_LOCAL_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
   if (typeof value === "string") return redact(value) as T;
@@ -82,6 +84,7 @@ export async function consoleAction(
   context?: ConsoleActionContext,
 ): Promise<unknown> {
   try {
+    if ((PAYMENT_LOCAL_ACTIONS as readonly string[]).includes(name)) return paymentLocalAction(service, name, input, context);
     if ((WALLET_VAULT_ACTIONS as readonly string[]).includes(name)) {
       try {
         return await walletLocalAction(service, name, input, context);

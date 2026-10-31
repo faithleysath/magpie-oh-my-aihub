@@ -7,13 +7,14 @@ import { maskSensitiveText } from "./page-snapshot.ts";
 import { ConsolePairingJournal, PairingCapacityError, PairingUnavailableError } from "./console-pairing.ts";
 import type { PendingPairing } from "./console-pairing.ts";
 
+/** Server-owned session context. The browser cannot supply or read these fields. */
 export interface ConsoleActionContext {
   /** The authenticated browser session that invoked this action; never client-supplied. */
-  sessionId: string;
+  readonly sessionId: string;
   /** False after logout, idle/absolute expiry or server stop. Canonical payment contract name. */
-  assertActive: () => boolean;
+  readonly assertActive: () => boolean;
   /** Compatibility alias for the same server-owned check. */
-  isActive: () => boolean;
+  readonly isActive: () => boolean;
 }
 
 export interface ConsoleServerOptions {
