@@ -55,12 +55,12 @@
 | 工作流 | 独立 worktree | 负责代理 | 分支 / PR | 状态 | 集成条件 |
 | --- | --- | --- | --- | --- | --- |
 | A-ui | `/Users/laysath/.paseo/worktrees/1z728cdk/a-ui` | `ccb08749-badc-4512-9604-e93ce7bd76b9` | PR #25 旧 head `cbce7004`；新 SHA 待 handoff | BLOCKED | 独立审 `6a326f2b…` 正式不通过旧 head；六项 fix 待新 SHA 复审；真实宿主加载 `d142a9c` 非 `cbce700`；新 head 真实会话 UNKNOWN；fixture 视觉只合成；**不能 Visual GO** |
-| A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | PR #22 `77d71b2` 原 head / 新 `feeddecad` 复审 | BLOCKED | 独立审 `84ba711e…` 正式 BLOCKED：同配置 foreign RPC 仍 aclOk、syntheticKey 发 wrong listener、proof 不 gate/ledger stale 稳定、share 并发与吞 suspended；不能凭 fix message 通过 | 未集成；新 head 待独立审 |
-| B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | PR #26 新 head `fba73cad` base `8ce5c57` | REVIEW | B1/B2/B3 fix：开发方 52/0；旧 `fdc7d4c` 同行为 4 fail/14 pass；独立审 `5d386756` 复审中；原冻结阻断历史保留 | 不自动集成；不称 B GO；B2 真实旧 Key 撤销/enforced 与原生失败恢复特别复核 |
-| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #19 head `7bcf7e0` / PR #20 head `277ed66` | BLOCKED | 19 批准仍仅 `7bcf7e0` 技术 base；20 持久 generation 修复中；旧 head 仍 BLOCKED | 不把 B 整体或正式运行写 DONE |
+| A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | PR #22 `feeddecad` 复审 | BLOCKED | 复审仍 BLOCKED：启动 foreignRPC 修复 PASS，但 presecret forward 仍先泄 syntheticKey 后 proof；allCLI/start 不统一 gate；share 并发/吞 suspended/catalog 失败；stalepeer/ledgerstable；consoleport 避让未实；CI 76 fail（约 71 新回归） | 不能写仅 5 基线；dirty ownershipEnforced seam 未提交不算证据；3 批小 fix；production 默认 owner 不可绕；不扩功能 |
+| B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | PR #26 最新 `a2163c3` | BLOCKED | B2 补 nativeRevoke，但 `void -> success` 残余阻断修中；未批准 stack | 不自动集成；B 整体 NO-GO/未验证 |
+| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | PR #19 `6fa9877a` base approved 15 / PR #20 `715491f7` base new 19 | REVIEW | 19 称 7bcf 等价 rebase，待 review 确认后才可批准新 SHA；20 持久 control remotes/10 method adapter/新增 `Provisioner.revokeEnforced`，38 定向 0 fail，`5d386756` 复审；旧 `277ed66` 阻断历史留存 | B 整体 NO-GO/未验证；不自动集成 |
 | C-registry | `/Users/laysath/.paseo/worktrees/1z728cdk/c-registry` | `0c94d106-6442-470f-8f14-374c38ea20f7` | PR #21 frozen `917c429` base approved 15 | REVIEW | 相对 `1a6e13d` 仅 docs 变更、代码不变；独立审 `93febdd5…` 进行中；主网资金 NO-GO | 未集成 |
 | C-wallet | `/Users/laysath/.paseo/worktrees/1z728cdk/c-wallet` | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | PR #23 head `1a8a53d`（完整 SHA 待 handoff） | REVIEW | 41 模块测试；未 UI/真实资金；独立审 `b97887e5…` 进行中 | 未集成；主审明确 commit + 安全评审 |
-| C-external | `/Users/laysath/.paseo/worktrees/1z728cdk/c-external-wallet` | `3820537e-5840-4926-ba00-5975805b2df6` | `feature/phase10-c-external-wallet` / draft PR 待记录 | DOING | 主审明确 commit + 安全评审；真实扩展验收 BLOCKED/UNKNOWN |
+| C-external | `/Users/laysath/.paseo/worktrees/1z728cdk/c-external-wallet` | `3820537e-5840-4926-ba00-5975805b2df6` | PR #30 frozen `837bacba` | BLOCKED | 46 合成 tests/CI 双绿；未 UI/真扩展；主审 BLOCK 付款 UI 接入；需移除 unknown asset 普通签名例外 + 发送默认需服务 durable journal port；独立审 `baeaa46d…` | 真实 MetaMask/Rabby UNKNOWN；资金 NO-GO；不自动集成 |
 | P0-clock | `/Users/laysath/Projects/magpie-oh-my-aihub-clock-fix` | `f63b644e-40df-4174-afd4-c4f43da87927` | `fix/phase10-validation-clock` @ `889973f5` / PR #15 (draft) | DONE（集成） | 独立审通过；本地集成到 `feature/phase10-integration` @ `877d0bc5`；PR14 仍 docs-only |
 | P0-integration | `/tmp/oma-phase10-integration` | INTEGRATION | `feature/phase10-integration` @ `d1922f4` | DONE（集成） | 只接已批准 15 + 29；17/16/18/其它未接；非产品 GO |
 | P0-peak | `/Users/laysath/Projects/magpie-oh-my-aihub-p0` | `187ccdcb-8f0b-40f3-8276-939334de4412` | PR #16 old `0661bede` | BLOCKED | 独立审 FAIL：tier canonical 丢 dynamic；原代理修；**不准集成** |
@@ -111,7 +111,8 @@
 | A9 | 回归 | A-ui + A-service + 审查 | TODO | A1..A8 | console/security 测试 | 不放宽动作/幂等/敏感响应 |
 | A10 | A-ui 独立审阻断修复 | A-ui | BLOCKED | A9 | 独立报告 `/tmp/oma-research/A-UI-INDEPENDENT-REVIEW.md`；旧 `cbce7004`；66 前端测试/0；CI 5 既有 clock 失败 | 可用模型取本机 shareCandidates；credited 累计当资产余额；wallet 首屏监控密度；404 多步写部分成功；discover 两个 primary；wallet/network 数据 14px |
 | A13 | A-ui 已通过项（不覆盖阻断） | 审查代理 | DONE（仅事实） | A10 | 五导航/3 字段/只读 port/无 role/self 不计/未知非 0/theme/焦点/reduceMotion | 不能据此判 Visual GO；新 head 真实会话 UNKNOWN |
-| A11 | A-service ownership/proof/share 并发 | A-service | BLOCKED | P0 | 原 `77d71b2` 独立审 `84ba711e…` 正式 BLOCKED；新 `feeddecad` 复审 | 同配置 foreign RPC 仍 aclOk；syntheticKey 发 wrong listener；proof 不 gate/ledger stale 稳定；share 并发吞 suspended；synthetic 测试 key ≠ 已证真实 key 泄露 |
+| A11 | A-service ownership/proof/share 并发 | A-service | BLOCKED | P0 | `feeddecad` 复审仍 BLOCKED；启动 foreignRPC 修复 PASS | presecret forward 先泄 syntheticKey 后 proof；allCLI/start 不统一 gate；share 并发/吞 suspended/catalog 失败；stalepeer/ledgerstable；consoleport 避让未实 |
+| A12 | A-service 新 SHA 复核 | A-service | BLOCKED | A11 | CI 76 fail（约 71 新回归），不能写仅 5 基线 | 3 批小 fix；production 默认 owner 不可绕；`84ba711e…` 新 SHA 后复核；未提交 dirty seam 不算证据 |
 | A12 | A-service 新 head 复审 | A-service | REVIEW | A11 | `feeddecad4c161654a1e426e68b62abe4098bf42` | 不能凭 fix message 通过；报告不输出 secret |
 
 ### B — 无文件 P2P / 人工审批 / 端到端加密授权
@@ -128,7 +129,7 @@
 | B8 | 首次/变化 TOFU 人工 | B-core | TODO | B2 | 未接受/身份变化禁止 | 不跳过 |
 | B9 | 重放/篡改/过期 | B-core | TODO | B1..B7 | 负向测试 | 不自动文件回退 |
 | B10 | 紧急文件兼容 | B-core + 审查 | TODO | B9 | 显式选择/警告；默认关 | 不作为目标/验收替代 |
-| B11 | 有限 HTTP transport + 业务集成接口 | B-service | BLOCKED | B1,B3 + A-service stacked base | PR #19 `7bcf7e0` 仅作 PR20 base；PR20 `277ed66` 仍 BLOCKED；允许小修持久 generation/旧授权覆盖/enforced | 无真实双节点 GO；不合并 |
+| B11 | 有限 HTTP transport + 业务集成接口 | B-service | REVIEW | B1,B3 + A-service stacked base | PR #19 `6fa9877a` 待确认等价 rebase；PR #20 `715491f7` base 新19，38 定向 0 fail，复审中 | 新 19 SHA 未批准；B 整体 NO-GO；旧 `277ed66` 阻断历史留存 |
 
 ### C — 钱包与主网准备
 
@@ -139,11 +140,11 @@
 | C3 | 严格资产四元组 | C-registry | TODO | C1 | `chainId+tokenContract+decimals+issuerType`；拒绝符号推断 | 任意代币 |
 | C4 | 内置钱包：隔离模拟创建/恢复/加密存储/短解锁 | C-wallet | REVIEW | P0 | PR #23 head `1a8a53d`；41 模块测试；独立审 `b97887e5…` | 未 UI/真实资金；未集成 |
 | C5 | 敏感导出/助记词 | C-wallet | REVIEW | C4 | PR #23；警告 + **重新验证钱包密码**；不落日志/快照 | 未集成；独立审进行中 |
-| C6 | 外置钱包/多扩展明确选择 | C-external | DOING | P0 | EIP-1193/6963 夹具；用户明确选一个 | 自动挑/自动切链 |
+| C6 | 外置钱包/多扩展明确选择 | C-external | BLOCKED | P0 | PR #30 frozen `837bacba`；46 合成 tests；未 UI/真扩展；独立审 `baeaa46d…` | 删除 unknown asset 普通签名例外；发送需 durable journal；真实扩展 UNKNOWN |
 | C7 | P2P 付款/签名 | C-wallet + C-external | DOING | C2,C3 | 测试网/模拟；直接签名；普通钱包无签名文件 | 主网广播/签名文件路径 |
 | C8 | 自动充值策略（上限/暂停/条件） | C-wallet | TODO | C4..C7 | 策略 + 负向测试；可模拟/测试执行 | 主网执行 |
 | C9 | 主网硬禁止 | C-registry + C-wallet + C-external | TODO | C1..C8 | 负向测试：send/credit/cap 全拒绝 | 任何例外 |
-| C11 | 真实 MetaMask/Rabby 扩展验收 | C-external | BLOCKED | 隔离 profile 工具 | 计划见 `docs/phase10/evidence/2026-10-31-external-wallet-test-plan.md`；**BLOCKED/UNKNOWN** | 不得用 fake provider 单测声称兼容；不碰默认 profile |
+| C11 | 真实 MetaMask/Rabby 扩展兼容 | C-external | BLOCKED | 隔离 profile 工具 | PR #30 `837bacba` 46 合成 tests；真实扩展 UNKNOWN；独立审 `baeaa46d…` | 不得用 fake provider 单测声称兼容；主审 BLOCK 付款 UI 接入；资金 NO-GO |
 | C10 | 真实资金 | — | NO-GO | — | — | 禁止 |
 
 ### D — 真实资金独立审查
@@ -195,10 +196,9 @@
 | 2026-10-31 | 初始 VALIDATION 前置 | A/B 可开始；C 不接真实资金 | INVENTORY §14 | VERIFIED |
 | 2026-10-31 | 文档 draft PR | #14，draft，仅 3 个 docs 文件；主审文档范围审查通过，作为实现前置；**计划无 GO** | `gh pr view 14` | VERIFIED |
 | 2026-10-31 | 实现分派登记 | A-ui/A-service/B-core/C-registry/C-wallet + P0-clock/P0-peak 独立 worktree | 本节 §2 | VERIFIED（登记）|
-| 2026-10-31 | B-service 19 复审 | PR #19 `7bcf7e0` 超时放槽/slowbody 取消经真 socket 复核；仅批准作 PR20 技术 base，不合并 | PR #19 | 技术 base 通过；B 整体未完 |
-| 2026-10-31 | B-service 20 仍阻 | PR #20 `277ed66` 旧 head BLOCKED；允许更新到 19 base 并小修持久 generation/旧授权覆盖/enforced | PR #20 | BLOCKED |
+| 2026-10-31 | B-service 新 heads | PR #19 `6fa9877a` base approved 15（称 7bcf 等价 rebase，待确认）；PR #20 `715491f7` base 新19，38 定向 0 fail，`5d386756` 复审 | PR #19/#20 | REVIEW；新 19 SHA 未批准；旧 277ed66 阻断历史留存 |
 | 2026-10-31 | B-core 复审阻断 | PR #26 冻结 `fdc7d4c4`；独立审 `5d386756` BLOCKED（B1/B2/B3）；cross-message idem/价格版本已修复；core fix 中 | PR #26 | BLOCKED（历史）；未集成 |
-| 2026-10-31 | B-core 新 head 待复审 | PR #26 `fba73cad` base `8ce5c57`；B1/B2/B3 fix；开发方 52/0；旧 `fdc7d4c` 4 fail/14 pass；`5d386756` 复审 | PR #26 | REVIEW；未集成；B2 旧 Key 撤销/enforced 与原生失败恢复特别复核 |
+| 2026-10-31 | B-core 最新 | PR #26 `a2163c3`；B2 补 nativeRevoke；`void -> success` 残余阻断修中；未批准 stack | PR #26 | BLOCKED；B 整体 NO-GO/未验证 |
 | 2026-10-31 | P0-clock 集成 | 源 `889973f5` → `877d0bc5`；独立审通过；仅本地 integration 分支；PR14 仍 docs-only | `feature/phase10-integration` | 非产品 GO |
 | 2026-10-31 | A-ui 待审/阻断 | PR #25 旧 `cbce7004`；独立审 `6a326f2b…` 正式不通过；真实宿主 `d142a9c`；新 head 真实会话 UNKNOWN；fixture 视觉只合成 | PR #25 / A-UI-INDEPENDENT-REVIEW.md | BLOCKED；不能 Visual GO |
 | 2026-10-31 | P0-clock 独立审 | 精确 `889973f5` 无产品/安全阻断；746/0；CI 双绿；boot 32 次未复现 flake；主审批准仅该 commit 本地集成 | PR #15 / 独立审报告 | 通过（非产品 GO） |
@@ -207,7 +207,8 @@
 | 2026-10-31 | P0-hermetic 独立 FAIL | PR #17 `3ce22ee7`；check/resume seam 未透传、仍读生产 | PR #17 | BLOCKED；原实现修；不准集成 |
 | 2026-10-31 | P0-peak 独立 FAIL | PR #16 `0661bede`；tier/canonical 一致性 + 覆盖缺口 | PR #16 | BLOCKED；原实现修；不准集成 |
 | 2026-10-31 | C21 frozen | PR #21 `917c429`；相对 `1a6e13d` 仅 docs 变更、代码不变；独立审进行中 | PR #21 | REVIEW；未集成 |
-| 2026-10-31 | A-service 正式阻断 | 原 `77d71b2` 独立审 `84ba711e…` BLOCKED；新 `feeddecad` 复审中 | PR #22 | BLOCKED；未集成 |
+| 2026-10-31 | A-service 复审仍阻断 | `feeddecad`：启动 foreignRPC 修复 PASS；presecret 先泄 syntheticKey；allCLI/start 不统一 gate；share 并发/吞 suspended/catalog；stalepeer/ledgerstable；CI 76 fail（约 71 新回归） | PR #22 | BLOCKED；3 批小 fix；未集成 |
+| 2026-10-31 | C-external 冻结待审 | PR #30 `837bacba`；46 合成 tests/CI 双绿；未 UI/真扩展；allowUnregisteredAsset 无 issuer 信任、UNKNOWN_BROADCAST 仅内存可重发；主审 BLOCK 付款 UI | PR #30 | BLOCKED；资金 NO-GO；不自动集成 |
 | 2026-10-31 | C-wallet 交付待审 | PR #23 head `1a8a53d`；41 模块测试；未 UI/真实资金；独立审 `b97887e5…` | PR #23 | REVIEW；未集成 |
 | 2026-10-31 | P0 报告命名 | P0-clock 属 P0，不沿用 D2 名称 | 主审说明 | VERIFIED |
 | 2026-10-31 | 改动前 UI 审查证据 | 3 份事实报告 + 16 张截图 + SHA256SUMS 已入库；无 HOME/app/凭据；0.1.2289 空网络 | `docs/phase10/evidence/` | REPRODUCED / 已审查；非 Visual UX GO |
