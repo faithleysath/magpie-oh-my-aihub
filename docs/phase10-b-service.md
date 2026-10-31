@@ -126,7 +126,9 @@ be reported as `lan-reachable`; the diagnostic must not claim overlay-only.
   calls `Provisioner.revokeEnforced`; only a measured `keyRevoked`/`secretRotated`
   with the exact `consumerNodeId`/`approvalId`/`keyId`/`generation` binding is
   confirmed. Removal is the strong stop; if removal fails, rotation must make the old
-  secret 401 (read back via `limitStatus`); a $0.0001 cap is not a stop. Anything
+  secret 401/403 (read back via `limitStatus`); ECONNREFUSED/timeout/5xx/bad JSON
+  is UNKNOWN, never rejection. A loopback gateway may trust its caller, so this does
+  not prove a remote provider's 401. A $0.0001 cap is not a stop. Anything
   else is `{revoked:false, enforcement: capRestricted|safetyUncertain|failed}` and
   B-core keeps the same generation uncertain/action-needed without sending a
   “revoked” notice.
@@ -208,7 +210,7 @@ second approval layer.
 - per-peer and global rate limit before the node call; global/per-peer concurrency;
 - timeout; wildcard bind and false loopback claims refused.
 
-`plugin/test/control-p2p-port.test.ts` (9 pass):
+`plugin/test/control-p2p-port.test.ts` (15 pass):
 
 - requested-set vs selected-subset price version;
 - approval/hand-over through the real Service;
@@ -220,8 +222,10 @@ second approval layer.
 - a crash after native add but before final ownership save leaves a pending record;
   the same approval adopts it and a different approval is refused;
 - enforced revoke: remove success, rotation fallback, a rotation whose old secret
-  is still accepted is not claimed, and both-fail returns `revoked:false` with the
-  key/record still active.
+  is still accepted is not claimed, transport/5xx/bad-JSON readback is unknown, a
+  missing local key row with a working secret is not confirmed, wrong key/generation
+  is refused inside the lock, both-fail returns `revoked:false`, and hand-over has a
+  final lock-held key/secret check.
 
 `plugin/test/control-service-port.test.ts` (12 pass):
 
@@ -248,10 +252,10 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | --- | --- | --- |
 | HTTP transport policy and limits | VERIFIED (unit + real socket) | 20 pass, typecheck |
 | Approval/handover/import adapter reuses Service | VERIFIED (unit with fake Magpie / loopback gateway) | 12 pass |
-| B-core business port mapping + persistent ownership | VERIFIED (unit, fake Magpie) | 9 pass |
-| Enforced revoke remove/rotate/old-secret/both-fail | VERIFIED (unit, fake Magpie) | 9 port tests |
+| B-core business port mapping + persistent ownership | VERIFIED (unit, fake Magpie) | 15 pass |
+| Enforced revoke readback/lock/both-fail | VERIFIED (unit, fake Magpie) | 15 port tests |
 | PR #19 transport | PASS (reviewed 7bcf7e0, rebased on approved PR #15) | 20 real/unit tests; see PR #19 |
-| PR #20 adapter targeted | PASS (local, rebased branch) | 20 transport + 12 old adapter + 9 new port tests = 41 total |
+| PR #20 adapter targeted | PASS (local, rebased branch) | 20 transport + 12 old adapter + 15 new port tests = 47 total |
 | Full `bun run test` on PR #20 head `73f7e39` | PASS (CI) | run `41160518919` linux+macOS success; includes the approved PR #15 clock base |
 | Real B-core `P2pNode` stacked and compiled | UNKNOWN (not approved) | B-core PR #26 is committed (`fdc7d4c`/`fba73c`) but not approved for stack; the local port mirrors its `P2pBusinessPort` shape and is compile-checked only in a temporary snapshot |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
