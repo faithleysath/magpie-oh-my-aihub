@@ -267,6 +267,11 @@ section.card + section.card { margin-top: var(--space-4); }
 .credit-list { list-style: none; margin: var(--space-1) 0 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: var(--space-1); }
 .credit-list li { display: flex; justify-content: space-between; gap: var(--space-3); font-size: var(--text-base); color: var(--body); font-family: var(--font-mono); }
 .credit-list strong { font-variant-numeric: tabular-nums; }
+.home-model-group { padding: var(--space-2) 0; border-bottom: 1px solid var(--line-soft); }
+.home-model-group:last-child { border-bottom: 0; }
+.home-model-group strong { display: block; }
+.home-model-group small { display: block; color: var(--muted); }
+.home-model-group ul { margin: var(--space-1) 0 0; padding-left: var(--space-5); font-family: var(--font-mono); font-size: var(--text-sm); }
 .status-line { font-size: var(--text-xl); font-weight: 700; color: var(--ink); }
 .home-figures { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; margin: 0; }
 .home-figures > div { padding: var(--space-2) 0; border-bottom: 1px solid var(--line-soft); }

@@ -94,6 +94,19 @@ const configured = () => {
   state.configured = true;
   state.status.config = { networkName: "studio-ai", hostname: "node-1", peers: ["tcp://198.51.100.7:11010"], sharingEnabled: false, consumingEnabled: true, catalog: { enabled: false } };
   state.status.network = { state: "online", summary: "已连接 0 个其他节点", neighbors: [], ports: [], thisNode: { hostname: "node-1", virtualIpv4: "10.126.126.1", networkName: "studio-ai" }, core: { running: true, version: "2.6.4" }, evidence: { readAt: "2026-10-31T00:00:00.000Z" } };
+  // Simulated readback evidence: the home count must come from here, never from
+  // a legacy provider.models snapshot or an authorization list.
+  state.status.providers = [{
+    id: "provider-1", status: "connected", fingerprint: { hostname: "partner-harbor" },
+    models: ["legacy/not-callable"],
+    modelsEvidence: {
+      status: "current", source: "provider-models", readAt: new Date(Date.now() - 60_000).toISOString(), expiresAt: new Date(Date.now() + 4 * 60_000).toISOString(),
+      models: ["qwen/qwen3-32b", "deepseek/deepseek-chat"], modelCount: 2, callable: "yes",
+      identity: { hostname: "partner-harbor", virtualIpv4: null, fingerprint: null },
+      generation: 2, keyRef: "provider-keys.json#provider-1", keyGeneration: 1, error: null,
+    },
+  }];
+  state.status.catalog = { ...state.status.catalog, peers: [{ nodeId: "x".repeat(16), status: "verified", quote: { models: [{ id: "authorized/but-not-called" }] } }] };
   return state;
 };
 
@@ -167,6 +180,17 @@ test("three-field connect is atomic: one join-network, no configure fallback, th
     expect(world.nodes.get("settings-panel").hidden).toBe(true);
     expect(world.nodes.get("nav-home").attributes["aria-current"]).toBe("page");
     expect(world.nodes.get("home-network").textContent).toBe("已连接");
+    // Available models come from current readback evidence only.
+    expect(world.nodes.get("home-models").textContent).toBe("2 个当前可见模型");
+    expect(world.nodes.get("home-models-detail").textContent).toContain("最近真实读回");
+    expect(world.nodes.get("home-models-detail").textContent).toContain("推理额度与 429 另计");
+    expect(world.nodes.get("home-models-evidence").hidden).toBe(false);
+    const listText = world.nodes.get("home-models-list").textContent;
+    expect(listText).toContain("partner-harbor");
+    expect(listText).toContain("qwen/qwen3-32b");
+    expect(listText).toContain("deepseek/deepseek-chat");
+    expect(listText).not.toContain("legacy/not-callable");
+    expect(listText).not.toContain("authorized/but-not-called");
   } finally {
     await world.window.emit("pagehide");
     world.restore();

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { capLabel, checkLabel, mountProviders, parseTransportDocument, peerAcceptance, peerNextStep, priceText, selectableModels, validCap } from "./providers.js";
+import { capLabel, checkLabel, modelEvidenceSummary, mountProviders, parseTransportDocument, peerAcceptance, peerNextStep, priceText, selectableModels, validCap } from "./providers.js";
 
 const pricing = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 };
 const model = { id: "native/demo", displayName: "本机模型", pricing, completePrice: true, allowedByPolicy: true };
@@ -403,4 +403,152 @@ test("all shipped workflow DOM avoids HTML injection, remote resources and brows
   expect(html).toContain("data-1p-ignore data-bwignore");
   expect(html).toContain("已保存的密码不会回显");
   expect(html).toContain("不会写入浏览器存储");
+});
+
+describe("available-model evidence (simulated status.providers, no backend)", () => {
+  const NOW = Date.parse("2026-10-31T00:10:00.000Z");
+  const iso = (offsetMs) => new Date(NOW + offsetMs).toISOString();
+  const evidence = (over = {}) => ({
+    status: "current", source: "provider-models", readAt: iso(-60_000), expiresAt: iso(4 * 60_000),
+    models: ["qwen/qwen3-32b", "deepseek/deepseek-chat"], modelCount: 2, callable: "yes",
+    identity: { hostname: "partner-harbor", virtualIpv4: null, fingerprint: null },
+    generation: 3, keyRef: "provider-keys.json#p1", keyGeneration: 2, error: null, ...over,
+  });
+  const provider = (over = {}) => ({ id: "p1", status: "connected", fingerprint: { hostname: "partner-harbor" }, modelsEvidence: evidence(), ...over });
+  const summaryOf = (rows) => modelEvidenceSummary(rows, NOW);
+
+  test("only a current, fresh, connected record with finite count counts", () => {
+    const summary = summaryOf([provider()]);
+    expect(summary).toMatchObject({ state: "current", count: 2, providers: 1 });
+    expect(summary.label).toBe("2 个当前可见模型");
+    expect(summary.detail).toContain("最近真实读回");
+    expect(summary.detail).toContain("推理额度与 429 另计");
+    expect(summary.entries[0].models).toEqual(["qwen/qwen3-32b", "deepseek/deepseek-chat"]);
+    expect(summary.entries[0].counted).toBeTrue();
+    expect(summaryOf([provider(), provider({ id: "p2", modelsEvidence: evidence({ modelCount: 5, models: [] }) })])).toMatchObject({ count: 7, providers: 2 });
+  });
+
+  test("legacy provider.models and authorization lists never become a callable count", () => {
+    expect(summaryOf([{ id: "p1", status: "connected", models: ["a/one", "b/two"] }]))
+      .toMatchObject({ state: "unknown", count: 0, label: "尚未确认" });
+    expect(summaryOf([{ id: "p1", models: ["a/one"], modelsEvidence: evidence({ status: "unknown", callable: "unknown", modelCount: null }) }]))
+      .toMatchObject({ state: "unknown", count: 0 });
+    expect(summaryOf([{ id: "p1", models: ["a/one"], modelsEvidence: evidence({ callable: "unknown" }) }]))
+      .toMatchObject({ state: "unknown", count: 0 });
+    expect(summaryOf([{ id: "p1", models: ["a/one"], modelsEvidence: evidence({ modelCount: null }) }]))
+      .toMatchObject({ state: "unknown", count: 0 });
+  });
+
+  test("stale evidence shows unknown plus the exact next step", () => {
+    const summary = summaryOf([provider({ modelsEvidence: evidence({ status: "stale" }) })]);
+    expect(summary).toMatchObject({ state: "stale", count: 0, label: "模型清单已过期" });
+    expect(summary.detail).toContain("重新读取可用模型");
+    expect(summary.detail).toContain("过期清单不算可用");
+    expect(summaryOf([])).toMatchObject({ state: "none", label: "尚未连接" });
+  });
+
+  test("readAt must be a real past time inside a 5 minute window", () => {
+    // exactly 5 minutes is the contract boundary and is accepted
+    expect(summaryOf([provider({ modelsEvidence: evidence({ readAt: iso(-4 * 60_000), expiresAt: iso(60_000) }) })])).toMatchObject({ state: "current", count: 2 });
+    // future readAt is not trusted by this client, even if the backend tolerates a small skew
+    expect(summaryOf([provider({ modelsEvidence: evidence({ readAt: iso(60_000), expiresAt: iso(5 * 60_000) }) })])).toMatchObject({ state: "unknown", count: 0 });
+    // invalid or missing readAt
+    expect(summaryOf([provider({ modelsEvidence: evidence({ readAt: "not-a-date" }) })])).toMatchObject({ state: "unknown", count: 0 });
+    expect(summaryOf([provider({ modelsEvidence: evidence({ readAt: null }) })])).toMatchObject({ state: "unknown", count: 0 });
+    // expiry before readAt
+    expect(summaryOf([provider({ modelsEvidence: evidence({ readAt: iso(60_000), expiresAt: iso(30_000) }) })])).toMatchObject({ state: "unknown", count: 0 });
+    // window longer than the backend TTL is unknown, not silently current
+    expect(summaryOf([provider({ modelsEvidence: evidence({ readAt: iso(-6 * 60_000), expiresAt: iso(60_000) }) })])).toMatchObject({ state: "unknown", count: 0 });
+    // an ordinary expiry in the past is stale
+    expect(summaryOf([provider({ modelsEvidence: evidence({ readAt: iso(-6 * 60_000), expiresAt: iso(-60_000) }) })])).toMatchObject({ state: "stale", count: 0 });
+    // missing or unparsable expiry
+    expect(summaryOf([provider({ modelsEvidence: evidence({ expiresAt: null }) })])).toMatchObject({ state: "unknown", count: 0 });
+    expect(summaryOf([provider({ modelsEvidence: evidence({ expiresAt: "not-a-date" }) })])).toMatchObject({ state: "unknown", count: 0 });
+    // a future expiry is normal TTL and still counts
+    expect(summaryOf([provider({ modelsEvidence: evidence({ readAt: iso(-60_000), expiresAt: iso(4 * 60_000) }) })])).toMatchObject({ state: "current", count: 2 });
+  });
+
+  test("paused, disabled, degraded or identity-mismatched connections do not count", () => {
+    for (const status of ["paused", "disabled", "degraded", "identity-mismatch", "revoked"]) {
+      const summary = summaryOf([provider({ status })]);
+      expect(summary, status).toMatchObject({ state: "inactive", count: 0, label: "0 个当前可见模型" });
+      expect(summary.detail, status).toContain("恢复连接并重新读取");
+      expect(summary.entries[0]).toMatchObject({ counted: false, status });
+      expect(summary.entries[0].models.length, status).toBeGreaterThan(0);
+    }
+    // The UI is a pure projection: after the Service marks the old evidence
+    // stale/unknown (pause, resume, identity change), a new current readback
+    // counts again. The client has no resume epoch of its own.
+    expect(summaryOf([provider()])).toMatchObject({ state: "current", count: 2 });
+  });
+
+  test("a paused provider does not hide a connected one", () => {
+    const summary = summaryOf([provider({ id: "paused", status: "paused" }), provider({ id: "live", modelsEvidence: evidence({ modelCount: 3, models: ["c/three"] }) })]);
+    expect(summary).toMatchObject({ state: "current", count: 3, providers: 1 });
+    expect(summary.detail).toContain("另有 1 个伙伴连接已暂停或降级，仅诊断");
+    expect(summary.entries.filter((row) => row.counted === false)).toHaveLength(1);
+  });
+
+  test("a visible list never overwrites an exhausted or unread quota", () => {
+    const spent = summaryOf([{ ...provider(), limit: { costLimit: 2, cost: 2, costLeft: 0, spent: true } }]);
+    expect(spent).toMatchObject({ state: "current", count: 2, label: "2 个当前可见模型" });
+    expect(spent.detail).toContain("额度已用尽（原生 429）");
+    expect(spent.entries[0]).toMatchObject({ quota: "spent" });
+    expect(spent.entries[0].quotaText).toContain("429");
+
+    const unknown = summaryOf([provider()]);
+    expect(unknown.detail).toContain("额度待确认");
+    expect(unknown.entries[0]).toMatchObject({ quota: "unknown" });
+  });
+
+  test("an empty or rejected readback gets its own next step, never a zero", () => {
+    const empty = summaryOf([provider({ modelsEvidence: evidence({ models: [], modelCount: 0 }) })]);
+    expect(empty).toMatchObject({ state: "empty", count: 0, label: "已连接，但没有发现模型" });
+    expect(empty.detail).toContain("核对模型范围与额度");
+
+    const denied = summaryOf([provider({ modelsEvidence: evidence({ status: "unknown", callable: "no", modelCount: null, error: "401 rejected" }) })]);
+    expect(denied).toMatchObject({ state: "denied", count: 0, label: "授权未通过" });
+    expect(denied.detail).toContain("401/撤销");
+    expect(denied.detail).not.toContain("0 个");
+  });
+
+  test("a changed key only counts after a new current readback", () => {
+    expect(summaryOf([provider({ modelsEvidence: evidence({ status: "stale", keyGeneration: 3, generation: 1 }) })])).toMatchObject({ state: "stale", count: 0 });
+    expect(summaryOf([provider({ modelsEvidence: evidence({ status: "current", keyGeneration: 3, generation: 2 }) })])).toMatchObject({ state: "current", count: 2 });
+  });
+});
+
+describe("explicit model readback (simulated backend response shape)", () => {
+  const providerView = { id: "provider-1", remoteMagpieId: "magpie-1", status: "connected", fingerprint: { hostname: "partner-harbor" }, limit: { costLimit: 2, cost: 0, costLeft: 2 } };
+  const state = () => {
+    const base = baseState();
+    base.status.providers = [structuredClone(providerView)];
+    return base;
+  };
+  const evidence = (over = {}) => {
+    const now = Date.now();
+    return { status: "current", source: "provider-models", readAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(now + 4 * 60_000).toISOString(), models: ["qwen/qwen3-32b"], modelCount: 1, callable: "yes", identity: null, generation: 1, keyRef: "provider-keys.json#provider-1", keyGeneration: 1, error: null, ...over };
+  };
+
+  test("provider-models refreshes the console state exactly like the contract asks", async () => {
+    let refreshes = 0;
+    const r = runtime(state(), async (name) => name === "provider-models" ? { ...providerView, models: ["qwen/qwen3-32b"], modelsEvidence: evidence() } : {});
+    try {
+      const before = r.refreshes;
+      await find(r.roots["connections-panel"], "button", "读取可用模型").click(); await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["provider-models"]);
+      expect(r.refreshes).toBeGreaterThan(before);
+      expect(r.dialog.textContent).toContain("qwen/qwen3-32b");
+      expect(r.dialog.textContent).not.toContain("只作诊断");
+    } finally { r.cleanup(); }
+  });
+
+  test("a read without current evidence is shown as diagnostic only", async () => {
+    const r = runtime(state(), async () => ({ ...providerView, models: ["qwen/qwen3-32b"], modelsEvidence: evidence({ status: "stale", callable: "unknown", modelCount: null }) }));
+    try {
+      await find(r.roots["connections-panel"], "button", "读取可用模型").click(); await flush();
+      expect(r.dialog.textContent).toContain("只作诊断");
+      expect(r.dialog.textContent).toContain("首页不会把它计为可用");
+    } finally { r.cleanup(); }
+  });
 });

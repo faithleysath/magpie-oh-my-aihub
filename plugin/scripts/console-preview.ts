@@ -8,6 +8,8 @@
  *
  *   bun run plugin/scripts/console-preview.ts --scenario configured --port 61390
  *   bun run plugin/scripts/console-preview.ts --scenario first-run --port 61391
+ *   bun run plugin/scripts/console-preview.ts --scenario stale --port 61392
+ *   bun run plugin/scripts/console-preview.ts --scenario paused --port 61394
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -98,6 +100,12 @@ function configuredState(): any {
         mappedCidr: "10.126.126.2/32", status: "connected", lastConnectedAt: "2026-10-31T01:30:00.000Z",
         fingerprint: { hostname: "partner-harbor" },
         limit: { costLimit: 2.5, cost: 0.42, costLeft: 2.08, spent: false },
+        modelsEvidence: {
+          status: "current", source: "provider-models", readAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          models: ["qwen/qwen3-32b", "deepseek/deepseek-chat"], modelCount: 2, callable: "yes",
+          identity: { hostname: "partner-harbor", virtualIpv4: "10.126.126.2", fingerprint: null },
+          generation: 4, keyRef: "provider-keys.json#provider-harbor", keyGeneration: 2, error: null,
+        },
       }],
       catalog: {
         enabled: true,
@@ -179,7 +187,22 @@ function firstRunState(): any {
   return state;
 }
 
-let current: any = scenario === "first-run" ? firstRunState() : configuredState();
+function staleEvidenceState() {
+  const state = configuredState();
+  const provider = state.status.providers[0];
+  provider.modelsEvidence = { ...provider.modelsEvidence, status: "stale", callable: "unknown", modelCount: null, models: [], readAt: "2026-10-30T21:00:00.000Z", expiresAt: "2026-10-30T21:05:00.000Z" };
+  return state;
+}
+function pausedEvidenceState() {
+  const state = configuredState();
+  // Historical list kept for diagnosis, but the connection is not usable.
+  state.status.providers[0].status = "paused";
+  return state;
+}
+let current: any = scenario === "first-run" ? firstRunState()
+  : scenario === "stale" ? staleEvidenceState()
+  : scenario === "paused" ? pausedEvidenceState()
+  : configuredState();
 const csrf = "0".repeat(32);
 const instance = "preview-instance";
 
@@ -205,6 +228,10 @@ const server = Bun.serve({
       if (name === "join-network" || name === "configure") {
         current = configuredState();
         return json({ result: current });
+      }
+      if (name === "provider-models" || name === "provider-check") {
+        const provider = current.status.providers?.[0];
+        return json({ result: { ...provider, models: provider?.modelsEvidence?.models ?? [], modelsEvidence: provider?.modelsEvidence } });
       }
       if (name === "share-native-models") {
         current.status.config.sharingEnabled = true;

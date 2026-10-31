@@ -55,6 +55,126 @@ export function parseTransportDocument(text) {
 }
 const statusNames = { connected: "已连接", verified: "身份已接受", unverified: "身份待确认", "identity-changed": "身份已变化", stale: "报价已过期", unreachable: "暂时无法连接", "no-catalog": "未发布目录", conflict: "地址冲突", offline: "离线", self: "本机", pending: "待审批", approved: "已批准", rejected: "已拒绝", paused: "已暂停", auth: "授权失效", error: "需要处理", unknown: "尚未验证" };
 
+/**
+ * Home "available models" is a real-readback question, never an authorization
+ * question, and a 200 model list is not a promise that inference quota remains.
+ * Only a current, unexpired evidence record for the current key/identity is
+ * shown; quota is reported separately (native 429 / unknown / not read).
+ */
+/** Mirrors the backend's 5 minute evidence TTL; the client only narrows trust. */
+const EVIDENCE_TTL_MS = 5 * 60 * 1000;
+
+function quotaEvidence(provider) {
+  const limit = record(provider?.limit);
+  const knownCap = typeof limit.costLimit === "number" && Number.isFinite(limit.costLimit);
+  const left = typeof limit.costLeft === "number" && Number.isFinite(limit.costLeft);
+  if (limit.spent === true) return { state: "spent", text: "额度已用尽（原生 429）" };
+  if (left && left <= 0) return { state: "spent", text: "额度已用尽（原生 429）" };
+  if (!knownCap) return { state: "unknown", text: "额度待确认（未读取原生限额）" };
+  return { state: "ok", text: `额度上限 ${capLabel(limit.costLimit)} · 已用 ${money(limit.cost)} · 剩余 ${money(limit.costLeft)}` };
+}
+
+export function modelEvidenceSummary(providers, now = Date.now()) {
+  const rows = items(providers).map((provider) => {
+    const evidence = record(provider?.modelsEvidence);
+    const hostname = provider?.fingerprint?.hostname || provider?.hostname || provider?.id || "伙伴服务";
+    // The backend promises a 5 minute TTL. A record can only be trusted when
+    // both timestamps exist, are ordered, are not in the future and fit that
+    // window; everything else stays unknown rather than guessing freshness.
+    const readMs = typeof evidence.readAt === "string" ? Date.parse(evidence.readAt) : NaN;
+    const expMs = typeof evidence.expiresAt === "string" ? Date.parse(evidence.expiresAt) : NaN;
+    let freshness = "unknown";
+    if (Number.isFinite(readMs) && readMs <= now && Number.isFinite(expMs) && expMs >= readMs) {
+      if (expMs - readMs > EVIDENCE_TTL_MS) freshness = "unknown";
+      else freshness = expMs <= now ? "expired" : "fresh";
+    }
+    return {
+      hostname,
+      evidence,
+      freshness,
+      status: typeof provider?.status === "string" ? provider.status : "unknown",
+      quota: quotaEvidence(provider),
+    };
+  });
+  if (!rows.length) {
+    return { state: "none", count: 0, providers: 0, entries: [], label: "尚未连接", detail: "还没有连接伙伴服务；在“发现”核对身份后申请模型。" };
+  }
+  const eligible = rows.filter((row) => row.evidence.status === "current" && row.freshness === "fresh" && row.evidence.callable === "yes" && typeof row.evidence.modelCount === "number" && Number.isFinite(row.evidence.modelCount) && row.evidence.modelCount >= 0);
+  // A paused, disabled, degraded or identity-mismatched connection keeps its
+  // historical list for diagnosis, but it is not a current usable model source.
+  const usable = eligible.filter((row) => row.status === "connected");
+  const inactive = eligible.filter((row) => row.status !== "connected");
+  const entry = (row, counted) => ({
+    hostname: row.hostname,
+    count: row.evidence.modelCount,
+    models: items(row.evidence.models).filter((model) => typeof model === "string"),
+    readAt: typeof row.evidence.readAt === "string" ? row.evidence.readAt : null,
+    source: typeof row.evidence.source === "string" ? row.evidence.source : null,
+    quota: row.quota.state,
+    quotaText: row.quota.text,
+    counted,
+    status: row.status,
+  });
+  if (usable.length) {
+    const count = usable.reduce((total, row) => total + row.evidence.modelCount, 0);
+    const spent = usable.some((row) => row.quota.state === "spent");
+    const unknownQuota = usable.some((row) => row.quota.state === "unknown");
+    const quotaNote = spent ? "；有伙伴额度已用尽（原生 429）" : unknownQuota ? "；额度待确认" : "";
+    const pausedNote = inactive.length ? `；另有 ${inactive.length} 个伙伴连接已暂停或降级，仅诊断` : "";
+    if (count === 0) {
+      return {
+        state: "empty", count: 0, providers: usable.length,
+        entries: [...usable.map((row) => entry(row, true)), ...inactive.map((row) => entry(row, false))],
+        label: "已连接，但没有发现模型",
+        detail: "真实读回成功但清单为空；请在共享方核对模型范围与额度，或稍后重新读取。",
+      };
+    }
+    return {
+      state: "current",
+      count,
+      providers: usable.length,
+      label: `${count} 个当前可见模型`,
+      detail: `${usable.length} 个伙伴服务 · 最近真实读回；推理额度与 429 另计，不代表可调用${quotaNote}${pausedNote}`,
+      entries: [...usable.map((row) => entry(row, true)), ...inactive.map((row) => entry(row, false))],
+    };
+  }
+  if (inactive.length) {
+    return {
+      state: "inactive",
+      count: 0,
+      providers: inactive.length,
+      entries: inactive.map((row) => entry(row, false)),
+      label: "0 个当前可见模型",
+      detail: "伙伴连接已暂停、降级或身份不匹配；恢复连接并重新读取后再计入，历史清单只作诊断。",
+    };
+  }
+  const denied = rows.some((row) => row.evidence.callable === "no" && row.evidence.status !== "stale");
+  if (denied) {
+    const stale = rows.some((row) => row.evidence.status === "stale" || row.freshness === "expired");
+    return {
+      state: "denied",
+      count: 0,
+      providers: rows.length,
+      entries: [],
+      label: stale ? "模型清单已过期" : "授权未通过",
+      detail: stale
+        ? "到「发现 → 我的连接」重新读取可用模型；过期清单不算可用。"
+        : "最近一次读回被拒绝（401/撤销）；到「发现 → 我的连接」核验密钥与额度，不会用 0 代替。",
+    };
+  }
+  const stale = rows.some((row) => row.evidence.status === "stale" || row.freshness === "expired");
+  return {
+    state: stale ? "stale" : "unknown",
+    count: 0,
+    providers: rows.length,
+    entries: [],
+    label: stale ? "模型清单已过期" : "尚未确认",
+    detail: stale
+      ? "到「发现 → 我的连接」重新读取可用模型；过期清单不算可用。"
+      : "到「发现 → 我的连接」读取可用模型；读取前不会计入可用数。",
+  };
+}
+
 export function mountProviders({ client, getState, onState, notice, setBusy, refreshState }) {
   const el = (tag, text, className) => {
     const node = document.createElement(tag);
@@ -653,14 +773,22 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       if (provider.detail) row.append(el("p", provider.detail, "inline-warning"));
       row.append(details("连接与核验信息", [["本机接入地址", provider.url], ["伙伴网络地址", provider.mappedCidr], ["最近连接", provider.lastConnectedAt], ["原生限额状态", limit.spent === true ? "额度已用尽，原生调用可能返回 429" : provider.limit ? "已读取" : "尚未读取"], ["授权说明", "401 表示密钥未被接受；429 表示原生限额拒绝。两者不是网络连通证明。"]]));
       const actions = el("div", null, "workflow-actions");
-      actions.append(button("读取可用模型", () => void run("provider-models", { id: provider.id }, (result) => showProviderModels(provider, result), { refresh: false })), button("检查连接与额度", () => void run("provider-check", { id: provider.id })), button("更新访问密钥", () => updateKey(provider)), button("移除此连接", () => confirmAction("移除此连接", "会移除本插件创建的本机远程服务与转发。对方的授权和账目不会被删除，其他连接可能短暂重连。", "provider-remove", { id: provider.id }, "我确认移除此伙伴连接")));
+      // Both reads persist a new evidence record, so refresh the state once after
+      // the explicit action (the polling endpoint itself never probes).
+      actions.append(button("读取可用模型", () => void run("provider-models", { id: provider.id }, (result) => showProviderModels(provider, result))), button("检查连接与额度", () => void run("provider-check", { id: provider.id })), button("更新访问密钥", () => updateKey(provider)), button("移除此连接", () => confirmAction("移除此连接", "会移除本插件创建的本机远程服务与转发。对方的授权和账目不会被删除，其他连接可能短暂重连。", "provider-remove", { id: provider.id }, "我确认移除此伙伴连接")));
       row.append(actions); connectionsList.append(row);
     }
   }
   function showProviderModels(provider, result) {
     const models = items(result.models || result.modelIds || result);
+    const evidence = record(result.modelsEvidence);
     openDialog("此连接的实际可用模型", (root) => {
       root.append(paragraph(`来自 Magpie 原生远程服务：${provider.remoteMagpieId || provider.id}`));
+      if (evidence.status && evidence.status !== "current") {
+        root.append(el("p", "这次读取没有留下当前证据，清单只作诊断；首页不会把它计为可用。", "inline-warning"));
+      } else if (evidence.readAt) {
+        root.append(paragraph(`真实读回于 ${new Date(evidence.readAt).toLocaleString("zh-CN", { hour12: false })}。`));
+      }
       if (!models.length) root.append(empty("尚未读取到模型", "检查此连接的身份、密钥与额度后重新读取。"));
       for (const model of models) {
         const data = typeof model === "string" ? { id: model } : model;
