@@ -2051,7 +2051,9 @@ export class Service {
       mappedCidr: cfg.sharingEnabled || this.controlOnlyPublication() ? cfg.mappedCidr : null,
       publishedPorts: this.publishedPorts(cfg),
       socks5Proxy: cfg.catalog.discoveryEnabled ? `socks5://127.0.0.1:${cfg.catalog.socksPort}` : null,
-      portForwards: cfg.controlEnabled !== false ? this.allForwardSpecs() : (cfg.consumingEnabled ? this.forwardSpecs() : []),
+      // A control forward is an outbound path to a peer: it belongs to the
+      // consuming capability, exactly like a provider forward.
+      portForwards: cfg.consumingEnabled ? this.allForwardSpecs() : [],
       secureMode: cfg.secureMode,
       secureIdentity: cfg.secureIdentity,
     };
