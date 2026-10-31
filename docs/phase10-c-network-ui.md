@@ -2,7 +2,7 @@
 
 - 分支：`feature/phase10-c-network-ui`
 - worktree：`/Users/laysath/.paseo/worktrees/1z728cdk/c-network-ui`
-- 基线：冻结的 wallet UI 39 head `37800f9824bbe7027eab68441f5fcddde26183f7`（明确作为开发依赖，不修改 39）
+- 基线：最终 wallet UI 39 head `23c94804f75c6deeaefbd1c4b32a74f779cb64b2`（明确作为开发依赖，不修改 39）
 - 服务契约：`/tmp/oma-research/C-NETWORK-LOCAL-ACTION-CONTRACT.md`（C-network 41 head `cc0dd210e1cc20f5e4f48cb961e5c280b1a98bf6`，未合并/未 import 实现）
 - 结论：**只读网络/资产 UI + mock 行为测试完成；真实 C-network service 未接线，真实 RPC/余额未验收，不是 Wallet GO。**
 
@@ -47,7 +47,7 @@
 | 项 | 结果 |
 | --- | --- |
 | `bun test plugin/console/wallet-network-ui.test.js` | **11 pass / 0 fail / 60 assertions**（mock） |
-| `bun test plugin/console` | **101 pass / 0 fail / 743 assertions** |
+| `bun test plugin/console` | **103 pass / 0 fail / 757 assertions** |
 | `bun run typecheck` | pass |
 
 覆盖：平权网络/原生与 Base USDC/BSC USDC unsupported、精确 6/18 decimals、默认空充值选择、单/双选独立、显式 watch、错误地址不调用 action、余额刷新精确输入、unknown 不显示 0、普通 onShow 不调用余额 action、服务 404 fail closed、源码无 RPC/存储/付款/自动充值。
