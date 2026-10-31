@@ -235,7 +235,7 @@ bun install --frozen-lockfile
 | 命令 | 结果 | 说明 |
 | --- | --- | --- |
 | `bun run typecheck` | PASS | `tsc --noEmit` 无输出 |
-| `bun test test/wallet-vault.test.ts` | **40 pass / 0 fail / 208 expect** | 纯模块，临时目录，无网络 |
+| `bun test test/wallet-vault.test.ts` | **40 pass / 0 fail / 212 expect** | 纯模块，临时目录，无网络 |
 | `bun run secret-scan` | PASS | 工作树无凭据模式 |
 | `bun install --frozen-lockfile` | PASS（no changes） | lock 可复现 |
 | `npm audit --omit=dev`（公共 registry） | 0 known vulnerabilities | 不是完整供应链审计 |

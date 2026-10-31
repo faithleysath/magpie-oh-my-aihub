@@ -864,6 +864,16 @@ describe("simulated/testnet payment signing", () => {
       code: "signing-permit-invalid",
     });
     expect(permit.remainingUses).toBe(1);
+    const changedData = vault.preparePayment(paymentInput({ data: "0x1234" }));
+    await expect(vault.signPayment({ prepared: changedData, permit })).rejects.toMatchObject({
+      code: "signing-permit-invalid",
+    });
+    expect(permit.remainingUses).toBe(1);
+    const changedGas = vault.preparePayment(paymentInput({ gasLimit: 22_000n }));
+    await expect(vault.signPayment({ prepared: changedGas, permit })).rejects.toMatchObject({
+      code: "signing-permit-invalid",
+    });
+    expect(permit.remainingUses).toBe(1);
     const allowed = await vault.signPayment({ prepared, permit });
     expect(allowed.valueWei).toBe("1000000000000000");
     expect(permit.remainingUses).toBe(0);
