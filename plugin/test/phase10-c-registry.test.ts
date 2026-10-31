@@ -807,6 +807,17 @@ describe("funds provenance and pending recovery", () => {
     second.ledger.close();
   });
 
+  test("a pending unknown fundsClass is refused before any cap write", async () => {
+    const { ledger, provisioner } = provisionerLab();
+    await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });
+    const rec = provisioner.find("alice")!;
+    rec.pending = { capUsd: 2, depositId: "bogus-class", usd: 1, fundsClass: "bogus" as never, source: "simulated" };
+    await expect(provisioner.reconcile(rec)).rejects.toThrow(/fundsClass|unknown/);
+    expect(rec.pending).not.toBeNull();
+    expect(rec.creditedUsd).toBe(0);
+    ledger.close();
+  });
+
   test("a legacy unknown-source deposit stays auditable, pauses credit and can be reviewed without rewriting history", async () => {
     const { ledger, magpie, provisioner } = provisionerLab();
     const view = await provisioner.ensure("alice", { models: [LAB_MODEL], capUsd: 1 });

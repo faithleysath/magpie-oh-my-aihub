@@ -929,6 +929,9 @@ export class Provisioner {
     if (!c.pending || !c.secret) return;
     const blocked = await this.blockUnknownProvenance(c);
     if (blocked) throw new Error(`pending deposit ${c.pending.depositId} cannot be reconciled: ${blocked}`);
+    if (c.pending.fundsClass !== undefined && !isKnownFundsClass(c.pending.fundsClass)) {
+      await this.uncertainPending(c, `pending deposit ${c.pending.depositId} has unknown fundsClass ${JSON.stringify(c.pending.fundsClass)}; manual review is required`);
+    }
     let status: LimitStatus;
     try {
       status = await this.magpie.limitStatus(c.secret);
