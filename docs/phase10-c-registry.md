@@ -439,12 +439,12 @@ bun run typecheck                      # PASS (tsc --noEmit)
 bun run secret-scan                    # PASS: no credentials in the working tree
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts
-# 57 pass / 0 fail（291 expect）
+# 57 pass / 0 fail（306 expect）
 
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts \
   ./test/wallet-surface.test.ts ./test/deposits.test.ts ./test/ledger.test.ts
-# 107 pass / 0 fail（497 expect）
+# 107 pass / 0 fail（512 expect）
 ```
 
 覆盖：
