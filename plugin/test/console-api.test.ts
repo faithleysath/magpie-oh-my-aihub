@@ -28,7 +28,7 @@ function fixture() {
     providers: [], catalog: { peers: [] }, consumers: [], accounting: { uncertain: false },
     network: {
       state: "online",
-      summary: "Connected to 1 peer over the overlay.",
+      summary: "已连接到 1 个伙伴。",
       evidence: { readAt: "2026-10-30T00:00:01Z", staleMs: 500, live: true, stale: false },
       thisNode: { virtualIpv4: "10.77.0.9/24", hostname: "ohmyaihub-local-node", stale: false },
       neighbors: [],

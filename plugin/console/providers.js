@@ -212,7 +212,9 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
 // Zero-file P2P states (B assembly contract, draft). Labels only; no secrets.
 const P2P_INBOUND_LABELS = {
   requested: "待核对", "awaiting-trust": "需要核对身份", "waiting-tofu": "需要核对身份",
-  "awaiting-approval": "待批准", pending: "待批准", approved: "已批准", rejected: "已拒绝", expired: "已过期",
+  "awaiting-approval": "待批准", pending: "待批准", approved: "已批准", acked: "已交付",
+  connected: "已连接", rejected: "已拒绝", expired: "已过期", revoked: "已撤销",
+  "action-needed": "需要处理",
 };
 const P2P_OUTBOUND_LABELS = {
   requested: "等待批准", "awaiting-trust": "等待对方核对身份", "awaiting-approval": "等待批准",
@@ -973,7 +975,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       row.append(top, paragraph(`${items(request.models).length} 个模型 · 建议额度 ${request.capUsd === null || request.capUsd === undefined ? "未提供" : money(request.capUsd)} · 到期 ${when(request.expiresAt)}`));
       row.append(details("完整身份与报价", [["伙伴节点", request.consumerNodeId], ["完整身份指纹", request.consumerFingerprint], ["报价指纹", request.quoteHash], ["价格版本", request.priceVersion], ["身份状态", P2P_TOFU_LABELS[request.tofu] || request.tofu || "未提供"], ["收到时间", when(request.receivedAt)]]));
       if (request.tofu && request.tofu !== "accepted") row.append(el("p", P2P_TOFU_LABELS[request.tofu] || request.tofu, "inline-warning"));
-      if (request.detail) row.append(el("p", request.detail, "inline-warning"));
+      if (request.detail) row.append(el("p", request.state === "revoked" ? "此授权已撤销；历史请求与账目保留。" : request.detail, "inline-warning"));
       if (actionable) {
         const actions = el("div", null, "workflow-actions");
         actions.append(button("核对并批准", () => approveP2p(request)), button("拒绝", () => rejectP2p(request)));

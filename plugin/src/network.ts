@@ -494,7 +494,7 @@ export function projectNetwork(input: NetworkProjectionInput): NetworkView {
             : state === "degraded"
               ? "The overlay is running, but its state could not be fully proven."
               : state === "online"
-                ? `Connected to ${neighbors.length} peer${neighbors.length === 1 ? "" : "s"} over the overlay.`
+                ? `已连接到 ${neighbors.length} 个伙伴。`
                 : "Network state is unknown.";
 
   const quoteModels = input.catalog.quote?.models.length ?? null;
