@@ -240,6 +240,13 @@ second approval layer.
   verifies the native models/cap, then promotes the journal and reads the secret
   through the locked hand-over. If that adoption cannot be proven, it stays
   `unknown`; it never calls `ensure` or creates a second key.
+  Funding rules for this adoption: if a Ledger account already exists, the
+  existing seed path is a no-op (no second opening/window/deposit). If it does not,
+  the opening is exactly the approved cap once; native `cost` is recorded as one
+  idempotent adjustment (never as a new deposit), the usage cursor starts at the
+  current usage-log end, and no native cap/model/value is changed. The native used
+  cost is read before adoption; if it is unknown, adoption is refused and no
+  opening balance is seeded. No chain deposit/source logic is copied.
   `noSideEffect` is allowed only when a durable pending journal exists, the local
   Provisioner record is absent, **and** the Magpie key list (`keyList`/`keyByName`,
   not just `provisioner.find`) has no key with the deterministic plugin name; source
