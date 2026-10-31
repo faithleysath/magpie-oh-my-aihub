@@ -22,6 +22,8 @@
 
 ## 1. 现状：安装、打开、配置
 
+> 修改前真实 UI 事实与实拍：`docs/phase10/evidence/2026-10-31-current-console-before.md` 与 `docs/phase10/evidence/screenshots/`。来源是 0.1.2289 真实宿主、**空网络**，REPRODUCED；仅为修改前证据，不是 Visual UX GO，也不定义目标。
+
 ```mermaid
 flowchart TD
   S1["Magpie Plugins → Discover"] --> S2["Install GitHub package"]
@@ -227,6 +229,7 @@ flowchart TD
 5. 普通钱包不提供签名文件路径；P2P 付款/签名必须走内置或用户明确选择的外置钱包。
 6. 不把测试网/模拟链结果写成主网付款或主网授信。
 7. 不因收到转账自动解除暂停；不自动再签发。
+8. 多扩展必须用户明确选择；**不得用 fake provider 单测声称真实 MetaMask/Rabby 兼容**；真实扩展验收当前 BLOCKED/UNKNOWN。
 
 ## 6. D — 真实资金独立审查（PROPOSED）
 
@@ -322,6 +325,7 @@ flowchart TD
 | C8 | 自动充值策略 | C4–C7 | 策略 + 负向测试 | 可模拟/测试执行；主网执行硬拒绝 | 待办 |
 | C9 | 主网发送/授信硬禁止 | C1–C8 | 负向测试 | 任何主网 send/credit/cap 路径拒绝 | 待办 |
 | C10 | 真实资金 | — | — | **NO-GO**（D 清单 + 用户明确授权前不执行） | 禁止 |
+| C11 | 真实 MetaMask/Rabby 扩展兼容 | 隔离 profile 工具 | [`evidence/2026-10-31-external-wallet-test-plan.md`](evidence/2026-10-31-external-wallet-test-plan.md) | EIP-1193/6963 + 真实签名/拒绝路径 | **BLOCKED/UNKNOWN**；fake provider 不算验收 |
 
 ### D — 真实资金独立审查
 

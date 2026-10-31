@@ -23,6 +23,7 @@
 | 本地门禁 | typecheck / boot-check / secret-scan 通过；`bun run test` 740 pass / 5 fail（固定时钟，P0-3） |
 | 参考研究 | 审查代理 `6a326f2b-2249-4123-8f35-1fe35926e107`：`/tmp/oma-research/REFERENCE-REVIEW.md` |
 | PR14 | `#14` draft；主审文档范围审查通过，作为实现前置；**内容仅计划，无 GO**；不合并 |
+| 改动前 UI 证据 | `docs/phase10/evidence/`：3 份事实报告 + 16 张实拍 + SHA256SUMS；0.1.2289 真实宿主**空网络**；可标 REPRODUCED/已审查，**不能标 Visual UX GO** |
 | 实现代理模型 | `pi/magpie/group/deepseek-v4.1-flash`（max） |
 | 真实资金 | NO-GO；D 本阶段只出 NO-GO 清单，不执行真实资金 |
 | 主网发送/授信 | **硬禁止**（C 不实现） |
@@ -37,8 +38,10 @@
 | A-ui | `ccb08749-badc-4512-9604-e93ce7bd76b9` | 5 页 IA、首页 5 块、贴纸风、只读端口/邻居 | 不改 B/C 代码；不自动分享/信任 |
 | A-service | `c51de818-13dd-4df6-ba68-2e48155eeb63` | 三字段配置、自动检测模型、一次“分享这些模型”、状态投影 | 不改 UI 视觉；不自动分享 |
 | B-core | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | 所有节点控制服务、请求/审批/E2E/注册/ACK 状态机 | 文件不能代替目标；不自动批准 |
+| B-service | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | 有限 HTTP transport、业务集成接口；依赖 B-core/A-service 批准后的 stacked base | 不重复密码模块；不另起协议 |
 | C-registry | `0c94d106-6442-470f-8f14-374c38ea20f7` | 56/8453 只读平权、四元组资产、注册表 | 主网发送/授信；真实资金 |
 | C-wallet | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | 隔离测试创建/恢复/加密存储/短解锁/敏感导出/EIP712 模拟签名 | 尚未 UI 集成；不接生产资金；不声称生产级安全 |
+| C-external | `3820537e-5840-4926-ba00-5975805b2df6` | EIP-1193/6963 发现、明确选钱包、受限签名、模拟 testnet 付款 | 尚未 UI 集成；不得用 fake provider 声称真实扩展兼容 |
 | D 审查 | 独立审查代理（待分派） | 真实资金 NO-GO 清单 | 不改代码；不兼任 C 实现；不执行真实资金 |
 | P0-clock | `f63b644e-40df-4174-afd4-c4f43da87927` | 测试时钟、`bun run test` 全绿 | 不改用户安装 |
 | P0-peak | `187ccdcb-8f0b-40f3-8276-939334de4412` | `peak` fail-closed | 不实现峰谷价 |
@@ -52,11 +55,15 @@
 | A-ui | `/Users/laysath/.paseo/worktrees/1z728cdk/a-ui` | `ccb08749-badc-4512-9604-e93ce7bd76b9` | `feature/phase10-a-console` / draft PR 待记录 | DOING | 主审明确 commit + R2 审查 |
 | A-service | `/Users/laysath/.paseo/worktrees/1z728cdk/a-service` | `c51de818-13dd-4df6-ba68-2e48155eeb63` | `feature/phase10-a-network` / draft PR 待记录 | DOING | 主审明确 commit + P0 |
 | B-core | `/Users/laysath/.paseo/worktrees/1z728cdk/b-core` | `0185d02c-b0c4-49a9-b9bb-7242c31d6a04` | `feature/phase10-b-protocol` / draft PR 待记录 | DOING | 主审明确 commit + 安全评审 |
+| B-service | `/Users/laysath/.paseo/worktrees/1z728cdk/b-service` | `8dd0cf10-548b-45fb-88c0-9b8a7cb5abe3` | `feature/phase10-b-control-service` / draft PR 待记录 | DOING | 依赖 B-core/A-service 批准后的 stacked base；合同 `/tmp/oma-research/B-CONTROL-CONTRACT.md` |
 | C-registry | `/Users/laysath/.paseo/worktrees/1z728cdk/c-registry` | `0c94d106-6442-470f-8f14-374c38ea20f7` | `feature/phase10-c-mainnet-registry` / draft PR 待记录 | DOING | 主审明确 commit + D 前置 |
 | C-wallet | `/Users/laysath/.paseo/worktrees/1z728cdk/c-wallet` | `01060df1-e5e8-4de8-b6cb-70ca932c7b1e` | `feature/phase10-c-wallet-vault` / draft PR 待记录 | DOING | 主审明确 commit + 安全评审 |
-| P0-clock | 独立 worktree（路径待补） | `f63b644e-40df-4174-afd4-c4f43da87927` | 小 draft PR 在做 | DOING | P0-3 证据 |
-| P0-peak | 独立 worktree（路径待补） | `187ccdcb-8f0b-40f3-8276-939334de4412` | 小 draft PR 在做 | DOING | P0-2 证据 |
+| C-external | `/Users/laysath/.paseo/worktrees/1z728cdk/c-external-wallet` | `3820537e-5840-4926-ba00-5975805b2df6` | `feature/phase10-c-external-wallet` / draft PR 待记录 | DOING | 主审明确 commit + 安全评审；真实扩展验收 BLOCKED/UNKNOWN |
+| P0-clock | `/Users/laysath/Projects/magpie-oh-my-aihub-clock-fix` | `f63b644e-40df-4174-afd4-c4f43da87927` | `fix/phase10-validation-clock` @ `889973f5` / PR #15 (draft) | REVIEW | 独立审代理 `27dcd09b-8ab1-4989-aecd-aa5d70e530ac`；未集成 |
+| P0-peak | `/Users/laysath/Projects/magpie-oh-my-aihub-p0` | `187ccdcb-8f0b-40f3-8276-939334de4412` | `fix/phase10-unsupported-pricing-guard` @ `0661bede` / PR #16 (draft) | REVIEW | 独立审 `27dcd09b…` 排队审 15+16 组合；未集成 |
 
+> B-core 与 B-service 共同维护合同 `/tmp/oma-research/B-CONTROL-CONTRACT.md`；B-service 只做有限 HTTP transport 与业务集成接口，不重复密码模块。
+>
 > C-wallet 只做隔离测试核心（创建/恢复/加密存储/短解锁/敏感导出/EIP712 模拟签名）；**尚未 UI 集成，也不代表生产资金认可**。
 
 **集成规则**
@@ -74,8 +81,10 @@
 | ID | 单元 | 负责 | 状态 | 依赖 | 验收/证据 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
 | P0-1 | 0.1.2289 + EasyTier 2.6.4 隔离副本 | P0 | TODO | — | 版本/哈希/平台；隔离 data dir；不改 `/Applications` | 已决定，不再选版本 |
-| P0-2 | `peak` fail-closed | P0-peak `187ccdcb…` + C | DOING | P0-1 | 含不支持价格 → 拒绝发布/签发；负向测试 | 后续再实现峰谷价 |
-| P0-3 | 测试时钟 | P0-clock `f63b644e…` | DOING | — | `bun run test` 全绿；可注入时钟 | 不改产品语义 |
+| P0-2 | `peak` fail-closed | P0-peak `187ccdcb…` + C | REVIEW | P0-1 | 目标 48 pass/0 fail + typecheck/secret/boot stub PASS；CI `41157220963` linux/mac **753 pass/1 skip/5 fail（既有 clock）**；报告 `/tmp/oma-research/P0-PRICING-GUARD-REPORT.md` | **REVIEW**；不可写 CI 全绿，不可 DONE；未集成 |
+| P0-3 | 测试时钟 | P0-clock `f63b644e…` | REVIEW | — | 本地 746/0；CI `41156933911` linux/macos success；PR #15 draft | 独立审另派；**REVIEW 不是 DONE**；未集成 |
+| P0-6 | hermetic tests（隔离旧测试对生产网关/公共 RPC 的访问） | P0 测试代理（待分派） | TODO | P0-3 | 测试不访问生产网关/公共 RPC；隔离夹具 | 小 PR；先修隔离再谈重测 |
+| P0-7 | 精确 pin 支持 0.1.2289 实际实验 | P0 测试代理（待分派） | TODO | P0-1 | 0.1.2289 pin/隔离实验可复现 | 小 PR；不修改用户安装 |
 | P0-4 | 最小重测 401/429/limit/top-up/restart | P0 | TODO | P0-1 | 脱敏日志 + 命令 | 0.1.2289 实际结果 |
 | P0-5 | 证据/CI/pin | P0 | TODO | P0-2..4 | 双平台 CI + 文档 | 不合并是调度约束 |
 
@@ -107,6 +116,7 @@
 | B8 | 首次/变化 TOFU 人工 | B-core | TODO | B2 | 未接受/身份变化禁止 | 不跳过 |
 | B9 | 重放/篡改/过期 | B-core | TODO | B1..B7 | 负向测试 | 不自动文件回退 |
 | B10 | 紧急文件兼容 | B-core + 审查 | TODO | B9 | 显式选择/警告；默认关 | 不作为目标/验收替代 |
+| B11 | 有限 HTTP transport + 业务集成接口 | B-service | DOING | B1,B3 + A-service stacked base | 合同 `/tmp/oma-research/B-CONTROL-CONTRACT.md`；不重复密码模块 | 尚无真实双节点 GO；未集成 |
 
 ### C — 钱包与主网准备
 
@@ -117,10 +127,11 @@
 | C3 | 严格资产四元组 | C-registry | TODO | C1 | `chainId+tokenContract+decimals+issuerType`；拒绝符号推断 | 任意代币 |
 | C4 | 内置钱包：隔离模拟创建/恢复/加密存储/短解锁 | C-wallet | DOING | P0 | 隔离测试记录；明确非生产级 | 真实资产/生产级声明/UI 集成 |
 | C5 | 敏感导出/助记词 | C-wallet | DOING | C4 | 警告 + **重新验证钱包密码**；不落日志/快照 | 明文泄漏/绕过密码 |
-| C6 | 外置钱包/多扩展明确选择 | C-wallet | TODO | P0 | 多扩展夹具；用户明确选一个 | 自动挑/自动切链 |
-| C7 | P2P 付款/签名 | C-wallet | DOING | C2,C3 | 测试网/模拟；直接签名；普通钱包无签名文件 | 主网广播/签名文件路径 |
+| C6 | 外置钱包/多扩展明确选择 | C-external | DOING | P0 | EIP-1193/6963 夹具；用户明确选一个 | 自动挑/自动切链 |
+| C7 | P2P 付款/签名 | C-wallet + C-external | DOING | C2,C3 | 测试网/模拟；直接签名；普通钱包无签名文件 | 主网广播/签名文件路径 |
 | C8 | 自动充值策略（上限/暂停/条件） | C-wallet | TODO | C4..C7 | 策略 + 负向测试；可模拟/测试执行 | 主网执行 |
-| C9 | 主网硬禁止 | C-registry + C-wallet | TODO | C1..C8 | 负向测试：send/credit/cap 全拒绝 | 任何例外 |
+| C9 | 主网硬禁止 | C-registry + C-wallet + C-external | TODO | C1..C8 | 负向测试：send/credit/cap 全拒绝 | 任何例外 |
+| C11 | 真实 MetaMask/Rabby 扩展验收 | C-external | BLOCKED | 隔离 profile 工具 | 计划见 `docs/phase10/evidence/2026-10-31-external-wallet-test-plan.md`；**BLOCKED/UNKNOWN** | 不得用 fake provider 单测声称兼容；不碰默认 profile |
 | C10 | 真实资金 | — | NO-GO | — | — | 禁止 |
 
 ### D — 真实资金独立审查
@@ -135,8 +146,8 @@
 
 | ID | 单元 | 负责 | 状态 | 依赖 | 验收/证据 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
-| R1 | 改动前当前 Console 真浏览器审查 | 审查代理 | TODO | 本文 §4 | 截图/问题清单；不改代码 | 0.1.2289 只做 UI 审查 |
-| R2 | A/B 改动后真浏览器审查 | 审查代理 | TODO | A9/B10 | 前后对比 + 步骤回归 | 不改代码 |
+| R1 | 改动前当前 Console 真浏览器审查 | 审查代理 | DONE（仅事实） | 本文 §4 | 证据已入库 `docs/phase10/evidence/`；REPRODUCED；0.1.2289 空网络 | **不是 Visual UX GO/产品验收**；产品方案不抄入 FLOWS |
+| R2 | A/B 改动后真浏览器审查 | 审查代理 | TODO | A9/B10 + R1 | 前后对比 + 步骤回归 | 不改代码；仍非 Visual UX GO |
 | R3 | C 钱包/主网准备安全评审 | 审查代理 | TODO | C9 | 设计/威胁模型评审 | 不等于 D |
 | R4 | 最终验收对照 FLOWS | 父代理 | TODO | 全部 | 逐项证据 | 不合并是调度约束 |
 | R5 | 文档 draft PR（仅 docs） | INTEGRATION | DONE | — | https://github.com/faithleysath/magpie-oh-my-aihub/pull/14 | 不合并；不含实现/验收 |
@@ -150,7 +161,16 @@
 | 目标 app 来源 | `/Applications/Magpie.app`（0.1.2289） | **复制**到 `/tmp` 便携副本；不改用户安装 |
 | 0.1.2038 历史副本（可选） | `~/Projects/lab/magpie-iso/Magpie.app`、`~/Projects/lab/magpie-pricing-2038/Magpie.app` | 只作历史对照，不作为本轮目标 |
 
-**启动方案（A/B UI 审查，推荐）**：复制 app → 同级 `.portable` + `data/` + 独立 `HOME` → 设 `MAGPIE_ADDR`/`MAGPIE_WEB_KEY`/`OH_MY_AIHUB_MAGPIE` → `.../magpie web --addr 127.0.0.1:<free> --no-open` → 安装 `/tmp/oma-phase10-main-8ce5c57`（本地路径仅 UI 审查）→ 插件页打开/配对控制台。不碰 `~/Library/Application Support/Magpie`；0.1.2289 的 UI 审查不得写成验收。
+**启动方案（A/B UI 审查，推荐）**：复制 app → 同级 `.portable` + `data/` + 独立 `HOME` → 设 `MAGPIE_ADDR`/`MAGPIE_WEB_KEY`/`OH_MY_AIHUB_MAGPIE` → `.../magpie web --addr 127.0.0.1:<free> --no-open` → 安装 `$MAIN_WORKTREE`（本地路径仅 UI 审查）→ 插件页打开/配对控制台。不碰 `~/Library/Application Support/Magpie`；0.1.2289 的 UI 审查不得写成验收。
+
+## 4.1 改动前 UI 审查证据入库（已完成）
+
+- 客观事实报告 + 精选实拍已入库 `docs/phase10/evidence/`：`README.md`、`2026-10-31-current-console-before.md`、`2026-10-31-reference-review.md`、`screenshots/`（16 张）+ `SHA256SUMS`；外置钱包测试计划作为附录 `2026-10-31-external-wallet-test-plan.md`（BLOCKED/UNKNOWN，不是验收）。
+- **未收录**：HOME 副本、app 包、`data/`、Gateway Key、网络密钥、会话/配对票据、RPC 凭据、个人路径/用户名。
+- 覆盖：首页、我的共享、钱包、网络/安全状态、错误/退出/匿名壳，以及浅色/深色/390 窄屏；完整 30 张未入库。
+- 审查报告已删自拟产品方案；INVENTORY/FLOWS 只采纳可核对事实，不抄产品方案。
+- 来源边界：0.1.2289 真实宿主、**空网络**；无真实伙伴/P2P 授权/钱包交易。可标 REPRODUCED/已审查，**不能标 Visual UX GO**。
+- 已与 P0-clock/P0-peak/B-service 等待审记录一起批量提交 PR14。
 
 ## 5. 证据记录
 
@@ -163,6 +183,11 @@
 | 2026-10-31 | 初始 VALIDATION 前置 | A/B 可开始；C 不接真实资金 | INVENTORY §14 | VERIFIED |
 | 2026-10-31 | 文档 draft PR | #14，draft，仅 3 个 docs 文件；主审文档范围审查通过，作为实现前置；**计划无 GO** | `gh pr view 14` | VERIFIED |
 | 2026-10-31 | 实现分派登记 | A-ui/A-service/B-core/C-registry/C-wallet + P0-clock/P0-peak 独立 worktree | 本节 §2 | VERIFIED（登记）|
+| 2026-10-31 | P0-clock 交付待审 | PR #15 draft；commit `889973f5`；CI `41156933911` success；本地 746/0；**REVIEW，未集成** | PR #15 / CI | 待独立审 |
+| 2026-10-31 | P0-peak 交付待审 | PR #16 draft；commit `0661bede`；CI `41157220963` linux/mac 753 pass/1 skip/5 fail（既有 clock）；本地目标 48/0；**REVIEW，未集成** | PR #16 / CI / 报告 | 待独立审 15+16 |
+| 2026-10-31 | P0 报告命名 | P0-clock 属 P0，不沿用 D2 名称 | 主审说明 | VERIFIED |
+| 2026-10-31 | 改动前 UI 审查证据 | 3 份事实报告 + 16 张截图 + SHA256SUMS 已入库；无 HOME/app/凭据；0.1.2289 空网络 | `docs/phase10/evidence/` | REPRODUCED / 已审查；非 Visual UX GO |
+| 2026-10-31 | 外置钱包测试计划 | 真实 MetaMask/Rabby 验收 **BLOCKED/UNKNOWN**（隔离 profile 工具缺口）；不碰默认 profile | `docs/phase10/evidence/2026-10-31-external-wallet-test-plan.md` | 附录；非验收 |
 | 待补 | P0-1..5 | — | — | TODO |
 | 待补 | R1 截图/问题清单 | — | — | TODO |
 

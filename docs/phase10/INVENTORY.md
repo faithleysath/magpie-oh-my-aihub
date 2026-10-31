@@ -151,6 +151,8 @@
 
 ### 5.1 页面（现状 7 页；A 的目标是 5 页）
 
+> 改动前真实 UI 事实与实拍见 [`evidence/2026-10-31-current-console-before.md`](evidence/2026-10-31-current-console-before.md) 与 `evidence/screenshots/`；0.1.2289 真实宿主、空网络，REPRODUCED，仅为修改前证据，不是 Visual UX GO。
+
 | 页面（导航 id） | 主要展示 | 数据来源（轮询只做本地读） | 动作（动作名 → 适配器） |
 | --- | --- | --- | --- |
 | 总览 `overview` | 就绪/安全检查、EasyTier 状态、节点数、共享/使用状态、伙伴列表 | `consoleState()` → `service.consoleSnapshot()` + `consoleWorkflows().snapshot()` + `consoleWalletState()` | `checks`；`refresh` 仅重读 `/ui/api/state` |
@@ -286,7 +288,7 @@
 4. `console-wallet.ts`：`wallet-network`/`wallet-scan`/`plan` 从硬编码 testnet 改为“注册表 + readOnly/creditable”判定；主网 `scan`/`intent`/`credit` 全部拒绝；`console/wallet.js` 的 `TEST_CHAINS = [97,84532]` 改为注册表驱动。
 5. `wallet-workflows.ts`/`walletview.ts`：测试网/模拟链的 P2P 付款/签名/账单语义；**普通钱包不提供签名文件路径**（内置或用户明确选择的外置钱包直接签名；旧文件签名仅高级兼容）；主网只读展示；不得生成主网转账指引或广播。
 6. **内置钱包**：隔离/模拟环境实现创建、恢复、锁定、敏感导出；**助记词导出必须重新验证钱包密码**；明确标注“非生产级安全”，默认不承载真实资产；密钥存储/导出方案单独安全评审。
-7. **外置钱包/多扩展**：检测到多个浏览器钱包扩展时必须由用户明确选择一个；不自动挑、不自动切链；签名前核对链/合约/收款人/金额。
+7. **外置钱包/多扩展**：检测到多个浏览器钱包扩展时必须由用户明确选择一个；不自动挑、不自动切链；签名前核对链/合约/收款人/金额。真实 MetaMask/Rabby 验收当前 **BLOCKED/UNKNOWN**（隔离 profile 工具缺口），fake provider 单测不算兼容证据。
 8. **自动充值策略**：上限、暂停条件、审批条件可配置；**可在隔离/模拟/测试网执行；主网禁止执行**（只展示策略，不发送、不入账、不授信）。
 9. **主网红线**：56/8453 发送/授信（含人工逐笔确认）一律禁止；不新增任何主网入账或抬 cap 路径。C 不实现“人工逐笔授信”。
 10. **价格锁定阻塞**（ARCHITECTURE Known blocker #1）与峰谷价：未解决前不得承载真实资金；本轮 `peak` 先 fail-closed。
@@ -362,6 +364,7 @@
 | 钱包（链/账本） | 生产 Wallet→Watcher→ChainStore→Ledger→Provisioner；BSC/Base 最终性、重复扫描、reorg、RPC503、真实 Key 回读（Phase 9 本地模拟 + PR11 真实测试网历史） | 主网（56/8453）从未入账；本地模拟 RPC 不等于公链；真实浏览器扩展未验收 |
 | 账务/账单 | 消费者隔离、消费分页、未签名账单导入/导出、缺口审计（`phase9-wallet.md`、`final-consumption-history.png`） | 48 KiB 上限；未知创建预留需高级人工恢复 |
 | 控制台安全 | Host/Origin/CSRF/幂等/CSP/敏感响应/配对（`test/console-security.test.ts` 32 项等） | 浏览器扩展、真实恶意站点、平台差异未穷尽 |
+| 改动前 UI 事实 | 0.1.2289 真实宿主空网络：7 页、首次三屏、错误/退出/匿名壳、浅/深/390（[证据](evidence/2026-10-31-current-console-before.md)） | 无真实伙伴/P2P 授权/钱包交易；不能标 Visual UX GO |
 | 测试/CI | main `8ce5c57` CI 双平台成功；本机 typecheck/boot-check/secret-scan 通过 | 本机 `bun run test` 5 个时钟相关失败（见 §13）；CI 绿不等于当前时钟下可复现 |
 
 ## 13. 本机测试环境与本次实测
