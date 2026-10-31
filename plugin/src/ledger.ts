@@ -348,7 +348,8 @@ function mapWindow(r: WindowRow): LedgerWindow {
 }
 
 function mapDeposit(r: DepositRow): LedgerDeposit {
-  const fundsClass = (r.funds_class as FundsClass | null) ?? classifyDepositSource(r.source) ?? "simulated";
+  const fundsClass = (r.funds_class as FundsClass | null) ?? classifyDepositSource(r.source);
+  if (!fundsClass) throw new Error(`deposit ${r.id} has an unclassified source ${JSON.stringify(r.source)}; refusing to guess its funds class`);
   return {
     id: r.id,
     consumerId: r.consumer_id,
