@@ -23,7 +23,7 @@ description = "EVM contract address recorded in token/tokenContract fields"
 condition = "AND"
 rules = ['generic-api-key']
 regexTarget = "match"
-regexes = ['(?i)"?(?:token|token_?contract)"?\s*[:=]\s*"?0x[0-9a-f]{40}(?:[^0-9a-fA-F]|$)']
+regexes = ['(?i)"?(?:token|token_?contract|tokenAddress|contract)"?\s*[:=]\s*"?0x[0-9a-f]{40}(?:[^0-9a-fA-F]|$)']
 
 # Evidence manifests record SHA-256 digests of two artefact names. The key and
 # the 64-hex value shape must both match; any other key or line is reported.
