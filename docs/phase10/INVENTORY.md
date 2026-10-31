@@ -78,7 +78,7 @@
 - `plugin/src/magpie.ts:limitStatus` 直接把 `/v1/magpie/limit` JSON 当类型断言返回；新增字段不会报错，但语义变化不会被发现。
 - 结果：在 0.1.2289 上，DeepSeek 峰时调用可能“Magpie 原生已用 = 2× 静态价，插件账本 = 1× 静态价”。`Provisioner` 的 `native used + balance` 复算会看到漂移 → `pause(drift)`；或在未检测窗口内少记费用。**UNKNOWN：未在 0.1.2289 实机复现。**
 
-> Phase 10 的 D 门必须先做一件事：**明确选择并钉住 Phase 10 的目标 Magpie 版本**（继续 0.1.2171 以便复用 Phase 9 证据，或升级到本机 0.1.2289 并重测），再决定是否实现 `peak`。不得把两个版本的结论混用。
+> P0 已决定：**本轮目标 Magpie 0.1.2289 + EasyTier 2.6.4，隔离副本，不改用户安装**。`peak` 先 fail-closed 拒绝，后续单独实现；不得把 0.1.2038/0.1.2171 的结论混用为 0.1.2289 的结论。
 
 ## 3. 运行面、数据面与端口
 
