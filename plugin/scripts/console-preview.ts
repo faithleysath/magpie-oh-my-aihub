@@ -121,6 +121,64 @@ function configuredState(): any {
         }],
         quote: { contentHash: "9".repeat(64), identity: { fingerprint: "1".repeat(64) }, billing: { priceVersion: "2".repeat(64) }, version: 4, updatedAt: "2026-10-31T01:50:00.000Z", publishedAt: "2026-10-31T01:50:00.000Z", models: candidates.models.filter((row) => row.completePrice) },
       },
+      p2p: {
+        schema: "ohmyaihub/p2p-state/1",
+        enabled: true,
+        listener: { state: "ready", host: "127.0.0.1", port: 41999, reachability: "loopback", verified: true, detail: null },
+        inboundRequests: [{
+          requestId: "req-inbound-1", consumerNodeId: "c".repeat(16), consumerHostname: "partner-new",
+          consumerFingerprint: "e".repeat(64), models: ["deepseek/deepseek-chat", "qwen/qwen3-235b"],
+          quoteHash: "9".repeat(64), priceVersion: "2".repeat(64), capUsd: 0.5,
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(), tofu: "pending", state: "pending",
+          receivedAt: new Date().toISOString(), detail: null,
+        }],
+        outboundRequests: [{
+          requestId: "req-outbound-1", providerNodeId: "a".repeat(16), providerHostname: "partner-harbor",
+          providerFingerprint: "f".repeat(64), models: ["qwen/qwen3-32b"], quoteHash: "b".repeat(64),
+          priceVersion: "2".repeat(64), state: "connected",
+          ack: { state: "registered", models: ["qwen/qwen3-32b"], capUsd: 2.5, at: new Date().toISOString() },
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), detail: null,
+        }],
+        approvals: [{
+          approvalId: "approval-1", requestId: "req-approved-1", consumerNodeId: "partner-harbor",
+          consumerFingerprint: "f".repeat(64), providerNodeId: "7f3c9a2b1d4e5f60", providerFingerprint: "1".repeat(64),
+          models: ["deepseek/deepseek-chat"], capUsd: 5, quoteHash: "9".repeat(64), priceVersion: "2".repeat(64),
+          generation: 1, keyId: "key-opaque-1", state: "delivered",
+          delivery: { state: "delivered", lastError: null },
+          createdAt: new Date().toISOString(), approvedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 86_400_000).toISOString(), detail: null,
+        }, {
+          approvalId: "approval-2", requestId: "req-approved-2", consumerNodeId: "partner-slow",
+          consumerFingerprint: "d".repeat(64), providerNodeId: "7f3c9a2b1d4e5f60", providerFingerprint: "1".repeat(64),
+          models: ["qwen/qwen3-235b"], capUsd: 1, quoteHash: "9".repeat(64), priceVersion: "2".repeat(64),
+          generation: 1, keyId: "key-opaque-2", state: "uncertain",
+          delivery: { state: "uncertain", lastError: "delivery timeout" },
+          createdAt: new Date().toISOString(), approvedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 86_400_000).toISOString(), detail: null,
+        }],
+        presence: [
+          {
+            nodeId: "a".repeat(16), hostname: "partner-harbor", fingerprint: "f".repeat(64),
+            endpoint: { host: "127.0.0.1", mappedCidr: "10.126.126.2", controlPort: 41999 },
+            capability: { control: true, sharing: "enabled", providesModels: true },
+            signature: "valid", tofu: "accepted",
+            expiresAt: new Date(Date.now() + 120_000).toISOString(), verified: true,
+          },
+          {
+            nodeId: "c".repeat(16), hostname: "partner-new", fingerprint: "e".repeat(64),
+            endpoint: { host: "127.0.0.1", mappedCidr: "10.126.126.3", controlPort: 42000 },
+            capability: { control: true, sharing: "enabled", providesModels: true },
+            signature: "valid", tofu: "pending",
+            expiresAt: new Date(Date.now() + 120_000).toISOString(), verified: true,
+          },
+        ],
+        connections: [{
+          providerNodeId: "a".repeat(16), providerHostname: "partner-harbor", providerId: "provider-harbor",
+          state: "connected", models: ["qwen/qwen3-32b"], capUsd: 2.5,
+          readbackAt: new Date().toISOString(), detail: null,
+        }],
+        counts: { pendingInbound: 1, awaitingApproval: 0, connected: 1, actionNeeded: 1 },
+      },
       consumers: [{
         consumerId: "partner-harbor", models: ["deepseek/deepseek-chat"], capUsd: 5, usedUsd: 0.31, leftUsd: 4.69, calls: 42,
         paused: null, revokedAt: null, priceVersion: "2".repeat(64), acceptedQuoteHash: "9".repeat(64),
@@ -257,6 +315,16 @@ const server = Bun.serve({
       if (name === "network-refresh" || name === "catalog-refresh" || name === "checks") return json({ result: current });
       if (name === "share-candidates") return json({ result: candidates });
       if (name === "catalog-settings" || name === "share-models" || name === "share-toggle" || name === "catalog-publish") return json({ result: current });
+      if (name === "p2p-quote-preview") {
+        const request = current.status.p2p.inboundRequests.find((row: any) => row.requestId === input.requestId);
+        const models = (Array.isArray(input.models) ? input.models as string[] : []).filter((id) => request?.models.includes(id));
+        const quoteModels = current.status.catalog.quote.models;
+        const pricing = models.map((id) => ({ id, pricing: quoteModels.find((row: any) => row.id === id)?.pricing ?? null }));
+        return json({ result: { requestId: input.requestId, quoteHash: request?.quoteHash ?? "", priceVersion: request?.priceVersion ?? "", models, pricing } });
+      }
+      if (name === "p2p-request" || name === "p2p-approve" || name === "p2p-reject" || name === "p2p-revoke" || name === "p2p-recover") {
+        return json({ result: name === "p2p-request" ? { requestId: "req-fixture", state: "pending" } : { state: "ok" } });
+      }
       return json({ error: "action_not_allowed" }, 404);
     }
     if (url.pathname === "/ui/logout") return json({ ok: true });

@@ -35,7 +35,10 @@ export async function consoleState(service: Service) {
       magpie: snapshot.magpie, config: snapshot.config, easytier: snapshot.easytier, providers: snapshot.providers,
       catalog: snapshot.catalog, consumers: snapshot.consumers, accounting: snapshot.accounting,
       checks: snapshot.checks, checksAt: snapshot.checksAt, checksDurationMs: snapshot.checksDurationMs, readiness: snapshot.readiness,
-    }, ...workflows, p2p, wallet: consoleWalletState(service),
+      // The zero-file panel reads status.p2p; the control app's state object is
+      // kept one level down so it can never overwrite the console schema.
+      p2p,
+    }, ...workflows, wallet: consoleWalletState(service),
   });
 }
 const refuse = (message: string): never => { throw new ConsoleInputError(message); };
