@@ -1,6 +1,6 @@
 # Phase 10 C1 — 主网只读注册表、收款网络选择与硬门禁
 
-> 状态：**实现完成，待独立审查/合并**。本文只报告本单元（C1 registry + C2 选择 + C3 资产四元组 + C9 主网硬门禁）的实际结果，不代表 C 整体、UI 或真实资金验收。
+> 状态：**独立审查 fixes 已应用，待 re-review/合并**。本文只报告本单元（C1 registry + C2 选择 + C3 资产四元组 + C9 主网硬门禁）的实际结果，不代表 C 整体、UI 或真实资金验收。
 >
 > **真实资金：NO-GO。** 本单元没有发送、授信、自动充值、签名或广播路径；没有任何真实资产被移动。
 >
@@ -441,12 +441,12 @@ bun run typecheck                      # PASS (tsc --noEmit)
 bun run secret-scan                    # PASS: no credentials in the working tree
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts
-# 57 pass / 0 fail（309 expect）
+# 69 pass / 0 fail（351 expect）
 
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts \
   ./test/wallet-surface.test.ts ./test/deposits.test.ts ./test/ledger.test.ts
-# 107 pass / 0 fail（515 expect）
+# 310 pass / 0 fail（1673 expect，17 files，旧简化 guard）
 ```
 
 覆盖：
@@ -521,6 +521,23 @@ bun test --preload /tmp/phase10-prep/guard.ts \
 - 真实资金仍为 **NO-GO**，需用户明确授权 + D 独立审查 + 价格锁定/峰谷价等前置；本单元不放行。
 
 ---
+
+## 9. 独立审查 fixes（2026-10-31）
+
+审查对象为 `917c429`；以下修复针对其 F1–F6，当前 code head `ee62255`（CI run `41160995832` 双平台 pass），随后 docs commit 只改本文，不改代码。真实资金仍 NO-GO；F7/F8（send/sign/autoRecharge 无生产调用点、无主网事件路径）保持 UNKNOWN，不宣称端到端。
+
+| 审查项 | 修复 |
+| --- | --- |
+| F1 任意真实主网可伪装 testnet | `CREDIT_CHAIN_ALLOWLIST=[97,84532]`；`enabled+credit` 必须在该 allowlist。chain 1/未知链伪装 testnet/credit/enabled 构造即拒绝；`loadRegistry` v2 文件同样拒绝。本地 fork 只能 `simulationRegistry(..., [1337/31337/31338])`，不能靠改 `networkType` 进入生产。 |
+| F2 FundsClass / reconcile | `LedgerDeposit` 增加 `fundsClass/chainId/assetId`；`depositIntent` 接受并校验 provenance。pending 在 Magpie 写前持久化 `fundsClass/chainId/assetId/source`；`reconcile` 缺 ledger 行时只恢复同一来源，chain pending 缺失/冲突则 fail-closed 人工恢复，绝不重记 `simulated`。`topUp` 拒绝 `chain*`/`opening*` id 且不能复用 chain ledger 行；`applyChainDeposit` 拒绝非 chain 行，`setCap` 校验 pending provenance。历史行不重写 source/chainId/amount。 |
+| F3 文件绕过 https | `NetworkRegistry.validate()` 校验所有 loaded endpoint：协议、主网/只读 https、无 credentials、无 fragment；v2 `http://` 主网文件加载即拒绝。 |
+| F4 redirect/响应上限 | `EvmClient` 请求 `redirect:"error"`；响应体默认上限 8 MiB（流式计数，chunked 也拒绝）；超时沿用 `AbortSignal.timeout`。 |
+| F5 failover 未验链 | 每个实际 endpoint 首次使用前独立 `eth_chainId` 验证；A 验证后失败切 B，B 必须先验链，不能把 B 的余额当 A。测试证明 B 的 `eth_getBalance` 零调用。 |
+| F6 source 变体 | mainnet gate 归一化 trim/lower/空白；`Chain:56`、` chain : 56 `、`CHAIN:8453` 拒绝；ledger 对 `evm:56`、`chain:0x38` 等未分类 source 直接拒绝。 |
+
+新增/更新测试：chain 1/unknown chain、v2 chain1 文件、`Load v2 http`、307、超长响应、错链 failover、pending chain 缺行、pending class 冲突、manual 同源恢复、topUp chain/opening id、applyChainDeposit 非 chain 行。测试使用受控 mockRPC；没有重跑公网 RPC，旧 raw log 仍是原只读证据。
+
+当前本地目标集：`310 pass / 0 fail / 1673 expect / 17 files`，使用旧简化 guard（仅阻断 `:3425`/non-loopback）；这不等于 PR17 精确 origin 登记 guard，不能用它宣称全量 hermetic。CI 是提交者 CI，不是独立审查通过。
 
 ## 8. 变更文件
 
