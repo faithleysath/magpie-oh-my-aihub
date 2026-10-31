@@ -2748,8 +2748,8 @@ export class Service {
    * may still answer with 503) is no longer an offer: it is withdrawn at once,
    * not only after the quote TTL. A later successful catalogue read restores it.
    */
-  markCatalogWithdrawn(nodeId: string, detail = "the peer's signed presence says it is not sharing models"): void {
-    const peer = this.catalogPeers.find((p) => p.nodeId === nodeId);
+  markCatalogWithdrawn(nodeId: string, detail = "the peer's signed presence says it is not sharing models", hostname?: string): void {
+    const peer = this.catalogPeers.find((p) => p.nodeId === nodeId || (hostname && p.hostname === hostname));
     if (!peer) return;
     if (peer.catalog === "withdrawn" && peer.status === "no-catalog" && peer.quote === null) return;
     peer.lastQuoteAt = peer.fetchedAt ?? peer.lastQuoteAt;

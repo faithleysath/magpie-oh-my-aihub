@@ -694,7 +694,9 @@ describe("a signed presence can withdraw the display catalogue", () => {
     expect(published.quote).not.toBeNull();
     expect(() => s.catalogRequest("bbbbbbbb", undefined, { fingerprint: published.identity!.fingerprint, quoteHash: published.quoteHash! })).not.toThrow();
 
-    s.markCatalogWithdrawn("bbbbbbbb");
+    // The presence node id may be unknown to a fresh consumer (no catalogue
+    // read yet); the overlay hostname is the fallback selector.
+    s.markCatalogWithdrawn("ffffffff", undefined, "ohmyaihub-bbbbbbbb");
     const withdrawn = s.peersInDirectory().find((p) => p.hostname === "ohmyaihub-bbbbbbbb")!;
     expect(withdrawn.quote).toBeNull();
     expect(withdrawn.quoteHash).toBeNull();

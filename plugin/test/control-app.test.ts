@@ -27,7 +27,7 @@ function fakeService() {
     catalogStatus: () => ({ quote: null, peers: [] }),
     setControlPresence: (fn: (() => unknown | null) | null) => { presence = fn; },
     setControlPort: (port: number) => { cfg.controlPort = port; calls.push(`port:${port}`); },
-    markCatalogWithdrawn: (nodeId: string, detail?: string) => { calls.push(`withdrawn:${nodeId}`); },
+    markCatalogWithdrawn: (nodeId: string, _detail?: string, _hostname?: string) => { calls.push(`withdrawn:${nodeId}`); },
     setControlActive: (active: boolean) => { controlActive = active; calls.push(`active:${active}`); },
     applyControlPublication: async () => { calls.push(`publish:${controlActive}`); },
     gatewayPort: () => 3425,

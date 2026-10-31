@@ -730,8 +730,8 @@ export class ControlApp {
   private applyPresenceCapability(presence: PresenceBody): void {
     const sharing = presence.capability.sharing === "enabled" && presence.capability.providesModels === true;
     if (sharing) return;
-    const svc = this.service as unknown as { markCatalogWithdrawn?: (nodeId: string, detail?: string) => void };
-    svc.markCatalogWithdrawn?.(presence.node.nodeId, "the provider's signed presence says it is not sharing models");
+    const svc = this.service as unknown as { markCatalogWithdrawn?: (nodeId: string, detail?: string, hostname?: string) => void };
+    svc.markCatalogWithdrawn?.(presence.node.nodeId, "the provider's signed presence says it is not sharing models", presence.node.hostname);
   }
 
   /**
