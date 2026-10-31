@@ -1,8 +1,9 @@
 import { redact } from "./log.ts";
-import { ConsoleInputError } from "./console-server.ts";
+import { ConsoleInputError, type ConsoleActionContext } from "./console-server.ts";
 import { configureInput } from "./server.ts";
 import { consoleWorkflows } from "./console-workflows.ts";
 import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
+import { WALLET_VAULT_ACTIONS, walletLocalAction, walletLocalState, WalletLocalError } from "./wallet-local-service.ts";
 import { hex64, modelList, RequestValidationError } from "./connection-request.ts";
 import type { Service } from "./service.ts";
 
@@ -13,6 +14,7 @@ export const CONSOLE_ACTIONS = [
   "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
   ...WALLET_CONSOLE_ACTIONS,
+  ...WALLET_VAULT_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
   if (typeof value === "string") return redact(value) as T;
@@ -24,6 +26,12 @@ export async function consoleState(service: Service) {
   const snapshot = service.consoleSnapshot();
   // Polling performs only local reads, never active probes.
   const workflows = consoleWorkflows(service).snapshot();
+  let walletVault: unknown;
+  try {
+    walletVault = await walletLocalState(service);
+  } catch {
+    walletVault = { wallet: null, error: "wallet-vault-unavailable" };
+  }
   return clean({
     schema: "ohmyaihub/console/1" as const, at: new Date().toISOString(), configured: Boolean(snapshot.config.nodeId),
     status: {
@@ -31,7 +39,7 @@ export async function consoleState(service: Service) {
       magpie: snapshot.magpie, config: snapshot.config, easytier: snapshot.easytier, providers: snapshot.providers,
       catalog: snapshot.catalog, consumers: snapshot.consumers, accounting: snapshot.accounting,
       checks: snapshot.checks, checksAt: snapshot.checksAt, checksDurationMs: snapshot.checksDurationMs, readiness: snapshot.readiness,
-    }, ...workflows, wallet: consoleWalletState(service),
+    }, ...workflows, wallet: consoleWalletState(service), walletVault,
   });
 }
 const refuse = (message: string): never => { throw new ConsoleInputError(message); };
@@ -54,8 +62,21 @@ function knownRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
   return /^(no (?:active consumer|remote provider|discovered catalogue peer)|configure this node first|consumption is disabled|choose |refusing |the (?:request|accepted|effective price|provider's catalogue identity|identity of|key of)|a shared model|consumer .+ (?:is paused|was revoked|has an unconfirmed|has no)|cannot reissue|this key is bound|pass the catalogue|.* is (?:first-seen|offline|unverified|stale);|.* offered an older|.* does not offer:)/.test(message);
 }
-export async function consoleAction(service: Service, name: string, input: Record<string, unknown>): Promise<unknown> {
+export async function consoleAction(
+  service: Service,
+  name: string,
+  input: Record<string, unknown>,
+  context?: ConsoleActionContext,
+): Promise<unknown> {
   try {
+    if ((WALLET_VAULT_ACTIONS as readonly string[]).includes(name)) {
+      try {
+        return await walletLocalAction(service, name, input, context);
+      } catch (error) {
+        if (error instanceof WalletLocalError) throw new ConsoleInputError(error.message);
+        throw error;
+      }
+    }
     if ((WALLET_CONSOLE_ACTIONS as readonly string[]).includes(name)) return consoleWalletAction(service, name, input);
     const w = () => consoleWorkflows(service);
     switch (name) {
