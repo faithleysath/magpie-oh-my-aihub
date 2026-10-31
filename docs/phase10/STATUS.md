@@ -14,7 +14,7 @@
 | 快照时间 | 2026-10-31 |
 | 基线 main | `8ce5c57f565fb1b835021a9b730b61014eb47d5f` |
 | PR13 | `#13`，MERGED，merge SHA = 上述 main；CI run `41056993038` success |
-| 开发/文档分支 | `feature/phase10-simplified-p2p-ux`（已推送；仅 docs 变更；draft PR 见 §4） |
+| 开发/文档分支 | `feature/phase10-simplified-p2p-ux`（已推送；仅 docs 变更；draft PR #14） |
 | 盘点工作树 | `/Users/laysath/Projects/magpie-oh-my-aihub-import` |
 | 纯 main 只读工作树 | `/tmp/oma-phase10-main-8ce5c57`（detached @ `8ce5c57`） |
 | 目标运行版本（已决定） | **Magpie 0.1.2289 + EasyTier 2.6.4**；隔离副本，不改用户安装 |
@@ -130,7 +130,7 @@
 | R2 | A/B 改动后真浏览器审查 | 审查代理 | TODO | A9/B10 | 前后对比 + 步骤回归 | 不改代码 |
 | R3 | C 钱包/主网准备安全评审 | 审查代理 | TODO | C9 | 设计/威胁模型评审 | 不等于 D |
 | R4 | 最终验收对照 FLOWS | 父代理 | TODO | 全部 | 逐项证据 | 不合并是调度约束 |
-| R5 | 文档 draft PR（仅 docs） | INTEGRATION | DOING | — | PR URL + 文件列表 | 不合并；不含实现/验收 |
+| R5 | 文档 draft PR（仅 docs） | INTEGRATION | DONE | — | https://github.com/faithleysath/magpie-oh-my-aihub/pull/14 | 不合并；不含实现/验收 |
 
 ## 4. 审查代理环境交接（只读）
 
@@ -152,6 +152,7 @@
 | 2026-10-31 | 峰谷价缺口 | `peak` 进入原生计价；插件未处理 → P0-2 fail-closed | `internal/catalog/peak.go`、`internal/usage/usage.go`、`plugin/src/pricing.ts` | VERIFIED（源码）/ UNKNOWN（运行时） |
 | 2026-10-31 | 本地测试 | 740 pass / 5 fail；固定时钟 | `bun run test` | REPRODUCED |
 | 2026-10-31 | 初始 VALIDATION 前置 | A/B 可开始；C 不接真实资金 | INVENTORY §14 | VERIFIED |
+| 2026-10-31 | 文档 draft PR | #14，draft，仅 3 个 docs 文件 | `gh pr view 14` | VERIFIED |
 | 待补 | P0-1..5 | — | — | TODO |
 | 待补 | R1 截图/问题清单 | — | — | TODO |
 
