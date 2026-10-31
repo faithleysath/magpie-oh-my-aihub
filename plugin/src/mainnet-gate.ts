@@ -59,6 +59,9 @@ export function isMainnetChainId(chainId: unknown): chainId is MainnetChainId {
  * data, because the columns are hard-coded here.
  */
 export function mainnetCapabilities(chainId: number): Record<NetworkCapability, boolean> {
+  if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId <= 0) {
+    throw new MainnetGateError("mainnet-capability-forbidden", `chain id ${String(chainId)} is not a positive integer`);
+  }
   const mainnet = isMainnetChainId(chainId);
   return {
     "read-metadata": true,
@@ -71,6 +74,8 @@ export function mainnetCapabilities(chainId: number): Record<NetworkCapability, 
 }
 
 export function mainnetCapabilityAllowed(chainId: number, capability: NetworkCapability): boolean {
+  // A UI/JSON string must not read as "not a mainnet" and therefore allowed.
+  if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId <= 0) return false;
   if (!isMainnetChainId(chainId)) return true;
   return MAINNET_ALLOWED.includes(capability);
 }

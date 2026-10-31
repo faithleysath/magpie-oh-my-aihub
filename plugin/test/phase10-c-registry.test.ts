@@ -23,6 +23,7 @@ import {
   MAINNET_BOUNDARY,
   MAINNET_CHAIN_IDS,
   mainnetCapabilities,
+  mainnetCapabilityAllowed,
   MainnetGateError,
 } from "../src/mainnet-gate.ts";
 import { ReceivingNetworkPolicy } from "../src/receiving-networks.ts";
@@ -437,6 +438,9 @@ describe("C9 hard gates: mainnet send/credit/auto-recharge", () => {
         "auto-recharge": false,
       });
     }
+    expect(mainnetCapabilityAllowed(56, "send")).toBe(false);
+    expect(mainnetCapabilityAllowed("56" as never, "send")).toBe(false);
+    expect(() => mainnetCapabilities("56" as never)).toThrow(/positive integer/);
     expect(mainnetCapabilities(97)).toEqual({
       "read-metadata": true,
       "read-balance": true,
