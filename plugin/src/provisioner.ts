@@ -420,7 +420,10 @@ export class Provisioner {
     return { start: new Date(y, m, d).toISOString(), reset: new Date(y, m, d + 1).toISOString() };
   }
 
-  private async seedLedger(rec: ConsumerRecord): Promise<LedgerWindow | null> {
+  private async seedLedger(
+    rec: ConsumerRecord,
+    opts: { requireKnownUsage?: boolean; status?: LimitStatus | null } = {},
+  ): Promise<LedgerWindow | null> {
     if (!this.ledger) return null;
     const existing = this.ledger.account(rec.consumerId);
     if (existing) {
@@ -428,11 +431,18 @@ export class Provisioner {
       if (open) return open;
       return null;
     }
-    let status: LimitStatus | null = null;
-    try {
-      status = await this.magpie.limitStatus(rec.secret);
-    } catch {
-      status = null;
+    let status: LimitStatus | null = opts.status !== undefined ? opts.status : null;
+    if (opts.status === undefined) {
+      try {
+        status = await this.magpie.limitStatus(rec.secret);
+      } catch {
+        status = null;
+      }
+    }
+    if (opts.requireKnownUsage) {
+      if (!status || typeof status.limit?.cost !== "number" || !Number.isFinite(status.limit.cost)) {
+        throw new Error("native used cost is unknown; refusing to seed an opening balance");
+      }
     }
     // A price source that cannot be read must not seed a window: an "unpriced"
     // window would make every later charge free. The accounting check turns
@@ -1681,6 +1691,10 @@ export class Provisioner {
         if (existing.revokedAt || existing.keyId !== input.keyId || existing.keyName !== input.keyName || !existingModelsMatch || Math.abs(existing.capUsd - input.capUsd) > 1e-9) {
           throw new Error("the local Provisioner record does not match the native adoption binding");
         }
+        // Crash after the consumer write but before the Ledger seed: finish the
+        // existing seed path. It is a no-op when the account/window already
+        // exists; an unknown native used cost stays unresolved.
+        await this.seedLedger(existing, { requireKnownUsage: true });
         return;
       }
       const key = this.magpie.keyByName(expectedName) ?? this.magpie.keyById(input.keyId);
@@ -1722,7 +1736,7 @@ export class Provisioner {
         if (idx >= 0) this.list.splice(idx, 1);
         throw e;
       }
-      await this.seedLedger(rec);
+      await this.seedLedger(rec, { requireKnownUsage: true, status });
       logger.info(`adopted native gateway key ${rec.keyName} (${rec.keyId}) for ${input.consumerId} without creating a key`);
     });
   }

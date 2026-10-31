@@ -376,6 +376,8 @@ describe("B-core P2pBusinessPort mapping", () => {
     const nativeKey = await magpie.addKey("ohmyaihub-native-only");
     await magpie.setModels(nativeKey.id, [LAB_MODEL]);
     await magpie.setCostLimit(nativeKey.id, "3650d", 1);
+    magpie.call(nativeKey.id, 1000, 1000);
+    const nativeUsed = magpie.used(magpie.keys.get(nativeKey.id)!);
     const countBefore = magpie.keys.size;
     const nativeConsumer = { accountId: "7".repeat(64), nodeId: "native-only", hostname: "ohmyaihub-native-only", fingerprint: "7".repeat(64) };
     const ambiguous = await port.reconcileApproval!({
@@ -413,6 +415,9 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(magpie.keys.size).toBe(countBefore); // no second key
     expect(svc.provisioner.find("native-only")?.keyId).toBe(nativeKey.id);
     expect(svc.ledger?.account("native-only")).toBeDefined();
+    const balance = svc.ledger!.balance("native-only");
+    expect(balance.depositedNanos).toBe(1_000_000_000);
+    expect(balance.consumedNanos).toBe(Math.round(nativeUsed * 1_000_000_000));
     const concurrentTakes = await Promise.all([
       port.takeAuthorization({
         approvalId: nativeOnly, generation: 1, consumerNodeId: "native-only", consumerFingerprint: "7".repeat(64),
@@ -446,6 +451,7 @@ describe("B-core P2pBusinessPort mapping", () => {
     });
     expect(adoptedAgain.key).toBe(nativeKey.secret);
     expect(magpie.keys.size).toBe(countBefore);
+    expect(svc.ledger!.balance("native-only")).toEqual(balance); // no duplicate opening/credit
   });
 
   test("reconcileApproval returns unknown when Magpie key management cannot be read", async () => {
