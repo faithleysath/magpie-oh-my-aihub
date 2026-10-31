@@ -382,15 +382,36 @@ describe("atomic single-winner claim", () => {
     const withUuid = { ...operation(), previewId: crypto.randomUUID() } as unknown as ExternalWalletOperation;
     await expectCode(() => port.reserve(withUuid), "PAYMENT_OPERATION_INVALID_ARGUMENT");
     // The UUID variant must not have created a second row under a different key.
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })).toBeNull();
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })).toBeNull();
   });
 
-  test("the stable key is invoice+consumer, not a preview UUID or intent hash", () => {
-    const a = paymentIdempotencyKey({ invoice: "inv_pay_001", consumerAddress: PAYER });
-    const b = paymentIdempotencyKey({ invoice: "inv_pay_001", consumerAddress: PAYER.toUpperCase().replace("0X", "0x") });
+  test("the stable key is provider+invoice+consumer, not a preview UUID or intent hash", () => {
+    const a = paymentIdempotencyKey({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP });
+    const b = paymentIdempotencyKey({ invoice: "inv_pay_001", consumerAddress: PAYER.toUpperCase().replace("0X", "0x"), providerIdentityFingerprint: FP });
     expect(a).toBe(b);
-    const c = paymentIdempotencyKey({ invoice: "inv_pay_002", consumerAddress: PAYER });
+    const c = paymentIdempotencyKey({ invoice: "inv_pay_002", consumerAddress: PAYER, providerIdentityFingerprint: FP });
     expect(c).not.toBe(a);
+    const d = paymentIdempotencyKey({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: "provider:lab:fp-2" });
+    expect(d).not.toBe(a);
+  });
+
+  test("two provider identities with the same invoice are distinct operations", async () => {
+    const j = openJournal({ authority: { assertCurrent() {} } });
+    const a = binding({ invoice: "inv_shared_provider", providerIdentityFingerprint: "provider:lab:fp-a" });
+    const b = binding({ invoice: "inv_shared_provider", providerIdentityFingerprint: "provider:lab:fp-b" });
+    const ra = await j.operationPort(a).reserve(operationFrom(a));
+    const rb = await j.operationPort(b).reserve(operationFrom(b));
+    expect(ra.state).toBe("reserved");
+    expect(rb.state).toBe("reserved");
+    expect(ra.reservationId).not.toBe(rb.reservationId);
+    expect(
+      j.lookup({ invoice: "inv_shared_provider", consumerAddress: PAYER, providerIdentityFingerprint: "provider:lab:fp-a" })!
+        .providerIdentityFingerprint,
+    ).toBe("provider:lab:fp-a");
+    expect(
+      j.lookup({ invoice: "inv_shared_provider", consumerAddress: PAYER, providerIdentityFingerprint: "provider:lab:fp-b" })!
+        .providerIdentityFingerprint,
+    ).toBe("provider:lab:fp-b");
   });
 
   test("crash after markBroadcasting leaves a non-sendable row after reopen", async () => {
@@ -426,12 +447,16 @@ describe("atomic single-winner claim", () => {
     before.close();
 
     const after = openJournal({ ownerInstanceId: "owner-new" });
-    const record = after.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+    const record = after.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
     const evidence: UnsentReleaseEvidence = {
       basis: "owner-restarted-before-broadcast",
       confirmedNoBroadcast: true,
-      observedAt: new Date(now).toISOString(),
-      reference: "boot:owner-old-ended",
+      releasedByOwnerInstanceId: "owner-new",
+      noBroadcastObservation: {
+        method: "service-flow",
+        observedAt: new Date(now).toISOString(),
+        reference: "boot:owner-old-ended",
+      },
       previousOwnerInstanceId: "owner-old",
     };
     expectSyncCode(
@@ -451,7 +476,8 @@ describe("atomic single-winner claim", () => {
     expect(released.txHash).toBeNull();
     expect(released.reason).toContain("OWNER_RESTARTED");
 
-    const reclaimed = await after.operationPort(binding()).reserve(operation());
+    const reclaimPort = after.operationPort(binding());
+    const reclaimed = await reclaimPort.reserve(operation());
     expect(reclaimed.state).toBe("reserved");
     expect(reclaimed.attempt).toBe(2);
     expect(reclaimed.reservationId).not.toBe(reservationId);
@@ -459,6 +485,19 @@ describe("atomic single-winner claim", () => {
     await expectCode(
       () => after.operationPort(binding()).markBroadcasting({ reservationId, operation: operation() }),
       "PAYMENT_OPERATION_RESERVATION_MISMATCH",
+    );
+
+    // A late hash from the released attempt arrives after attempt 2 claimed:
+    // it must block the new send, not be rejected as "not broadcasting".
+    const latePort = after.operationPort(binding());
+    await latePort.recordHash({ reservationId, operation: operation(), hash: HASH_A });
+    const late = after.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
+    expect(late.state).toBe("broadcast");
+    expect(late.txHash).toBe(HASH_A);
+    expect(late.hashes).toContain(HASH_A);
+    await expectCode(
+      () => reclaimPort.markBroadcasting({ reservationId: reclaimed.reservationId, operation: operation() }),
+      "PAYMENT_OPERATION_NOT_RESERVED",
     );
   });
 });
@@ -480,7 +519,7 @@ describe("send gate and durable state machine", () => {
       "PAYMENT_OPERATION_PAYLOAD_MISMATCH",
     );
     // Still not broadcasting after both refusals.
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("reserved");
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("reserved");
 
     await port.markBroadcasting({ reservationId, operation: op });
     // A second journal instance can see it immediately: the commit is durable.
@@ -502,14 +541,15 @@ describe("send gate and durable state machine", () => {
 
     await port.recordHash({ reservationId, operation: op, hash: HASH_A });
     await port.recordHash({ reservationId, operation: op, hash: HASH_A }); // idempotent
-    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
     expect(record.state).toBe("broadcast");
     expect(record.txHash).toBe(HASH_A);
+    expect(record.hashes).toContain(HASH_A);
     await expectCode(() => port.recordHash({ reservationId, operation: op, hash: HASH_B }), "PAYMENT_OPERATION_HASH_CONFLICT");
 
     // A late unknown never erases the hash.
     await port.recordUnknown({ reservationId, operation: op, reason: "TIMEOUT" });
-    const after = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+    const after = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
     expect(after.state).toBe("broadcast");
     expect(after.txHash).toBe(HASH_A);
 
@@ -518,12 +558,30 @@ describe("send gate and durable state machine", () => {
     await expectCode(() => port.markBroadcasting({ reservationId, operation: op }), "PAYMENT_OPERATION_NOT_RESERVED");
   });
 
+  test("the same transaction hash cannot be bound to two invoices", async () => {
+    const j = openJournal();
+    const a = binding({ invoice: "inv_dup_a" });
+    const b = binding({ invoice: "inv_dup_b" });
+    const first = await reservedPort(j, a);
+    const second = await reservedPort(j, b);
+    await first.port.markBroadcasting({ reservationId: first.reservationId, operation: first.op });
+    await second.port.markBroadcasting({ reservationId: second.reservationId, operation: second.op });
+    await first.port.recordHash({ reservationId: first.reservationId, operation: first.op, hash: HASH_A });
+    await expectCode(
+      () => second.port.recordHash({ reservationId: second.reservationId, operation: second.op, hash: HASH_A }),
+      "PAYMENT_OPERATION_HASH_CONFLICT",
+    );
+    const row = j.lookup({ invoice: "inv_dup_b", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
+    expect(row.state).toBe("broadcasting");
+    expect(row.txHash).toBeNull();
+  });
+
   test("unknown is terminal for sending; a known hash can still recover it", async () => {
     const j = openJournal();
     const { port, op, reservationId } = await reservedPort(j);
     await port.markBroadcasting({ reservationId, operation: op });
     await port.recordUnknown({ reservationId, operation: op, reason: "RPC_500" });
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("unknown");
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("unknown");
 
     const reopened = openJournal();
     const retry = await reopened.operationPort(binding()).reserve(op);
@@ -536,7 +594,7 @@ describe("send gate and durable state machine", () => {
 
     // A hash found later is evidence, not a resend: it upgrades unknown→broadcast.
     await reopened.operationPort(binding()).recordHash({ reservationId, operation: op, hash: HASH_A });
-    const record = reopened.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+    const record = reopened.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
     expect(record.state).toBe("broadcast");
     expect(record.txHash).toBe(HASH_A);
     expect(record.recoveredFromUnknown).toBe(true);
@@ -549,61 +607,54 @@ describe("send gate and durable state machine", () => {
       () => port.recordUnknown({ reservationId, operation: op, reason: "TIMEOUT" }),
       "PAYMENT_OPERATION_NOT_BROADCASTING",
     );
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("reserved");
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("reserved");
     // The original claim can still be marked normally.
     await port.markBroadcasting({ reservationId, operation: op });
   });
 
-  test("a wallet rejection is recorded as unknown, and needs evidence to be released", async () => {
+  test("a wallet rejection stays unknown; unknown release is disabled", async () => {
     const j = openJournal();
     const { port, op, reservationId } = await reservedPort(j);
     await port.markBroadcasting({ reservationId, operation: op });
     await port.recordUnknown({ reservationId, operation: op, reason: "USER_REJECTED" });
-    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
     expect(record.state).toBe("unknown");
     expect(record.reason).toBe("USER_REJECTED");
-
-    const valid: RejectedUnknownReleaseEvidence = {
-      basis: "wallet-user-rejection",
-      providerCode: "USER_REJECTED",
-      confirmedNoBroadcast: true,
-      userConfirmedRetry: true,
-      noBroadcastObservation: { method: "chain-nonce", observedAt: new Date(now).toISOString(), reference: "nonce-observation-7" },
-    };
     expectSyncCode(
-      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence: { ...valid, userConfirmedRetry: false as true } }),
+      () =>
+        j.releaseRejectedUnknown({
+          idemKey: record.idemKey,
+          reservationId,
+          payloadHash: record.payloadHash,
+          evidence: {
+            basis: "wallet-user-rejection",
+            providerCode: "USER_REJECTED",
+            confirmedNoBroadcast: true,
+            userConfirmedRetry: true,
+            releasedByOwnerInstanceId: "owner-1",
+            noBroadcastObservation: {
+              method: "chain-nonce",
+              observedAt: new Date(now).toISOString(),
+              reference: "nonce-observation-7",
+            },
+          },
+        }),
       "PAYMENT_OPERATION_RELEASE_REFUSED",
     );
-    expectSyncCode(
-      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence: { ...valid, providerCode: "4001", noBroadcastObservation: { ...valid.noBroadcastObservation, method: "guessed" as "chain-nonce" } } }),
-      "PAYMENT_OPERATION_RELEASE_REFUSED",
-    );
-    expectSyncCode(
-      () => j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId: "other", payloadHash: record.payloadHash, evidence: valid }),
-      "PAYMENT_OPERATION_RESERVATION_MISMATCH",
-    );
-
-    const released = j.releaseRejectedUnknown({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence: valid });
-    expect(released.state).toBe("released");
-    expect(released.reason).toContain("WALLET_REJECTION");
-
-    const reclaimed = await port.reserve(op);
-    expect(reclaimed.state).toBe("reserved");
-    expect(reclaimed.attempt).toBe(2);
-    expect(reclaimed.reservationId).not.toBe(reservationId);
-    await expectCode(
-      () => port.markBroadcasting({ reservationId, operation: op }),
-      "PAYMENT_OPERATION_RESERVATION_MISMATCH",
-    );
+    // The unknown row stays terminal; a new reserve cannot turn it into a send.
+    const retry = await port.reserve(op);
+    expect(retry.state).toBe("unknown");
+    expect(retry.blocked).toBe(true);
   });
 
-  test("timeouts, 500s and invalid hashes are never released by the rejection path", async () => {
-    for (const reason of ["TIMEOUT", "RPC_500", "INVALID_TX_HASH", "WALLET_ERROR"]) {
-      const j = openJournal({ dbName: `state/${reason}.sqlite` });
+  test("timeouts, 500s, invalid hashes and 4001 are all non-releasable unknown", async () => {
+    for (const reason of ["TIMEOUT", "RPC_500", "INVALID_TX_HASH", "WALLET_ERROR", "USER_REJECTED", 4001]) {
+      const j = openJournal({ dbName: `state/${String(reason)}.sqlite` });
       const { port, op, reservationId } = await reservedPort(j);
       await port.markBroadcasting({ reservationId, operation: op });
       await port.recordUnknown({ reservationId, operation: op, reason });
-      const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+      const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
+      expect(record.state).toBe("unknown");
       expectSyncCode(
         () =>
           j.releaseRejectedUnknown({
@@ -615,112 +666,71 @@ describe("send gate and durable state machine", () => {
               providerCode: "USER_REJECTED",
               confirmedNoBroadcast: true,
               userConfirmedRetry: true,
+              releasedByOwnerInstanceId: "owner-1",
               noBroadcastObservation: { method: "chain-nonce", observedAt: new Date(now).toISOString(), reference: "nonce" },
             },
           }),
         "PAYMENT_OPERATION_RELEASE_REFUSED",
       );
-      expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("unknown");
+      expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("unknown");
     }
   });
 
-  test("old no-broadcast evidence is still usable, future evidence is not", async () => {
-    const j = openJournal({ dbName: "state/evidence-age.sqlite" });
-    const value = binding({ invoice: "inv_evidence_age" });
-    const { port, op, reservationId } = await reservedPort(j, value);
-    await port.markBroadcasting({ reservationId, operation: op });
-    await port.recordUnknown({ reservationId, operation: op, reason: "USER_REJECTED" });
-    const record = j.lookup({ invoice: "inv_evidence_age", consumerAddress: PAYER })!;
-    const base = {
-      basis: "wallet-user-rejection" as const,
-      providerCode: "USER_REJECTED" as const,
-      confirmedNoBroadcast: true as const,
-      userConfirmedRetry: true as const,
+  test("reserved release requires fresh owner-bound evidence with a non-wallet source", async () => {
+    const value = binding({ expiresAtMs: now + 7 * 24 * 60 * 60 * 1000 });
+    const j = openJournal();
+    const { reservationId } = await reservedPort(j, value);
+    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
+    const base: UnsentReleaseEvidence = {
+      basis: "service-recovered-unsent",
+      confirmedNoBroadcast: true,
+      releasedByOwnerInstanceId: "owner-1",
+      noBroadcastObservation: {
+        method: "service-flow",
+        observedAt: new Date(now).toISOString(),
+        reference: "flow-aborted-before-mark",
+      },
     };
+    const release = (evidence: UnsentReleaseEvidence) =>
+      j.releaseUnsentReservation({ idemKey: record.idemKey, reservationId, payloadHash: record.payloadHash, evidence });
+
+    expectSyncCode(() => release({ ...base, releasedByOwnerInstanceId: "owner-other" }), "PAYMENT_OPERATION_RELEASE_REFUSED");
+    expectSyncCode(
+      () => release({ ...base, noBroadcastObservation: { ...base.noBroadcastObservation, observedAt: new Date(now + 120_000).toISOString() } }),
+      "PAYMENT_OPERATION_RELEASE_REFUSED",
+    );
+    expectSyncCode(
+      () => release({ ...base, noBroadcastObservation: { ...base.noBroadcastObservation, observedAt: new Date(now - 60_000).toISOString() } }),
+      "PAYMENT_OPERATION_RELEASE_REFUSED",
+    );
     expectSyncCode(
       () =>
-        j.releaseRejectedUnknown({
-          idemKey: record.idemKey,
-          reservationId,
-          payloadHash: record.payloadHash,
-          evidence: {
-            ...base,
-            noBroadcastObservation: {
-              method: "chain-nonce",
-              observedAt: new Date(now + 120_000).toISOString(),
-              reference: "future",
-            },
+        release({
+          ...base,
+          noBroadcastObservation: {
+            ...base.noBroadcastObservation,
+            method: "provider-response" as unknown as "chain-nonce",
           },
         }),
-      "PAYMENT_OPERATION_INVALID_ARGUMENT",
+      "PAYMENT_OPERATION_RELEASE_REFUSED",
     );
-    const released = j.releaseRejectedUnknown({
-      idemKey: record.idemKey,
-      reservationId,
-      payloadHash: record.payloadHash,
-      evidence: {
-        ...base,
-        noBroadcastObservation: {
-          method: "chain-nonce",
-          observedAt: new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString(),
-          reference: "old-but-checked-nonce",
-        },
-      },
+
+    // 25 hours later the original observation is stale even though it is after
+    // the claim; a fresh re-observation is required and is then accepted.
+    now += 25 * 60 * 60 * 1000;
+    expectSyncCode(
+      () => release({ ...base, noBroadcastObservation: { ...base.noBroadcastObservation, observedAt: new Date(now - 25 * 60 * 60 * 1000).toISOString() } }),
+      "PAYMENT_OPERATION_RELEASE_REFUSED",
+    );
+    const released = release({
+      ...base,
+      noBroadcastObservation: { ...base.noBroadcastObservation, observedAt: new Date(now).toISOString() },
     });
     expect(released.state).toBe("released");
-  });
-
-  test("4001 and USER_REJECTED are the same rejection class for release", async () => {
-    const j = openJournal({ dbName: "state/rejection-code.sqlite" });
-    const value = binding({ invoice: "inv_rejection_code" });
-    const { port, op, reservationId } = await reservedPort(j, value);
-    await port.markBroadcasting({ reservationId, operation: op });
-    await port.recordUnknown({ reservationId, operation: op, reason: 4001 });
-    const record = j.lookup({ invoice: "inv_rejection_code", consumerAddress: PAYER })!;
-    expect(record.reason).toBe("4001");
-    const released = j.releaseRejectedUnknown({
-      idemKey: record.idemKey,
-      reservationId,
-      payloadHash: record.payloadHash,
-      evidence: {
-        basis: "wallet-user-rejection",
-        providerCode: "USER_REJECTED",
-        confirmedNoBroadcast: true,
-        userConfirmedRetry: true,
-        noBroadcastObservation: { method: "chain-nonce", observedAt: new Date(now).toISOString(), reference: "nonce" },
-      },
-    });
-    expect(released.state).toBe("released");
-  });
-
-  test("a late hash found after a release blocks the retry", async () => {
-    const j = openJournal({ dbName: "state/late-hash.sqlite" });
-    const value = binding({ invoice: "inv_late_hash" });
-    const { port, op, reservationId } = await reservedPort(j, value);
-    await port.markBroadcasting({ reservationId, operation: op });
-    await port.recordUnknown({ reservationId, operation: op, reason: "USER_REJECTED" });
-    const record = j.lookup({ invoice: "inv_late_hash", consumerAddress: PAYER })!;
-    j.releaseRejectedUnknown({
-      idemKey: record.idemKey,
-      reservationId,
-      payloadHash: record.payloadHash,
-      evidence: {
-        basis: "wallet-user-rejection",
-        providerCode: "USER_REJECTED",
-        confirmedNoBroadcast: true,
-        userConfirmedRetry: true,
-        noBroadcastObservation: { method: "chain-nonce", observedAt: new Date(now).toISOString(), reference: "nonce" },
-      },
-    });
-    expect(j.lookup({ invoice: "inv_late_hash", consumerAddress: PAYER })!.state).toBe("released");
-
-    // A hash that appears after the release is stronger evidence than the
-    // Service's "no broadcast" check: record it and refuse the retry.
-    await port.recordHash({ reservationId, operation: op, hash: HASH_A });
-    const recovered = j.lookup({ invoice: "inv_late_hash", consumerAddress: PAYER })!;
-    expect(recovered.state).toBe("broadcast");
-    expect(recovered.txHash).toBe(HASH_A);
-    expect((await port.reserve(op)).state).toBe("broadcast");
+    const reclaimed = await j.operationPort(value).reserve(operationFrom(value));
+    expect(reclaimed.state).toBe("reserved");
+    expect(reclaimed.attempt).toBe(2);
+    expect(reclaimed.reservationId).not.toBe(reservationId);
   });
 
   test("a hash cannot be recorded before the send gate, and an unknown reason is sanitized", async () => {
@@ -729,7 +739,7 @@ describe("send gate and durable state machine", () => {
     await expectCode(() => port.recordHash({ reservationId, operation: op, hash: HASH_A }), "PAYMENT_OPERATION_NOT_BROADCASTING");
     await port.markBroadcasting({ reservationId, operation: op });
     await port.recordUnknown({ reservationId, operation: op, reason: "seed words: alpha beta / secret" });
-    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
     expect(record.reason).toMatch(/^[A-Za-z0-9._:-]+$/);
     expect(record.reason).not.toContain(" ");
     expect(record.reason).not.toContain("seed words");
@@ -759,7 +769,7 @@ describe("verified intent binding and negative cases", () => {
     for (const candidate of cases) {
       await expectCode(() => port.reserve(candidate), "PAYMENT_OPERATION_PAYLOAD_MISMATCH");
     }
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })).toBeNull();
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })).toBeNull();
   });
 
   test("malformed operations and bindings fail closed", async () => {
@@ -786,7 +796,7 @@ describe("verified intent binding and negative cases", () => {
     const port = j.operationPort(changedQuote);
     await expectCode(() => port.reserve(operationFrom(changedQuote)), "PAYMENT_OPERATION_PAYLOAD_MISMATCH");
     // The original row is untouched.
-    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
     expect(record.amountRaw).toBe("1000001");
     expect(record.state).toBe("reserved");
   });
@@ -807,10 +817,11 @@ describe("verified intent binding and negative cases", () => {
     const op = operationFrom(value);
     const reservation = await port.reserve(op);
     expect(reservation.state).toBe("reserved");
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.expiresAtMs).toBe(now + 1000);
 
     now += 1001;
     await expectCode(() => port.markBroadcasting({ reservationId: reservation.reservationId, operation: op }), "PAYMENT_OPERATION_EXPIRED");
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("reserved");
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("reserved");
 
     const fresh = binding({ invoice: "inv_expired_new", expiresAtMs: now - 1 });
     await expectCode(() => j.operationPort(fresh).reserve(operationFrom(fresh)), "PAYMENT_OPERATION_EXPIRED");
@@ -824,12 +835,12 @@ describe("verified intent binding and negative cases", () => {
 
     authority.revoked = true;
     await expectCode(() => port.markBroadcasting({ reservationId, operation: op }), "PAYMENT_OPERATION_IDENTITY_STALE");
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("reserved");
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("reserved");
 
     authority.revoked = false;
     authority.accepted.providerIdentityFingerprint = "provider:lab:fp-2";
     await expectCode(() => port.markBroadcasting({ reservationId, operation: op }), "PAYMENT_OPERATION_IDENTITY_STALE");
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("reserved");
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("reserved");
 
     // A new reservation for a new invoice with a stale fingerprint is refused too.
     authority.accepted.providerIdentityFingerprint = "provider:lab:fp-1";
@@ -859,7 +870,7 @@ describe("verified intent binding and negative cases", () => {
 
     registry.setAssetEnabled(assetIdOf(97, CONTRACT), false);
     await expectCode(() => port.markBroadcasting({ reservationId, operation: op }), "PAYMENT_OPERATION_ASSET_NOT_TRUSTED");
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("reserved");
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("reserved");
 
     const unknown = binding({ invoice: "inv_unknown_asset", contractAddress: OTHER_RECIPIENT, assetId: assetIdOf(97, OTHER_RECIPIENT) });
     await expectCode(() => j.operationPort(unknown).reserve(operationFrom(unknown)), "PAYMENT_OPERATION_ASSET_NOT_TRUSTED");
@@ -872,13 +883,13 @@ describe("verified intent binding and negative cases", () => {
     await expectCode(() => port.markBroadcasting({ reservationId, operation: op }), "PAYMENT_OPERATION_CLOSED");
 
     const reopened = openJournal();
-    expect(reopened.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.state).toBe("reserved");
+    expect(reopened.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.state).toBe("reserved");
   });
 
   test("a CAS loss (another service released the claim) prevents the send", async () => {
     const j = openJournal();
     const { port, op, reservationId } = await reservedPort(j);
-    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
+    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
     j.releaseUnsentReservation({
       idemKey: record.idemKey,
       reservationId,
@@ -886,8 +897,12 @@ describe("verified intent binding and negative cases", () => {
       evidence: {
         basis: "service-recovered-unsent",
         confirmedNoBroadcast: true,
-        observedAt: new Date(now).toISOString(),
-        reference: "confirm-flow-failed-before-send",
+        releasedByOwnerInstanceId: "owner-1",
+        noBroadcastObservation: {
+          method: "service-flow",
+          observedAt: new Date(now).toISOString(),
+          reference: "confirm-flow-failed-before-send",
+        },
       },
     });
     await expectCode(() => port.markBroadcasting({ reservationId, operation: op }), "PAYMENT_OPERATION_NOT_RESERVED");
@@ -902,8 +917,8 @@ describe("recovery queries", () => {
   test("query, lookup and pending expose the known hash and never a send permit", async () => {
     const j = openJournal();
     const { port, op, reservationId } = await reservedPort(j);
-    const key = j.idempotencyKeyOf({ invoice: "inv_pay_001", consumerAddress: PAYER });
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.idemKey).toBe(key);
+    const key = j.idempotencyKeyOf({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP });
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.idemKey).toBe(key);
     expect(j.lookupByIdemKey(key)!.reservationId).toBe(reservationId);
     expect(j.pending().map((row) => row.state)).toEqual(["reserved"]);
 
@@ -930,7 +945,7 @@ describe("recovery queries", () => {
     expect(pending[0]).toMatchObject({ state: "unknown", txHash: null, reason: "RPC_500", invoice: "inv_pay_001" });
     expect(await port.query(op)).toMatchObject({ state: "unknown", hash: null, retryable: false });
     // The Service can hand the invoice to a chain lookup; no resend API exists.
-    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!.reservationId).toBe(reservationId);
+    expect(j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!.reservationId).toBe(reservationId);
   });
 });
 
@@ -967,21 +982,18 @@ describe("local storage safety", () => {
 
   test("the journal stores no calldata, signature or raw evidence reference", async () => {
     const j = openJournal();
-    const { port, op, reservationId } = await reservedPort(j);
-    await port.markBroadcasting({ reservationId, operation: op });
-    await port.recordUnknown({ reservationId, operation: op, reason: "USER_REJECTED" });
-    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER })!;
-    j.releaseRejectedUnknown({
+    const { op, reservationId } = await reservedPort(j);
+    const record = j.lookup({ invoice: "inv_pay_001", consumerAddress: PAYER, providerIdentityFingerprint: FP })!;
+    j.releaseUnsentReservation({
       idemKey: record.idemKey,
       reservationId,
       payloadHash: record.payloadHash,
       evidence: {
-        basis: "wallet-user-rejection",
-        providerCode: "USER_REJECTED",
+        basis: "service-recovered-unsent",
         confirmedNoBroadcast: true,
-        userConfirmedRetry: true,
+        releasedByOwnerInstanceId: "owner-1",
         noBroadcastObservation: {
-          method: "chain-nonce",
+          method: "service-flow",
           observedAt: new Date(now).toISOString(),
           reference: "SECRET-REFERENCE-DO-NOT-STORE",
         },
@@ -1082,7 +1094,7 @@ describe("real SQLite concurrency across processes", () => {
     const okHashes = results.filter((result) => result.ok === true && result.kind === "hash");
     expect(okHashes).toHaveLength(1);
     const check = openJournal({ dbName: "race2/payment-operations.sqlite" });
-    const record = check.lookupByIdemKey(paymentIdempotencyKey({ invoice: value.invoice, consumerAddress: value.consumerAddress }))!;
+    const record = check.lookupByIdemKey(paymentIdempotencyKey({ invoice: value.invoice, consumerAddress: value.consumerAddress, providerIdentityFingerprint: value.providerIdentityFingerprint }))!;
     check.close();
     expect(record.state).toBe("broadcast");
     expect([HASH_A, HASH_B]).toContain(record.txHash!);
