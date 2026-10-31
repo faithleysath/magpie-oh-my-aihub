@@ -35,5 +35,8 @@
     "page/icon.svg",
     "README.md",
     "!console/*.test.js"
-  ]
+  ],
+  "dependencies": {
+    "ethers": "6.17.0"
+  }
 }
