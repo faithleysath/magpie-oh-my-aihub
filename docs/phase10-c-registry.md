@@ -135,7 +135,7 @@ curl -s -X POST https://mainnet.base.org -H 'content-type: application/json' \
 
 - `requireEnabledNetwork(chainId)`：旧的 watcher/credit 入口；主网永远抛错。
 - `requireCreditableNetwork(chainId)`：先检查硬 chainId 集合，再检查 enabled/support。
-- `requireReadableNetwork(chainId)`：只允许已注册、有 RPC、且 `support=read-only` 或 `enabled=true`；**不产生任何 credit**。
+- `requireReadableNetwork(chainId)`：只允许已注册、有 RPC、且 `support=read-only` 或 `enabled=true`；**不产生任何 credit**。主网/只读网络的 RPC 端点强制 `https`（测试网本地 http 仍允许）。
 - `receivableNetworks()` / `readableNetworks()`：无 primary/default。
 - `setNetworkEnabled(56|8453, true)`：抛错。
 
@@ -417,12 +417,12 @@ bun run typecheck                      # PASS (tsc --noEmit)
 bun run secret-scan                    # PASS: no credentials in the working tree
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts
-# 56 pass / 0 fail（284 expect）
+# 57 pass / 0 fail（287 expect）
 
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts \
   ./test/wallet-surface.test.ts ./test/deposits.test.ts ./test/ledger.test.ts
-# 106 pass / 0 fail（488 expect）
+# 107 pass / 0 fail（493 expect）
 ```
 
 覆盖：
