@@ -417,12 +417,12 @@ bun run typecheck                      # PASS (tsc --noEmit)
 bun run secret-scan                    # PASS: no credentials in the working tree
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts
-# 57 pass / 0 fail（287 expect）
+# 57 pass / 0 fail（288 expect）
 
 bun test --preload /tmp/phase10-prep/guard.ts \
   ./test/networks.test.ts ./test/phase10-c-registry.test.ts \
   ./test/wallet-surface.test.ts ./test/deposits.test.ts ./test/ledger.test.ts
-# 107 pass / 0 fail（493 expect）
+# 107 pass / 0 fail（494 expect）
 ```
 
 覆盖：
@@ -458,7 +458,9 @@ bun test --preload /tmp/phase10-prep/guard.ts \
 - `browser wallet workflows > pending older than 50-row preview ...` → 过期导致 0 行
 - `browser wallet workflows > production watcher credit ...` → “请求已失效或无法再次签名”
 
-基线 `VALIDATION-PREP.md` 记录全量 740 pass / 5 fail；本次仅跑上述目标集，未跑全量。**没有**因为本单元改动新增失败；失败原因是夹具固定时钟 `2026-10-30T12:00Z` 早于真实墙钟。全量测试前仍需按协调方要求使用已审查的 guard preload，避免 `phase8-prompt-journey.test.ts` 读取本机 LAN:3425 生产 Magpie、`service.test.ts` 访问公共测试网 RPC。
+基线 `VALIDATION-PREP.md` 记录全量 740 pass / 5 fail；本次目标集没有新增失败。CI（run `41158413320`，commit `0c94c08`）两个平台均恰好 **5 fail**，全部是同一已知时钟缺陷（wallet wizard 1 + numeric admission 1 + browser wallet workflows 3），`778/779 tests`；本单元新增的 registry/selection/read-only/ledger 测试全绿。早期 run 另有 4 个 fixture 资产字段失败，已用 `0c94c08` 修正（fixture 显式 `credit:true`/`fixed-test-rate`），不再出现。
+
+全量本地测试仍可能受本机端口占用/生产网关影响（本次本地全量看到 `EADDRINUSE 13650/31589` 与既有 guard 拦截，不是本分支回归）；全量前按协调方要求使用已审查的 guard preload，避免 `phase8-prompt-journey.test.ts` 读取本机 LAN:3425 生产 Magpie、`service.test.ts` 访问公共测试网 RPC。
 
 ### 5.3 未运行 / UNKNOWN
 
