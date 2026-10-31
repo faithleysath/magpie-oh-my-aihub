@@ -120,33 +120,37 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
       submit.disabled = true; agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; }); root.append(agree.label, submit);
     });
   }
-  function heading(root, eyebrow, text, description, actions) {
-    const node = el("div", null, "page-heading"); const copy = el("div"); copy.append(el("p", eyebrow, "eyebrow"), el("h1", text), p(description)); node.append(copy);
-    if (actions) node.append(actions); root.append(node);
-  }
-
   const refreshButton = button("初始化 / 刷新钱包", () => void run("wallet-refresh", { probeRpc: false }));
-  heading(walletRoot, "TESTNET · YOUR OWN KEYS", "测试网钱包", "共享方管理收款与入账；使用方通过自己的外部钱包完成签名和转账。", refreshButton);
   walletRoot.append(el("div", "仅支持测试网资产。BSC Testnet 与 Base Sepolia 独立选择；本应用不持有钱包私钥，不执行转账。若连接本地模拟 RPC，其链事件仅为实验数据，不代表公链付款。", "soft-note wallet-scope"));
   const walletEvidence = el("div", null, "wallet-evidence"); walletRoot.append(walletEvidence);
-  const registry = section("网络与收款配置", "每个网络使用相同流程。先检查 RPC、测试代币与收款地址，再明确启动观察。RPC 地址只写入本机服务，不回显带凭证的地址。");
-  const watcherActions = el("div", null, "workflow-actions");
-  watcherActions.append(button("启动已启用网络的观察", () => confirm("启动链上观察", "将联系已配置的 RPC。只有生产观察器确认、账本应用和原生额度回读后，才可判断入账结果。", "wallet-start", {})), button("停止自动观察", () => confirm("停止自动观察", "停止后不再启动新的定时扫描；正在执行的扫描可能仍需完成。不会取消申请或撤销已记账记录。", "wallet-stop", {})));
-  registry.append(watcherActions);
-  const networks = el("div", null, "wallet-network-grid"); registry.append(networks); walletRoot.append(registry);
+  // Read-only overview: assets, deposits and provider credit stay separate.
+  const registry = section("网络、资产与提供者信用", "链上入账是资产记录，伙伴账目余额是提供者信用；两者不是同一个数。网络配置、RPC 与观察器在“网络 → 诊断”里。");
+  const networks = el("div", null, "wallet-network-list"); registry.append(networks); walletRoot.append(registry);
   const intents = section("共享方 · 发起与追踪入账申请", "这里只为本机已管理的伙伴创建申请。申请不改变模型、授权额度或账本余额；转账与签名由付款方在外部钱包完成。");
   const intentActions = el("div", null, "workflow-actions");
   const createButton = button("创建测试网入账申请", () => createIntent(), true);
-  intentActions.append(createButton, button("刷新链与入账证据", () => void run("wallet-refresh", { probeRpc: true })));
+  const refreshButtonInline = refreshButton;
+  intentActions.append(createButton);
   intents.append(intentActions);
   const intentRows = el("div", null, "workflow-list"); intents.append(intentRows); walletRoot.append(intents);
   const guide = section("使用方 · 用自己的外部钱包付款", "请向共享方索取入账申请文件。导入后核对完整网络、代币合约、金额、收款地址和有效期；使用自己的钱包签名，将签名文件私下交回共享方。共享方验证后才会给出准确转账指引。");
-  const guideActions = el("div", null, "workflow-actions"); guideActions.append(button("导入并核对入账申请", () => importFile("deposit"), true), button("导入共享方账单", () => importFile("statement"))); guide.append(guideActions);
+  const guideActions = el("div", null, "workflow-actions"); guideActions.append(button("导入并核对入账申请", () => importFile("deposit"))); guide.append(guideActions);
   guide.append(p("不向此页面提供钱包私钥、助记词或钱包备份文件。签名是归属证明，不能替代转账，也不代表已经入账。"));
   const tutorials = el("details", null, "workflow-details"); tutorials.append(el("summary", "第三方真实资产参考教程"), p("以下是第三方的真实主网资产教程，不会获取测试币，也不适用于本地模拟代币。本项目与 Peer、支付宝无合作关系。"));
   for (const [name, href] of [["BNB Chain 官方教程", "https://www.bnbchain.org/en/blog/moving-from-a-centralized-exchange-to-bnb-chain"], ["Peer 中文购买教程", "https://docs.peer.xyz/guides/zh/alipay-buy"]]) { const link = el("a", name); link.href = href; link.target = "_blank"; link.rel = "noopener noreferrer external"; tutorials.append(link); }
   guide.append(tutorials); walletRoot.append(guide);
-  const alerts = section("链上异常与审计记录", "标记已审阅只保存说明，不会补记余额、撤销入账、解冻授权或重建缺失费用。"); const alertRows = el("div", null, "workflow-list"); alerts.append(alertRows); walletRoot.append(alerts);
+  // Diagnostics live on the network page, not in the wallet's everyday view.
+  const diagnosticsRoot = document.getElementById("wallet-diagnostics");
+  const alertRows = el("div", null, "workflow-list");
+  const diagnosticRows = el("div", null, "workflow-list");
+  if (diagnosticsRoot) {
+    const diagSection = section("钱包与链诊断", "RPC、观察器、扫描、测试代币、对账与审计都在这里；每项都会明确写清它改变了什么。");
+    const watcherActions = el("div", null, "workflow-actions");
+    watcherActions.append(button("启动已启用网络的观察", () => confirm("启动链上观察", "将联系已配置的 RPC。只有生产观察器确认、账本应用和原生额度回读后，才可判断入账结果。", "wallet-start", {})), button("停止自动观察", () => confirm("停止自动观察", "停止后不再启动新的定时扫描；正在执行的扫描可能仍需完成。不会取消申请或撤销已记账记录。", "wallet-stop", {})), refreshButtonInline, button("刷新链与入账证据", () => void run("wallet-refresh", { probeRpc: true })));
+    diagSection.append(watcherActions, diagnosticRows);
+    const alerts = section("链上异常与审计记录", "标记已审阅只保存说明，不会补记余额、撤销入账、解冻授权或重建缺失费用。"); alerts.append(alertRows);
+    diagnosticsRoot.append(diagSection, alerts);
+  }
 
   function renderEvidence() {
     const wallet = obj(state.wallet); walletEvidence.replaceChildren();
@@ -164,24 +168,42 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     if (!configs.length) { networks.append(empty("先读取钱包配置", "初始化 / 刷新钱包会明确读取配置，不会因为打开此页就自动扫描网络。")); return; }
     for (const network of configs) {
       const chain = rows(wallet.view?.chains).find((row) => row.chainId === network.chainId) || {};
-      const card = el("article", null, "wallet-network-card");
-      const top = el("div", null, "section-heading"); top.append(el("h3", network.displayName), pill(network.running ? "观察运行中" : network.enabled ? "已启用 · 观察未运行" : "已停用"));
-      const policy = obj(network.finality);
-      card.append(top, p(`测试网络 · chainId ${network.chainId}`), p(`最终性：${policy.mode === "finalized-tag" ? "等待 finalized 标签" : `等待 ${policy.confirmations} 次确认`}`), p(`RPC ${network.rpcConfigured ? `已配置 ${network.rpcCount} 个` : "尚未配置"} · 最近扫描 ${stamp(chain.lastScanAt)}`));
-      if (chain.lastError) card.append(el("p", "此网络的 RPC 或扫描结果尚未验证，请检查网络配置并刷新证据。", "inline-warning"));
       const receiving = rows(wallet.receiving).find((row) => row.chainId === network.chainId);
-      card.append(details("收款地址与观察进度", [["本机收款地址", receiving?.address], ["链头", chain.head], ["最终块", chain.finalizedBlock], ["观察游标", chain.cursor], ["最终性依据", policy.rationale]]));
+      const assets = rows(wallet.registry?.assets).filter((asset) => asset.chainId === network.chainId);
+      // Unscanned is unknown; only a real read may print an amount.
+      const credited = !chain.lastScanAt && !(chain.totals?.credited > 0) ? "尚未查询" : typeof chain.totals?.credited === "number" ? usd(chain.totals.credited) : "未读取";
+      const row = el("div", null, "wallet-network-row");
+      const top = el("div", null, "section-heading"); top.append(el("h3", network.displayName), pill(network.running ? "观察运行中" : network.enabled ? "已启用 · 观察未运行" : "已停用", network.running ? "info" : "neutral"));
+      row.append(top, p(`测试网 chainId ${network.chainId} · 链上已入账 ${credited} · 收款地址${receiving?.address ? "已设置" : "尚未设置"}`), p(`资产：${assets.length ? assets.map((asset) => `${asset.symbol}${asset.enabled ? "" : "（停用）"}`).join("、") : "尚未注册"}`));
+      if (chain.lastError) row.append(el("p", "此网络的 RPC 或扫描结果尚未验证，请到“网络 → 诊断”检查。", "inline-warning"));
+      networks.append(row);
+    }
+  }
+  function renderDiagnostics() {
+    diagnosticRows.replaceChildren();
+    const wallet = obj(state.wallet);
+    const configs = rows(wallet.registry?.networks).filter((network) => TEST_CHAINS.includes(network.chainId));
+    if (!configs.length) { diagnosticRows.append(empty("还没有可诊断的网络", "初始化钱包后，这里会列出每个测试网的 RPC、观察与代币配置。")); }
+    for (const network of configs) {
+      const chain = rows(wallet.view?.chains).find((row) => row.chainId === network.chainId) || {};
+      const policy = obj(network.finality);
+      const row = el("article", null, "workflow-row");
+      const top = el("div", null, "section-heading"); top.append(el("h3", network.displayName), pill(network.enabled ? "已启用" : "已停用"));
+      row.append(top, p(`chainId ${network.chainId} · RPC ${network.rpcConfigured ? `已配置 ${network.rpcCount} 个` : "尚未配置"} · 最近扫描 ${stamp(chain.lastScanAt)}`), p(`最终性：${policy.mode === "finalized-tag" ? "等待 finalized 标签" : `等待 ${policy.confirmations} 次确认`}`));
+      row.append(details("收款地址与观察进度", [["本机收款地址", receivingAddress(network)], ["链头", chain.head], ["最终块", chain.finalizedBlock], ["观察游标", chain.cursor], ["最终性依据", policy.rationale]]));
       const assets = rows(wallet.registry?.assets).filter((asset) => asset.chainId === network.chainId);
       for (const asset of assets) {
-        const row = el("div", null, "wallet-asset");
-        row.append(el("strong", `${asset.symbol} · ${asset.enabled ? "已启用" : "已停用"}`), details("代币合约与固定测试汇率", [["完整代币合约", asset.contractAddress], ["资产身份", asset.assetId], ["小数位", asset.decimals], ["链上小数位", asset.onchainDecimals], ["汇率（nanoUSD / token）", asset.nanosPerToken ?? asset.pricing?.nanosPerToken], ["价格版本", asset.priceVersion ?? asset.pricing?.version], ["测试网限制", asset.testnetOnly === false ? "需要核验" : "仅测试网"]]), button(asset.enabled ? "停用此测试代币" : "启用此测试代币", () => confirm(asset.enabled ? "停用此测试代币" : "启用此测试代币", "资产身份由网络和合约共同确定。此操作不会修改历史入账。", "wallet-asset-toggle", { assetId: asset.assetId, enabled: !asset.enabled })));
-        card.append(row);
+        const assetRow = el("div", null, "wallet-asset");
+        assetRow.append(el("strong", `${asset.symbol} · ${asset.enabled ? "已启用" : "已停用"}`), details("代币合约与固定测试汇率", [["完整代币合约", asset.contractAddress], ["资产身份", asset.assetId], ["小数位", asset.decimals], ["链上小数位", asset.onchainDecimals], ["汇率（nanoUSD / token）", asset.nanosPerToken ?? asset.pricing?.nanosPerToken], ["价格版本", asset.priceVersion ?? asset.pricing?.version], ["测试网限制", asset.testnetOnly === false ? "需要核验" : "仅测试网"]]), button(asset.enabled ? "停用此测试代币" : "启用此测试代币", () => confirm(asset.enabled ? "停用此测试代币" : "启用此测试代币", "资产身份由网络和合约共同确定。此操作不会修改历史入账。", "wallet-asset-toggle", { assetId: asset.assetId, enabled: !asset.enabled })));
+        row.append(assetRow);
       }
       const actions = el("div", null, "workflow-actions");
       actions.append(button("编辑 RPC", () => editRpc(network)), button(network.enabled ? "停用网络" : "启用网络", () => confirm(network.enabled ? "停用网络" : "启用网络", "只调整当前测试网配置。停止定时观察不代表已中断正在执行的扫描。", "wallet-network", { chainId: network.chainId, enabled: !network.enabled })), button("设置收款地址", () => editReceiving(network)), button("注册测试代币", () => registerAsset(network)), button("扫描此网络", () => confirm("扫描此网络", "主动扫描可能通过既有观察器验证、归属并应用真实账本入账。扫描返回不代表密钥额度已验证，请随后刷新证据。", "wallet-scan", { chainId: network.chainId })));
-      card.append(actions); networks.append(card);
+      row.append(actions);
+      diagnosticRows.append(row);
     }
   }
+  function receivingAddress(network) { return rows(obj(state.wallet).receiving).find((row) => row.chainId === network.chainId)?.address; }
   function editRpc(network) {
     openDialog(`编辑 ${network.displayName} RPC`, (root) => {
       root.append(p("已有 RPC 地址不会回显。仅在需要替换时填写，每行一个 HTTP(S) 地址；内容只提交给本机服务。留空不更改。"));
@@ -451,12 +473,14 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
   }
 
   // Private per-consumer accounting and unsigned statement exchange.
-  heading(accountingRoot, "EVIDENCE BEFORE BALANCE", "用量与账单", "累计入账、已结算用量、余额和原生额度来自既有账本；未知状态不会按零计算。", button("刷新账目检查", () => void run("accounting-refresh", selectedConsumer ? { consumerId: selectedConsumer } : {})));
+  const accountingHeading = el("div", null, "section-heading");
+  accountingHeading.append(el("h2", "账本与离线账单"), button("刷新账目检查", () => void run("accounting-refresh", selectedConsumer ? { consumerId: selectedConsumer } : {})));
+  accountingRoot.append(accountingHeading, p("累计入账、已结算用量、余额和原生额度来自既有账本；未知状态不会按零计算。这是既有会计路径，不是 Phase 10 的无文件目标。", "muted"));
   const accountingIntro = section("选择本机管理的伙伴", "共享方只查看自己管理的伙伴账目。使用方可导入共享方交付的未签名账单，并在“我的连接”查看对方原生限额回读。");
   const consumerSelect = select("伙伴账目", [], "请选择伙伴，不会自动选择"); accountingIntro.append(consumerSelect.label);
   consumerSelect.input.addEventListener("change", () => { closeDialog(); selectedConsumer = consumerSelect.input.value; renderAccounting(); });
   const accountContent = el("div"); accountingRoot.append(accountingIntro, accountContent);
-  const external = section("使用方 · 已导入的共享方账单", "这是共享方提供的未签名快照。摘要只验证内容一致性，不证明身份、付款或链上最终性；请独立核对。"), externalContent = el("div");
+  const external = section("使用方 · 已导入的共享方账单（离线文件）", "这是共享方提供的未签名快照。摘要只验证内容一致性，不证明身份、付款或链上最终性；请独立核对。"), externalContent = el("div");
   external.append(button("导入共享方账单", () => importFile("statement")), externalContent); accountingRoot.append(external);
   function renderConsumerOptions() {
     const value = selectedConsumer;
@@ -555,6 +579,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     state = next; renderEvidence();
     const keys = [
       ["networks", [next.wallet?.registry, next.wallet?.receiving, next.wallet?.view?.chains], renderNetworks],
+      ["diagnostics", [next.wallet?.registry, next.wallet?.receiving, next.wallet?.view?.chains], renderDiagnostics],
       ["intents", [next.wallet?.intents, next.wallet?.intentOperations, next.wallet?.view?.deposits], renderIntents],
       ["alerts", [next.wallet?.anomalies, next.wallet?.view?.alerts], renderAlerts],
       ["consumers", next.status.consumers, renderConsumerOptions],
