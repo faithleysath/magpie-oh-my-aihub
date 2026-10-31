@@ -476,6 +476,10 @@ export class EasytierSupervisor {
   private restarts = 0;
   private stopping = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** a scheduled crash-restart; cleared by stop() so a failed start cannot loop */
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  /** true between spawning the core and proving its RPC belongs to it */
+  private startupPending = false;
   private consecutiveFailures = 0;
   private lastStartAt = 0;
   private lastRelocateAt = 0;
@@ -600,6 +604,7 @@ export class EasytierSupervisor {
       env: process.env,
     });
     this.proc = proc;
+    this.startupPending = true;
     this.lastStartAt = Date.now();
     this.state.pid = proc.pid;
     this.state.running = true;
@@ -620,9 +625,11 @@ export class EasytierSupervisor {
         `easytier-core did not answer its RPC on 127.0.0.1:${cfg.rpcPort} within ${this.rpcTimeoutMs}ms`;
       logger.error(why);
       this.state.lastError = why;
+      this.startupPending = false;
       await this.stop();
       throw new Error(why);
     }
+    this.startupPending = false;
     await this.refresh();
     return this.snapshot();
   }
@@ -656,11 +663,14 @@ export class EasytierSupervisor {
     this.state.pid = null;
     this.persist();
     this.emit();
-    this.scheduleRestart();
+    // During the first start, start() owns the error: a scheduleRestart here
+    // would overwrite the real reason and could restart into the same foreign
+    // port before waitForRpc has even finished.
+    if (!this.startupPending) this.scheduleRestart();
   }
 
   private scheduleRestart(): void {
-    if (!this.cfg || this.stopping) return;
+    if (!this.cfg || this.stopping || this.startupPending) return;
     const stable = Date.now() - this.lastStartAt > 5 * 60_000;
     if (stable) this.consecutiveFailures = 0;
     this.consecutiveFailures += 1;
@@ -675,8 +685,10 @@ export class EasytierSupervisor {
     this.state.restarts = this.restarts;
     this.state.lastError = `restarting in ${delay} ms (attempt ${this.consecutiveFailures})`;
     this.emit();
-    setTimeout(() => {
-      if (!this.cfg || this.stopping) return;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (!this.cfg || this.stopping || this.startupPending) return;
       this.start(this.cfg).catch((e) => logger.error(`restart failed: ${String(e)}`));
     }, delay);
   }
@@ -697,6 +709,10 @@ export class EasytierSupervisor {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
     }
     const pid = this.state.pid;
     if (pid) {
@@ -765,8 +781,9 @@ export class EasytierSupervisor {
       return false;
     }
     while (Date.now() < deadline) {
-      if (this.proc && this.proc.exitCode !== null) {
-        this.state.lastError = `easytier-core exited before its RPC answered on 127.0.0.1:${port} (code ${this.proc.exitCode})`;
+      // pump() clears this.proc as soon as the child exits.
+      if (!this.proc || this.proc.exitCode !== null) {
+        this.state.lastError = `easytier-core exited before its RPC answered on 127.0.0.1:${port}`;
         return false;
       }
       const owner: SocketOwnership = await this.ownership.listenerPids(port);
