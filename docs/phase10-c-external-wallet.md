@@ -201,6 +201,7 @@ eth_sendTransaction, eth_signTypedData_v4, wallet_switchEthereumChain
 | 服务端安全/静态文件测试 | `bun test plugin/test/console-security.test.ts` | **32 pass / 0 fail / 1967 assertions** | REPRODUCED |
 | TypeScript 类型检查 | `cd plugin && bun run typecheck` | exit 0 | REPRODUCED |
 | 全量测试（隔离 worktree + hermetic guard） | `bun test --max-concurrency=1 ./test ./console ../docs/validation/lab/phase9/wallet-fixture` | **799 pass / 0 fail / 6248 assertions**（54 files） | REPRODUCED（合成 fixture） |
+| CI（GitHub Actions） | run `41159720447` | **linux 792 pass / 0 fail; macos 791 pass / 1 skip / 0 fail** | REPRODUCED（合成 fixture，CI） |
 | boot-check | `bun run boot-check` | PASS | REPRODUCED |
 | secret-scan | `bun run secret-scan` | PASS | REPRODUCED |
 | Keccak/EIP-712/recover 与 `plugin/src/{keccak,eip712,secp256k1}.ts` 对照 | 单测内 | 相同 digest、相同恢复地址 | REPRODUCED |
