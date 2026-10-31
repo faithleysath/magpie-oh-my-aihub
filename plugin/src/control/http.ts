@@ -17,10 +17,18 @@ export type ControlListenerKind = "loopback-only" | "lan-reachable";
 
 /** The narrow part of B-core this transport needs. No Magpie or Service here. */
 export interface ControlNode {
-  /** Validate + answer a signed client hello. Throws a `{code}` error on refusal. */
-  acceptHello(raw: unknown): Promise<unknown>;
-  /** Open one sealed session frame and run its one business transition. */
-  handleFrame(sessionId: string, frame: Uint8Array): Promise<unknown>;
+  /**
+   * Validate + answer a signed client hello. Throws a `{code}` error on refusal.
+   * `signal` aborts on the HTTP response deadline or a client disconnect; it is
+   * best-effort cancellation, never proof that a native write did not happen.
+   */
+  acceptHello(raw: unknown, signal?: AbortSignal): Promise<unknown>;
+  /**
+   * Open one sealed session frame and run its one business transition. `signal`
+   * has the same best-effort meaning as above; the execution slot stays held
+   * until the returned promise settles, even if the signal fires.
+   */
+  handleFrame(sessionId: string, frame: Uint8Array, signal?: AbortSignal): Promise<unknown>;
 }
 
 export interface RateRule {
@@ -41,7 +49,11 @@ export interface ControlLimits {
   /** simultaneous handlers from one source address */
   maxConcurrentPerPeer: number;
   healthTimeoutMs: number;
+  /** deadline for reading a request body; a stalled stream is cancelled */
+  bodyTimeoutMs: number;
+  /** deadline for the hello/JSON work after its body has been read */
   helloTimeoutMs: number;
+  /** deadline for one frame's business work after its body has been read */
   frameTimeoutMs: number;
   maxHelloBytes: number;
   maxFrameBytes: number;
@@ -55,8 +67,12 @@ export const DEFAULT_CONTROL_LIMITS: Readonly<ControlLimits> = Object.freeze({
   maxConcurrent: 8,
   maxConcurrentPerPeer: 2,
   healthTimeoutMs: 2_000,
+  bodyTimeoutMs: 5_000,
   helloTimeoutMs: 5_000,
-  frameTimeoutMs: 5_000,
+  // A frame can legitimately reach Magpie's CLI (approval/hand-over/Remote
+  // registration). This is an HTTP response deadline, not a business cancel:
+  // the node keeps its slot until its own operation settles.
+  frameTimeoutMs: 30_000,
   maxHelloBytes: 8 * 1024,
   maxFrameBytes: 32 * 1024,
 });
@@ -222,21 +238,47 @@ async function readBounded(req: Request, limit: number, deadline: number, now: (
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+
+  /** Reads one chunk, but never past the body deadline. */
+  const readWithinDeadline = async (): Promise<{ done: boolean; value?: Uint8Array } | "timeout"> => {
+    const remaining = deadline - now();
+    if (remaining <= 0) return "timeout";
+    const read = reader.read().then(
+      (value) => ({ kind: "read" as const, value }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), remaining);
+      timer.unref?.();
+    });
+    try {
+      const result = await Promise.race([read, timeout]);
+      if (result === "timeout") return "timeout";
+      if (result.kind === "error") throw result.error;
+      return { done: result.value.done, ...(result.value.value ? { value: result.value.value } : {}) };
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+
   try {
     for (;;) {
-      if (now() > deadline) {
+      const next = await readWithinDeadline();
+      if (next === "timeout") {
+        // This really cancels the stream; it is not an HTTP-only timeout. The
+        // caller still must not claim a native/business operation was cancelled.
         await reader.cancel().catch(() => {});
         return errorResponse(408, "timeout");
       }
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
+      if (next.done) break;
+      if (!next.value) continue;
+      total += next.value.byteLength;
       if (total > limit) {
         await reader.cancel().catch(() => {});
         return errorResponse(413, "oversize");
       }
-      chunks.push(value);
+      chunks.push(next.value);
     }
   } catch {
     return errorResponse(400, "malformed");
@@ -279,6 +321,8 @@ const SAFE_CODES = new Set([
   "not_found",
   "conflict",
   "session_closed",
+  "policy",
+  "no_shared_models",
   "internal",
 ]);
 
@@ -304,9 +348,12 @@ function statusForCode(code: string): number {
     case "quote_mismatch":
       return 400;
     case "untrusted_peer":
+    case "policy":
       return 403;
     case "not_found":
       return 404;
+    case "no_shared_models":
+      return 409;
     case "expired":
     case "session_closed":
       return 410;
@@ -325,21 +372,38 @@ function refusal(error: unknown): Response {
   return errorResponse(statusForCode(code), code);
 }
 
-/** Runs `work` but answers a timeout; the node keeps its own internal deadline. */
-async function boundedWork(work: Promise<Response>, timeoutMs: number): Promise<Response> {
+/**
+ * Races a business promise against the HTTP response deadline. The execution
+ * slot is released **only when the business promise settles**, not when the
+ * timeout response is written: an HTTP 408 is “outcome unknown”, not a cancel.
+ * A never-settling operation therefore keeps its bounded slot, and new requests
+ * receive 503 instead of starting unbounded background work. A late rejection
+ * is observed here and can never become an unhandled rejection.
+ */
+function settleWithTimeout(work: Promise<Response>, timeoutMs: number, release: () => void, onTimeout: () => void): Promise<Response> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<Response>((resolve) => {
-    timer = setTimeout(() => resolve(errorResponse(408, "timeout")), timeoutMs);
+    timer = setTimeout(() => {
+      // Answer 408 first, then send the best-effort cancellation signal. The
+      // 408 still means "outcome unknown", and the slot is not released here.
+      resolve(errorResponse(408, "timeout"));
+      onTimeout();
+    }, timeoutMs);
     timer.unref?.();
   });
-  try {
-    return await Promise.race([work, timeout]);
-  } finally {
+  const guarded = work.then(
+    (value) => {
+      release();
+      return value;
+    },
+    (error: unknown) => {
+      release();
+      return refusal(error);
+    },
+  );
+  return Promise.race([guarded, timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
-    // If the node is still running after a timeout, its eventual rejection is
-    // not an unhandled rejection of this handler.
-    work.catch(() => {});
-  }
+  });
 }
 
 function responseBody(value: unknown, maxBytes = 16 * 1024): Response {
@@ -405,9 +469,21 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
 
       const busy = enter(peer);
       if (busy) return busy;
+      let held = true;
+      let handedOff = false;
+      const controller = new AbortController();
+      const abortFromClient = () => controller.abort(new Error("client disconnected"));
+      const release = () => {
+        if (!held) return;
+        held = false;
+        leave(peer);
+        // Keep observing a client disconnect until the business promise settles,
+        // not only until the HTTP response is written.
+        if (req.signal) req.signal.removeEventListener("abort", abortFromClient);
+      };
+      if (req.signal) req.signal.addEventListener("abort", abortFromClient, { once: true });
       try {
         const startedAt = now();
-        const timeout = route === "health" ? limits.healthTimeoutMs : route === "hello" ? limits.helloTimeoutMs : limits.frameTimeoutMs;
         const bodyLimit = route === "hello" ? limits.maxHelloBytes : route === "frame" ? limits.maxFrameBytes : 0;
 
         if (route === "health") {
@@ -416,17 +492,7 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
           const declared = declaredLength(req);
           if (declared === "invalid") return errorResponse(400, "malformed");
           if (declared !== null && declared > 0) return errorResponse(400, "malformed");
-          return await boundedWork(
-            (async () =>
-              response(
-                JSON.stringify({
-                  ok: true,
-                  protocol: "ohmyaihub/p2p/v1",
-                }),
-                200,
-              ))(),
-            timeout,
-          );
+          return response(JSON.stringify({ ok: true, protocol: "ohmyaihub/p2p/v1" }), 200);
         }
 
         if (!contentEncodingIsIdentity(req)) return errorResponse(415, "unsupported_encoding");
@@ -442,35 +508,47 @@ export function createControlHandler(options: ControlHttpOptions): ControlHttpHa
           if (!frameContentType(req)) return errorResponse(415, "unsupported_media_type");
         }
 
-        const work = (async (): Promise<Response> => {
-          const bytes = await readBounded(req, bodyLimit, startedAt + timeout, now);
-          if (bytes instanceof Response) return bytes;
-          if (route === "hello") {
-            if (bytes.byteLength === 0) return errorResponse(400, "malformed");
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
-            } catch {
-              return errorResponse(400, "malformed");
-            }
-            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return errorResponse(400, "malformed");
-            const result = await options.node.acceptHello(parsed);
-            return responseBody(result);
+        // The body deadline is separate from the business deadline. A stalled
+        // stream is really cancelled here and its slot is released below; after
+        // this point a native/business operation may have executed, so a later
+        // HTTP timeout is an unknown outcome, never a claim of cancellation.
+        const bytes = await readBounded(req, bodyLimit, startedAt + limits.bodyTimeoutMs, now);
+        if (bytes instanceof Response) {
+          if (bytes.status === 408) controller.abort(new Error("request body timed out"));
+          return bytes;
+        }
+
+        let work: Promise<Response>;
+        if (route === "hello") {
+          if (bytes.byteLength === 0) return errorResponse(400, "malformed");
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+          } catch {
+            return errorResponse(400, "malformed");
           }
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return errorResponse(400, "malformed");
+          work = (async () => responseBody(await options.node.acceptHello(parsed, controller.signal)))();
+        } else {
           const sessionId = target.url.searchParams.get("session")!;
           if (bytes.byteLength === 0) return errorResponse(400, "malformed");
-          const result = await options.node.handleFrame(sessionId, bytes);
-          // A successful frame has no response body: the business result is
-          // local to the node and the caller only needs to know it was accepted.
-          void result;
-          return new Response(null, { status: 204, headers: NO_STORE });
-        })().catch((error: unknown) => refusal(error));
+          work = (async () => {
+            // A successful frame has no response body: the business result is
+            // local to the node and the caller only needs to know it was accepted.
+            await options.node.handleFrame(sessionId, bytes, controller.signal);
+            return new Response(null, { status: 204, headers: NO_STORE });
+          })();
+        }
 
-        return await boundedWork(work, timeout);
+        // Hand ownership of the execution slot to the business promise. If the
+        // HTTP response times out, the slot stays held until the promise settles.
+        handedOff = true;
+        const workTimeout = route === "hello" ? limits.helloTimeoutMs : limits.frameTimeoutMs;
+        return await settleWithTimeout(work, workTimeout, release, () => controller.abort(new Error("HTTP response timeout")));
       } catch (error) {
         return refusal(error);
       } finally {
-        leave(peer);
+        if (!handedOff) release();
       }
     },
   };

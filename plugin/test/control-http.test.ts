@@ -185,6 +185,8 @@ describe("control HTTP surface", () => {
 
     for (const [code, status] of [
       ["untrusted_peer", 403],
+      ["policy", 403],
+      ["no_shared_models", 409],
       ["expired", 410],
       ["session_closed", 410],
       ["replay", 409],
@@ -263,5 +265,247 @@ describe("control HTTP surface", () => {
     expect(() => startControlServer({ node, host: "0.0.0.0", port: 0, allowedHosts: [HOST], listener: "lan-reachable" })).toThrow(/wildcard/);
     expect(() => startControlServer({ node, host: "192.168.1.10", port: 0, allowedHosts: [HOST], listener: "loopback-only" })).toThrow(/loopback-only/);
     expect(() => startControlServer({ node, host: "127.0.0.1", port: 0, allowedHosts: [], listener: "loopback-only" })).toThrow(/allowed Host/);
+  });
+});
+
+// --- real Bun.serve behaviour under slow/never-settling work -----------------
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function realControlServer(
+  node: ControlNode,
+  limits: Partial<ControlLimits> = {},
+) {
+  let handler!: ReturnType<typeof createControlHandler>;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (req, srv) => handler.handle(req, srv.requestIP(req)?.address ?? "test-peer"),
+  });
+  const port = server.port;
+  if (!port) throw new Error("the real test server did not bind a port");
+  const host = `127.0.0.1:${port}`;
+  handler = createControlHandler({
+    node,
+    allowedHosts: [host],
+    listener: "loopback-only",
+    limits: {
+      request: { limit: 1000, windowMs: 1000 },
+      health: { limit: 1000, windowMs: 1000 },
+      hello: { limit: 1000, windowMs: 1000 },
+      frame: { limit: 1000, windowMs: 1000 },
+      ...limits,
+    },
+    now: () => Date.now(),
+  });
+  return { server, host, port };
+}
+
+function realFrame(host: string): Promise<Response> {
+  return fetch(`http://${host}/p2p/v1/frame?session=${SESSION}`, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: new Uint8Array([1, 2, 3]),
+  });
+}
+
+async function waitForHealth(host: string, status: number, timeoutMs = 1000): Promise<number> {
+  const until = Date.now() + timeoutMs;
+  let last = 0;
+  while (Date.now() < until) {
+    try {
+      last = (await fetch(`http://${host}/p2p/v1/health`)).status;
+      if (last === status) return last;
+    } catch {
+      /* the listener may still be stopping */
+    }
+    await Bun.sleep(5);
+  }
+  return last;
+}
+
+describe("real Bun.serve timeout and execution-slot ownership", () => {
+  test("a timeout keeps the slot until the business promise settles; late success does not re-enter or duplicate", async () => {
+    const gate = deferred<void>();
+    let calls = 0;
+    const { server, host } = realControlServer(
+      {
+        async acceptHello() { return {}; },
+        async handleFrame() {
+          calls += 1;
+          await gate.promise;
+          return { state: "approved" };
+        },
+      },
+      { maxConcurrent: 1, maxConcurrentPerPeer: 1, frameTimeoutMs: 25, bodyTimeoutMs: 500 },
+    );
+    const first = await realFrame(host);
+    expect(first.status).toBe(408);
+    expect(await first.text()).toBe('{"code":"timeout"}');
+    // The transport response timed out, but the business promise still owns its
+    // slot. A new request must not start unbounded parallel work.
+    expect((await fetch(`http://${host}/p2p/v1/health`)).status).toBe(503);
+    expect(calls).toBe(1);
+    gate.resolve();
+    expect(await waitForHealth(host, 200)).toBe(200);
+    expect(calls).toBe(1); // late success did not run the frame again
+    server.stop(true);
+  });
+
+  test("a never-settling business promise is bounded: later requests get 503 until it settles", async () => {
+    const gate = deferred<void>();
+    const { server, host } = realControlServer(
+      {
+        async acceptHello() { return {}; },
+        async handleFrame() { await gate.promise; return {}; },
+      },
+      { maxConcurrent: 1, maxConcurrentPerPeer: 1, frameTimeoutMs: 20, bodyTimeoutMs: 500 },
+    );
+    expect((await realFrame(host)).status).toBe(408);
+    for (let i = 0; i < 3; i += 1) expect((await realFrame(host)).status).toBe(503);
+    gate.resolve();
+    expect(await waitForHealth(host, 200)).toBe(200);
+    server.stop(true);
+  });
+
+  test("a late rejection releases the slot and never becomes an unhandled rejection", async () => {
+    const gate = deferred<void>();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    const { server, host } = realControlServer(
+      {
+        async acceptHello() { return {}; },
+        async handleFrame() { await gate.promise; return {}; },
+      },
+      { maxConcurrent: 1, maxConcurrentPerPeer: 1, frameTimeoutMs: 20, bodyTimeoutMs: 500 },
+    );
+    try {
+      expect((await realFrame(host)).status).toBe(408);
+      gate.reject(new Error("late business failure"));
+      expect(await waitForHealth(host, 200)).toBe(200);
+      await Bun.sleep(20);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      gate.resolve();
+      server.stop(true);
+    }
+  });
+
+  test("stopping the real listener with in-flight work does not produce an unhandled late rejection", async () => {
+    const gate = deferred<void>();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    const { server, host } = realControlServer(
+      {
+        async acceptHello() { return {}; },
+        async handleFrame() { await gate.promise; return {}; },
+      },
+      { maxConcurrent: 1, maxConcurrentPerPeer: 1, frameTimeoutMs: 20, bodyTimeoutMs: 500 },
+    );
+    try {
+      expect((await realFrame(host)).status).toBe(408);
+      server.stop(true);
+      gate.reject(new Error("rejected after stop"));
+      await Bun.sleep(30);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      server.stop(true);
+    }
+  });
+
+  test("a stalled real request body is cancelled at its own deadline and releases the slot", async () => {
+    let accepted = 0;
+    const { server, host, port } = realControlServer(
+      {
+        async acceptHello() { accepted += 1; return {}; },
+        async handleFrame() { return {}; },
+      },
+      { maxConcurrent: 1, maxConcurrentPerPeer: 1, bodyTimeoutMs: 50, helloTimeoutMs: 500 },
+    );
+    let received = "";
+    const socket = await Bun.connect({
+      hostname: "127.0.0.1",
+      port,
+      socket: {
+        data(_socket, chunk) {
+          received += new TextDecoder().decode(chunk);
+        },
+        open(socket) {
+          socket.write(
+            `POST /p2p/v1/hello HTTP/1.1\r\nHost: ${host}\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{`,
+          );
+        },
+      },
+    });
+    const until = Date.now() + 1000;
+    while (!received.includes(" 408 ") && Date.now() < until) await Bun.sleep(5);
+    expect(received).toContain(" 408 ");
+    expect(received).toContain('{"code":"timeout"}');
+    expect(accepted).toBe(0); // the body never completed, so no hello work ran
+    socket.end();
+    expect(await waitForHealth(host, 200)).toBe(200);
+    server.stop(true);
+  });
+});
+
+  test("the timeout aborts the node signal; a node that honours it releases the slot", async () => {
+    let signal: AbortSignal | undefined;
+    const { server, host } = realControlServer(
+      {
+        async acceptHello() { return {}; },
+        handleFrame(_sessionId, _frame, abort) {
+          signal = abort;
+          return new Promise((_resolve, reject) => {
+            abort?.addEventListener("abort", () => reject(new Error("aborted by transport")), { once: true });
+          });
+        },
+      },
+      { maxConcurrent: 1, maxConcurrentPerPeer: 1, frameTimeoutMs: 20, bodyTimeoutMs: 500 },
+    );
+    expect((await realFrame(host)).status).toBe(408);
+    expect(signal?.aborted).toBe(true);
+    expect(await waitForHealth(host, 200)).toBe(200);
+    server.stop(true);
+  });
+
+describe("body cancellation", () => {
+  test("a stalled ReadableStream is really cancelled, not merely abandoned", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{"));
+        // never close
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { h } = handler(
+      fakeNode().node,
+      { now: () => Date.now() } as Partial<ControlHttpOptions>,
+      { bodyTimeoutMs: 20, helloTimeoutMs: 50 },
+    );
+    const req = new Request(`http://${HOST}/p2p/v1/hello`, {
+      method: "POST",
+      headers: { host: HOST, "content-type": "application/json" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    const res = await h.handle(req);
+    expect(res.status).toBe(408);
+    await Bun.sleep(5);
+    expect(cancelled).toBe(true);
   });
 });
