@@ -1607,6 +1607,35 @@ export class Provisioner {
   }
 
   /**
+   * Read-only native key-management snapshot for reconcileApproval. It returns
+   * only ids/names/models/limit values, never secrets. `target` is the key with
+   * the deterministic consumer name, or the recorded key id when present.
+   */
+  async nativeKeySnapshot(consumerId: string): Promise<{
+    nativeKeyIds: string[];
+    target: { keyId: string; keyName: string; models: string[]; costLimit: number | null } | null;
+  }> {
+    return this.withLock(consumerId, async () => {
+      const keys = this.magpie.keyList();
+      const rec = this.find(consumerId);
+      const named = this.magpie.keyByName(Provisioner.keyName(consumerId));
+      const targetKey = named ?? (rec?.keyId ? this.magpie.keyById(rec.keyId) : undefined);
+      const cost = targetKey?.limit?.cost;
+      return {
+        nativeKeyIds: keys.map((k) => String(k.id)).slice(0, 500),
+        target: targetKey
+          ? {
+              keyId: String(targetKey.id),
+              keyName: String(targetKey.name),
+              models: Array.isArray(targetKey.models) ? targetKey.models.map(String) : [],
+              costLimit: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
+            }
+          : null,
+      };
+    });
+  }
+
+  /**
    * Read-only Magpie key-management check for an interrupted approval: does a
    * key with this consumer's deterministic plugin name exist? A missing local
    * Provisioner record alone is not proof; this reads Magpie's management store.

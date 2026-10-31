@@ -276,15 +276,27 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(ready.state).toBe("keyReady");
     if (ready.state === "keyReady") {
       expect(ready.keyId).toBe(approved.keyId);
-      expect(ready.knownKeyId).toBe(approved.keyId);
       expect(ready.consumerNodeId).toBe("alice");
       expect(ready.approvalId).toBe(APPROVAL);
       expect(ready.generation).toBe(1);
-      expect(ready.source).toBe("journal+native");
-      expect(ready.observedAt).toMatch(/T/);
+      expect(ready.evidence.source).toBe("magpie-key-readback");
+      expect(ready.evidence.observedAt).toMatch(/T/);
+      expect(ready.evidence.checked).toContain("keys");
+      expect(ready.evidence.nativeKeyIds).toContain(approved.keyId);
       expect(ready.models).toEqual([LAB_MODEL]);
       expect(ready.capUsd).toBe(1);
     }
+    // Simulate a crash between the native ensure and the journal keyId write:
+    // the pending intent plus the deterministic native key is a keyReady.
+    const file = JSON.parse(readFileSync(approvalFile, "utf8"));
+    file.approvals[0].state = "pending";
+    file.approvals[0].keyId = null;
+    file.approvals[0].keyName = null;
+    writeFileSync(approvalFile, JSON.stringify(file));
+    const interrupted = await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 1, consumer, keyId: null });
+    expect(interrupted.state).toBe("keyReady");
+    if (interrupted.state === "keyReady") expect(interrupted.keyId).toBe(approved.keyId);
+
     // A different generation/approval binding is unknown, never noSideEffect.
     expect((await port.reconcileApproval!({ requestHash: HASH, approvalId: APPROVAL, generation: 2, consumer, keyId: null })).state).toBe("unknown");
     expect((await port.reconcileApproval!({ requestHash: HASH, approvalId: "9".repeat(32), generation: 1, consumer, keyId: null })).state).toBe("unknown");
@@ -307,8 +319,9 @@ describe("B-core P2pBusinessPort mapping", () => {
     });
     expect(none.state).toBe("noSideEffect");
     if (none.state === "noSideEffect") {
-      expect(none.knownKeyId).toBeNull();
-      expect(none.source).toBe("journal+native");
+      expect(none.keyId).toBeNull();
+      expect(none.evidence.source).toBe("provisioner-journal:magpie-readback");
+      expect(none.evidence.checked).toEqual(["journal", "keys"]);
       expect(none.consumerNodeId).toBe("nobody");
     }
 

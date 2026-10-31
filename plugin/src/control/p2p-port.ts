@@ -116,19 +116,28 @@ export interface P2pApprovalReconcileInput {
   keyId: string | null;
 }
 
-export interface P2pApprovalReconcileBinding {
-  consumerNodeId: string;
+export interface P2pReconcileEvidence {
+  /** read-only source, e.g. "magpie-key-readback" */
+  source: string;
+  /** when the adapter observed the real state; stale evidence is refused */
+  observedAt: string;
+  /** fields actually read back, e.g. ["keys","keyId","models","costLimit"] */
+  checked: string[];
+  /** native key ids the adapter saw; no key material */
+  nativeKeyIds?: string[];
+}
+
+export interface P2pReconcileBindings {
   requestHash: string;
   approvalId: string;
   generation: number;
-  knownKeyId: string | null;
-  observedAt: string;
-  /** where the observation came from; never a key or ciphertext */
-  source: "journal+native" | "journal" | "native-management" | "none";
+  consumerNodeId: string;
+  consumerFingerprint: string;
+  keyId: string | null;
 }
 
 export type P2pApprovalReconcile =
-  | (P2pApprovalReconcileBinding & {
+  | (P2pReconcileBindings & {
       state: "keyReady";
       keyId: string;
       keyName: string;
@@ -136,10 +145,15 @@ export type P2pApprovalReconcile =
       capUsd: number;
       priceVersion: string;
       expiresAt: string;
-      detail: string | null;
+      evidence: P2pReconcileEvidence;
+      detail?: string | null;
     })
-  | (P2pApprovalReconcileBinding & { state: "noSideEffect"; knownKeyId: null; detail: string | null })
-  | (P2pApprovalReconcileBinding & { state: "unknown"; detail: string | null });
+  | (P2pReconcileBindings & {
+      state: "noSideEffect";
+      evidence: P2pReconcileEvidence;
+      detail?: string | null;
+    })
+  | { state: "unknown"; detail: string | null };
 
 export interface P2pApprovedMaterials {
   approvalId: string;
@@ -650,9 +664,14 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           throw new ControlServiceRefusal("conflict", "this consumer already has an active approval; revoke it before a new one");
         }
 
+        const quote = service.catalogStatus().quote;
+        const selectedPrice = quote ? catalogPriceVersion(quote.models.filter((m) => models.includes(m.id))) : null;
+        if (!selectedPrice) throw new ControlServiceRefusal("quote_mismatch", "the selected models have no complete price");
         const pending = recordFor(input, at);
+        pending.priceVersion = selectedPrice;
+        pending.expiresAt = new Date(now().getTime() + 10 * 60_000).toISOString();
         saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, pending] });
-        const expiresAt = new Date(now().getTime() + 10 * 60_000).toISOString();
+        const expiresAt = pending.expiresAt;
         let materials: P2pApprovedMaterials;
         try {
           const result = await approve(service, {
@@ -722,30 +741,15 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
 
     async reconcileApproval(input) {
       const observedAt = now().toISOString();
-      const binding = {
-        consumerNodeId: input.consumer.nodeId,
-        requestHash: input.requestHash,
-        approvalId: input.approvalId,
-        generation: input.generation,
-        observedAt,
-      };
       try {
         const state = loadApprovals(approvalStateFile);
         const record = state.approvals.find((a) => a.approvalId === input.approvalId);
         const consumer = service.provisioner.find(input.consumer.nodeId);
-        const knownKeyId = consumer?.keyId ?? record?.keyId ?? null;
-        if (input.keyId && consumer?.keyId && consumer.keyId !== input.keyId) {
-          return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the native consumer key id differs from the interrupted approval" };
-        }
+        const native = await service.provisioner.nativeKeySnapshot(input.consumer.nodeId).catch(() => null);
+        if (!native) return { state: "unknown", detail: "the native Magpie key-management readback failed" };
         if (!record) {
-          // A missing journal is not proof that this approval intent never
-          // existed. A Provisioner consumer may be from this or another
-          // attempt; only an unknown result can prevent a second key.
           return {
-            ...binding,
             state: "unknown",
-            knownKeyId,
-            source: consumer ? "native-management" : "none",
             detail: consumer
               ? "a Provisioner consumer exists without a persistent approval binding"
               : "no persistent approval journal entry proves this intent",
@@ -757,61 +761,75 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           record.consumerNodeId !== input.consumer.nodeId ||
           record.consumerFingerprint !== input.consumer.fingerprint
         ) {
-          return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval journal entry does not match the interrupted approval" };
+          return { state: "unknown", detail: "the approval journal entry does not match the interrupted approval" };
         }
-        if (record.state === "revoked") {
-          return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval was already revoked" };
-        }
+        if (record.state === "revoked") return { state: "unknown", detail: "the approval was already revoked" };
         if (record.state === "approved" || record.state === "pending" || record.state === "uncertain") {
-          const recovered = recoverApproval(record, service, observedAt);
-          if (recovered && consumer) {
-            if (input.keyId && recovered.keyId !== input.keyId) {
-              return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the recovered key id does not match the interrupted approval" };
+          const target = native.target;
+          const expectedName = `ohmyaihub-${record.consumerNodeId}`;
+          const targetMatches =
+            target &&
+            native.nativeKeyIds.includes(target.keyId) &&
+            target.keyName === expectedName &&
+            (!record.keyId || target.keyId === record.keyId) &&
+            target.models.length > 0 &&
+            sameSet(target.models, record.models) &&
+            (target.costLimit === null || Math.abs(target.costLimit - record.capUsd) <= 1e-9);
+          if (targetMatches && target) {
+            if (!record.priceVersion || !record.expiresAt) {
+              return { state: "unknown", detail: "the native key was found but its price/expiry binding is incomplete" };
+            }
+            if (Math.abs(Date.parse(observedAt) - Date.now()) > 5 * 60_000) {
+              return { state: "unknown", detail: "the readback evidence is stale" };
             }
             return {
-              ...binding,
               state: "keyReady",
-              knownKeyId: recovered.keyId!,
-              keyId: recovered.keyId!,
-              keyName: recovered.keyName!,
-              models: recovered.models,
-              capUsd: recovered.capUsd,
-              priceVersion: recovered.priceVersion,
-              expiresAt: recovered.expiresAt,
-              source: "journal+native",
-              detail: "recovered from the persistent approval/native key binding",
+              requestHash: record.requestHash,
+              approvalId: record.approvalId,
+              generation: record.generation,
+              consumerNodeId: record.consumerNodeId,
+              consumerFingerprint: record.consumerFingerprint,
+              keyId: target.keyId,
+              keyName: target.keyName,
+              models: [...target.models],
+              capUsd: record.capUsd,
+              priceVersion: record.priceVersion,
+              expiresAt: record.expiresAt,
+              evidence: {
+                source: "magpie-key-readback",
+                observedAt,
+                checked: ["keys", "keyId", "models", "costLimit"],
+                nativeKeyIds: native.nativeKeyIds,
+              },
+              detail: "recovered from the persistent approval and native Magpie key list",
             };
           }
-          if (record.state === "pending" && !consumer) {
-            const nativeAbsent = await service.provisioner.nativeConsumerKeyAbsent(input.consumer.nodeId);
-            if (nativeAbsent) {
-              return {
-                ...binding,
-                state: "noSideEffect",
-                knownKeyId: null,
-                source: "journal+native",
-                detail: "the durable pending intent exists and Magpie's key management view has no key with this consumer's plugin name",
-              };
+          if (record.state === "pending" && !consumer && !native.target) {
+            if (Math.abs(Date.parse(observedAt) - Date.now()) > 5 * 60_000) {
+              return { state: "unknown", detail: "the readback evidence is stale" };
             }
             return {
-              ...binding,
-              state: "unknown",
-              knownKeyId,
-              source: "journal+native",
-              detail: "a Magpie key with this consumer's plugin name exists even though the local Provisioner record is absent",
+              state: "noSideEffect",
+              requestHash: record.requestHash,
+              approvalId: record.approvalId,
+              generation: record.generation,
+              consumerNodeId: record.consumerNodeId,
+              consumerFingerprint: record.consumerFingerprint,
+              keyId: null,
+              evidence: {
+                source: "provisioner-journal:magpie-readback",
+                observedAt,
+                checked: ["journal", "keys"],
+                nativeKeyIds: native.nativeKeyIds,
+              },
+              detail: "the durable pending intent exists and Magpie's key list has no key with this consumer's plugin name",
             };
           }
-          return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval exists but its native key binding cannot be proven" };
+          return { state: "unknown", detail: "the approval exists but its native key binding cannot be proven" };
         }
-        return { ...binding, state: "unknown", knownKeyId, source: "journal+native", detail: "the approval journal state is not recoverable" };
+        return { state: "unknown", detail: "the approval journal state is not recoverable" };
       } catch (error) {
-        return {
-          ...binding,
-          state: "unknown",
-          knownKeyId: null,
-          source: "none",
-          detail: String((error as Error)?.message ?? error).slice(0, 200),
-        };
+        return { state: "unknown", detail: String((error as Error)?.message ?? error).slice(0, 200) };
       }
     },
 
