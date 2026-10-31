@@ -65,7 +65,7 @@ approval and the same key, or reports `action-needed`.
 
 | Method | Route | Body | Result |
 | --- | --- | --- | --- |
-| GET | `/p2p/v1/health` | none | `{ok, protocol, listener, maxSessionTtlMs}` |
+| GET | `/p2p/v1/health` | none | `{ok, protocol}` (no listener/identity/port) |
 | POST | `/p2p/v1/hello` | signed hello, ≤8 KiB JSON | signed server_hello |
 | POST | `/p2p/v1/frame?session=<32hex>` | binary frame, ≤32 KiB | `204` or `{code}` |
 
@@ -84,8 +84,9 @@ Implemented policy:
 - node errors are reduced to the stable B-core code allow-list; unknown codes and
   plain errors become `internal` with no message; successful frame responses carry
   no business metadata;
-- responses are `no-store` + `nosniff`; health contains no node id, key, fingerprint,
-  consumer, cap or catalogue data.
+- responses are `no-store` + `nosniff`; health contains only `{ok, protocol}` — no
+  node id, key, fingerprint, consumer, cap, listener/port or catalogue data. Listener
+  exposure is reported only through the authenticated local status projection.
 
 The server wrapper refuses a wildcard bind unless the caller explicitly allows it,
 and refuses to label a non-loopback bind `loopback-only`. A LAN-reachable bind must
@@ -99,9 +100,13 @@ be reported as `lan-reachable`; the diagnostic must not claim overlay-only.
   returns only models the provider could currently approve; it creates no key.
 - `approveRequest` converts the v2 request into the existing v1 request shape **only
   for the Service call**, then calls `Service.approveConnectionRequest`. The human
-  selected models are a subset of the request. The returned `priceVersion` is
-  recomputed for the selected subset, not for the whole eligible set (this is a
-  required B-core fix in the contract).
+  selected models are a subset of the request. The adapter returns the selected-model
+  price version; B-core must persist it **alongside**, not instead of, the full quote
+  `billing.priceVersion` and the selected model snapshot. The current B-core code
+  stores the all-eligible validation version, which is a required fix in the
+  contract. Full quote hash, full quote price version, requested-subset version,
+  approved-subset version and the selected model list are distinct bindings; the
+  delivered authorization carries the full `contentHash` plus the selected version.
 - `readKeyMaterial` rechecks the Provisioner record (key id/name, models, cap,
   accepted quote hash, price version) before and after `Service.handover`; a changed
   quote, cap, model scope, key generation or paused consumer fails before a key is
