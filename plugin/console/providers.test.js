@@ -126,6 +126,20 @@ describe("real mounted workflow handlers", () => {
     }
   });
 
+  test("several peers never put more than one primary action on the catalogue screen", async () => {
+    const state = baseState();
+    state.status.catalog.peers = [structuredClone(peer), { ...structuredClone(peer), nodeId: "b".repeat(16), hostname: "伙伴乙", quote: { ...structuredClone(peer.quote), node: { displayName: "伙伴乙" } } }];
+    const r = runtime(state);
+    try {
+      const primaries = all(r.roots["discovery-panel"], "button").filter((node) => String(node.className).split(" ").includes("primary"));
+      expect(primaries).toHaveLength(0);
+      // The single primary lives inside the request dialog.
+      await find(r.roots["discovery-panel"], "button", "选择模型并申请").click(); await flush();
+      const dialogPrimaries = all(r.dialog, "button").filter((node) => String(node.className).split(" ").includes("primary"));
+      expect(dialogPrimaries).toHaveLength(1);
+    } finally { r.cleanup(); }
+  });
+
   test("catalogue next steps are Chinese and raw CLI diagnostics remain in collapsed technical details", () => {
     expect(peerNextStep("unverified")).toContain("核对并接受身份");
     expect(peerNextStep("identity-changed")).toContain("核对新身份");
@@ -215,9 +229,49 @@ describe("real mounted workflow handlers", () => {
       r.render(next);
       expect(selected.checked).toBeFalse();
       expect(name.value).toBe("正在填写的名称");
-      await find(sharing, "button", "保存模型范围").click(); await flush();
+      await find(sharing, "button", "分享这些模型").click(); await flush();
       expect(r.calls).toHaveLength(0);
-      expect(r.notices.at(-1)[0]).toContain("至少选择一个");
+      expect(r.notices.at(-1)[0]).toContain("至少勾选");
+    } finally { r.cleanup(); }
+  });
+
+  test("sharing fails closed instead of writing several legacy actions", async () => {
+    const r = runtime(baseState(), async (name) => {
+      if (name === "share-native-models") throw Object.assign(new Error("missing"), { status: 404 });
+      return {};
+    });
+    try {
+      await find(r.roots["sharing-panel"], "button", "分享这些模型").click(); await flush();
+      const agree = all(r.dialog, "input")[0]; agree.checked = true; await agree.emit("change");
+      await find(r.dialog, "button", "确认分享").click(); await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["share-native-models"]);
+      expect(r.notices.at(-1)[0]).toContain("更新 Magpie");
+      expect(r.notices.at(-1)[0]).toContain("没有做任何修改");
+    } finally { r.cleanup(); }
+  });
+
+  test("stopping sharing fails closed without legacy toggles", async () => {
+    const r = runtime(baseState(), async (name) => {
+      if (name === "stop-sharing") throw Object.assign(new Error("missing"), { status: 404 });
+      return {};
+    });
+    try {
+      await find(r.roots["sharing-panel"], "button", "停止共享").click(); await flush();
+      const agree = all(r.dialog, "input")[0]; agree.checked = true; await agree.emit("change");
+      await find(r.dialog, "button", "确认停止").click(); await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["stop-sharing"]);
+      expect(r.notices.at(-1)[0]).toContain("更新 Magpie");
+    } finally { r.cleanup(); }
+  });
+
+  test("catalogue metadata saves on its own and never publishes", async () => {
+    const r = runtime();
+    try {
+      const sharing = r.roots["sharing-panel"];
+      await find(sharing, "button", "保存展示信息").click(); await flush();
+      expect(r.calls.map((call) => call.name)).toEqual(["catalog-settings"]);
+      expect(r.calls[0].input.displayName).toBeNull();
+      expect(r.calls.some((call) => ["share-models", "share-toggle", "catalog-publish"].includes(call.name))).toBeFalse();
     } finally { r.cleanup(); }
   });
 
@@ -347,5 +401,6 @@ test("all shipped workflow DOM avoids HTML injection, remote resources and brows
   expect(source).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|localStorage|sessionStorage|indexedDB|document\.cookie|eval\(/);
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   expect(html).toContain("data-1p-ignore data-bwignore");
-  expect(html).toContain("本应用不会回显已保存的密码");
+  expect(html).toContain("已保存的密码不会回显");
+  expect(html).toContain("不会写入浏览器存储");
 });

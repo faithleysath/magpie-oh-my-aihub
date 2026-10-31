@@ -219,11 +219,6 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       root.append(agree.label, submit);
     });
   }
-  function heading(name, title, subtitle, action) {
-    const node = el("div", null, "page-heading");
-    const text = el("div"); text.append(el("p", name, "eyebrow"), el("h1", title), paragraph(subtitle));
-    node.append(text); if (action) node.append(action); return node;
-  }
   function toolbar(title) { const node = el("div", null, "section-heading"); node.append(el("h2", title)); return node; }
   function searchInput(kind, container, rerender) {
     const input = el("input", null, "workflow-search"); input.type = "search"; input.placeholder = kind === "discovery" ? "搜索模型或伙伴" : "搜索本机模型"; input.setAttribute("aria-label", input.placeholder);
@@ -231,11 +226,11 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
 
   // Discovery and consumer request export.
-  roots.discovery.append(heading("DISCOVER TOGETHER", "发现伙伴的 AI", "在私有网络中查看真实模型、价格与签名身份。", button("刷新目录", () => void run("catalog-refresh"))));
   const discoveryIntro = el("div", null, "card workflow-section");
   const discoveryControls = toolbar("伙伴目录");
   const discoverToggle = button("开启目录发现", () => void run("catalog-discover", { enabled: !state.status.config.catalog?.discoveryEnabled }));
-  discoveryControls.append(discoverToggle); discoveryIntro.append(discoveryControls, paragraph("目录只用于展示报价，申请不会自动产生账户或扣费。首次使用前，请通过可信渠道核对对方的完整身份指纹。"));
+  discoveryControls.append(button("刷新目录", () => void run("catalog-refresh")), discoverToggle);
+  discoveryIntro.append(discoveryControls, paragraph("目录只用于展示报价，申请不会自动产生账户或扣费。首次使用前，请通过可信渠道核对对方的完整身份指纹。"));
   searchInput("discovery", discoveryIntro, renderDiscovery);
   const discoveryList = el("div", null, "workflow-card-grid");
   roots.discovery.append(discoveryIntro, discoveryList);
@@ -267,7 +262,9 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const actions = el("div", null, "workflow-actions");
       if (acceptance.fingerprint && peer.nodeId && !["verified", "connected"].includes(peer.status)) actions.append(button(peer.status === "identity-changed" ? "核对新身份" : "核对并接受身份", () => trustPeer(peer)));
       if (peer.quote && peer.nodeId) {
-        const request = button("选择模型并申请", () => requestConnection(peer), true);
+        // One screen may show several peers, so the per-card request action is a
+        // contextual secondary action; the only primary on the page is the tab row.
+        const request = button("选择模型并申请", () => requestConnection(peer));
         const connect = button("已有密钥，连接此伙伴", () => connectPeer(peer));
         const allowed = ["verified", "connected"].includes(peer.status) && peer.online;
         request.disabled = !allowed; connect.disabled = !allowed;
@@ -333,40 +330,31 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
 
   // Sharing policy, catalogue publication and manual imported approvals.
-  roots.sharing.append(heading("SHARE ON YOUR TERMS", "我的共享", "选择本机模型，发布目录，并逐一审批伙伴的访问申请。", button("读取本机模型", () => loadCandidates())));
+  // One explicit action: choose detected native models, confirm once, and the
+  // service re-checks price/ACL then enables sharing and publishes the catalogue.
   const shareIntro = el("div", null, "card workflow-section");
-  const shareTop = toolbar("共享能力");
-  const shareToggle = button("开启共享", () => confirmAction(state.status.config.sharingEnabled ? "暂停共享" : "开启共享", "此操作会更新网络发布并可能重连。访问模型仍需有效的专属授权。", "share-toggle", { enabled: !state.status.config.sharingEnabled }));
-  shareTop.append(shareToggle); shareIntro.append(shareTop, paragraph("只提供当前 Magpie 中有完整价格的本机模型。不会转售从其他伙伴连接来的模型。"));
-  const modelsCard = el("div", null, "card workflow-section");
-  modelsCard.append(toolbar("允许共享的本机模型"));
-  searchInput("sharing", modelsCard, renderModels);
+  const shareTop = toolbar("检测到的本机模型");
+  const detectButton = button("重新检测", () => loadCandidates());
+  const stopShareButton = button("停止共享", () => stopSharing());
+  const modelSave = button("分享这些模型", () => confirmShare(), true);
+  shareTop.append(detectButton, modelSave, stopShareButton);
   const modelsList = el("div", null, "shared-model-list");
-  const modelSave = button("保存模型范围", () => {
-    const selected = selectableModels(candidates?.models, [...selectedModels]);
-    if (!selected.length) { notice("请至少选择一个有完整价格的本机模型；如需停止共享，请暂停共享能力。", "warn"); return; }
-    void run("share-models", { models: selected }, () => { modelDirty = false; });
-  }, true);
-  modelsCard.append(modelsList, paragraph("价格未锁定（priceLocked: false）。模型价格变化时，现有授权可能暂停并要求重新确认。"), modelSave);
-  const publication = el("form", null, "card workflow-section");
-  publication.append(toolbar("对伙伴展示的目录"));
+  shareIntro.append(shareTop, paragraph("自动读取本机 Magpie 中的原生模型。勾选后点一次“分享这些模型”，服务会再核对价格与共享策略，然后把这份清单发布到网络目录。"));
+  searchInput("sharing", shareIntro, renderModels);
+  shareIntro.append(modelsList, paragraph("价格未锁定（priceLocked: false）。模型价格变化时，现有授权可能暂停并要求重新确认。"));
+  const publication = el("details", null, "workflow-details");
+  publication.append(el("summary", "目录展示信息（分享时一起保存）"));
   const displayName = field("展示名称"); displayName.input.maxLength = 120;
   const contact = field("联系说明"); contact.input.maxLength = 200;
   const minimum = field("建议申请额度（USD）", "number"); minimum.input.min = "0.0001"; minimum.input.step = "0.0001";
   const pubFields = el("div", null, "form-grid"); pubFields.append(displayName.label, contact.label, minimum.label);
-  const publishToggle = button("发布目录", () => confirmAction(state.status.config.catalog?.enabled ? "停止发布目录" : "发布模型目录", "发布内容包括所选模型、价格、联系说明和自签名身份。授权密钥不会进入目录。", "catalog-publish", { enabled: !state.status.config.catalog?.enabled }));
-  const pubSave = el("button", "保存目录说明", "button primary"); pubSave.type = "submit";
-  const pubActions = el("div", null, "workflow-actions"); pubActions.append(pubSave, publishToggle);
-  publication.append(pubFields, pubActions);
+  const pubSave = el("button", "保存展示信息", "button secondary"); pubSave.type = "button";
+  pubSave.addEventListener("click", () => { if (state) void run("catalog-settings", catalogueOptions(), () => { publicationDirty = false; }); });
+  const pubActions = el("div", null, "workflow-actions"); pubActions.append(pubSave);
+  publication.append(pubFields, paragraph("这些字段只改目录展示文案，不会分享模型或发布目录；分享仍要点“分享这些模型”。"), pubActions);
   for (const input of [displayName.input, contact.input, minimum.input]) input.addEventListener("input", () => { publicationDirty = true; });
-  publication.addEventListener("submit", (event) => {
-    event.preventDefault(); if (!publication.reportValidity()) return;
-    const input = { displayName: displayName.input.value.trim() || null, contact: contact.input.value.trim() || null };
-    if (minimum.input.value) input.minTopUpUsd = Number(minimum.input.value);
-    void run("catalog-settings", input, () => { publicationDirty = false; });
-  });
   const ownIdentity = el("div", null, "card workflow-section");
-  ownIdentity.append(toolbar("我的目录身份"), paragraph("让伙伴在其“发现模型”页面展开身份信息，与你通过可信渠道逐字核对完整指纹。以下均为公开目录信息。"));
+  ownIdentity.append(toolbar("我的目录身份"), paragraph("让伙伴在其“发现”页面展开身份信息，与你通过可信渠道逐字核对完整指纹。以下均为公开目录信息。"));
   const identityContent = el("div");
   ownIdentity.append(identityContent);
   function renderOwnIdentity() {
@@ -374,10 +362,10 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     const quote = state?.status.catalog?.quote;
     const fingerprint = quote?.identity?.fingerprint;
     if (!fingerprint) {
-      identityContent.append(empty("尚未生成目录身份", "选择本机模型并发布目录后，这里会显示可供伙伴核对的完整身份和报价。"));
+      identityContent.append(empty("尚未生成目录身份", "分享模型后，这里会显示可供伙伴核对的完整身份和报价。"));
       return;
     }
-    identityContent.append(details("查看完整目录身份与报价", [["完整身份指纹", fingerprint], ["完整报价指纹", quote.contentHash], ["完整价格版本", quote.billing?.priceVersion], ["目录版本", quote.version ?? quote.publication?.version], ["更新时间", quote.updatedAt ?? quote.publication?.updatedAt], ["发布时间", quote.publishedAt ?? quote.publication?.publishedAt], ["身份签名", "自签名 Ed" + "25519；只证明同一密钥签署，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
+    identityContent.append(details("查看完整目录身份与报价", [["完整身份指纹", fingerprint], ["完整报价指纹", quote.contentHash], ["完整价格版本", quote.billing?.priceVersion], ["目录版本", quote.version ?? quote.publication?.version], ["更新时间", quote.updatedAt ?? quote.publication?.updatedAt], ["发布时间", quote.publishedAt ?? quote.publication?.publishedAt], ["身份签名", "自签名 Ed" + "25519；只证明同一密钥签署，不代表现实身份。"], ["价格未锁定", "是（priceLocked: false）；伙伴看到的价格可能随 Magpie 设置变化。"]]));
     const actions = el("div", null, "workflow-actions");
     actions.append(button("复制完整身份指纹", async () => {
       try { await navigator.clipboard.writeText(fingerprint); notice("完整身份指纹已复制，请通过可信渠道交给伙伴核对。", "good"); }
@@ -391,7 +379,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   const requestsList = el("div", null, "workflow-list"); requestCard.append(requestsList);
   const consumersCard = el("div", null, "card workflow-section"); consumersCard.append(toolbar("已授权的伙伴"));
   const consumersList = el("div", null, "workflow-list"); consumersCard.append(consumersList);
-  roots.sharing.append(shareIntro, modelsCard, publication, ownIdentity, requestCard, consumersCard);
+  roots.sharing.append(shareIntro, publication, ownIdentity, requestCard, consumersCard);
   function policySelection(models) {
     const policy = state?.status.config.share?.models;
     return items(models).filter((model) => model.completePrice && (Array.isArray(policy) ? policy.some((rule) => rule === "*" || rule === model.id || (rule.endsWith("/*") && model.id.startsWith(rule.slice(0, -1)))) : model.allowedByPolicy)).map((model) => model.id);
@@ -403,11 +391,89 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       renderModels();
     }, { refresh: false });
   }
+  function catalogueOptions() {
+    const input = { displayName: displayName.input.value.trim() || null, contact: contact.input.value.trim() || null };
+    if (minimum.input.value) input.minTopUpUsd = Number(minimum.input.value);
+    return input;
+  }
+  /**
+   * An older plugin would need several separate writes (models, sharing, publish)
+   * with different defaults and no rollback. Sharing must be all-or-nothing, so
+   * the UI refuses instead of leaving a half-published catalogue.
+   */
+  function outdated(action) {
+    return Object.assign(new Error(`当前插件版本不提供「${action}」，无法保证一次完成。为避免只公开一部分模型或留下不一致的共享状态，本页没有做任何修改；请更新 Magpie 中的 Oh My AIHub 插件后重试。`), { status: 404 });
+  }
+  function confirmShare() {
+    const chosen = selectableModels(candidates?.models, [...selectedModels]);
+    if (!chosen.length) { notice("请至少勾选一个有完整价格的本机模型。", "warn"); return; }
+    const names = chosen.map((id) => items(candidates?.models).find((model) => model.id === id)?.displayName || id);
+    openDialog("分享这些模型", (root) => {
+      root.append(paragraph(`将要分享 ${chosen.length} 个本机模型：${names.join("、")}。确认后服务会再次核对价格与共享策略，然后开启共享并把这份清单发布到网络目录；访问仍需伙伴逐一获得你的授权。`));
+      const agree = checkbox("我确认分享这些模型，并把模型与价格发布到目录");
+      const submit = button("确认分享", () => { if (agree.input.checked) void runShare(chosen); }, true);
+      submit.disabled = true;
+      agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      root.append(agree.label, submit);
+    });
+  }
+  async function runShare(models) {
+    if (working || !state) return;
+    working = true; setBusy(true); notice("正在核对并分享所选模型…");
+    try {
+      try {
+        await client.action("share-native-models", { models, confirm: true });
+      } catch (error) {
+        if (error.status === 404) throw outdated("share-native-models");
+        throw error;
+      }
+      modelDirty = false;
+      closeDialog();
+      await refreshState();
+      notice("已分享所选模型；目录发布状态以下方真实状态为准。", "good");
+    } catch (error) {
+      const message = error.status === 0
+        ? "连接中断，分享结果暂时不明。请刷新状态确认后再决定，系统不会自动重复提交。"
+        : error.message;
+      notice(message, "warn");
+      if (dialog.open) { dialogError.textContent = message; dialogError.hidden = false; }
+    } finally {
+      working = false;
+      if (state) setBusy(false);
+    }
+  }
+  function stopSharing() {
+    openDialog("停止共享", (root) => {
+      root.append(paragraph("会停止共享并撤下目录。已授权的伙伴记录与账目保留；需要时可再次分享。"));
+      const agree = checkbox("我确认停止共享并撤下目录");
+      const submit = button("确认停止", async () => {
+        if (!agree.input.checked || working) return;
+        working = true; setBusy(true);
+        try {
+          try { await client.action("stop-sharing", { confirm: true }); }
+          catch (error) {
+            if (error.status === 404) throw outdated("stop-sharing");
+            throw error;
+          }
+          closeDialog();
+          await refreshState();
+          notice("已停止共享并撤下目录。", "good");
+        } catch (error) {
+          const message = error.status === 0 ? "连接中断，停止结果暂时不明。请刷新状态确认。" : error.message;
+          notice(message, "warn");
+          dialogError.textContent = message; dialogError.hidden = false;
+        } finally { working = false; if (state) setBusy(false); }
+      }, true);
+      submit.disabled = true;
+      agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
+      root.append(agree.label, submit);
+    });
+  }
   function renderModels() {
     modelsList.replaceChildren();
-    if (!candidates) { modelsList.append(empty("先读取本机模型", "点击上方“读取本机模型”，获取 Magpie 当前真实模型及完整价格。")); modelSave.disabled = true; return; }
+    if (!candidates) { modelsList.append(empty("还没有检测到模型", "点“重新检测本机模型”读取 Magpie 当前的模型与价格。")); modelSave.disabled = true; return; }
     const models = items(candidates.models).filter((model) => [model.id, model.displayName].join(" ").toLowerCase().includes(search.sharing.toLowerCase()));
-    if (!models.length) modelsList.append(empty("没有可显示的本机模型", "在 Magpie 添加本机服务和模型并设置完整价格后，再读取模型列表。"));
+    if (!models.length) modelsList.append(empty("没有可分享的本机模型", "在 Magpie 添加本机服务和模型并设置完整价格后，再重新检测。"));
     for (const model of models) {
       const row = el("div", null, "shared-model-row");
       const choice = checkbox(model.displayName || model.id, selectedModels.has(model.id));
@@ -417,7 +483,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       row.append(body, badge(model.completePrice ? "价格完整" : "缺少价格", model.completePrice ? "good" : "warn"));
       modelsList.append(row);
     }
-    modelSave.disabled = items(candidates.models).every((model) => !model.completePrice);
+    modelSave.disabled = items(candidates.models).every((model) => !model.completePrice) || !selectedModels.size;
   }
   function importDocument(kind) {
     openDialog(kind === "request" ? "导入连接申请" : "导入伙伴授权", (root) => {
@@ -568,11 +634,10 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
 
   // Native Remote Magpie connections, key replacement and removal.
-  roots.connections.append(heading("CONNECTED TO YOUR MAGPIE", "我的连接", "授权验证通过后，伙伴模型会注册为本机 Magpie 的原生远程服务。", button("导入伙伴授权", () => importDocument("authorization"), true)));
   const connectionsIntro = el("div", null, "card workflow-section");
-  const consumeTop = toolbar("使用伙伴的 AI");
-  const consumeToggle = button("开启使用能力", () => confirmAction(state.status.config.consumingEnabled ? "暂停使用伙伴的 AI" : "开启使用伙伴的 AI", "此操作可能重连网络。暂停时仅移除本插件创建的远程服务注册，伙伴的账户与额度仍独立保留。", "consume-toggle", { enabled: !state.status.config.consumingEnabled }));
-  consumeTop.append(consumeToggle); connectionsIntro.append(consumeTop, paragraph("每个共享方的身份、密钥、模型与额度保持独立。可从发现页面生成申请，或导入对方已交付的授权文件。"));
+  const connectionsTop = toolbar("已连接的伙伴");
+  connectionsTop.append(button("导入伙伴授权", () => importDocument("authorization"), true));
+  connectionsIntro.append(connectionsTop, paragraph("授权验证通过后，伙伴模型会注册为本机 Magpie 的原生远程服务。每个共享方的身份、密钥、模型与额度保持独立。"));
   const connectionsList = el("div", null, "workflow-card-grid"); roots.connections.append(connectionsIntro, connectionsList);
   function renderConnections() {
     connectionsList.replaceChildren();
@@ -617,9 +682,8 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
   function render(next) {
     state = next;
-    shareToggle.textContent = next.status.config.sharingEnabled ? "暂停共享" : "开启共享";
-    consumeToggle.textContent = next.status.config.consumingEnabled ? "暂停使用能力" : "开启使用能力";
-    publishToggle.textContent = next.status.config.catalog?.enabled ? "停止发布目录" : "发布目录";
+    // Stopping only exists while something is shared; sharing itself is the single confirm action.
+    stopShareButton.hidden = next.status.config.sharingEnabled !== true;
     if (!publicationDirty) {
       const config = record(next.status.config.catalog);
       displayName.input.value = config.displayName || "";
