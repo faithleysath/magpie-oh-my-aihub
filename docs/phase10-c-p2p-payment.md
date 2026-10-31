@@ -128,6 +128,11 @@ signer, over a synthetic authenticated two-endpoint port:
   duplicate signature do not create a second invoice; bounded outbound retry keeps
   one request; store is 0600 and contains no key/seed/private material.
 
+Full local hermetic suite before the final two idempotency assertions:
+**818 pass / 0 fail / 6503 expect / 57 files**. CI `41169827983` @ `f061ad4`:
+**linux 818 pass / 0 fail / 6505 expect / 819 tests; macOS 817 pass / 0 fail /
+6502 expect / 818 tests; both success**.
+
 NOT verified: actual B HTTP/EasyTier two-node delivery, real MetaMask/Rabby, real
 chain transfer/finality/reorg, receipt/Watcher integration, Ledger credit, page UI.
 All are UNKNOWN / out of this first unit.
