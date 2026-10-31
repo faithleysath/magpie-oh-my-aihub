@@ -28,6 +28,8 @@ export interface ConsoleServerOptions {
   secureCookie?: boolean;
   /** Host-owned state path only. Omit to disable explicit browser pairing. */
   pairingFile?: string;
+  /** Session retirement hook (logout/expiry/replacement); never receives secrets. */
+  onSessionEnd?: (sessionId: string) => void;
 }
 
 export interface ConsoleServer {
@@ -240,6 +242,7 @@ export function createConsoleHandler(
     }
     session.operations.clear();
     session.cacheBytes = 0;
+    try { options.onSessionEnd?.(session.id); } catch { /* session retirement must still complete */ }
   }
   function expired(session: Session): boolean {
     return now() >= session.idleAt || now() >= session.absoluteAt;

@@ -88,7 +88,10 @@ const DEFAULT_REVEAL_TTL_MS = 60_000;
 const MAX_REVEAL_TTL_MS = 120_000;
 const MAX_PASSWORD_BYTES = 1024;
 const MAX_MNEMONIC_CHARS = 4096;
-const MAX_BACKUP_BYTES = 128 * 1024;
+// A real x-ethers keystore is ~1 KiB. Keep the restore input below the
+// transport's 64 KiB JSON body (including JSON escaping), rather than granting
+// the whole console a larger body limit for a weak port request.
+const MAX_BACKUP_BYTES = 32 * 1024;
 
 const owners = new WeakMap<Service, WalletLocalService>();
 
@@ -135,6 +138,13 @@ export class WalletLocalService {
 
   async status(): Promise<{ wallet: WalletSnapshot }> {
     return { wallet: (await this.vault).snapshot() };
+  }
+
+  /** Console session retirement: grants cannot outlive the browser session. */
+  endSession(sessionId: string): void {
+    for (const [id, grant] of this.grants) {
+      if (grant.consoleSessionId === sessionId) this.grants.delete(id);
+    }
   }
 
   async action(name: string, input: Record<string, unknown>, context?: WalletLocalContext): Promise<unknown> {
@@ -192,7 +202,12 @@ export class WalletLocalService {
     const result = await vault.create({ password, strength: strength as 128 | 160 | 192 | 224 | 256 });
     // The response contains the one-time mnemonic and is a sensitive action at
     // the transport; this method does not retain it.
-    return { wallet: result.snapshot, mnemonic: result.mnemonic };
+    return {
+      wallet: result.snapshot,
+      mnemonic: result.mnemonic,
+      backupRequired: true,
+      warning: "这是唯一一次显示助记词；请立即离线备份。不要粘贴到网站、聊天或日志中。",
+    };
   }
 
   private async import(input: Record<string, unknown>, context: WalletLocalContext): Promise<unknown> {

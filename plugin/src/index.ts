@@ -21,7 +21,7 @@ import { startConsoleServer, type ConsoleServer } from "./console-server.ts";
 import { CONSOLE_ACTIONS, consoleAction, consoleState } from "./console-api.ts";
 import { readConsolePort, saveConsolePort, readOwnPluginOptions, startConsoleLauncher, publishUnavailableLauncher } from "./console-launch.ts";
 import { Service } from "./service.ts";
-import { WALLET_VAULT_SENSITIVE_ACTIONS } from "./wallet-local-service.ts";
+import { WALLET_VAULT_SENSITIVE_ACTIONS, walletLocalService } from "./wallet-local-service.ts";
 import { startApi } from "./server.ts";
 import {
   decideOptions,
@@ -200,6 +200,7 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         sensitiveActions: ["key-reveal", ...WALLET_VAULT_SENSITIVE_ACTIONS],
         staticModules: ["/session.js", "/providers.js", "/wallet.js"],
         pairingFile: statePath("console-pairing.json"),
+        onSessionEnd: (sessionId: string) => walletLocalService(service!).endSession(sessionId),
       };
       consoleServer = startConsoleServer(consoleOptions);
       saveConsolePort(consoleServer.port);

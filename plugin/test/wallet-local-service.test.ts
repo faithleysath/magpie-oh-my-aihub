@@ -36,8 +36,10 @@ describe("WalletLocalService lifecycle and reveal", () => {
     const path = tempPath();
     const service = new WalletLocalService({ path });
     const ctx = context();
-    const created = await service.action("wallet-vault-create", { password: PASSWORD }, ctx) as { wallet: any; mnemonic: string };
+    const created = await service.action("wallet-vault-create", { password: PASSWORD }, ctx) as { wallet: any; mnemonic: string; backupRequired: boolean; warning: string };
     expect(created.mnemonic.split(" ")).toHaveLength(12);
+    expect(created.backupRequired).toBe(true);
+    expect(created.warning).toContain("唯一一次");
     expect(created.wallet.status).toBe("locked");
     expect(created.wallet.addressVerified).toBe(false);
 
@@ -97,12 +99,17 @@ describe("WalletLocalService lifecycle and reveal", () => {
     const staleGrant = await service.action("wallet-vault-reveal-authorize", {
       kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
     }, a) as { authorizationId: string };
+    service.endSession(a.sessionId);
+    expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: staleGrant.authorizationId, password: PASSWORD }, a))).toBe("wallet-reveal-invalid");
+    const lockGrant = await service.action("wallet-vault-reveal-authorize", {
+      kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
+    }, a) as { authorizationId: string };
     await service.action("wallet-vault-lock", {}, a);
     await expect(service.action("wallet-vault-reveal-authorize", {
       kind: "mnemonic", purpose: "wallet-recovery", confirmation: "local-user-confirmed",
     }, a)).rejects.toMatchObject({ code: "wallet-unlock-required" });
     await service.action("wallet-vault-unlock", { password: PASSWORD }, a);
-    expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: staleGrant.authorizationId, password: PASSWORD }, a))).toBe("wallet-reveal-invalid");
+    expect(await codeOf(service.action("wallet-vault-reveal-mnemonic", { authorizationId: lockGrant.authorizationId, password: PASSWORD }, a))).toBe("wallet-reveal-invalid");
   });
 
   test("wrong password locks the vault and burns the grant; inactive session and TTL reject", async () => {
@@ -138,11 +145,17 @@ describe("WalletLocalService lifecycle and reveal", () => {
     await expect(service.action("wallet-vault-create", { password: PASSWORD, unexpected: true }, ctx)).rejects.toMatchObject({
       code: "wallet-invalid-input",
     });
+    await expect(service.action("wallet-vault-unlock", { password: PASSWORD, sessionId: "f".repeat(64) }, ctx)).rejects.toMatchObject({
+      code: "wallet-invalid-input",
+    });
     await expect(service.action("wallet-vault-import", { mnemonic: VECTOR, password: "short" }, ctx)).rejects.toMatchObject({
       code: "wallet-invalid-input",
     });
     await expect(service.action("wallet-vault-unlock", { password: "wrong password 123" }, ctx)).rejects.toMatchObject({
       code: "wallet-absent",
+    });
+    await expect(service.action("wallet-vault-restore", { encryptedBackup: "x".repeat(32 * 1024 + 1), password: PASSWORD }, ctx)).rejects.toMatchObject({
+      code: "wallet-invalid-input",
     });
     try {
       await service.action("wallet-vault-import", { mnemonic: VECTOR, password: PASSWORD }, ctx);
