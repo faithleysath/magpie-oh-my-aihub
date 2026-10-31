@@ -27,6 +27,7 @@ mock.module(join(src, "console-launch.ts"), () => ({
 }));
 mock.module(join(src, "console-server.ts"), () => ({
   startConsoleServer: () => ({ port: 12346, origin: "http://127.0.0.1:12346", issueTicket: () => "unused-fixture", pendingPairings: () => [], approvePairing: () => false, stop() {} }),
+  startConsoleServerWithFallback: () => ({ server: { port: 12346, origin: "http://127.0.0.1:12346", issueTicket: () => "unused-fixture", pendingPairings: () => [], approvePairing: () => false, stop() {} }, fallback: false }),
 }));
 mock.module(join(src, "console-api.ts"), () => ({
   CONSOLE_ACTIONS: ["configure", "checks"], consoleState: async () => ({}), consoleAction: async () => ({}),

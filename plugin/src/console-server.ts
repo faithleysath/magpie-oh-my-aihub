@@ -457,6 +457,20 @@ export function createConsoleHandler(
 }
 
 /** Own listener only. Never exposes or forwards the Magpie administrative interface. */
+/**
+ * Binds the saved console port, and falls back to an OS-assigned one when that
+ * port was taken while the host was down. The caller persists the real port; a
+ * console that cannot bind must not stay unavailable forever on a stale port.
+ */
+export function startConsoleServerWithFallback(options: ConsoleServerOptions): { server: ConsoleServer; fallback: boolean } {
+  try {
+    return { server: startConsoleServer(options), fallback: false };
+  } catch (cause) {
+    if (!options.port) throw cause;
+    return { server: startConsoleServer({ ...options, port: 0 }), fallback: true };
+  }
+}
+
 export function startConsoleServer(options: ConsoleServerOptions): ConsoleServer {
   let transport: ConsoleHandler | undefined;
   const server = Bun.serve({
