@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Service, type SupervisorLike } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import { FakeBinder, FakeOwnership } from "./support/fake-ports.ts";
-import { MODELS_EVIDENCE_TTL_MS, loadState, projectModelsEvidence, type ProviderConnection } from "../src/state.ts";
+import { MODELS_EVIDENCE_TTL_MS, loadState, projectModelsEvidence, saveState, type ProviderConnection } from "../src/state.ts";
 
 const KEY = "sk-labmodel01";
 const KEY2 = "sk-labmodel02";
@@ -257,6 +257,44 @@ describe("provider models evidence", () => {
     );
     expect(missingRead.status).toBe("stale");
     expect(missingRead.callable).toBe("unknown");
+  });
+
+  test("a keyRef mismatch makes the evidence unknown", async () => {
+    const svc = await connected();
+    const rec = (svc as unknown as { state: ReturnType<typeof loadState>["state"] }).state.providers[0]!;
+    rec.modelsEvidence = { ...rec.modelsEvidence!, keyRef: "provider-keys.json#someone-else" };
+    const e = evidence(svc);
+    expect(e.status).toBe("unknown");
+    expect(e.modelCount).toBeNull();
+    expect(e.callable).toBe("unknown");
+    expect(e.error).toMatch(/key reference/);
+  });
+
+  test("TTL at the limit is current, longer than the limit is stale", async () => {
+    const svc = await connected();
+    const rec = (svc as unknown as { state: ReturnType<typeof loadState>["state"] }).state.providers[0]!;
+    const readAt = Date.parse(rec.modelsEvidence!.readAt!);
+    rec.modelsEvidence = { ...rec.modelsEvidence!, expiresAt: new Date(readAt + MODELS_EVIDENCE_TTL_MS).toISOString() };
+    expect(evidence(svc).status).toBe("current");
+    rec.modelsEvidence = { ...rec.modelsEvidence!, expiresAt: new Date(readAt + MODELS_EVIDENCE_TTL_MS + 1).toISOString() };
+    const e = evidence(svc);
+    expect(e.status).toBe("stale");
+    expect(e.modelCount).toBeNull();
+    expect(e.error).toMatch(/TTL/);
+  });
+
+  test("save/load preserves the evidence and remains idempotent", async () => {
+    const svc = await connected();
+    const first = loadState().state.providers[0]!;
+    const serialized = JSON.stringify(first.modelsEvidence);
+    const again = loadState().state.providers[0]!;
+    expect(JSON.stringify(again.modelsEvidence)).toBe(serialized);
+    expect(again.keyRef).toBe(first.keyRef);
+    const state = loadState().state;
+    saveState(state);
+    const reloaded = loadState().state.providers[0]!;
+    expect(JSON.stringify(reloaded.modelsEvidence)).toBe(serialized);
+    expect(reloaded.modelsEvidence?.status).toBe("current");
   });
 
   test("disconnecting the provider never leaves current evidence", async () => {

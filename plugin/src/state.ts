@@ -211,24 +211,30 @@ export function projectModelsEvidence(p: ProviderConnection, now = Date.now()): 
   if (!stored) return unknownModelsEvidence(p.keyRef, keyGeneration);
   const currentKey = stored.keyGeneration === keyGeneration;
   const currentIdentity = identityMatches(stored.identity, p.fingerprint, stored.identity?.fingerprint ?? null, p.acceptedFingerprint ?? null);
+  const currentKeyRef = stored.keyRef === p.keyRef;
   const readAtMs = stored.readAt ? Date.parse(stored.readAt) : Number.NaN;
   const expiresMs = stored.expiresAt ? Date.parse(stored.expiresAt) : Number.NaN;
   const invalidReadAt = !Number.isFinite(readAtMs);
   const futureReadAt = Number.isFinite(readAtMs) && readAtMs > now + 60_000;
   const invalidExpiry = !Number.isFinite(expiresMs) || (Number.isFinite(readAtMs) && expiresMs < readAtMs);
+  const ttlTooLong =
+    Number.isFinite(readAtMs) && Number.isFinite(expiresMs) && expiresMs - readAtMs > MODELS_EVIDENCE_TTL_MS;
   const expired = Number.isFinite(expiresMs) && now > expiresMs;
   const notServing = p.status !== "connected";
   const status: ProviderModelsEvidence["status"] =
-    stored.status === "unknown" ||
-    !currentKey ||
-    !currentIdentity ||
-    invalidReadAt ||
-    futureReadAt ||
-    invalidExpiry ||
-    expired ||
-    notServing
-      ? "stale"
-      : stored.status;
+    !currentKeyRef
+      ? "unknown"
+      : stored.status === "unknown" ||
+          !currentKey ||
+          !currentIdentity ||
+          invalidReadAt ||
+          futureReadAt ||
+          invalidExpiry ||
+          ttlTooLong ||
+          expired ||
+          notServing
+        ? "stale"
+        : stored.status;
   const current = status === "current";
   const callable: ProviderModelsEvidence["callable"] = current
     ? stored.models.length > 0
@@ -254,8 +260,14 @@ export function projectModelsEvidence(p: ProviderConnection, now = Date.now()): 
                 ? "the Gateway Key changed; read the models again"
                 : !currentIdentity
                   ? "the provider identity changed; read the models again"
-                  : "the provider is not serving"
-        : stored.error,
+                  : ttlTooLong
+                    ? "the model read-back TTL is longer than allowed; read it again"
+                    : "the provider is not serving"
+        : !currentKeyRef
+          ? "the model read-back belongs to a different key reference; read it again"
+          : ttlTooLong
+            ? "the model read-back TTL is longer than allowed; read it again"
+            : stored.error,
   };
 }
 
