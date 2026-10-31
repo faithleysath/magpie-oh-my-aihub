@@ -83,7 +83,10 @@ function finite(value: unknown): value is number {
 }
 
 /** A price form this plugin cannot snapshot; never a zero price. */
-export type UnsupportedPriceReason = "peak" | "rate-window";
+export type UnsupportedPriceReason = "peak" | "rate-window" | "tier-limit";
+
+/** Magpie/catalog schema accepts at most 10 tiers; bound the check as well. */
+export const MAX_PRICE_TIERS = 10;
 
 /**
  * The one place that recognizes a price the plugin cannot freeze.
@@ -100,6 +103,16 @@ export type UnsupportedPriceReason = "peak" | "rate-window";
  * (`omitempty`), so it is accepted; any non-empty value, and any malformed
  * value, is refused. Only an empty array of rate windows is accepted.
  */
+function directUnsupportedPriceReason(price: unknown): UnsupportedPriceReason | null {
+  if (!price || typeof price !== "object" || Array.isArray(price)) return null;
+  const p = price as Record<string, unknown>;
+  // A price object carrying rate windows is not a shape /v1/models writes;
+  // refuse it rather than guessing which window applies.
+  if (Object.hasOwn(p, "rateWindows")) return "rate-window";
+  if (Object.hasOwn(p, "peak") && p.peak !== undefined && p.peak !== "") return "peak";
+  return null;
+}
+
 export function unsupportedPriceReason(
   price: unknown,
   provider?: { rateWindows?: unknown } | null,
@@ -108,12 +121,19 @@ export function unsupportedPriceReason(
     const windows = provider.rateWindows;
     if (!Array.isArray(windows) || windows.length !== 0) return "rate-window";
   }
+  const direct = directUnsupportedPriceReason(price);
+  if (direct) return direct;
   if (price && typeof price === "object" && !Array.isArray(price)) {
-    const p = price as Record<string, unknown>;
-    // A price object carrying rate windows is not a shape /v1/models writes;
-    // refuse it rather than guessing which window applies.
-    if (Object.hasOwn(p, "rateWindows")) return "rate-window";
-    if (Object.hasOwn(p, "peak") && p.peak !== undefined && p.peak !== "") return "peak";
+    const tiers = (price as Record<string, unknown>).tiers;
+    if (Array.isArray(tiers)) {
+      // A finite, non-recursive walk: a tier cannot nest tiers in the supported
+      // schema, and a hostile/cyclic object must not turn this into unbounded work.
+      if (tiers.length > MAX_PRICE_TIERS) return "tier-limit";
+      for (const tier of tiers) {
+        const reason = directUnsupportedPriceReason(tier);
+        if (reason) return reason;
+      }
+    }
   }
   return null;
 }
