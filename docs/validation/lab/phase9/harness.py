@@ -59,6 +59,31 @@ MEASURED_APP_VERSIONS = {
 }
 
 
+# The exact app binary each measured version must be, per (system, machine).
+# A missing entry is not a rejection: the version is still accepted by name and
+# its binary hash is recorded in runtime.json, which is what keeps an unmeasured
+# platform from being refused outright. A listed entry is enforced: a rebuild of
+# the same version with different bytes is refused instead of being measured as
+# if it were the measured build. Only macOS arm64 was measured for Phase 10.
+MEASURED_APP_BINARIES = {
+    ("0.1.2289", "Darwin", "arm64"): "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
+}
+
+
+def measured_binary_sha(version: str, system: str, machine: str) -> str | None:
+    """The required binary hash for this platform, or None when only the version is pinned."""
+    return MEASURED_APP_BINARIES.get((version, system, machine))
+
+
+def verify_app_binary(version: str, system: str, machine: str, digest_value: str) -> None:
+    """Refuse a same-version app whose bytes are not the measured build."""
+    wanted = measured_binary_sha(version, system, machine)
+    if wanted is not None and digest_value != wanted:
+        raise RuntimeError(
+            f"the {version} app binary does not match the measured {system}/{machine} build"
+        )
+
+
 def measured_source_sha(version: str) -> str:
     """The upstream commit for a measured app version; refuse anything else."""
     sha = MEASURED_APP_VERSIONS.get(version)
@@ -243,6 +268,9 @@ def prepare(args):
     with (app / "Contents/Info.plist").open("rb") as f:
         version = plistlib.load(f)["CFBundleShortVersionString"]
     source_sha = measured_source_sha(version)
+    app_binary = app / "Contents/MacOS/magpie"
+    app_binary_sha = digest(app_binary)
+    verify_app_binary(version, platform.system(), platform.machine(), app_binary_sha)
     if not (REPO / "package.json").is_file():
         raise RuntimeError("root installable package.json is required")
     root = Path(args.root or f"/tmp/ohmyaihub-phase9-real-{secrets.token_hex(4)}").resolve()
@@ -259,7 +287,7 @@ def prepare(args):
     runtime = {"schema": MARKER, "root": str(root), "createdAt": stamp(),
                "repoHead": run(["git", "rev-parse", "HEAD"], cwd=REPO).stdout.decode().strip(),
                "platform": {"os": platform.system(), "release": platform.release(), "arch": platform.machine()},
-               "magpieSourceSha": source_sha,
+               "magpieSourceSha": source_sha, "magpieBinarySha256": app_binary_sha,
                "magpieVersion": version, "billingPin": "0.1.2038",
                "compatibility": "UNKNOWN until actor acceptance", "networkName": "phase9-" + secrets.token_hex(4),
                "networkSecret": secrets.token_hex(24), "nodes": {}}
@@ -332,6 +360,9 @@ def prepare(args):
         providers = json.loads((data / "providers.json").read_text())
         node["fixture"]["portableProviderFileExists"] = bool(providers)
         node["binarySha256"] = digest(Path(node["bin"]))
+        # The per-node copy is what actually runs: it must be the same measured
+        # bytes as the source, not merely a copy of the same version string.
+        verify_app_binary(version, platform.system(), platform.machine(), node["binarySha256"])
         save(root / "runtime.json", runtime)
     audit(root / "runtime.json", runtime)
     print(root / "runtime.json")
