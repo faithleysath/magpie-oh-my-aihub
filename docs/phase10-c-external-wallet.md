@@ -54,7 +54,7 @@ import {
 - 只监听 `eip6963:announceProvider`，并主动派发 `eip6963:requestProvider`。
 - **不读取、不自动选择 `window.ethereum`**；旧式 provider 只作为 `"legacy"` 显式选项出现。
 - `start()` 注册监听并请求一次；`stop()/dispose()` 移除监听并清空缓存。
-- `list()` 返回 sanitized 展示项：`id, uuid, name, rdns, icon, identity:"unverified", source, warnings, announcedAt`。**不含 provider 对象。**
+- `list()` 返回 sanitized 展示项：`id, uuid, name, rdns, icon, initial, identity:"unverified", source, warnings, announcedAt`。**`icon` 恒为 null，`initial` 是名称首字符；不含 provider 对象。**
 - `select(id)` 是显式选择：返回 `{ id, provider, info }`；不调用 provider。`select("legacy")` 才使用 `window.ethereum`。
 - 同一 provider 重新 announce 时保留内部 `id` 和 provider 引用；不同 provider 使用同一 `uuid` 时不合并，标记 `uuid-claimed-by-multiple-providers`。
 - `info` 永远不是身份认证；`identity` 固定为 `"unverified"`。
@@ -85,7 +85,7 @@ const session = createExternalWallet({
 | --- | --- | --- |
 | `connect({userInitiated:true})` | `eth_requestAccounts` + `eth_chainId` | 用户明确连接 |
 | `refresh()` | 只用 `eth_accounts` + `eth_chainId` 刷新 | 已明确连接 |
-| `readBalances({assetId?})` | `eth_getBalance` / 固定 `balanceOf` `eth_call` | 已连接；主网只读需 `allowMainnetRead` |
+| `readBalances({assetId?})` | `eth_getBalance` / 固定 `balanceOf` `eth_call` | 已连接；主网只读需 `allowMainnetRead`；**不切链** |
 | `requestSwitchChain(chainId,{userInitiated:true})` | 只调用 `wallet_switchEthereumChain` | 用户明确请求；不自动添加网络 |
 | `signDeposit(document,{userInitiated:true, expectedIntentHash?})` | 精确校验 EIP-712 后签名并本地恢复地址 | 已连接、网络匹配、未过期；**必须本地已登记可授信资产** |
 | `prepareTransfer({userInitiated:true, assetId, amountRaw, recipientAddress})` | 准确余额/gas/calldata 预览 | 已连接、测试网、已注册 mock 资产 |
@@ -191,11 +191,13 @@ type Operation = {
 };
 ```
 
-- `reserve` 必须按精确 operation 幂等；不得只按 `previewId` 建键。已有 `unknown/broadcasting/broadcast` 时必须拒绝再次发送。
-- `markBroadcasting` 必须持久化成功后才能调用 provider；失败则模块不发送。
-- `recordHash`/`recordUnknown` 失败时模块进入 unknown 并报 `OPERATION_JOURNAL_FAILED`，不自动重发。
+- `reserve` 必须按精确 operation 幂等；不得只按 `previewId` 建键。已有 `reserved/broadcasting/broadcast/unknown` 时，后到调用不得再获得 `state:"reserved"`（service 必须单赢家/原子）。
+- `markBroadcasting` 必须是 `reserved -> broadcasting` 的 CAS，校验 `reservationId`，并在返回前已持久化（事务/fsync）。失败则模块不发送；否则两个 tab 可能各发一笔。
+- `recordHash`/`recordUnknown` 失败时模块进入 unknown 并报 `OPERATION_JOURNAL_FAILED`，不自动重发。`4001/USER_REJECTED` 也走 `recordUnknown`；service 决定是否安全释放该 reservation（否则同 intentHash 可能被 bricked）。
+- `intentHash` 可省略；省略时 service 按 `(account,chain,asset,contract,recipient,amountRaw,calldataHash)` 合并。service 必须校验 `intentHash` 对应已存 intent 的 tuple 与 operation 一致；origin/provider 身份校验属 service scope，模块不验证。
 - `query` 用于服务/UI 恢复；本模块当前不替代 service 的恢复状态机。
-- **当前状态**：journal 实现不在本 PR；测试中的 `memoryOperationPort` 是模拟，不是 Service 接线。刷新/新 session 只有在同一持久 journal 实现下才能阻止同 intent 再次发送；模块自身内存幂等不等于跨刷新安全。
+- **当前状态**：journal 实现不在本 PR；测试中的 `memoryOperationPort` 是模拟，不是 Service 接线，且其 `reserve` 不是原子单赢家。刷新/新 session 只有在同一持久 journal 实现下才能阻止同 intent 再次发送；模块自身内存幂等不等于跨刷新安全。
+- `query` 模块当前不调用，仅供 service/UI 恢复。
 
 ## 3. 安全与门禁
 
@@ -204,7 +206,7 @@ type Operation = {
 - `name`：去控制字符/双向控制字符，去 `<`/`>`，限长 80；空名显示“未命名钱包”。
 - `rdns`：只允许 DNS 形状，非法则清空并标记 `invalid-rdns`。
 - `uuid`：必须是 UUID 形状；非法则清空并标记 `invalid-uuid`；重复时两个 provider 都保留并标记，不合并。
-- `icon`：只接受 `data:image/{png,webp,svg+xml};base64,...`，大小受限；SVG 解码后拒绝 `<script>`, `<foreignObject>`, `<iframe>`, `<object>`, `<embed>`, `on*=` 事件属性, `javascript:`, `@import`, `url(`, `<!doctype>`, `<!entity>` 和外部 `href/src`。调用方只能把它赋给 `<img src>`，不得内联插入 HTML。
+- `icon`：**不渲染任何钱包提供的 `data:`/SVG 图标**。`safeWalletIcon()` 恒返回 null；`sanitizeWalletInfo()` 返回 `icon:null` 和 `initial`（名称首字符），有图标时记 `icon-not-rendered`。UI 只用名称/首字母或内置静态图标；不放宽 CSP，不做完整 SVG sanitizer。
 - `identity` 固定 `"unverified"`；`info` 永远不能用于授权、额度或身份判断。真正身份由既有目录指纹/服务层授权决定。
 - provider 引用只保存在发现记录/会话内存中；重新 announce 不会丢失它，也不写入存储。
 
@@ -223,7 +225,8 @@ eth_sendTransaction, eth_signTypedData_v4, wallet_switchEthereumChain
 ### 3.3 不作弊的门禁
 
 - **未知网络/代币/decimals/发行方**：注册表查找失败即拒绝；发送仅允许 `testnetOnly` 且 `issuerType === "mock"`。
-- **主网 56/8453**：`prepareTransfer`、`confirmTransfer`、`signDeposit` 默认硬拒绝；`requestSwitchChain` 默认也拒绝，主网只读需 `allowMainnetRead: true` + 记录 `support: "read-only"`，且仍然不能发送。`allowMainnetRead` 只影响只读展示，不能解锁发送/授信/自动充值。浏览器模块是 defense-in-depth，**不是唯一门禁**；服务层必须保持同样的主网硬阻断。
+- **核心 credit 链路 allowlist**：`CREDIT_CHAIN_IDS = [97,84532]`；`allowedChainIds` 只能是显式 switch 的收窄集合，不能扩大核心集合。chain 1 即使 `networkType:"testnet"`、`enabled/support/receivable/credit` 全伪造成可授信，`prepareTransfer`/`signDeposit`/`requestSwitchChain` 仍 `UNKNOWN_CHAIN`；56/8453 仍由 `assertNoMainnetSend` 先行阻断。
+- **主网 56/8453**：`prepareTransfer`、`confirmTransfer`、`signDeposit` 默认硬拒绝；`requestSwitchChain` 默认也拒绝，主网只读需 `allowMainnetRead: true` + 记录 `support: "read-only"` + 用户显式 `requestSwitchChain(...,{userInitiated:true})`，且仍然不能发送。`readBalances` **不会**因 `allowMainnetRead` 自动切链；普通余额查询只读当前链。`allowMainnetRead` 只影响只读展示，不能解锁发送/授信/自动充值。浏览器模块是 defense-in-depth，**不是唯一门禁**；服务层必须保持同样的主网硬阻断。
 - **不自动切链**：网络不匹配时返回 `CHAIN_MISMATCH`，由用户显式调用 `requestSwitchChain`。
 - **不自动添加网络**：`wallet_switchEthereumChain` 返回 4901 时只报 `CHAIN_NOT_ADDED`，不调用 `wallet_addEthereumChain`。
 - **未接线不发送**：没有注入 `operationPort` 时 `confirmTransfer` 返回 `OPERATION_JOURNAL_REQUIRED`，不调用 provider。
@@ -241,8 +244,8 @@ eth_sendTransaction, eth_signTypedData_v4, wallet_switchEthereumChain
 
 | 项 | 命令 | 结果 | 标签 |
 | --- | --- | --- | --- |
-| 模块单测 | `bun test plugin/console/external-wallet.test.js` | **50 pass / 0 fail / 323 assertions** | REPRODUCED（合成 provider） |
-| 既有控制台测试 | `bun test plugin/console` | **104 pass / 0 fail / 770 assertions** | REPRODUCED |
+| 模块单测 | `bun test plugin/console/external-wallet.test.js` | **52 pass / 0 fail / 336 assertions** | REPRODUCED（合成 provider） |
+| 既有控制台测试 | `bun test plugin/console` | **106 pass / 0 fail / 783 assertions** | REPRODUCED |
 | 服务端安全/静态文件测试 | `bun test plugin/test/console-security.test.ts` | **32 pass / 0 fail / 1967 assertions** | REPRODUCED |
 | TypeScript 类型检查 | `cd plugin && bun run typecheck` | exit 0 | REPRODUCED |
 | 旧 head `837bacb` + 新行为测试 | 同文件复制到旧 head | **42 pass / 8 fail**（证明旧 bool 绕过、无 journal 发送、receipt 文案在旧 head 失败） | REPRODUCED（旧 head，预期失败） |
@@ -256,15 +259,15 @@ eth_sendTransaction, eth_signTypedData_v4, wallet_switchEthereumChain
 
 - EIP-6963 双 provider 发现、主动 request、显式选择、provider 引用保留、重新 announce；
 - legacy `window.ethereum` 显式选择、未选择前不调用 `eth_requestAccounts`；
-- 名称/rdns/图标 XSS、SVG 活动内容、重复 uuid、伪装/非法字段；
+- 名称/rdns/uuid 注入、重复 uuid、伪装/非法字段；**不渲染任何 data/SVG 图标，只返回名称 initial**；
 - 4001 / 4100 / 4900 / 超时；账户/网络/断开事件；旧 generation 失效；
 - `signDeposit` 精确 typed data、digest/intentHash、错误 chain、主网拒绝、本地资产/发行方/精度/credit/pricing、未知资产/发行方一律拒绝（旧 bool 绕过已删）、用户拒绝/锁定/超时、签名账户不符、签名期间切账户/切链；
-- `prepareTransfer` 精确 token/native 余额、gas、fee、calldata、blockers、未知 chain/token/decimals/issuer/disabled、缺 support/receivable/credit/pricing、伪造 testnet 主网；
+- `prepareTransfer` 精确 token/native 余额、gas、fee、calldata、blockers、未知 chain/token/decimals/issuer/disabled、缺 support/receivable/credit/pricing、伪造 testnet 主网、**chain 1 + client allowedChainIds 仍拒绝**；
 - 显式逐笔确认、伪造预览、缺确认、主网拒绝、余额不足、切账户/切链/gas 变化导致 `PREVIEW_STALE`；
-- 未注入 `operationPort` 时拒绝发送且零 provider 调用；模拟 journal 的 reserve → markBroadcasting → send → recordHash 顺序、markBroadcasting 失败不发、跨新 session 同 operation unknown 不重发；
+- 未注入 `operationPort` 时拒绝发送且零 provider 调用；模拟 journal 的 reserve → markBroadcasting → send → recordHash 顺序、markBroadcasting 失败不发、已有 broadcasting 不发送、跨新 session 同 operation unknown 不重发；
 - 重复/并发确认只发一次；发送超时/无效哈希/用户拒绝进入 unknown 并记录 journal，不自动重试；
-- 回执 pending/success/reverted/unknown、哈希不匹配、`transferVerified:false`、广播不等于预期转账/入账；
-- 无通用方法透传、无存储、dispose 清理监听。
+- 回执 pending/success/reverted/unknown、哈希不匹配、`executionStatus`、`transferVerified:false`、`paymentStatus:"unverified"`、广播不等于预期转账/入账；
+- 余额查询不切链；无通用方法透传、无存储、dispose 清理监听。
 
 ### 4.2 真实扩展：UNKNOWN / BLOCKED
 
@@ -350,7 +353,7 @@ C-registry 代理 `0c94d106-6442-470f-8f14-374c38ea20f7` 的 PR #21（draft，he
 - `operationPort` 的 Service journal 实现不在本 PR；未接线时 `confirmTransfer` 默认不可用。内存 `memoryOperationPort` 测试只是模拟，不能替代 Service 持久 journal；刷新/新 session 的防重发必须由 Service 实现。
 - gas 预览使用 legacy `eth_gasPrice`；真实钱包可能改用 EIP-1559 并在确认界面显示不同费用。gas limit 是 `eth_estimateGas` 的结果，实际消耗可能更低；不把预估值当作最终扣费。
 - 没有处理交易替换/加速、nonce 冲突、钱包内 pending 队列；钱包可能改写 gas/fee/nonce，甚至 calldata/recipient；模块不核验交易内容。未知广播只允许按已知哈希查回执，不自动重发。
-- SVG 图标过滤偏严格，可能拒绝部分真实钱包图标；这是安全取舍，不影响 provider 发现和签名。
+- 钱包图标一律不使用远端 data/SVG；只显示名称/首字母或内置静态图标。CSP 保持 `img-src 'self'`，不为图标放宽。
 - 本次没有真实 RPC 或真实扩展证据；所有“REPRODUCED”均限合成 provider 单测。
 
 ## 8. 复现命令
