@@ -205,7 +205,7 @@ second approval layer.
 - per-peer and global rate limit before the node call; global/per-peer concurrency;
 - timeout; wildcard bind and false loopback claims refused.
 
-`plugin/test/control-p2p-port.test.ts` (6 pass):
+`plugin/test/control-p2p-port.test.ts` (9 pass):
 
 - requested-set vs selected-subset price version;
 - approval/hand-over through the real Service;
@@ -214,8 +214,11 @@ second approval layer.
   generation is refused;
 - stale revocation does not remove a newer Remote;
 - corrupt ownership file fails closed before any Remote call;
-- enforced revoke: remove success, rotation fallback, and both-fail returns
-  `revoked:false` with the key/record still active.
+- a crash after native add but before final ownership save leaves a pending record;
+  the same approval adopts it and a different approval is refused;
+- enforced revoke: remove success, rotation fallback, a rotation whose old secret
+  is still accepted is not claimed, and both-fail returns `revoked:false` with the
+  key/record still active.
 
 `plugin/test/control-service-port.test.ts` (12 pass):
 
@@ -242,10 +245,10 @@ bun test test/control-http.test.ts test/control-service-port.test.ts test/contro
 | --- | --- | --- |
 | HTTP transport policy and limits | VERIFIED (unit + real socket) | 20 pass, typecheck |
 | Approval/handover/import adapter reuses Service | VERIFIED (unit with fake Magpie / loopback gateway) | 12 pass |
-| B-core business port mapping + persistent ownership | VERIFIED (unit, fake Magpie) | 6 pass |
-| Enforced revoke remove/rotate/both-fail | VERIFIED (unit, fake Magpie) | 6 port tests |
+| B-core business port mapping + persistent ownership | VERIFIED (unit, fake Magpie) | 9 pass |
+| Enforced revoke remove/rotate/old-secret/both-fail | VERIFIED (unit, fake Magpie) | 9 port tests |
 | PR #19 transport | PASS (reviewed 7bcf7e0, rebased on approved PR #15) | 20 real/unit tests; see PR #19 |
-| PR #20 adapter targeted | PASS (local, rebased branch) | 32 pass (12 old adapter + 20 transport) plus 6 new port tests = 38 total |
+| PR #20 adapter targeted | PASS (local, rebased branch) | 20 transport + 12 old adapter + 9 new port tests = 41 total |
 | Full `bun run test` on the rebased PR #20 head | UNKNOWN / host contention | Not claimed after rebase; shared host port collisions; PR #19 previously ran 773/0 in a temp PR #15+#17 copy |
 | Real B-core `P2pNode` stacked and compiled | UNKNOWN (not approved) | B-core PR #26 is committed (`fdc7d4c`/`fba73c`) but not approved for stack; the local port mirrors its `P2pBusinessPort` shape and is compile-checked only in a temporary snapshot |
 | Real Magpie 0.1.2289 approval + Remote read-back | UNKNOWN | no isolated 0.1.2289 run in this branch |
