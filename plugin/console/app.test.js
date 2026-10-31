@@ -100,7 +100,7 @@ const configured = () => {
     id: "provider-1", status: "connected", fingerprint: { hostname: "partner-harbor" },
     models: ["legacy/not-callable"],
     modelsEvidence: {
-      status: "current", source: "provider-models", readAt: "2026-10-31T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z",
+      status: "current", source: "provider-models", readAt: new Date(Date.now() - 60_000).toISOString(), expiresAt: new Date(Date.now() + 4 * 60_000).toISOString(),
       models: ["qwen/qwen3-32b", "deepseek/deepseek-chat"], modelCount: 2, callable: "yes",
       identity: { hostname: "partner-harbor", virtualIpv4: null, fingerprint: null },
       generation: 2, keyRef: "provider-keys.json#provider-1", keyGeneration: 1, error: null,

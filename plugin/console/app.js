@@ -313,7 +313,7 @@ function renderHome(state) {
   if (evidenceBox && evidenceList) {
     const summary = modelEvidenceSummary(list(object(state.status).providers));
     evidenceList.replaceChildren();
-    const usable = summary.state === "current" ? summary.entries : [];
+    const usable = ["current", "empty", "inactive"].includes(summary.state) ? summary.entries : [];
     show("home-models-evidence", usable.length > 0);
     for (const entry of usable) {
       const group = document.createElement("div");
@@ -324,6 +324,12 @@ function renderHome(state) {
       note.className = "muted";
       note.textContent = `${entry.source ? `读回来源 ${entry.source}` : "真实读回"}${entry.readAt ? ` · ${time(entry.readAt)}` : ""} · ${entry.quotaText}`;
       group.append(title, note);
+      if (entry.counted === false) {
+        const warning = document.createElement("p");
+        warning.className = "inline-warning";
+        warning.textContent = `连接状态 ${entry.status}：仅诊断，不计入当前可见模型。`;
+        group.append(warning);
+      }
       if (entry.models.length) {
         const ul = document.createElement("ul");
         for (const model of entry.models) {
