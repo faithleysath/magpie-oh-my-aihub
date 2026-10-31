@@ -235,14 +235,14 @@ function networkSummary(state) {
 function homeNetwork(state) { return networkSummary(state); }
 
 function homeModels(state) {
-  const candidates = state.shareCandidates?.models;
-  if (!Array.isArray(candidates)) return ["尚未检测", "在“我的共享”自动检测本机模型后显示。"];
-  const shareable = candidates.filter((model) => model && model.completePrice);
-  const peerModels = list(object(state.status.catalog).peers)
-    .filter((peer) => ["verified", "connected"].includes(peer?.status))
-    .reduce((total, peer) => total + list(peer?.quote?.models).length, 0);
-  const detail = `${peerModels ? `${peerModels} 个来自已信任伙伴 · ` : ""}只统计有完整价格的模型`;
-  return [`${shareable.length} 个可分享`, detail];
+  const providers = list(object(state.status).providers);
+  const connected = providers.filter((provider) => provider?.status === "connected");
+  if (!providers.length) return ["尚未连接", "还没有连接伙伴服务；在“发现”核对身份后申请模型。"];
+  if (!connected.length) return ["待确认", `${providers.length} 个伙伴服务未连接；在“发现 → 我的连接”核对。`];
+  // Only models actually available through an authorized native Remote provider count.
+  const known = connected.reduce((total, provider) => total + (Array.isArray(provider?.models) ? provider.models.length : 0), 0);
+  if (known) return [`${known} 个已授权模型`, `${connected.length} 个伙伴服务已连接；只统计已确认可用的模型。`];
+  return [`${connected.length} 个伙伴服务已连接`, "模型清单要在“发现 → 我的连接”读取确认；确认前不算可用。"];
 }
 
 function homeSharing(state) {
@@ -259,20 +259,30 @@ function homeSharing(state) {
   ];
 }
 
+/**
+ * Chain deposits are cumulative incoming transfers, not the current token
+ * balance. Without a balance read the only honest answer is "尚未查询".
+ */
 function homeWallet(state) {
   const walletState = object(state.wallet);
   if (walletState.availability !== "available") {
-    return ["尚未读取", walletState.error || "钱包记录未初始化；在钱包页初始化或刷新。", "未读取"];
+    return { status: "资产余额尚未查询", detail: walletState.error || "钱包记录未初始化；在钱包页初始化或刷新。", credit: [] };
   }
-  const chains = list(object(walletState.view).chains);
-  // Never print $0 for a chain that was not read: an unscanned chain is unknown, not zero.
-  const scanned = chains.some((chain) => Boolean(chain?.lastScanAt) || (typeof chain?.totals?.credited === "number" && chain.totals.credited > 0));
-  const credited = scanned ? chains.reduce((total, chain) => total + (typeof chain?.totals?.credited === "number" ? chain.totals.credited : 0), 0) : null;
   const consumers = list(object(walletState.view).consumers);
-  const credit = consumers.reduce((total, consumer) => total + (typeof consumer?.ledger?.balanceUsd === "number" ? consumer.ledger.balanceUsd : 0), 0);
-  const unproven = chains.reduce((total, chain) => total + (typeof chain?.totals?.unclaimed === "number" ? chain.totals.unclaimed : 0) + (typeof chain?.totals?.uncertain === "number" ? chain.totals.uncertain : 0), 0);
-  const detail = `${consumers.length} 个伙伴账目${unproven ? ` · ${unproven} 笔链上记录待核对` : ""}；资产与信用分开记账`;
-  return [credited === null ? "尚未查询" : money(credited), consumers.length ? money(credit) : "尚未读取", detail];
+  const credit = consumers
+    .filter((consumer) => typeof consumer?.ledger?.balanceUsd === "number")
+    .map((consumer) => ({ id: consumer.consumerId, amount: consumer.ledger.balanceUsd }));
+  const deposits = list(object(walletState.view).deposits)
+    .filter((deposit) => typeof deposit?.creditedUsd === "number" && deposit.creditedUsd > 0)
+    .sort((left, right) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")));
+  const latest = deposits[0];
+  return {
+    status: latest ? `最近入账 ${money(latest.creditedUsd)}（累计，非余额）` : "资产余额尚未查询",
+    detail: latest
+      ? `最近一笔充值 ${time(latest.updatedAt)} · 观察器与 RPC 在“网络 → 诊断”`
+      : "还没有已确认的充值记录；观察器与 RPC 在“网络 → 诊断”",
+    credit,
+  };
 }
 
 function todos(state) {
@@ -307,10 +317,33 @@ function renderHome(state) {
   const [sharing, sharingDetail] = homeSharing(state);
   setText("home-sharing", sharing);
   setText("home-sharing-detail", sharingDetail);
-  const [assets, credit, walletDetail] = homeWallet(state);
-  setText("home-wallet-assets", assets);
-  setText("home-wallet-credit", credit);
-  setText("home-wallet-detail", walletDetail);
+  const wallet = homeWallet(state);
+  setText("home-wallet-assets", wallet.status);
+  setText("home-wallet-detail", wallet.detail);
+  const creditList = $("home-wallet-credit");
+  creditList.replaceChildren();
+  if (!wallet.credit.length) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = "还没有提供者账目";
+    creditList.append(li);
+  } else {
+    for (const entry of wallet.credit.slice(0, 4)) {
+      const li = document.createElement("li");
+      const name = document.createElement("span");
+      name.textContent = entry.id;
+      const amount = document.createElement("strong");
+      amount.textContent = money(entry.amount);
+      li.append(name, amount);
+      creditList.append(li);
+    }
+    if (wallet.credit.length > 4) {
+      const li = document.createElement("li");
+      li.className = "muted";
+      li.textContent = `另有 ${wallet.credit.length - 4} 个伙伴账目，见钱包页`;
+      creditList.append(li);
+    }
+  }
   const listNode = $("home-todos");
   listNode.replaceChildren();
   const entries = todos(state);
@@ -561,12 +594,10 @@ async function saveNetwork({ networkName, networkSecret, initialNode }) {
   try {
     return await client.action("join-network", input);
   } catch (error) {
-    // Only "this backend does not know the action" may fall back. A 400/500
-    // means the write may have been attempted and must not be repeated blindly.
     if (error.status !== 404) throw error;
-    const legacy = { networkName, peers: initialNode ? [initialNode] : [] };
-    if (networkSecret) legacy.networkSecret = networkSecret;
-    return client.action("configure", legacy);
+    // An older backend would need several other writes with different defaults
+    // (role, ports, listen address). Fail closed instead of writing half a network.
+    throw new ConsoleError("当前插件版本不提供一次完成的三字段连接。为避免只写入一半配置，本页没有修改任何设置；请更新 Magpie 中的 Oh My AIHub 插件后重试。", 404);
   }
 }
 

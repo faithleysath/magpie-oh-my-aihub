@@ -55,38 +55,37 @@
             <div class="page-heading">
               <div><h1 id="home-title">首页</h1><p>这台设备上的私有 AI 网络。</p></div>
             </div>
-            <div class="home-grid">
-              <article class="card block" aria-labelledby="home-network-title">
+            <div class="card home-list">
+              <section class="home-row" aria-labelledby="home-network-title">
                 <h2 id="home-network-title">网络连接</h2>
                 <p class="status-line" id="home-network">尚未连接</p>
                 <p class="muted" id="home-network-detail">还没有读取到网络状态。</p>
                 <button type="button" class="text-button" data-goto="network">查看网络 →</button>
-              </article>
-              <article class="card block" aria-labelledby="home-models-title">
+              </section>
+              <section class="home-row" aria-labelledby="home-models-title">
                 <h2 id="home-models-title">可用模型</h2>
-                <p class="status-line" id="home-models">尚未检测</p>
-                <p class="muted" id="home-models-detail">检测本机 Magpie 中的模型后显示。</p>
-                <button type="button" class="text-button" data-goto="sharing">管理共享 →</button>
-              </article>
-              <article class="card block" aria-labelledby="home-sharing-title">
+                <p class="status-line" id="home-models">尚未确认</p>
+                <p class="muted" id="home-models-detail">只计算已经授权的伙伴服务；本机可分享数量在“我的共享”。</p>
+                <button type="button" class="text-button" data-goto="discovery">去发现 →</button>
+              </section>
+              <section class="home-row" aria-labelledby="home-sharing-title">
                 <h2 id="home-sharing-title">我的共享</h2>
                 <p class="status-line" id="home-sharing">未开启</p>
                 <p class="muted" id="home-sharing-detail">只共享你明确选中的本机模型。</p>
                 <button type="button" class="text-button" data-goto="sharing">查看共享 →</button>
-              </article>
-              <article class="card block" aria-labelledby="home-wallet-title">
+              </section>
+              <section class="home-row" aria-labelledby="home-wallet-title">
                 <h2 id="home-wallet-title">钱包</h2>
-                <dl class="home-figures">
-                  <div><dt>链上入账（资产）</dt><dd id="home-wallet-assets">尚未读取</dd></div>
-                  <div><dt>提供者信用（伙伴账目）</dt><dd id="home-wallet-credit">尚未读取</dd></div>
-                </dl>
-                <p class="muted" id="home-wallet-detail">只读汇总，不在这里发起任何资金操作。</p>
+                <p class="status-line" id="home-wallet-assets">资产余额尚未查询</p>
+                <p class="muted" id="home-wallet-detail">测试环境；这里只读，不发起任何资金操作。</p>
+                <h3 class="subhead">提供者信用（按伙伴）</h3>
+                <ul class="credit-list" id="home-wallet-credit"><li class="muted">尚未读取</li></ul>
                 <button type="button" class="text-button" data-goto="wallet">查看钱包 →</button>
-              </article>
-              <article class="card block block-wide" aria-labelledby="home-todo-title">
+              </section>
+              <section class="home-row" aria-labelledby="home-todo-title">
                 <h2 id="home-todo-title">待办</h2>
                 <ul class="todo-list" id="home-todos"></ul>
-              </article>
+              </section>
             </div>
           </section>
 
@@ -110,7 +109,7 @@
 
           <section id="wallet-page" aria-labelledby="wallet-title" hidden>
             <div class="page-heading">
-              <div><h1 id="wallet-title">钱包</h1><p>测试网入账与账目只在本机记录；本应用不持有私钥，不执行转账。</p></div>
+              <div><h1 id="wallet-title">钱包</h1><p>测试网环境；本应用不持有私钥，不执行转账。</p></div>
             </div>
             <div id="wallet-panel"></div>
             <details class="advanced-recovery" id="advanced-recovery">

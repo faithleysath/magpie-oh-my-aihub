@@ -257,10 +257,16 @@ section.card + section.card { margin-top: var(--space-4); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); flex-wrap: wrap; }
 .section-heading h2 { margin: 0; margin-right: auto; }
 
-/* ---------- home blocks ---------- */
-.home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
-.block { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
-.block-wide { grid-column: 1 / -1; }
+/* ---------- home rows ---------- */
+.home-list { padding: 0; }
+.home-row { display: flex; flex-direction: column; gap: var(--space-1); align-items: flex-start; padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line-soft); }
+.home-row:last-child { border-bottom: 0; }
+.home-row h2 { font-size: var(--text-base); color: var(--muted); font-weight: 600; }
+.home-row .status-line { font-size: var(--text-xl); }
+.home-row .text-button { padding-left: 0; }
+.credit-list { list-style: none; margin: var(--space-1) 0 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: var(--space-1); }
+.credit-list li { display: flex; justify-content: space-between; gap: var(--space-3); font-size: var(--text-sm); color: var(--body); font-family: var(--font-mono); }
+.credit-list strong { font-variant-numeric: tabular-nums; }
 .status-line { font-size: var(--text-xl); font-weight: 700; color: var(--ink); }
 .home-figures { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; margin: 0; }
 .home-figures > div { padding: var(--space-2) 0; border-bottom: 1px solid var(--line-soft); }
@@ -501,7 +507,7 @@ dialog::backdrop { background: var(--scrim); }
 .wallet-dialog { width: min(760px, calc(100vw - 32px)); }
 
 /* ---------- wallet ---------- */
-.wallet-scope { margin-bottom: var(--space-4); }
+.wallet-facts dd { font-family: var(--font-sans); word-break: normal; overflow-wrap: anywhere; }
 .wallet-evidence { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: var(--space-4) 0; }
 .wallet-evidence > p { font-size: var(--text-sm); color: var(--muted); }
 .wallet-network-list { display: flex; flex-direction: column; margin-top: var(--space-3); }

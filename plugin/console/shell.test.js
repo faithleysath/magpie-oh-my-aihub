@@ -29,9 +29,17 @@ describe("five page shell", () => {
     for (const gone of ["stats-grid", "overview-hero", "network-art", "readiness", "engine-status", "peer-count", "checks-list"]) {
       expect(home).not.toContain(gone);
     }
-    // Assets and provider credit are separate figures, never one balance.
-    expect(home).toContain("链上入账（资产）");
-    expect(home).toContain("提供者信用（伙伴账目）");
+    // Deposits are cumulative, not a balance, and credit is per provider.
+    expect(home).toContain("资产余额尚未查询");
+    expect(home).toContain("提供者信用（按伙伴）");
+    expect(home).not.toContain("链上入账（资产）");
+    expect(home).not.toContain("资产余额</dt>");
+  });
+
+  test("the wallet page states the testnet scope exactly once", () => {
+    expect(html).toContain("测试网环境；本应用不持有私钥，不执行转账。");
+    expect(html.split("测试网环境").length - 1).toBe(1);
+    expect(html).not.toContain("仅支持测试网资产。BSC Testnet 与 Base Sepolia");
   });
 
   test("discovery merges native connections and wallet merges bills", () => {
@@ -97,9 +105,11 @@ describe("five page shell", () => {
     expect(save).not.toContain("sharingEnabled");
     expect(save).not.toContain("rpcPort");
     expect(save).not.toContain("listenAddr");
-    // Legacy fallback only for an action the backend does not know.
+    // Fail closed on an older backend: no multi-write join, no configure fallback.
     expect(save).toContain("if (error.status !== 404) throw error;");
-    expect(save).toContain('client.action("configure", legacy)');
+    expect(save).toContain("本页没有修改任何设置");
+    expect(save).not.toContain('client.action("configure"');
+    expect(save).not.toContain("peers: initialNode");
   });
 
   test("network status prefers the read-only network projection and unknown stays unknown", () => {
