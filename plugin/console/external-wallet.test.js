@@ -208,11 +208,11 @@ function memoryOperationPort() {
   return api;
 }
 
-function sessionFixture({ provider = defaultProvider(), registry = registryFixture(), allowMainnetRead = false, timeouts = {}, now = () => NOW, info = walletInfo("Test Wallet"), operationPort = null } = {}) {
+function sessionFixture({ provider = defaultProvider(), registry = registryFixture(), allowMainnetRead = false, allowedChainIds, timeouts = {}, now = () => NOW, info = walletInfo("Test Wallet"), operationPort = null } = {}) {
   const wallet = { info, provider: provider.provider };
   const { discovery } = discoveryFixture({ wallets: [wallet] });
   const selection = discovery.list()[0];
-  const session = createExternalWallet({ discovery, selectionId: selection.id, registry, allowMainnetRead, timeouts, now, operationPort });
+  const session = createExternalWallet({ discovery, selectionId: selection.id, registry, allowMainnetRead, allowedChainIds, timeouts, now, operationPort });
   return { provider, session, discovery, wallet };
 }
 
@@ -313,7 +313,8 @@ describe("EIP-6963 discovery and untrusted info", () => {
     expect(entries[0].name).not.toContain("<");
     expect(entries[0].name).not.toContain(">");
     expect(entries[0].icon).toBeNull();
-    expect(entries[0].warnings).toContain("icon-rejected");
+    expect(entries[0].initial).toBe("i");
+    expect(entries[0].warnings).toContain("icon-not-rendered");
     expect(entries[1].warnings).toContain("uuid-claimed-by-multiple-providers");
     expect(entries[0].warnings).toContain("uuid-claimed-by-multiple-providers");
     expect(discovery.select(entries[0].id).provider).toBe(a.provider);
@@ -334,19 +335,19 @@ describe("EIP-6963 discovery and untrusted info", () => {
     expect(discovery.select(after[0].id).provider).toBe(provider);
   });
 
-  test("safe icons accept base64 raster/clean SVG and reject active or non-base64 SVG", () => {
-    const png = "data:image/png;base64,iVBORw0KGgo=";
-    const cleanSvg = "data:image/svg+xml;base64," + btoa('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>');
-    expect(safeWalletIcon(png)).toBe(png);
-    expect(safeWalletIcon(cleanSvg)).toBe(cleanSvg);
+  test("never renders remote data/SVG icons; uses a sanitized name initial instead", () => {
     for (const icon of [
+      "data:image/png;base64,iVBORw0KGgo=",
+      "data:image/svg+xml;base64," + btoa('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>'),
       "data:image/svg+xml,<svg><script>alert(1)</script></svg>",
       "data:image/svg+xml;base64," + btoa('<svg onload="alert(1)"></svg>'),
-      "data:image/svg+xml;base64," + btoa('<svg><foreignObject><body xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></body></foreignObject></svg>'),
-      "data:image/svg+xml;base64," + btoa('<svg><style>rect{width:expression(alert(1))}</style></svg>'),
       "javascript:alert(1)",
       "data:text/html;base64,PHNjcmlwdD4=",
     ]) expect(safeWalletIcon(icon)).toBeNull();
+    const info = sanitizeWalletInfo({ name: "Alpha Wallet", rdns: "io.example.alpha", uuid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", icon: "data:image/png;base64,iVBORw0KGgo=" });
+    expect(info.icon).toBeNull();
+    expect(info.initial).toBe("A");
+    expect(info.warnings).toContain("icon-not-rendered");
     expect(sanitizeWalletInfo({ name: "x", rdns: "bad rdns", uuid: "not-a-uuid" }).warnings).toEqual(expect.arrayContaining(["invalid-uuid", "invalid-rdns"]));
   });
 });
@@ -658,6 +659,23 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     expect(provider.provider.calls.some((call) => call.method === "eth_sendTransaction")).toBe(false);
   });
 
+  test("an existing broadcasting journal entry blocks a new preview without sending", async () => {
+    const port = memoryOperationPort();
+    const provider = defaultProvider();
+    const { session } = await connectedFixture({ provider, operationPort: port });
+    const first = await session.prepareTransfer({ userInitiated: true, ...transfer, intentHash: HASH });
+    const operation = {
+      schema: "ohmyaihub.external-wallet.operation/v1", intentHash: HASH, account: first.account,
+      chainId: first.chainId, assetId: first.assetId, contractAddress: first.contractAddress,
+      recipientAddress: first.recipientAddress, amountRaw: first.amountRaw, calldata: first.call.data, calldataHash: first.calldataHash,
+    };
+    const reservation = port.reserve(operation);
+    port.markBroadcasting({ reservationId: reservation.reservationId, operation });
+    const second = await session.prepareTransfer({ userInitiated: true, ...transfer, intentHash: HASH });
+    await expectCode(session.confirmTransfer(second, { userInitiated: true, acknowledged: true, previewId: second.previewId }), WALLET_ERROR.OPERATION_ALREADY_STARTED);
+    expect(provider.provider.calls.some((call) => call.method === "eth_sendTransaction")).toBe(false);
+  });
+
   test("requires one explicit per-transfer confirmation and sends exactly the previewed call", async () => {
     const { session, provider } = await connectedFixture();
     const preview = await session.prepareTransfer({ userInitiated: true, ...transfer });
@@ -771,6 +789,26 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
       await expectCode(session.signDeposit(document, { userInitiated: true, allowUnregisteredAsset: true }), WALLET_ERROR.MAINNET_BLOCKED);
       expect(provider.provider.calls.some((call) => call.method === "eth_signTypedData_v4")).toBe(false);
     }
+  });
+
+  test("chain 1 forged as testnet and client-allowed is still denied for send/sign/switch", async () => {
+    const chain1Contract = "0x" + "1".repeat(40);
+    const chain1Asset = `eip155:1:${chain1Contract.toLowerCase()}`;
+    const registry = registryFixture();
+    registry.networks.push({ chainId: 1, displayName: "Ethereum", family: "evm", networkType: "testnet", enabled: true, support: "credit", receivable: true, nativeSymbol: "ETH" });
+    registry.assets.push({ assetId: chain1Asset, chainId: 1, contractAddress: chain1Contract, symbol: "tONE", decimals: 6, issuerType: "mock", testnetOnly: true, enabled: true, credit: true, pricing: { kind: "fixed-test-rate" } });
+    const provider = defaultProvider({ eth_chainId: async () => "0x1" });
+    const { session } = await connectedFixture({ provider, registry, allowedChainIds: [1, 97, 84532] });
+    provider.provider.calls.length = 0;
+    await expectCode(session.prepareTransfer({ userInitiated: true, assetId: chain1Asset, amountRaw: "1", recipientAddress: RECIPIENT }), WALLET_ERROR.UNKNOWN_CHAIN);
+    const document = depositDocument({ chainId: 1, contractAddress: chain1Contract });
+    await expectCode(session.signDeposit(document, { userInitiated: true }), WALLET_ERROR.UNKNOWN_CHAIN);
+    await expectCode(session.requestSwitchChain(1, { userInitiated: true }), WALLET_ERROR.UNKNOWN_CHAIN);
+    expect(provider.provider.calls.some((call) => ["eth_sendTransaction", "eth_signTypedData_v4", "wallet_switchEthereumChain"].includes(call.method))).toBe(false);
+    const balances = await session.readBalances({ assetId: chain1Asset });
+    expect(balances.readOnly).toBe(true);
+    expect(balances.creditEligible).toBe(false);
+    expect(provider.provider.calls.some((call) => call.method === "wallet_switchEthereumChain")).toBe(false);
   });
 
   test("missing support/receivable or disabled credit network is not defaulted safe", async () => {
@@ -903,7 +941,7 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     expect((await session.getReceipt(TX_HASH)).state).toBe("pending");
     provider.setReceipt({ transactionHash: TX_HASH, status: "0x1", blockNumber: "0x10" });
     const success = await session.getReceipt(TX_HASH);
-    expect(success).toMatchObject({ state: "success", credited: false, transferVerified: false, evidence: "chain-receipt", finality: "unknown", blockNumber: "0x10" });
+    expect(success).toMatchObject({ state: "success", executionStatus: "success", paymentStatus: "unverified", credited: false, transferVerified: false, evidence: "chain-receipt", finality: "unknown", blockNumber: "0x10" });
     provider.setReceipt({ transactionHash: TX_HASH, status: "0x0", blockNumber: "0x11" });
     expect((await session.getReceipt(TX_HASH)).state).toBe("reverted");
     provider.setReceipt({ transactionHash: TX_HASH, status: "0x2", blockNumber: "0x12" });
@@ -925,7 +963,7 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
   });
 
   test("balances distinguish native and registered token values", async () => {
-    const { session } = await connectedFixture();
+    const { session, provider } = await connectedFixture();
     const balances = await session.readBalances({ assetId: ASSET_97 });
     expect(balances.native).toMatchObject({ symbol: "tBNB", decimals: 18, formatted: "1" });
     expect(balances.token).toMatchObject({ symbol: "tMOCK6", decimals: 6, formatted: "2" });
@@ -933,6 +971,9 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     expect(balances.creditEligible).toBe(true);
     expect(balances.usdValue).toBeNull();
     await expectCode(session.readBalances({ assetId: "eip155:97:" + "6".repeat(40) }), WALLET_ERROR.UNKNOWN_TOKEN);
+    provider.provider.calls.length = 0;
+    await expectCode(session.readBalances({ assetId: ASSET_84532 }), WALLET_ERROR.CHAIN_MISMATCH);
+    expect(provider.provider.calls.some((call) => call.method === "wallet_switchEthereumChain")).toBe(false);
   });
 });
 
