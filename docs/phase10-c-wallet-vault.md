@@ -42,7 +42,7 @@
   1. 当前有未过期的解锁会话；
   2. 专用一次性 capability（不可序列化、绑定 vault/session/kind/purpose/expiry）；
   3. 重新输入钱包密码并重新解密验证。
-- 普通 snapshot 只有版本、公开地址、状态、会话过期时间；不含助记词、私钥、keystore 或密码。
+- 普通 snapshot 只有版本、公开地址、`addressVerified`、状态、会话过期时间；不含助记词、私钥、keystore 或密码。锁定/未解锁的 `address` 不是可信托管地址，UI 不得用于收款二维码/转账目标；解锁成功后才置 `addressVerified:true`。
 - EIP-712：
   - `previewTypedData()` 只构造/哈希，**永不签名**，主网 56/8453 也可预览；
   - `prepareTypedData()` 需要显式 purpose，绑定 chainId、verifyingContract、primaryType、domain name/version 和字段集合；
@@ -167,6 +167,7 @@ bun install --frozen-lockfile
 - `unlock(password)` 先锁定旧会话，再解密；失败不会留下新会话。
 - 会话 TTL 固定，不因普通读 snapshot/签名自动续期；默认 5 分钟，最大 15 分钟。
 - 每次 `snapshot()` 都会检查过期并清理；`lock()`/`dispose()` 立即丢弃引用。
+- 核心签名 allowlist 固定为 **97/84532 testnet**；31337 仅通过显式 `isolatedSimulationChains: [31337]` 测试构造启用。56/8453 继续硬拒，chain 1/10/42161/137/324/59144/43114/未知链一律 `signing-disabled`，不依赖注入 policy。
 - 所有 permit/capability 绑定 `vaultId + sessionId`；锁定、重新解锁、重启、TTL 过期后全部失效。
 - 文件只保存密文；重启后 `WalletVault.open()` 状态是 `locked`，必须重新输入密码。
 - 失败密码、错误导出密码、过期敏感操作会锁定会话（capability 在密码验证前消耗）。
@@ -206,31 +207,32 @@ bun install --frozen-lockfile
   - domain 必须恰好是 `name/version/chainId/verifyingContract`；
   - `EIP712Domain` 类型必须恰好是标准四字段；
   - 不允许额外 types、额外/缺失 message 字段、未知 domain 字段；
-  - 文档 chainId 先经过 chain policy 和 56/8453 硬拒绝；
+  - 文档 chainId 先经过核心 allowlist（97/84532；31337 仅隔离）和 56/8453 硬拒绝；
   - 返回的对象由模块 WeakMap 登记，伪造对象不可签名。
 - `signTypedData({prepared, permit})`：
   - 重新计算 digest 并与登记值比较；
-  - 重新检查 purpose/chain policy；
+  - 重新检查 purpose/chain allowlist；
+  - message 含 `chainId` 时必须等于 domain/purpose chain；含 `assetId` 为 `eip155:<chain>:<contract>` 时必须同链；
   - 消耗 permit 后签名；返回 digest/address/chainId/purpose/primaryType/verifyingContract；
-  - 不返回交易，不广播。
+  - 不返回交易，不广播。preview 可展示不匹配文档，但始终 `signable:false`。
 
 `SigningPermit`：
 
 - 只能由本地 `WalletVault.createSigningPermit()` 在解锁会话中创建，并且必须传入本 vault 生成的 prepared 对象；
 - 绑定 `vaultId/sessionId/kind/purpose/chainId` 以及**精确 intent**：typed-data 绑定 digest，付款绑定 `paymentIntentHash`（chain/from/to/value/nonce/gas/fees/data）；换收款人、换 calldata、换 value、gas/fee 或 typed-data 文档都会失效；
 - TTL 1–300 秒（默认 60 秒），最多 8 次；多次使用也只能重复**同一个精确 intent**；
-- 付款 permit 还绑定 `maxPerPaymentWei`、`maxTotalWei`，累计 `spentWei`，作为 defense-in-depth；不得低于 prepared 的 value；
+- 付款 permit 的 `maxPerPaymentWei`/`maxTotalWei` 是**含最坏 gas 的总支出上限**：`value + gasLimit*maxFeePerGas`；`spentWei` 按该最坏成本原子累计。不得只按 transfer value 设上限；默认 permit 覆盖 `worst * maxUses`；`SignedPayment.maxGasCostWei/maxCostWei` 返回同值。
 - 失败的限制检查不消耗次数；签名前的成功消耗在异常时不退款（fail closed）；
 - 锁定/重新解锁/重启/过期后失效；不能序列化。
 
 ### 3.7 主网与自动充值
 
 - `MAINNET_SIGNING_DENIED_CHAIN_IDS = [56, 8453]` 在 `assertSignableChain()` 中硬拒绝；即使注入的 policy 把 56 标成 simulation/testnet，也会拒绝。
-- 其他主网/未知链由注入的 `WalletChainPolicy` 拒绝；默认策略 `DENY_ALL_CHAIN_POLICY` 拒绝一切，避免“没接线就能签”。
-- `preparePayment()` 只允许 policy 分类为 simulation/testnet 的链；主网 56/8453 连准备都拒绝。
+- 核心只允许 `SIGNING_CHAIN_ALLOWLIST = [97, 84532]`；`31337` 只在显式 `isolatedSimulationChains:[31337]` 的隔离构造中允许。其余链（包括 chain 1/10/42161/137/324/59144/43114 和未知 999999）直接 `signing-disabled`，即使注入的 `WalletChainPolicy` 声称它们是 testnet；policy 不是唯一门，也不再是绕过 allowlist 的入口。`createStaticChainPolicy()` 同样只接受 97/84532/31337 且类别必须匹配，不维护全主网黑名单。
+- `preparePayment()` 先经过核心 allowlist（97/84532；31337 仅隔离）并确认 policy 分类匹配；主网 56/8453 连准备都拒绝。
 - 核心只构造 **EIP-1559 type 2** 交易；没有 legacy `gasPrice` 路径。BSC testnet 97 的真实节点是否接受 type 2、以及 legacy 兼容性**未测 UNKNOWN**；不能把本模块的模拟测试写成“支持所有链”。
 - `signPayment()` 再次检查 chain policy，并解析回读 raw tx；没有 `send`/`broadcast` API，模块没有 RPC/fetch 代码。
-- `validateAutoRechargePolicy()` 只校验 policy 形状：chain/asset 四元组、per-payment/total 上限、最多 8 次、≤5 分钟、nonce、余额阈值；不读余额、不执行、不自动签名。未来执行器必须逐笔 `preparePayment()`，再用上述 exact-intent `SigningPermit` 签名；permit 不能变成“任意收款人/任意 calldata 的长期授权”。
+- `validateAutoRechargePolicy()` 只校验 policy 形状：chain/asset 四元组、per-payment/total 上限、最多 8 次、≤5 分钟、nonce、余额阈值；同样走核心 allowlist（31337 需显式隔离选项），不读余额、不执行、不自动签名。未来执行器必须逐笔 `preparePayment()`，再用上述 exact-intent、含最坏 gas 的 `SigningPermit` 签名；permit 不能变成“任意收款人/任意 calldata 的长期授权”。
 
 ### 3.8 窄接口
 
@@ -265,13 +267,13 @@ bun install --frozen-lockfile
 | 命令 | 结果 | 说明 |
 | --- | --- | --- |
 | `bun run typecheck` | PASS | `tsc --noEmit` 无输出 |
-| `bun test test/wallet-vault.test.ts` | **45 pass / 0 fail / 230 expect** | 纯模块，临时目录，无网络 |
+| `bun test test/wallet-vault.test.ts` | **53 pass / 0 fail / 288 expect** | 纯模块，临时目录，无网络 |
 | `bun run secret-scan` | PASS | 工作树无凭据模式 |
 | `bun install --frozen-lockfile` | PASS（no changes） | lock 可复现 |
 | `npm audit --omit=dev`（公共 registry） | 0 known vulnerabilities | 不是完整供应链审计 |
-| GitHub Actions `plugin` run `41160280967`（commit `c640f65`，本模块 47 个测试） | Linux 787 pass / **5 fail**；macOS 786 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 47 个测试全部 pass |
+| GitHub Actions `plugin` run `41162084059`（commit `7079027`，本模块 55 个测试） | Linux 795 pass / **5 fail**；macOS 794 pass / **5 fail** | 5 个失败均为仓库既有固定时钟/旧钱包测试：`wallet wizard`、`browser wallet workflows`（3 个）、`numeric admission...`；本模块 55 个测试全部 pass |
 
-**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `c640f65` 上跑全量，Linux 787 pass / 5 fail、macOS 786 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
+**没有把完整 `bun run test` 当作本模块门禁**：本地未跑全量；CI 在 commit `7079027` 上跑全量，Linux 795 pass / 5 fail、macOS 794 pass / 5 fail；5 个失败都是仓库既有固定时钟/旧钱包测试（P0-3 范围），不是本模块测试。网络 guard 由另一个小 PR 处理；本模块只跑针对性纯测试，不把旧失败写成通过。
 
 ### 覆盖矩阵
 
@@ -284,7 +286,7 @@ bun install --frozen-lockfile
 | 默认 KDF 强参数 | `default KDF...` | REPRODUCED（默认 N=2^17） |
 | 0644 文件 / 符号链接拒绝 | `a 0644 wallet file...` | REPRODUCED |
 | 篡改 ciphertext/MAC/KDF/未知字段 | `tampered ciphertext...` | REPRODUCED |
-| 篡改 x-ethers path/locale/client/gethFilename、mnemonic ciphertext、address、KDF 类型 | `x-ethers metadata...` / `tampered mnemonic...` | REPRODUCED（fail closed） |
+| 篡改 x-ethers path/locale/client/gethFilename、mnemonic ciphertext、address、KDF 类型 | `x-ethers metadata...` / `tampered mnemonic...` | REPRODUCED（path/locale/client 非 6.x/geth 校验失败时 fail closed；6.x 历史 client 可解锁） |
 | 真实 `DepositIntent` 11 个 primitive 字段的 digest/sign/verify | `the real DepositIntent schema...` | REPRODUCED（与现有 `src/eip712.ts` digest 对比） |
 | GitHub 根包/工作区 manifest 与 vault 源文件 | `wallet-vault-packaging.test.ts` | REPRODUCED（静态） |
 | 实际 Magpie `bun add github:...#branch`、ethers 解析、vault import | `/tmp` 安装实验（Bun 1.4.3 + Magpie Bun 1.4.4） | REPRODUCED（10 包，`function 6.17.0`） |
@@ -296,13 +298,16 @@ bun install --frozen-lockfile
 | 备份错密码/篡改不落地 | `a backup with a wrong password...` | REPRODUCED |
 | 敏感导出 capability 一次性/过期/伪造/跨 vault | `capabilities expire...` | REPRODUCED |
 | 导出错误密码消耗 capability 并锁定 | `a wrong password consumes...` | REPRODUCED |
-| 普通 snapshot 无 secret | `the ordinary snapshot...` | REPRODUCED |
+| 普通 snapshot 无 secret + `addressVerified` 锁定 false/解锁 true | `the ordinary snapshot...` / `x-ethers metadata...` | REPRODUCED |
 | 公开 EIP-712 Mail 向量 | `the published EIP-712 Mail vector...` | REPRODUCED |
 | purpose 签名 + 地址恢复验证 | `a prepared purpose can sign...` | REPRODUCED |
 | 主网 56/8453 只 preview，prepare/sign 拒绝 | `mainnet domains...` / `hard deny...` | REPRODUCED |
 | 伪造 prepared / 跨 vault prepared | `forged prepared...` / `prepared documents...` | REPRODUCED |
 | 模拟链 EIP-1559 付款签名、不广播 | `signs a bounded EIP-1559...` | REPRODUCED |
-| permit exact-intent 绑定/上限/次数/锁定拒绝 | `a permit is bound...` / `a typed-data permit is bound...` / `signing while locked...` | REPRODUCED |
+| permit exact-intent 绑定/次数/锁定拒绝 | `a permit is bound...` / `a typed-data permit is bound...` / `signing while locked...` | REPRODUCED |
+| permit 最坏成本 `value+gasLimit*maxFeePerGas`、value-only 上限拒绝、多用途累计 | `payment permits are capped...` | REPRODUCED |
+| F0 宽 policy 下 chain 1/10/42161/137/324/59144/43114/999999 拒绝；97/84532/隔离 31337 正控 | `F0 signing-chain allowlist` | REPRODUCED |
+| F1 DepositIntent domain 97 + message.chainId 56/8453/1 或 asset 链不一致拒绝；preview signable false | `a DepositIntent message.chainId/assetId...` | REPRODUCED |
 | 自动充值 policy 形状拒绝主网/长 TTL/坏上限 | `auto-recharge policy shape...` | REPRODUCED |
 | 并发 unlock/export/sign | `concurrency...` | REPRODUCED |
 
@@ -328,7 +333,7 @@ bun install --frozen-lockfile
 - **共享 Bun 宿主可读解密内存**：任何同进程插件/扩展都能在解锁期间读取 HDNodeWallet；capability/facade 不是沙箱。
 - **JS 无法保证内存擦除**：GC、堆快照、swap、core dump、崩溃转储可能保留 key；没有 Keychain/TPM/安全 enclave。
 - **离线暴力破解**：keystore 被复制后，密码强度决定安全；scrypt 只提高成本，不阻止弱密码。
-- **x-ethers mnemonic 完整性**：标准 V3 MAC 认证的是私钥密文/密码，不单独认证 `x-ethers.mnemonicCiphertext`。本模块在解密后**重新解析 BIP39 phrase、复核 checksum/entropy、按固定 `m/44'/60'/0'/0/0` 重新派生，并比较 address/privateKey 与 keystore 声明**；仅 wordlist 合法不算通过。`x-ethers.path/locale/client/gethFilename` 也做严格校验；篡改 path/locale/client/geth filename 在 `open` 拒绝，篡改 mnemonic ciphertext/address 在 `unlock` fail closed。但这仍不是独立的 mnemonic MAC；不要把“能导出助记词”当成该密文未被篡改的证明。
+- **x-ethers mnemonic 完整性**：标准 V3 MAC 认证的是私钥密文/密码，不单独认证 `x-ethers.mnemonicCiphertext`。本模块在解密后**重新解析 BIP39 phrase、复核 checksum/entropy、按固定 `m/44'/60'/0'/0/0` 重新派生，并比较 address/privateKey 与 keystore 声明**；仅 wordlist 合法不算通过。`x-ethers.path/locale` 严格校验；`client` 只接受 `ethers/6.x` 格式（历史 6.16/6.17 patch 可读，未知主版本 fail closed），不把 client 字符串当信任；`gethFilename` 是未认证展示元数据（格式/地址后缀校验，不构成完整性）。篡改 mnemonic ciphertext/address 在 `unlock` fail closed；锁定 snapshot 的地址标 `addressVerified:false`。这仍不是独立的 mnemonic MAC；不要把“能导出助记词”当成该密文未被篡改的证明。
 - **文件系统/OS**：Windows 权限与目录 fsync 未测；磁盘/SSD 安全擦除、备份软件、Time Machine、云同步可能复制旧密文。
 - **标准互操作**：`x-ethers` 扩展的助记词保留只验证了 ethers；geth/MetaMask/Rabby 等对 x-ethers 的行为 UNKNOWN。仅私钥的 V3 读取是标准，但本 vault 的 `restore()` 要求 x-ethers mnemonic；只接受 scrypt 备份，要求新密码至少 12 字符，PBKDF2/短密码外部备份不能直接 restore。
 - **EIP-712 字段范围**：purpose 签名只支持 primitive 字段（address/bool/string/bytesN/uint/int）。**实际 `DepositIntent` 的 11 个字段全是 primitive**（string/uint256/address/uint64），已用真实 `DEPOSIT_TYPES` 做 digest/sign/verify 兼容测试，并支持按链配置 purpose；不需要把普通充值导向手工文件。只有含 nested struct/array 的其他文档才需要扩展 purpose 或继续走 C-external 外置路径；`previewTypedData()` 可预览 nested 类型，但 preview 永不签名。
@@ -339,14 +344,14 @@ bun install --frozen-lockfile
 
 ## 6. 与 C-registry / B-core / 外部钱包适配的接口约定
 
-1. **链识别只来自 C-registry**：Service 实现 `WalletChainPolicy.classify(chainId)`，不要在本模块或 UI 复制完整网络/资产注册表。C-registry 的 `support/read-only`、`receivable`、`credit`、`pricing.kind` 字段属于 registry/Service；本核心不读取 `networkType/enabled`，也不会因为 `enabled=true` 而允许签名。vault 自己仍按 **chainId 硬集合**拒绝 56/8453，作为独立第二道门；C-registry 仍需自己的 `assertNoMainnetSend`，两边对 56/8453 必须一致。负向测试已覆盖“permissive policy 把 56 标成 simulation，仍拒绝”。
+1. **链识别只来自 C-registry**：Service 实现 `WalletChainPolicy.classify(chainId)`，不要在本模块或 UI 复制完整网络/资产注册表。C-registry 的 `support/read-only`、`receivable`、`credit`、`pricing.kind` 字段属于 registry/Service；本核心不读取 `networkType/enabled`，也不会因为 `enabled=true` 而允许签名。vault 自己另有**核心 allowlist**（仅 97/84532；31337 仅显式隔离测试）并按 chainId 硬拒 56/8453，作为独立第二道门；C-registry 仍需自己的 `assertNoMainnetSend`。负向测试已覆盖“permissive policy 把 chain 1/10/…/56/8453 标成 testnet，仍拒绝”。
 2. **prepared/intent 绑定**：typed data 必须经 `prepareTypedData()` 返回的 `PreparedTypedData`；付款必须经 `preparePayment()`。外部钱包适配器（C-external 的 `validateDepositDocument`/`prepareTransfer` 路径）应复用同一个 digest/字段集合；内置路径的 `SigningPermit` 绑定 `paymentIntentHash`（chain/from/to/value/nonce/gas/fees/data），不要另造付款归属规则或自行计算可签对象。
 3. **permit 只在本地创建且绑定 exact intent**：`createSigningPermit()` 必须接收本地 `prepareTypedData()`/`preparePayment()` 的 prepared 对象，绑定 digest 或 paymentIntentHash；`signingFacade()` 不包含它。P2P 消息不能直接产生 permit，也不能把一个 permit 换到另一个收款人/金额/calldata/typed-data 文档上。
 4. **导出只在本地**：完整 `WalletVault` 留在本地 UI/Service；P2P 只拿 facade。`createExportCapability()` 必须在用户点击后调用，导出结果绝不能进入普通响应、幂等缓存、日志或崩溃快照。
 5. **主网只读**：56/8453 只允许 `previewTypedData()` 和只读展示；不得调用 `preparePayment`/`sign*`，不得广播，不得自动授信/自动充值。
 6. **存储路径**：使用专用目录（建议 `<state-dir>/wallet/keystore.json`），不要放浏览器 storage；Service 停止/重启时调用 `lock()`/`dispose()`；重启后默认 locked。
 7. **错误处理**：使用 `WalletVaultError.code` 分类；不要把返回值/错误原文直接回显到 P2P；密码/助记词/私钥永不进日志。
-8. **自动充值**：后续执行器只能使用 `validateAutoRechargePolicy()` 校验过的 policy，再创建有 `maxUses/maxPerPaymentWei/maxTotalWei/nonce/expiry` 的 `SigningPermit`；本轮没有执行器。
+8. **自动充值**：后续执行器只能使用 `validateAutoRechargePolicy()` 校验过的 policy，再创建有 `maxUses/maxPerPaymentWei/maxTotalWei/nonce/expiry` 的 `SigningPermit`；上限按 `value+gasLimit*maxFeePerGas` 的最坏成本计算，本轮没有执行器。
 
 ## 7. 证据标签汇总
 
