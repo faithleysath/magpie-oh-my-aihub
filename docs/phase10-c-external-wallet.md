@@ -193,7 +193,7 @@ type Operation = {
 
 - `reserve` 必须按精确 operation 幂等；不得只按 `previewId` 建键。已有 `reserved/broadcasting/broadcast/unknown` 时，后到调用不得再获得 `state:"reserved"`（service 必须单赢家/原子）。
 - `markBroadcasting` 必须是 `reserved -> broadcasting` 的 CAS，校验 `reservationId`，并在返回前已持久化（事务/fsync）。失败则模块不发送；否则两个 tab 可能各发一笔。
-- `recordHash`/`recordUnknown` 失败时模块进入 unknown 并报 `OPERATION_JOURNAL_FAILED`，不自动重发。`4001/USER_REJECTED` 也走 `recordUnknown`；service 决定是否安全释放该 reservation（否则同 intentHash 可能被 bricked）。
+- `recordHash`/`recordUnknown` 失败时模块进入 unknown 并报 `OPERATION_JOURNAL_FAILED`，不自动重发。`4001/USER_REJECTED` 也走 `recordUnknown`，终态 unknown；**service 必须先证实没有广播，才可允许用户重试/释放 reservation；浏览器客户端不能直接释放**（否则同 intentHash 可能被 bricked 或被重复发送）。
 - `intentHash` 可省略；省略时 service 按 `(account,chain,asset,contract,recipient,amountRaw,calldataHash)` 合并。service 必须校验 `intentHash` 对应已存 intent 的 tuple 与 operation 一致；origin/provider 身份校验属 service scope，模块不验证。
 - `query` 用于服务/UI 恢复；本模块当前不替代 service 的恢复状态机。
 - **当前状态**：journal 实现不在本 PR；测试中的 `memoryOperationPort` 是模拟，不是 Service 接线，且其 `reserve` 不是原子单赢家。刷新/新 session 只有在同一持久 journal 实现下才能阻止同 intent 再次发送；模块自身内存幂等不等于跨刷新安全。
@@ -367,4 +367,4 @@ bun test plugin/test/console-security.test.ts
 cd plugin && bun install --frozen-lockfile && bun run typecheck
 ```
 
-全量测试前必须使用 hermetic network guard，阻止旧测试访问生产 `127.0.0.1:3425` 或公共 RPC。本分支不把该 guard 打进 PR。#17 guard check 路径独立审仍 FAIL/修复中；旧 head 在临时 detached worktree `60d0d04` 的 **799/0/6248（54 files）** 只能作为历史临时结果，不能称为全面 hermetic 验收。按主审要求，新 head 不重复全量，只做定向单测 + CI；CI `41161185158` 为 **linux 798 pass/1 skip/0 fail，macOS 797 pass/1 skip/0 fail**（后续 docs-only head 会另有同代码 CI）。并行默认全量曾与其他代理占用的固定端口 `127.0.0.1:13650` 冲突并出现非产品失败；该冲突 run 不作为代码结论。任务文本中的 `f63b644e` 是 P0-clock 代理 ID，不是 commit；实际 guard 为 `60d0d04`。
+全量测试前必须使用 hermetic network guard，阻止旧测试访问生产 `127.0.0.1:3425` 或公共 RPC。本分支不把该 guard 打进 PR。#17 guard 已 approved `49e8c0ff64c8fcaf28da472e664bee482fd5e843`；旧 `3ce`/FAIL 路径是历史，不代表当前状态。旧 head 在临时 detached worktree `60d0d04` 的 **799/0/6248（54 files）** 只能作为历史临时结果，不能称为全面 hermetic 验收。按主审要求，新 head 不重复全量，只做定向单测 + CI；CI `41161337808` 为 **linux 798 pass/1 skip/0 fail，macOS 797 pass/1 skip/0 fail**（code head `5875d44`；后续 docs-only head 另有同代码 CI）。并行默认全量曾与其他代理占用的固定端口 `127.0.0.1:13650` 冲突并出现非产品失败；该冲突 run 不作为代码结论。任务文本中的 `f63b644e` 是 P0-clock 代理 ID，不是 commit；实际 guard 为 `60d0d04`。
