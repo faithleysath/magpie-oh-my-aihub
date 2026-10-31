@@ -397,7 +397,12 @@ test("shipped UI uses safe DOM, no persistent credentials, remote resources, or 
   const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
   const transport = readFileSync(new URL("./session.js", import.meta.url), "utf8");
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
-  expect(app + transport).not.toMatch(/localStorage|sessionStorage|indexedDB|innerHTML|outerHTML|insertAdjacentHTML|document\.cookie/);
+  expect(app + transport).not.toMatch(/sessionStorage|indexedDB|innerHTML|outerHTML|insertAdjacentHTML|document\.cookie/);
+  // A theme choice is the only value allowed to persist; session credentials stay in memory.
+  const storageKeys = [...app.matchAll(/localStorage\.(?:getItem|setItem)\(([^,)]+)/g)].map((match) => match[1].trim());
+  expect(storageKeys.length).toBeGreaterThan(0);
+  for (const key of storageKeys) expect(key).toBe("THEME_KEY");
+  expect(app).not.toMatch(/localStorage[\s\S]{0,120}(ticket|csrf|secret|password|gateway|token)/i);
   expect(html).not.toMatch(/\son[a-z]+\s*=|<script[^>]*>\s*[^<\s]|(?:src|href)=["']https?:/);
   expect(html).not.toMatch(/\bstyle=/);
   expect(app).toContain('consumeTicketFragment(window.location, window.history)');
