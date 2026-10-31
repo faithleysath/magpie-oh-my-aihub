@@ -5,7 +5,7 @@ Status tags: **VERIFIED** (source/config/read), **REPRODUCED** (run and observed
 
 - Branch: `feature/phase10-wallet-closure`
 - Base: PR #49 `6b4d7d2f6e243b8ae8dfd074842cd71985850876`
-- Final code head: `d09efe1` (this docs commit follows it; the PR records the final head)
+- Functional code head: `d09efe1`; measured final head (this docs commit): `722d67a1cc15df32f0cd4c3d14ec8f6b53e401b5`
 - PR: https://github.com/faithleysath/magpie-oh-my-aihub/pull/50 (draft, not merged)
 - No real funds. Real mainnet access is read-only public RPC only. Mainnet send, credit and
   automatic recharge remain closed.
@@ -189,7 +189,7 @@ auto-recharge has no path.
 | secret-scan | PASS |
 | boot-check | PASS |
 | pack | 99 files, no tests/node_modules |
-| CI | to be recorded at the final head |
+| GitHub CI (`722d67a`) | plugin Linux PASS, plugin macOS PASS, Windows subset PASS, secrets working tree PASS, secrets git history PASS, package contents PASS |
 
 ## 9. Evidence and cleanup
 
