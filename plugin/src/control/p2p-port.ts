@@ -175,7 +175,7 @@ export interface P2pBusinessPort {
   approve(input: P2pApprovalRequest): Promise<P2pApprovedMaterials>;
   takeAuthorization(input: P2pTakeAuthorizationInput): Promise<P2pAuthorizationDocument>;
   recordAck(input: P2pAckRecord): Promise<void>;
-  revoke(input: P2pRevokeRequest): Promise<void | { revoked: boolean; detail: string | null }>;
+  revoke(input: P2pRevokeRequest): Promise<{ revoked: boolean; detail: string | null }>;
   recordApproval(input: P2pInboundApproval): Promise<void>;
   importAuthorization(input: {
     document: P2pAuthorizationDocument;
@@ -476,33 +476,50 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           keyId: document.keyId,
           keyName: document.keyName,
         };
-        const result = await importAuthorizationWithService(service, {
-          document,
-          approval: inboundApproval,
-          providerFingerprint: approval.providerFingerprint,
-          providerId,
-        });
-        // Save ownership only after registration/readback succeeded. The write
-        // is atomic and contains no key. If it fails, remove the Remote so the
-        // next attempt cannot be mistaken for a different approval's Remote.
-        const record: RemoteRecord = {
+        // Write a pending ownership record before the native add. A crash after
+        // addProvider but before the final atomic save therefore leaves an
+        // ownership record with this exact approvalId/providerId: the same
+        // approval can retry idempotently, while a different approval is refused
+        // and can never reset/replace the new Remote. The record holds no key.
+        const pending: RemoteRecord = {
           providerNodeId: approval.providerNodeId,
           providerFingerprint: approval.providerFingerprint,
           approvalId: approval.approvalId,
           generation: approval.generation,
           keyId: document.keyId,
           providerId,
+          models: [...document.models],
+          capUsd: document.capUsd,
+          updatedAt: now().toISOString(),
+        };
+        saveState(stateFile, { version: 1, remotes: [...state.remotes.filter((r) => r.providerNodeId !== approval.providerNodeId), pending] });
+        let result: { models: string[]; capUsd: number };
+        try {
+          result = await importAuthorizationWithService(service, {
+            document,
+            approval: inboundApproval,
+            providerFingerprint: approval.providerFingerprint,
+            providerId,
+          });
+        } catch (error) {
+          // If no native Remote remains, the pending record is only a failed
+          // attempt and can be cleared; if one remains (including an uncertain
+          // add), keep the record so no other approval can replace it.
+          if (!service.provider(providerId)) {
+            saveState(stateFile, { version: 1, remotes: state.remotes.filter((r) => r.providerNodeId !== approval.providerNodeId) });
+          }
+          throw error;
+        }
+        const completed: RemoteRecord = {
+          ...pending,
           models: [...result.models],
           capUsd: result.capUsd,
           updatedAt: now().toISOString(),
         };
-        const next: RemotesState = { version: 1, remotes: [...state.remotes.filter((r) => r.providerNodeId !== approval.providerNodeId), record] };
-        try {
-          saveState(stateFile, next);
-        } catch (error) {
-          await service.removeProvider(providerId).catch(() => {});
-          throw error;
-        }
+        // The pending record already names this approval/providerId. A final
+        // write failure leaves that recoverable record in place; do not remove a
+        // native Remote that a later same-approval retry can adopt.
+        saveState(stateFile, { version: 1, remotes: [...state.remotes.filter((r) => r.providerNodeId !== approval.providerNodeId), completed] });
         return { models: result.models, capUsd: result.capUsd };
       });
     },

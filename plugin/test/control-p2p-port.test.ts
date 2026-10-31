@@ -93,7 +93,7 @@ function realService() {
 }
 
 function authorization(): P2pAuthorizationDocument {
-  const key = "sk-p2p-port-fixture-secret";
+  const key = "sk-test-control-fixture-0001";
   return {
     schema: "ohmyaihub.authorization/v2",
     createdAt: "2026-10-31T00:00:00.000Z",
@@ -272,6 +272,44 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(providers.has(current)).toBe(true);
   });
 
+  test("a crash after the native add but before the final save keeps ownership and never resets the new Remote", async () => {
+    const providers = new Map<string, any>();
+    let failAfterAdd = true;
+    const service = {
+      addProvider: async (input: any) => {
+        providers.set(input.id, { ...input });
+        if (failAfterAdd) {
+          failAfterAdd = false;
+          throw new Error("simulated crash after native add");
+        }
+        return { id: input.id };
+      },
+      providerModels: async (id: string) => ({ id, models: [LAB_MODEL], limit: { costLimit: 1 } }),
+      removeProvider: async (id: string) => { providers.delete(id); return { id }; },
+      provider: (id: string) => providers.get(id),
+    } as never;
+    const stateFile = join(process.cwd(), "control-remotes.json");
+    const port = createP2pBusinessPort(service, { stateFile });
+    const doc = authorization();
+    await expect(port.importAuthorization({ document: doc, approval: inbound(), session: { sessionId: "s".repeat(32), peer } })).rejects.toThrow(/simulated crash/);
+    const pendingId = providerIdFor(PROVIDER, APPROVAL);
+    expect(providers.has(pendingId)).toBe(true);
+    expect(controlRemotes(stateFile).remotes[0]!.approvalId).toBe(APPROVAL);
+
+    // A different approval cannot take this provider while the pending/native
+    // record exists, even though the first import did not complete.
+    const other = { ...doc, approvalId: APPROVAL2, keyId: "key-old" };
+    await expect(
+      port.importAuthorization({ document: other, approval: inbound({ approvalId: APPROVAL2, generation: 2, keyId: "key-old" }), session: { sessionId: "s".repeat(32), peer } }),
+    ).rejects.toBeInstanceOf(ControlServiceRefusal);
+
+    // The same approval retries idempotently and adopts the existing Remote.
+    const retried = await port.importAuthorization({ document: doc, approval: inbound(), session: { sessionId: "s".repeat(32), peer } });
+    expect(retried.models).toEqual([LAB_MODEL]);
+    expect(providers.has(pendingId)).toBe(true);
+    expect(controlRemotes(stateFile).remotes[0]!.capUsd).toBe(1);
+  });
+
   test("a corrupt ownership file fails closed before touching a Remote", async () => {
     const { service, calls } = fakeConsumerService();
     const stateFile = join(process.cwd(), "control-remotes.json");
@@ -279,6 +317,35 @@ describe("B-core P2pBusinessPort mapping", () => {
     const port = createP2pBusinessPort(service, { stateFile });
     await expect(port.importAuthorization({ document: authorization(), approval: inbound(), session: { sessionId: "s".repeat(32), peer } })).rejects.toThrow(/corrupt|unreadable/);
     expect(calls).toEqual([]);
+  });
+
+  test("a rotation that leaves the old secret accepted is not claimed enforced", async () => {
+    const { svc, magpie } = realService();
+    const port = createP2pBusinessPort(svc);
+    const approved = await port.approve({
+      approvalId: "f".repeat(32),
+      generation: 1,
+      requestHash: "7".repeat(64),
+      request: singleRequest({ nodeId: "dave", hostname: "ohmyaihub-dave" }) as any,
+      consumer: { accountId: "d".repeat(64), nodeId: "dave", hostname: "ohmyaihub-dave", fingerprint: "d".repeat(64) },
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    (magpie as any).removeKey = async () => { throw new Error("remove failed"); };
+    (magpie as any).rotateKey = async (id: string) => {
+      const key = magpie.keyById(id);
+      if (key) key.secret = "sk-test-rotated-secret";
+      return "sk-test-rotated-secret";
+    };
+    // The provider's read-back still accepts the old secret: rotation happened
+    // but the old credential is not proven dead.
+    (magpie as any).limitStatus = async () => ({ limited: true, key: "x", limit: { costLimit: 1, cost: 0, costLeft: 1, calls: 0, spent: false } });
+    const result = await port.revoke({ consumerNodeId: "dave", approvalId: "f".repeat(32), reason: "operator-revoked" });
+    expect(result && result.revoked).toBe(false);
+    expect(svc.provisioner.find("dave")!.revokedAt).toBeNull();
+    expect(magpie.keyById(approved.keyId)).toBeDefined();
   });
 });
 
@@ -340,5 +407,34 @@ describe("enforced revoke port", () => {
     expect(failed && failed.revoked).toBe(false);
     expect(magpie.keyById(third.keyId)).toBeDefined();
     expect(svc.provisioner.find("carol")!.revokedAt).toBeNull();
+  });
+
+  test("a rotation that leaves the old secret accepted is not claimed enforced", async () => {
+    const { svc, magpie } = realService();
+    const port = createP2pBusinessPort(svc);
+    const approved = await port.approve({
+      approvalId: "f".repeat(32),
+      generation: 1,
+      requestHash: "7".repeat(64),
+      request: singleRequest({ nodeId: "dave", hostname: "ohmyaihub-dave" }) as any,
+      consumer: { accountId: "d".repeat(64), nodeId: "dave", hostname: "ohmyaihub-dave", fingerprint: "d".repeat(64) },
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    (magpie as any).removeKey = async () => { throw new Error("remove failed"); };
+    (magpie as any).rotateKey = async (id: string) => {
+      const key = magpie.keyById(id);
+      if (key) key.secret = "sk-test-rotated-secret";
+      return "sk-test-rotated-secret";
+    };
+    // The provider's read-back still accepts the old secret: rotation happened
+    // but the old credential is not proven dead.
+    (magpie as any).limitStatus = async () => ({ limited: true, key: "x", limit: { costLimit: 1, cost: 0, costLeft: 1, calls: 0, spent: false } });
+    const result = await port.revoke({ consumerNodeId: "dave", approvalId: "f".repeat(32), reason: "operator-revoked" });
+    expect(result && result.revoked).toBe(false);
+    expect(svc.provisioner.find("dave")!.revokedAt).toBeNull();
+    expect(magpie.keyById(approved.keyId)).toBeDefined();
   });
 });

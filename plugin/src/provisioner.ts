@@ -1627,29 +1627,56 @@ export class Provisioner {
       let enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain" = "safetyUncertain";
       let detail: string | null = null;
       let rotatedSecret: string | null = null;
+      const oldSecret = rec.secret;
+      const oldSecretStillAccepted = async (): Promise<boolean> => {
+        if (!oldSecret) return false;
+        try {
+          await this.magpie.limitStatus(oldSecret);
+          return true;
+        } catch {
+          return false;
+        }
+      };
       if (this.magpie.keyById(rec.keyId)) {
         try {
           await this.magpie.removeKey(rec.keyId);
-          if (!this.magpie.keyById(rec.keyId)) enforcement = "keyRevoked";
-          else detail = "remove returned but Magpie still lists the key";
+          if (!this.magpie.keyById(rec.keyId)) {
+            if (await oldSecretStillAccepted()) {
+              detail = "remove completed but the old secret is still accepted";
+            } else {
+              enforcement = "keyRevoked";
+            }
+          } else {
+            detail = "remove returned but Magpie still lists the key";
+          }
         } catch (e) {
           detail = `remove: ${String((e as Error)?.message ?? e)}`;
+          if (!this.magpie.keyById(rec.keyId) && !(await oldSecretStillAccepted())) {
+            enforcement = "keyRevoked";
+            detail = `${detail}; the key is absent and the old secret is refused`;
+          }
+        }
+        if (enforcement === "safetyUncertain" && this.magpie.keyById(rec.keyId)) {
           try {
             const rotated = await this.magpie.rotateKey(rec.keyId);
-            if (rotated && rotated !== rec.secret) {
+            if (rotated && rotated !== oldSecret && !(await oldSecretStillAccepted())) {
               rotatedSecret = rotated;
               enforcement = "secretRotated";
             } else if (!rotated) {
-              detail = `${detail}; rotate: no new secret`;
+              detail = `${detail ? `${detail}; ` : ""}rotate: no new secret`;
+            } else if (rotated === oldSecret) {
+              detail = `${detail ? `${detail}; ` : ""}rotate returned the same secret`;
+            } else {
+              detail = `${detail ? `${detail}; ` : ""}rotate completed but the old secret is still accepted`;
             }
           } catch (rotateError) {
-            detail = `${detail}; rotate: ${String((rotateError as Error)?.message ?? rotateError)}`;
+            detail = `${detail ? `${detail}; ` : ""}rotate: ${String((rotateError as Error)?.message ?? rotateError)}`;
           }
         }
         if (enforcement === "safetyUncertain") {
           try {
             await this.magpie.setCostLimit(rec.keyId, rec.window, 0.0001);
-            const status = await this.magpie.limitStatus(rotatedSecret ?? rec.secret);
+            const status = await this.magpie.limitStatus(rotatedSecret ?? oldSecret);
             if (Math.abs((status.limit?.costLimit ?? 0) - 0.0001) < 1e-9) {
               enforcement = "capRestricted";
               detail = `${detail ? `${detail}; ` : ""}a $0.0001 cap still admits calls`;
