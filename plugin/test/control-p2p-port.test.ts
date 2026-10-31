@@ -89,6 +89,18 @@ function realService() {
   });
   svc.requestApprovalContext = context;
   svc.writeSnapshot = () => {};
+  // The real gateway refuses an unknown secret with 401; the shared fake uses
+  // a plain "no such key" message, which the revoke proof deliberately treats
+  // as UNKNOWN, not as evidence of revocation.
+  const limitStatus = magpie.limitStatus.bind(magpie);
+  (magpie as any).limitStatus = async (secret: string) => {
+    try {
+      return await limitStatus(secret);
+    } catch (error) {
+      if (/no such key/.test(String((error as Error)?.message ?? error))) throw new Error("GET /v1/magpie/limit: HTTP 401");
+      throw error;
+    }
+  };
   return { svc, magpie };
 }
 
@@ -196,6 +208,33 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(approved.priceVersion).toBe(catalogPriceVersion([models[0]!])!);
     expect(approved.quoteHash).toBe(HASH);
     expect(magpie.keys.size).toBe(1);
+    const again = await port.approve({
+      approvalId: APPROVAL,
+      generation: 1,
+      requestHash: HASH,
+      request: doc as any,
+      consumer,
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: "reviewed",
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    expect(again.keyId).toBe(approved.keyId);
+    expect(magpie.keys.size).toBe(1); // idempotent: no second ensureKey
+    await expect(
+      port.approve({
+        approvalId: "1".repeat(32),
+        generation: 2,
+        requestHash: HASH,
+        request: doc as any,
+        consumer,
+        models: [LAB_MODEL],
+        capUsd: 1,
+        memo: "second",
+        quote: { contentHash: HASH, identityFingerprint: FP },
+      }),
+    ).rejects.toThrow(/already has an approval attempt|second key/);
+    expect(magpie.keys.size).toBe(1);
     const auth = await port.takeAuthorization({
       approvalId: APPROVAL,
       generation: 1,
@@ -210,6 +249,8 @@ describe("B-core P2pBusinessPort mapping", () => {
     });
     expect(auth.key).toBe(magpie.keyById(approved.keyId)!.secret);
     expect(auth.quote.priceVersion).toBe(approved.priceVersion);
+    await expect(svc.provisioner.confirmHandover("alice", approved.keyId, "sk-test-wrong-secret")).rejects.toThrow(/changed while/);
+    await expect(svc.provisioner.confirmHandover("alice", approved.keyId, auth.key)).resolves.toBeUndefined();
   });
 
   test("consumer import is generation-owned, refuses a different approval while a Remote exists, and survives restart", async () => {
@@ -319,6 +360,77 @@ describe("B-core P2pBusinessPort mapping", () => {
     expect(calls).toEqual([]);
   });
 
+  test("a missing local key row with a still-working secret is not confirmed", async () => {
+    const { svc, magpie } = realService();
+    const port = createP2pBusinessPort(svc);
+    const approved = await port.approve({
+      approvalId: "a".repeat(32),
+      generation: 1,
+      requestHash: "6".repeat(64),
+      request: singleRequest({ nodeId: "erin", hostname: "ohmyaihub-erin" }) as any,
+      consumer: { accountId: "e".repeat(64), nodeId: "erin", hostname: "ohmyaihub-erin", fingerprint: "e".repeat(64) },
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    // The local key row disappears while the gateway still accepts the old
+    // secret: absence of a row is not proof of revocation.
+    (magpie as any).keyById = () => undefined;
+    const result = await port.revoke({ consumerNodeId: "erin", approvalId: "a".repeat(32), keyId: approved.keyId, generation: 1, reason: "operator-revoked" });
+    expect(result.revoked).toBe(false);
+    expect(result.enforcement).not.toBe("keyRevoked");
+    expect(svc.provisioner.find("erin")!.revokedAt).toBeNull();
+  });
+
+  test("an unknown readback error is not enough to confirm revocation", async () => {
+    const { svc, magpie } = realService();
+    const port = createP2pBusinessPort(svc);
+    const approved = await port.approve({
+      approvalId: "b".repeat(32),
+      generation: 1,
+      requestHash: "5".repeat(64),
+      request: singleRequest({ nodeId: "frank", hostname: "ohmyaihub-frank" }) as any,
+      consumer: { accountId: "f".repeat(64), nodeId: "frank", hostname: "ohmyaihub-frank", fingerprint: "f".repeat(64) },
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    (magpie as any).removeKey = async () => { throw new Error("native remove failed"); };
+    (magpie as any).rotateKey = async () => { throw new Error("rotate failed"); };
+    (magpie as any).keyById = () => undefined;
+    (magpie as any).limitStatus = async () => { throw new Error("ECONNREFUSED"); };
+    const result = await port.revoke({ consumerNodeId: "frank", approvalId: "b".repeat(32), keyId: approved.keyId, generation: 1, reason: "operator-revoked" });
+    expect(result.revoked).toBe(false);
+    expect(svc.provisioner.find("frank")!.revokedAt).toBeNull();
+  });
+
+  test("a revoke request for another key generation is refused before touching the native key", async () => {
+    const { svc, magpie } = realService();
+    const port = createP2pBusinessPort(svc);
+    const approved = await port.approve({
+      approvalId: "c".repeat(32),
+      generation: 1,
+      requestHash: "4".repeat(64),
+      request: singleRequest({ nodeId: "grace", hostname: "ohmyaihub-grace" }) as any,
+      consumer: { accountId: "1".repeat(64), nodeId: "grace", hostname: "ohmyaihub-grace", fingerprint: "1".repeat(64) },
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    const result = await port.revoke({ consumerNodeId: "grace", approvalId: "c".repeat(32), keyId: "other-key", generation: 1, reason: "operator-revoked" });
+    expect(result.revoked).toBe(false);
+    expect(magpie.keyById(approved.keyId)).toBeDefined();
+    expect(svc.provisioner.find("grace")!.revokedAt).toBeNull();
+    // The same expected-key check is inside the Provisioner lock, not only in
+    // the port's pre-check.
+    const locked = await svc.provisioner.revokeEnforced("grace", "other-key");
+    expect(locked.revoked).toBe(false);
+    expect(magpie.keyById(approved.keyId)).toBeDefined();
+  });
+
   test("a rotation that leaves the old secret accepted is not claimed enforced", async () => {
     const { svc, magpie } = realService();
     const port = createP2pBusinessPort(svc);
@@ -420,6 +532,77 @@ describe("enforced revoke port", () => {
     expect(failed && failed.enforcement).toBe("capRestricted");
     expect(magpie.keyById(third.keyId)).toBeDefined();
     expect(svc.provisioner.find("carol")!.revokedAt).toBeNull();
+  });
+
+  test("a missing local key row with a still-working secret is not confirmed", async () => {
+    const { svc, magpie } = realService();
+    const port = createP2pBusinessPort(svc);
+    const approved = await port.approve({
+      approvalId: "a".repeat(32),
+      generation: 1,
+      requestHash: "6".repeat(64),
+      request: singleRequest({ nodeId: "erin", hostname: "ohmyaihub-erin" }) as any,
+      consumer: { accountId: "e".repeat(64), nodeId: "erin", hostname: "ohmyaihub-erin", fingerprint: "e".repeat(64) },
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    // The local key row disappears while the gateway still accepts the old
+    // secret: absence of a row is not proof of revocation.
+    (magpie as any).keyById = () => undefined;
+    const result = await port.revoke({ consumerNodeId: "erin", approvalId: "a".repeat(32), keyId: approved.keyId, generation: 1, reason: "operator-revoked" });
+    expect(result.revoked).toBe(false);
+    expect(result.enforcement).not.toBe("keyRevoked");
+    expect(svc.provisioner.find("erin")!.revokedAt).toBeNull();
+  });
+
+  test("an unknown readback error is not enough to confirm revocation", async () => {
+    const { svc, magpie } = realService();
+    const port = createP2pBusinessPort(svc);
+    const approved = await port.approve({
+      approvalId: "b".repeat(32),
+      generation: 1,
+      requestHash: "5".repeat(64),
+      request: singleRequest({ nodeId: "frank", hostname: "ohmyaihub-frank" }) as any,
+      consumer: { accountId: "f".repeat(64), nodeId: "frank", hostname: "ohmyaihub-frank", fingerprint: "f".repeat(64) },
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    (magpie as any).removeKey = async () => { throw new Error("native remove failed"); };
+    (magpie as any).rotateKey = async () => { throw new Error("rotate failed"); };
+    (magpie as any).keyById = () => undefined;
+    (magpie as any).limitStatus = async () => { throw new Error("ECONNREFUSED"); };
+    const result = await port.revoke({ consumerNodeId: "frank", approvalId: "b".repeat(32), keyId: approved.keyId, generation: 1, reason: "operator-revoked" });
+    expect(result.revoked).toBe(false);
+    expect(svc.provisioner.find("frank")!.revokedAt).toBeNull();
+  });
+
+  test("a revoke request for another key generation is refused before touching the native key", async () => {
+    const { svc, magpie } = realService();
+    const port = createP2pBusinessPort(svc);
+    const approved = await port.approve({
+      approvalId: "c".repeat(32),
+      generation: 1,
+      requestHash: "4".repeat(64),
+      request: singleRequest({ nodeId: "grace", hostname: "ohmyaihub-grace" }) as any,
+      consumer: { accountId: "1".repeat(64), nodeId: "grace", hostname: "ohmyaihub-grace", fingerprint: "1".repeat(64) },
+      models: [LAB_MODEL],
+      capUsd: 1,
+      memo: null,
+      quote: { contentHash: HASH, identityFingerprint: FP },
+    });
+    const result = await port.revoke({ consumerNodeId: "grace", approvalId: "c".repeat(32), keyId: "other-key", generation: 1, reason: "operator-revoked" });
+    expect(result.revoked).toBe(false);
+    expect(magpie.keyById(approved.keyId)).toBeDefined();
+    expect(svc.provisioner.find("grace")!.revokedAt).toBeNull();
+    // The same expected-key check is inside the Provisioner lock, not only in
+    // the port's pre-check.
+    const locked = await svc.provisioner.revokeEnforced("grace", "other-key");
+    expect(locked.revoked).toBe(false);
+    expect(magpie.keyById(approved.keyId)).toBeDefined();
   });
 
   test("a rotation that leaves the old secret accepted is not claimed enforced", async () => {

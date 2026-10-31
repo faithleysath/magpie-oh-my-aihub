@@ -1607,6 +1607,23 @@ export class Provisioner {
   }
 
   /**
+   * Final lock-held check before a control hand-over: the consumer still owns
+   * exactly the expected key/secret and Magpie still holds that key. It does
+   * not read or persist a new secret; a concurrent reissue after this check
+   * remains a caller-serialization concern, but the key read back for delivery
+   * cannot silently be a different generation that already existed.
+   */
+  async confirmHandover(consumerId: string, expectedKeyId: string, expectedSecret: string): Promise<void> {
+    return this.withLock(consumerId, async () => {
+      const rec = this.find(consumerId);
+      if (!rec || rec.revokedAt || rec.keyId !== expectedKeyId || rec.secret !== expectedSecret) {
+        throw new Error(`consumer ${consumerId} changed while its key was being handed over; do not deliver it`);
+      }
+      if (!this.magpie.keyById(rec.keyId)) throw new Error(`the key of ${consumerId} is no longer in Magpie; do not deliver it`);
+    });
+  }
+
+  /**
    * Revokes a key for the control plane and reports how far the stop actually
    * went. Resolving with `revoked: true` means the old secret is no longer
    * accepted (removed, or rotated so the old secret is 401). A minimum cap is
@@ -1614,60 +1631,74 @@ export class Provisioner {
    * rotation works, the record is left active and `revoked: false` is returned;
    * the caller must surface action-needed and must not send a "revoked" notice.
    */
-  async revokeEnforced(consumerId: string): Promise<{
+  async revokeEnforced(consumerId: string, expectedKeyId?: string | null): Promise<{
     revoked: boolean;
-    enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain";
+    enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain" | "failed";
     detail: string | null;
   }> {
     return this.withLock(consumerId, async () => {
       const rec = this.find(consumerId);
       if (!rec) throw new Error(`no consumer ${consumerId}`);
+      if (expectedKeyId && rec.keyId !== expectedKeyId) {
+        return { revoked: false, enforcement: "failed", detail: "the current Provisioner key is not the target approval's key" };
+      }
       if (rec.revokedAt) return { revoked: true, enforcement: "keyRevoked", detail: null };
 
-      let enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain" = "safetyUncertain";
+      let enforcement: "keyRevoked" | "secretRotated" | "capRestricted" | "safetyUncertain" | "failed" = "safetyUncertain";
       let detail: string | null = null;
       let rotatedSecret: string | null = null;
       const oldSecret = rec.secret;
-      const oldSecretStillAccepted = async (): Promise<boolean> => {
-        if (!oldSecret) return false;
+      /**
+       * Only an explicit 401/403 (or a verified missing key plus this) proves
+       * the old secret is refused. ECONNREFUSED/timeout/500/bad JSON is UNKNOWN,
+       * never evidence of invalidity. A loopback gateway may trust its caller,
+       * so even "accepted" is not evidence about a remote caller.
+       */
+      const oldSecretVerdict = async (): Promise<"rejected" | "accepted" | "unknown"> => {
+        if (!oldSecret) return "unknown";
         try {
           await this.magpie.limitStatus(oldSecret);
-          return true;
-        } catch {
-          return false;
+          return "accepted";
+        } catch (error) {
+          const status = (error as { status?: unknown })?.status;
+          if (status === 401 || status === 403) return "rejected";
+          const message = String((error as Error)?.message ?? error);
+          return /\bHTTP (401|403)\b/.test(message) ? "rejected" : "unknown";
         }
       };
       if (this.magpie.keyById(rec.keyId)) {
         try {
           await this.magpie.removeKey(rec.keyId);
           if (!this.magpie.keyById(rec.keyId)) {
-            if (await oldSecretStillAccepted()) {
-              detail = "remove completed but the old secret is still accepted";
-            } else {
-              enforcement = "keyRevoked";
-            }
+            const verdict = await oldSecretVerdict();
+            if (verdict === "rejected") enforcement = "keyRevoked";
+            else if (verdict === "accepted") detail = "remove completed but the old secret is still accepted";
+            else detail = "remove completed but the old secret's refusal could not be proven (unknown error)";
           } else {
             detail = "remove returned but Magpie still lists the key";
           }
         } catch (e) {
           detail = `remove: ${String((e as Error)?.message ?? e)}`;
-          if (!this.magpie.keyById(rec.keyId) && !(await oldSecretStillAccepted())) {
+          if (!this.magpie.keyById(rec.keyId) && (await oldSecretVerdict()) === "rejected") {
             enforcement = "keyRevoked";
-            detail = `${detail}; the key is absent and the old secret is refused`;
+            detail = `${detail}; the key is absent and the old secret is explicitly refused`;
           }
         }
         if (enforcement === "safetyUncertain" && this.magpie.keyById(rec.keyId)) {
           try {
             const rotated = await this.magpie.rotateKey(rec.keyId);
-            if (rotated && rotated !== oldSecret && !(await oldSecretStillAccepted())) {
+            const verdict = rotated && rotated !== oldSecret ? await oldSecretVerdict() : "unknown";
+            if (rotated && rotated !== oldSecret && verdict === "rejected") {
               rotatedSecret = rotated;
               enforcement = "secretRotated";
             } else if (!rotated) {
               detail = `${detail ? `${detail}; ` : ""}rotate: no new secret`;
             } else if (rotated === oldSecret) {
               detail = `${detail ? `${detail}; ` : ""}rotate returned the same secret`;
-            } else {
+            } else if (verdict === "accepted") {
               detail = `${detail ? `${detail}; ` : ""}rotate completed but the old secret is still accepted`;
+            } else if (verdict === "unknown") {
+              detail = `${detail ? `${detail}; ` : ""}rotate completed but the old secret's refusal could not be proven`;
             }
           } catch (rotateError) {
             detail = `${detail ? `${detail}; ` : ""}rotate: ${String((rotateError as Error)?.message ?? rotateError)}`;
@@ -1686,7 +1717,9 @@ export class Provisioner {
           }
         }
       } else {
-        enforcement = "keyRevoked";
+        const verdict = await oldSecretVerdict();
+        if (verdict === "rejected") enforcement = "keyRevoked";
+        else detail = "the key is absent but the old secret's refusal could not be proven";
       }
 
       if (enforcement === "keyRevoked" || enforcement === "secretRotated") {

@@ -283,6 +283,7 @@ export async function takeAuthorization(service: Service, input: ControlTakeAuth
     if (!context.quote) return refuse("quote_mismatch", "this provider no longer publishes the accepted quote");
   }
   const handover = await service.handover(input.consumerNodeId);
+  await service.provisioner.confirmHandover(input.consumerNodeId, input.keyId, handover.key);
   const after = consumerOf(service, input.consumerNodeId);
   if (after.keyId !== input.keyId || after.keyName !== input.keyName) {
     return refuse("conflict", "the consumer key changed during hand-over; nothing was sent");

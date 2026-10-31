@@ -340,7 +340,187 @@ function checkProviderDocument(input: P2pRequestValidationInput, context: P2pPro
 export interface P2pBusinessPortOptions {
   /** injectable for tests; defaults to statePath("control-remotes.json") */
   stateFile?: string;
+  /** injectable for tests; defaults to statePath("control-approvals.json") */
+  approvalStateFile?: string;
   now?: () => Date;
+}
+
+// --- durable, non-secret provider approval journal --------------------------
+//
+// B-core owns the authoritative approval rows. This journal exists only for
+// B-service idempotency and old-key protection across retries/restarts: it binds
+// approvalId/requestHash/generation to the Provisioner keyId and selected
+// snapshot, and contains no Gateway Key, secret or authorization document.
+
+type ApprovalState = "pending" | "approved" | "uncertain" | "revoked";
+
+interface ApprovalRecord {
+  approvalId: string;
+  requestHash: string;
+  generation: number;
+  consumerNodeId: string;
+  consumerFingerprint: string;
+  models: string[];
+  capUsd: number;
+  quoteHash: string;
+  priceVersion: string;
+  expiresAt: string;
+  keyId: string | null;
+  keyName: string | null;
+  memo: string | null;
+  state: ApprovalState;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ApprovalsState {
+  version: 1;
+  approvals: ApprovalRecord[];
+}
+
+const MAX_APPROVALS = 200;
+
+function emptyApprovals(): ApprovalsState {
+  return { version: 1, approvals: [] };
+}
+
+function parseApprovals(raw: unknown): ApprovalsState {
+  const o = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  if (!o || o.version !== 1 || !Array.isArray(o.approvals) || o.approvals.length > MAX_APPROVALS) {
+    throw new ControlServiceRefusal("internal", "the control approval journal is corrupt; refusing to approve or revoke");
+  }
+  const approvals: ApprovalRecord[] = [];
+  for (const entry of o.approvals) {
+    const r = entry && typeof entry === "object" && !Array.isArray(entry) ? (entry as Record<string, unknown>) : null;
+    if (!r) throw new ControlServiceRefusal("internal", "the control approval journal is corrupt; refusing to approve or revoke");
+    const text = (v: unknown) => typeof v === "string" && v.length > 0 && v.length <= 256;
+    const maybeText = (v: unknown) => v === null || text(v);
+    if (
+      !text(r.approvalId) ||
+      !text(r.requestHash) ||
+      !Number.isInteger(r.generation) ||
+      (r.generation as number) < 0 ||
+      !text(r.consumerNodeId) ||
+      !text(r.consumerFingerprint) ||
+      !Array.isArray(r.models) ||
+      r.models.some((m) => typeof m !== "string") ||
+      typeof r.capUsd !== "number" ||
+      !Number.isFinite(r.capUsd) ||
+      !text(r.quoteHash) ||
+      !text(r.priceVersion) ||
+      !text(r.expiresAt) ||
+      !maybeText(r.keyId) ||
+      !maybeText(r.keyName) ||
+      !maybeText(r.memo) ||
+      !["pending", "approved", "uncertain", "revoked"].includes(String(r.state)) ||
+      !maybeText(r.error) ||
+      !text(r.createdAt) ||
+      !text(r.updatedAt)
+    ) {
+      throw new ControlServiceRefusal("internal", "the control approval journal is corrupt; refusing to approve or revoke");
+    }
+    approvals.push({
+      approvalId: String(r.approvalId),
+      requestHash: String(r.requestHash),
+      generation: Number(r.generation),
+      consumerNodeId: String(r.consumerNodeId),
+      consumerFingerprint: String(r.consumerFingerprint),
+      models: r.models.map(String),
+      capUsd: r.capUsd,
+      quoteHash: String(r.quoteHash),
+      priceVersion: String(r.priceVersion),
+      expiresAt: String(r.expiresAt),
+      keyId: r.keyId === null ? null : String(r.keyId),
+      keyName: r.keyName === null ? null : String(r.keyName),
+      memo: r.memo === null ? null : String(r.memo),
+      state: r.state as ApprovalState,
+      error: r.error === null ? null : String(r.error),
+      createdAt: String(r.createdAt),
+      updatedAt: String(r.updatedAt),
+    });
+  }
+  return { version: 1, approvals };
+}
+
+function loadApprovals(file: string): ApprovalsState {
+  if (!existsSync(file)) return emptyApprovals();
+  const read = readJsonWithBackup<unknown>(file);
+  if (read.value === null) throw new ControlServiceRefusal("internal", "the control approval journal is unreadable; refusing to approve or revoke");
+  return parseApprovals(read.value);
+}
+
+function saveApprovals(file: string, state: ApprovalsState): void {
+  writeJsonAtomic(file, { version: 1, approvals: state.approvals.slice(-MAX_APPROVALS) }, 0o600);
+}
+
+function recordFor(input: P2pApprovalRequest, at: string): ApprovalRecord {
+  return {
+    approvalId: input.approvalId,
+    requestHash: input.requestHash,
+    generation: input.generation,
+    consumerNodeId: input.consumer.nodeId,
+    consumerFingerprint: input.consumer.fingerprint,
+    models: [...input.models],
+    capUsd: input.capUsd,
+    quoteHash: input.quote.contentHash,
+    priceVersion: "",
+    expiresAt: "",
+    keyId: null,
+    keyName: null,
+    memo: input.memo ?? null,
+    state: "pending",
+    error: null,
+    createdAt: at,
+    updatedAt: at,
+  };
+}
+
+function materialsFrom(record: ApprovalRecord): P2pApprovedMaterials {
+  if (!record.keyId || !record.keyName) throw new ControlServiceRefusal("internal", "the approval journal has no key binding");
+  return {
+    approvalId: record.approvalId,
+    generation: record.generation,
+    consumerNodeId: record.consumerNodeId,
+    consumerFingerprint: record.consumerFingerprint,
+    models: [...record.models],
+    capUsd: record.capUsd,
+    quoteHash: record.quoteHash,
+    priceVersion: record.priceVersion,
+    expiresAt: record.expiresAt,
+    keyId: record.keyId,
+    keyName: record.keyName,
+    memo: record.memo,
+  };
+}
+
+function recoverApproval(record: ApprovalRecord, service: Service, at: string): ApprovalRecord | null {
+  const rec = service.provisioner.find(record.consumerNodeId);
+  if (!rec || rec.revokedAt || !rec.keyId || !rec.keyName) return null;
+  if (rec.acceptedQuoteHash !== record.quoteHash) return null;
+  if (rec.capUsd !== record.capUsd || !sameSet(rec.models, record.models)) return null;
+  return {
+    ...record,
+    keyId: rec.keyId,
+    keyName: rec.keyName,
+    priceVersion: rec.priceVersion ?? record.priceVersion,
+    expiresAt: record.expiresAt || new Date(Date.parse(at) + 10 * 60_000).toISOString(),
+    state: "approved",
+    error: null,
+    updatedAt: at,
+  };
+}
+
+/** Read-only lookup for recovery/UI; no key material. */
+export function lookupControlApproval(approvalId: string, file = statePath("control-approvals.json")): ApprovalRecord | null {
+  return loadApprovals(file).approvals.find((a) => a.approvalId === approvalId) ?? null;
+}
+
+export function lookupControlRequest(requestHash: string, file = statePath("control-approvals.json")): ApprovalRecord | null {
+  return loadApprovals(file)
+    .approvals.filter((a) => a.requestHash === requestHash)
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+    .at(-1) ?? null;
 }
 
 /**
@@ -350,6 +530,7 @@ export interface P2pBusinessPortOptions {
  */
 export function createP2pBusinessPort(service: Service, options: P2pBusinessPortOptions = {}): P2pBusinessPort {
   const stateFile = options.stateFile ?? statePath("control-remotes.json");
+  const approvalStateFile = options.approvalStateFile ?? statePath("control-approvals.json");
   const now = options.now ?? (() => new Date());
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -400,46 +581,140 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
       if (input.request.quote.contentHash !== input.quote.contentHash || input.request.quote.identityFingerprint !== input.quote.identityFingerprint) {
         throw new ControlServiceRefusal("quote_mismatch", "the approval quote differs from the stored request");
       }
-      const expiresAt = new Date(now().getTime() + 10 * 60_000).toISOString();
-      const materials = await approve(service, {
-        approvalId: input.approvalId,
-        requestHash: input.requestHash,
-        consumerNodeId: input.consumer.nodeId,
-        consumerFingerprint: input.consumer.fingerprint,
-        document: input.request,
-        models,
-        capUsd,
-        memo: input.memo ?? "",
-        expiresAt,
+      return serial(async () => {
+        const at = now().toISOString();
+        const state = loadApprovals(approvalStateFile);
+        const existing = state.approvals.find((a) => a.approvalId === input.approvalId);
+        if (existing) {
+          if (
+            existing.requestHash !== input.requestHash ||
+            existing.generation !== input.generation ||
+            existing.consumerNodeId !== input.consumer.nodeId ||
+            existing.consumerFingerprint !== input.consumer.fingerprint ||
+            existing.quoteHash !== input.quote.contentHash ||
+            Math.abs(existing.capUsd - capUsd) > 1e-9 ||
+            !sameSet(existing.models, models)
+          ) {
+            throw new ControlServiceRefusal("conflict", "the approval id is already bound to a different decision");
+          }
+          if (existing.state === "approved") return materialsFrom(existing);
+          if (existing.state === "revoked") throw new ControlServiceRefusal("conflict", "this approval was already revoked");
+          const recovered = recoverApproval(existing, service, at);
+          if (recovered) {
+            saveApprovals(approvalStateFile, { version: 1, approvals: state.approvals.map((a) => (a.approvalId === existing.approvalId ? recovered : a)) });
+            return materialsFrom(recovered);
+          }
+          throw new ControlServiceRefusal("conflict", "this approval was already attempted and no second key will be created");
+        }
+        const sameRequest = state.approvals.find((a) => a.requestHash === input.requestHash && a.state !== "revoked");
+        if (sameRequest) {
+          throw new ControlServiceRefusal("conflict", "this request already has an approval attempt; do not create a second key");
+        }
+        const sameConsumer = state.approvals.find((a) => a.consumerNodeId === input.consumer.nodeId && a.state !== "revoked");
+        if (sameConsumer) {
+          throw new ControlServiceRefusal("conflict", "this consumer already has an active approval; revoke it before a new one");
+        }
+
+        const pending = recordFor(input, at);
+        saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, pending] });
+        const expiresAt = new Date(now().getTime() + 10 * 60_000).toISOString();
+        let materials: P2pApprovedMaterials;
+        try {
+          const result = await approve(service, {
+            approvalId: input.approvalId,
+            requestHash: input.requestHash,
+            consumerNodeId: input.consumer.nodeId,
+            consumerFingerprint: input.consumer.fingerprint,
+            document: input.request,
+            models,
+            capUsd,
+            memo: input.memo ?? "",
+            expiresAt,
+          });
+          if (result.quoteHash !== input.quote.contentHash) throw new ControlServiceRefusal("quote_mismatch", "the Service approved a different quote");
+          materials = {
+            approvalId: input.approvalId,
+            generation: input.generation,
+            consumerNodeId: input.consumer.nodeId,
+            consumerFingerprint: input.consumer.fingerprint,
+            models: result.models,
+            capUsd: result.capUsd,
+            quoteHash: result.quoteHash,
+            priceVersion: result.priceVersion,
+            expiresAt: result.expiresAt,
+            keyId: result.keyId,
+            keyName: result.keyName,
+            memo: input.memo,
+          };
+        } catch (error) {
+          // A failure after the Service created a key is uncertain, not a
+          // reason to create another. A failure with no key at all is safe to
+          // clear so the operator can retry after fixing the quote.
+          const recovered = recoverApproval(pending, service, now().toISOString());
+          if (recovered) {
+            saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, recovered] });
+            return materialsFrom(recovered);
+          }
+          if (!service.provisioner.find(input.consumer.nodeId)) {
+            saveApprovals(approvalStateFile, { version: 1, approvals: state.approvals });
+          } else {
+            const failed: ApprovalRecord = {
+              ...pending,
+              state: "uncertain",
+              error: String((error as Error)?.message ?? error).slice(0, 300),
+              updatedAt: now().toISOString(),
+            };
+            saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, failed] });
+          }
+          throw error;
+        }
+        const approved: ApprovalRecord = {
+          ...pending,
+          models: [...materials.models],
+          capUsd: materials.capUsd,
+          priceVersion: materials.priceVersion,
+          expiresAt: materials.expiresAt,
+          keyId: materials.keyId,
+          keyName: materials.keyName,
+          state: "approved",
+          error: null,
+          updatedAt: now().toISOString(),
+        };
+        saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, approved] });
+        return materials;
       });
-      if (materials.quoteHash !== input.quote.contentHash) throw new ControlServiceRefusal("quote_mismatch", "the Service approved a different quote");
-      return {
-        approvalId: input.approvalId,
-        generation: input.generation,
-        consumerNodeId: input.consumer.nodeId,
-        consumerFingerprint: input.consumer.fingerprint,
-        models: materials.models,
-        capUsd: materials.capUsd,
-        quoteHash: materials.quoteHash,
-        priceVersion: materials.priceVersion,
-        expiresAt: materials.expiresAt,
-        keyId: materials.keyId,
-        keyName: materials.keyName,
-        memo: input.memo,
-      };
     },
 
     async takeAuthorization(input) {
-      return takeAuthorizationWithService(service, {
-        approvalId: input.approvalId,
-        consumerNodeId: input.consumerNodeId,
-        consumerFingerprint: input.consumerFingerprint,
-        requestHash: input.requestHash,
-        models: input.models,
-        capUsd: input.capUsd,
-        quote: input.quote,
-        keyId: input.keyId,
-        keyName: input.keyName,
+      return serial(async () => {
+        const record = loadApprovals(approvalStateFile).approvals.find((a) => a.approvalId === input.approvalId);
+        if (!record || record.state !== "approved") {
+          throw new ControlServiceRefusal("conflict", "this approval has no confirmed key binding; refuse a second key hand-over");
+        }
+        if (
+          record.generation !== input.generation ||
+          record.consumerNodeId !== input.consumerNodeId ||
+          record.consumerFingerprint !== input.consumerFingerprint ||
+          record.requestHash !== input.requestHash ||
+          record.quoteHash !== input.quote.contentHash ||
+          Math.abs(record.capUsd - input.capUsd) > 1e-9 ||
+          !sameSet(record.models, input.models) ||
+          record.keyId !== input.keyId ||
+          record.keyName !== input.keyName
+        ) {
+          throw new ControlServiceRefusal("conflict", "the approval journal does not match this hand-over; refuse a second key");
+        }
+        return takeAuthorizationWithService(service, {
+          approvalId: input.approvalId,
+          consumerNodeId: input.consumerNodeId,
+          consumerFingerprint: input.consumerFingerprint,
+          requestHash: input.requestHash,
+          models: input.models,
+          capUsd: input.capUsd,
+          quote: input.quote,
+          keyId: input.keyId,
+          keyName: input.keyName,
+        });
       });
     },
 
@@ -448,36 +723,85 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
     },
 
     async revoke(input) {
-      const before = service.provisioner.find(input.consumerNodeId);
-      if (!before) throw new ControlServiceRefusal("conflict", "no active consumer authorization");
-      if (!input.keyId || before.keyId !== input.keyId) {
-        return {
-          revoked: false,
-          enforcement: "failed",
-          detail: "the approval's keyId is not the current Provisioner key; no revocation was claimed",
-        };
-      }
-      const result = await service.provisioner.revokeEnforced(input.consumerNodeId);
-      const after = service.provisioner.find(input.consumerNodeId);
-      if (!after || after.keyId !== input.keyId) {
-        return { revoked: false, enforcement: "failed", detail: "the key identity changed during revocation; no revocation was claimed" };
-      }
-      if (result.revoked && (result.enforcement === "keyRevoked" || result.enforcement === "secretRotated")) {
-        return {
-          revoked: true,
-          enforcement: result.enforcement,
-          consumerNodeId: input.consumerNodeId,
-          approvalId: input.approvalId,
-          keyId: input.keyId,
-          generation: input.generation,
-          detail: result.detail,
-        };
-      }
-      const enforcement =
-        result.enforcement === "capRestricted" || result.enforcement === "safetyUncertain"
-          ? result.enforcement
-          : "failed";
-      return { revoked: false, enforcement, detail: result.detail };
+      return serial(async () => {
+        const state = loadApprovals(approvalStateFile);
+        const record = state.approvals.find((a) => a.approvalId === input.approvalId);
+        if (!record) {
+          return {
+            revoked: false,
+            enforcement: "failed",
+            detail: "no persistent approval binding; refusing to revoke a key by an old/unbound request",
+          } as const;
+        }
+        if (
+          record.consumerNodeId !== input.consumerNodeId ||
+          record.generation !== input.generation ||
+          !input.keyId ||
+          record.keyId !== input.keyId
+        ) {
+          return {
+            revoked: false,
+            enforcement: "failed",
+            detail: "the revoke request does not match the persisted approval/key generation",
+          } as const;
+        }
+        if (record.state === "revoked") {
+          return {
+            revoked: true,
+            enforcement: "keyRevoked",
+            consumerNodeId: record.consumerNodeId,
+            approvalId: record.approvalId,
+            keyId: record.keyId,
+            generation: record.generation,
+            detail: "already revoked",
+          } as const;
+        }
+        // A stale approval must never reach the native key that a newer
+        // approval currently owns, even if the Provisioner reuses a key id.
+        const newer = state.approvals.some(
+          (a) =>
+            a.consumerNodeId === input.consumerNodeId &&
+            a.approvalId !== input.approvalId &&
+            a.state !== "revoked" &&
+            a.updatedAt > record.updatedAt,
+        );
+        if (newer) {
+          return {
+            revoked: false,
+            enforcement: "failed",
+            detail: "a newer approval owns this consumer; an old request cannot revoke its key",
+          } as const;
+        }
+        const before = service.provisioner.find(input.consumerNodeId);
+        if (!before || before.keyId !== input.keyId || before.revokedAt) {
+          return {
+            revoked: false,
+            enforcement: "failed",
+            detail: "the native current key does not match the target approval",
+          } as const;
+        }
+        const result = await service.provisioner.revokeEnforced(input.consumerNodeId, input.keyId);
+        const after = service.provisioner.find(input.consumerNodeId);
+        if (!after || after.keyId !== input.keyId) {
+          return { revoked: false, enforcement: "failed", detail: "the key identity changed during revocation; no revocation was claimed" } as const;
+        }
+        if (result.revoked && (result.enforcement === "keyRevoked" || result.enforcement === "secretRotated")) {
+          const revoked: ApprovalRecord = { ...record, state: "revoked", error: null, updatedAt: now().toISOString() };
+          saveApprovals(approvalStateFile, { version: 1, approvals: state.approvals.map((a) => (a.approvalId === record.approvalId ? revoked : a)) });
+          return {
+            revoked: true,
+            enforcement: result.enforcement,
+            consumerNodeId: input.consumerNodeId,
+            approvalId: input.approvalId,
+            keyId: input.keyId,
+            generation: input.generation,
+            detail: result.detail,
+          } as const;
+        }
+        const enforcement =
+          result.enforcement === "capRestricted" || result.enforcement === "safetyUncertain" ? result.enforcement : "failed";
+        return { revoked: false, enforcement, detail: result.detail } as const;
+      });
     },
 
     async recordApproval() {
