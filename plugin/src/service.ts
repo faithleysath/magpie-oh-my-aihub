@@ -3038,6 +3038,32 @@ export class Service {
     return this.status();
   }
 
+  /** Combo with provider models evidence: never leave a pre-migration read-back "current". */
+  private invalidateMigrationEvidence(conn: ProviderConnection, reason: string): void {
+    const e = (conn as unknown as { modelsEvidence?: Record<string, unknown> | null }).modelsEvidence;
+    if (!e) return;
+    e.status = "stale";
+    e.modelCount = null;
+    e.callable = "unknown";
+    e.error = reason.slice(0, 300);
+  }
+
+  private refreshMigrationEvidence(conn: ProviderConnection, models: string[]): void {
+    const e = (conn as unknown as { modelsEvidence?: Record<string, unknown> | null }).modelsEvidence;
+    if (!e) return;
+    const at = new Date().toISOString();
+    e.status = "current";
+    e.source = "reconcile";
+    e.readAt = at;
+    e.expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    e.models = [...models];
+    e.modelCount = models.length;
+    e.callable = "yes";
+    e.generation = (Number(e.generation) || 0) + 1;
+    e.keyGeneration = (conn as unknown as { keyGeneration?: number }).keyGeneration ?? e.keyGeneration;
+    e.error = null;
+  }
+
   /**
    * Existing, plugin-owned Remote: its loopback forward became foreign/dead.
    *
@@ -3086,6 +3112,27 @@ export class Service {
       conn.updatedAt = new Date().toISOString();
       return true;
     }
+    // Persist the intent before the native registration or the core changes.
+    // A crash at any later boundary can then converge from state.
+    conn.forwardPending = { from: fromPort, to: nextPort, at: new Date().toISOString() };
+    this.invalidateMigrationEvidence(conn, `forward migration ${fromPort} -> ${nextPort} in progress`);
+    saveState(this.state);
+    // Never let Magpie keep routing consumers with the stored key to the old
+    // port while that listener is gone/foreign. Remove our own entry first; a
+    // failure here aborts before the core restart.
+    if (magpiePort !== null) {
+      try {
+        await this.deps.magpie.removeProvider(conn.id);
+      } catch (e) {
+        conn.status = "degraded";
+        conn.detail = `forward recovery could not disable the old registration: ${(e as Error).message}`.slice(0, 300);
+        conn.updatedAt = new Date().toISOString();
+        this.forwardMigrationBusy = false;
+        this.forwardRecoveryBackoff.set(conn.id, Date.now() + 120_000);
+        saveState(this.state);
+        return true;
+      }
+    }
     conn.localPort = nextPort;
     let magpieChanged = false;
     try {
@@ -3109,11 +3156,7 @@ export class Service {
         throw new Error("the provider's model scope changed; refusing to rewrite the connection silently");
       }
       const limit = limitView(await this.probes.remoteLimit(nextPort, key, 8000));
-      if (magpiePort === null) {
-        await this.deps.magpie.addRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${nextPort}`, key });
-      } else {
-        await this.deps.magpie.replaceRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${nextPort}`, key });
-      }
+      await this.deps.magpie.addRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${nextPort}`, key });
       magpieChanged = true;
       if (!(await this.waitLocalModels(conn.id, 15_000))) {
         throw new Error(`Magpie did not list any ${conn.id}/ model after re-registration`);
@@ -3122,6 +3165,7 @@ export class Service {
       conn.models = [...models];
       conn.limit = limit;
       conn.forwardPending = null;
+      this.refreshMigrationEvidence(conn, models);
       conn.status = "connected";
       conn.detail = `forward recovered ${fromPort} -> ${nextPort}: ${reason}`.slice(0, 300);
       conn.updatedAt = at;
@@ -3150,6 +3194,7 @@ export class Service {
         // state and Magpie agree, but show the verification failure honestly.
         conn.localPort = nextPort;
         conn.forwardPending = null;
+        this.invalidateMigrationEvidence(conn, `forward moved to ${nextPort} but verification failed: ${why}`);
         conn.status = "degraded";
         conn.detail = `forward moved to ${nextPort} and was re-registered, but verification failed: ${why}`.slice(0, 300);
         conn.updatedAt = new Date().toISOString();
@@ -3183,19 +3228,23 @@ export class Service {
         await this.supervisor.stop().catch(() => {});
       }
       const oldProof = restored ? await this.proveForwardOwner(conn.id, fromPort) : null;
+      this.invalidateMigrationEvidence(conn, `forward recovery failed: ${why}`);
       if (!oldProof || oldProof.state !== "stable") {
-        if (magpiePort !== null) {
-          await this.deps.magpie.removeProvider(conn.id).catch((removeError) =>
-            logger.error(`provider ${conn.id}: cannot remove the registration pointing at an unproven port: ${String(removeError)}`),
-          );
-        }
         conn.status = "degraded";
         conn.detail =
           `forward recovery failed (${why}); the old port ${fromPort} is not provably owned, ` +
           `so its registration was removed instead of restored`;
       } else {
-        conn.status = "degraded";
-        conn.detail = `forward recovery failed (${why}); the old forward ${fromPort} was kept`.slice(0, 300);
+        try {
+          await this.deps.magpie.addRemoteProvider({ id: conn.id, url: `http://127.0.0.1:${fromPort}`, key });
+          conn.status = "degraded";
+          conn.detail = `forward recovery failed (${why}); the old forward ${fromPort} was restored after proving its owner`.slice(0, 300);
+        } catch (restoreRegistration) {
+          conn.status = "degraded";
+          conn.detail =
+            `forward recovery failed (${why}); the old forward ${fromPort} is owned but re-registering it failed: ` +
+            `${(restoreRegistration as Error).message}`.slice(0, 300);
+        }
       }
       conn.updatedAt = new Date().toISOString();
       // The failed candidate must never be chosen again by allocLocalPort().
@@ -3391,6 +3440,7 @@ export class Service {
             }),
           );
           conn.forwardPending = null;
+          this.invalidateMigrationEvidence(conn, `adopted loopback port ${owned} after a restart; re-reading the key scope`);
           conn.status = "degraded";
           conn.detail = `adopted the registered loopback port ${owned} after a restart; re-reading the key scope`;
           conn.updatedAt = new Date().toISOString();
