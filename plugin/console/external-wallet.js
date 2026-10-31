@@ -92,6 +92,11 @@ export const WALLET_ERROR = Object.freeze({
   DIGEST_MISMATCH: "DIGEST_MISMATCH",
   INVALID_SIGNATURE: "INVALID_SIGNATURE",
   INVALID_TX_HASH: "INVALID_TX_HASH",
+  INVALID_INTENT_HASH: "INVALID_INTENT_HASH",
+  OPERATION_JOURNAL_REQUIRED: "OPERATION_JOURNAL_REQUIRED",
+  OPERATION_ALREADY_STARTED: "OPERATION_ALREADY_STARTED",
+  OPERATION_UNKNOWN: "OPERATION_UNKNOWN",
+  OPERATION_JOURNAL_FAILED: "OPERATION_JOURNAL_FAILED",
   INSUFFICIENT_TOKEN_BALANCE: "INSUFFICIENT_TOKEN_BALANCE",
   INSUFFICIENT_NATIVE_BALANCE: "INSUFFICIENT_NATIVE_BALANCE",
   GAS_ESTIMATE_FAILED: "GAS_ESTIMATE_FAILED",
@@ -111,6 +116,7 @@ export class ExternalWalletError extends Error {
     this.name = "ExternalWalletError";
     this.code = code;
     this.providerCode = options.providerCode ?? null;
+    this.hash = options.hash ?? null;
     this.retryable = options.retryable === true;
   }
 }
@@ -815,18 +821,10 @@ function assertDepositNetworkKnown(registry, chainId) {
   if (!network.enabled || network.support !== "credit" || !network.receivable) throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该测试网当前只读或未开启收款，不能签名");
 }
 
-/** Signing never credits, but a locally registered asset is still checked exactly. */
-function assertDepositAssetKnown(registry, checked, allowUnregistered) {
-  if (registry === undefined) {
-    if (allowUnregistered) return;
-    throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "本地没有该代币的登记记录；如已核对服务端请求，可显式允许未登记请求签名");
-  }
-  let asset;
-  try { asset = findAsset(registry, checked.asset.assetId); }
-  catch (error) {
-    if (error.code === WALLET_ERROR.UNKNOWN_TOKEN && allowUnregistered) return;
-    throw error;
-  }
+/** Signing never credits, but the asset must always be locally registered. */
+function assertDepositAssetKnown(registry, checked) {
+  if (registry === undefined || registry === null) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "签名需要本地资产登记；未提供注册表");
+  const asset = findAsset(registry, checked.asset.assetId);
   if (asset.chainId !== checked.chainId) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币不属于请求网络");
   if (!asset.enabled) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币未启用");
   if (!asset.testnetOnly) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "代币不是测试网专用");
@@ -843,9 +841,9 @@ function assertDepositAssetKnown(registry, checked, allowUnregistered) {
 /**
  * Verifies the exact server-issued deposit request: strict keys, chain, asset
  * tuple, amount, expiry, EIP-712 domain/types/message and the recomputed digest.
- * The local registry is not consulted here: signing never credits or transfers,
- * and an incoming provider request may name an asset the consumer has not
- * registered. Transfer preparation always consults the local registry.
+ * This function verifies the document only; signDeposit separately requires a
+ * locally registered, credit-capable asset and testnet network. A caller cannot
+ * turn a valid-looking document into credit or a transfer with this function.
  */
 export function validateDepositDocument(document, options = {}) {
   const now = options.now ?? Date.now();
@@ -920,6 +918,26 @@ function encodeErc20Transfer(recipient, amountRaw) {
   return `0xa9059cbb${addressWord}${amountWord}`;
 }
 
+function calldataHashOf(data) {
+  return `0x${toHex(keccak256(fromHex(data)))}`;
+}
+
+/** Exact fields a durable service journal must bind; never previewId-only. */
+function operationOf(preview) {
+  return Object.freeze({
+    schema: "ohmyaihub.external-wallet.operation/v1",
+    intentHash: preview.intentHash,
+    account: preview.account,
+    chainId: preview.chainId,
+    assetId: preview.assetId,
+    contractAddress: preview.contractAddress,
+    recipientAddress: preview.recipientAddress,
+    amountRaw: preview.amountRaw,
+    calldata: preview.call.data,
+    calldataHash: preview.calldataHash,
+  });
+}
+
 function normalizeProviderError(error) {
   if (error instanceof ExternalWalletError) return error;
   const rawCode = error && typeof error === "object" ? error.code : undefined;
@@ -962,6 +980,11 @@ export function createExternalWallet(options = {}) {
   let activeProvider = selection.provider;
   if (!activeProvider || typeof activeProvider.request !== "function") throw fail(WALLET_ERROR.PROVIDER_INVALID, "所选钱包没有 EIP-1193 request");
   const registry = options.registry;
+  const operationPort = options.operationPort ?? null;
+  const requiredPortMethods = ["reserve", "markBroadcasting", "recordHash", "recordUnknown", "query"];
+  if (operationPort !== null && (typeof operationPort !== "object" || requiredPortMethods.some((name) => typeof operationPort[name] !== "function"))) {
+    throw fail(WALLET_ERROR.OPERATION_JOURNAL_REQUIRED, "operationPort 必须实现 reserve/markBroadcasting/recordHash/recordUnknown/query");
+  }
   const allowMainnetRead = options.allowMainnetRead === true;
   const allowedChainIds = new Set(Array.isArray(options.allowedChainIds) ? options.allowedChainIds : TESTNET_CHAIN_IDS);
   const now = options.now ?? Date.now;
@@ -1192,7 +1215,7 @@ export function createExternalWallet(options = {}) {
       expectedIntentHash: options.expectedIntentHash,
     });
     assertDepositNetworkKnown(registry, checked.chainId);
-    assertDepositAssetKnown(registry, checked, options.allowUnregisteredAsset === true);
+    assertDepositAssetKnown(registry, checked);
     const current = await readCurrentState();
     applyState(current.list, current.chainId);
     assertUsable();
@@ -1224,6 +1247,9 @@ export function createExternalWallet(options = {}) {
     const recipient = options.recipientAddress;
     if (typeof recipient !== "string" || !ADDRESS_RE.test(recipient) || recipient.toLowerCase() === ZERO_ADDRESS) throw fail(WALLET_ERROR.INVALID_ADDRESS, "收款地址无效");
     const amount = parseRawAmount(options.amountRaw, "转账金额");
+    const rawIntentHash = options.intentHash === undefined ? null : options.intentHash;
+    if (rawIntentHash !== null && (typeof rawIntentHash !== "string" || !HEX_32_RE.test(rawIntentHash))) throw fail(WALLET_ERROR.INVALID_INTENT_HASH, "intentHash 必须是 32 字节十六进制");
+    const intentHash = rawIntentHash === null ? null : rawIntentHash.toLowerCase();
     const startedGen = generation;
     const tokenRaw = parseQuantity(await providerRequest("eth_call", [{ to: asset.contractAddress, data: `0x70a08231${account.toLowerCase().slice(2).padStart(64, "0")}` }, "latest"], rpcMs), "代币余额");
     const nativeRaw = parseQuantity(await providerRequest("eth_getBalance", [account, "latest"], rpcMs), "原生余额");
@@ -1270,6 +1296,8 @@ export function createExternalWallet(options = {}) {
       estimatedFeeRaw: feeRaw.toString(),
       estimatedFeeNative: formatUnits(feeRaw.toString(), network.nativeDecimals),
       feeModel: "legacy-gas-price",
+      intentHash,
+      calldataHash: calldataHashOf(callData),
       call: Object.freeze({ to: asset.contractAddress, value: "0x0", data: callData }),
       blockers: Object.freeze(blockers),
       canSend: blockers.length === 0,
@@ -1288,8 +1316,9 @@ export function createExternalWallet(options = {}) {
     if (!preview || typeof preview !== "object" || !previews.has(preview)) throw fail(WALLET_ERROR.PREVIEW_NOT_ISSUED, "只能确认本模块生成的转账预览");
     if (options.previewId !== preview.previewId) throw fail(WALLET_ERROR.PREVIEW_CONFIRMATION_REQUIRED, "确认的预览编号不匹配");
     const state = previews.get(preview);
-    if (state.status === "sent") return Object.freeze({ hash: state.hash, chainId: preview.chainId, from: preview.account, to: preview.contractAddress, amountRaw: preview.amountRaw, broadcast: true, alreadySent: true, credited: false, finality: "unknown", generation });
+    if (state.status === "sent") return Object.freeze({ hash: state.hash, chainId: preview.chainId, from: preview.account, to: preview.contractAddress, amountRaw: preview.amountRaw, broadcast: true, alreadySent: true, credited: false, transferVerified: false, finality: "unknown", warning: "已广播；回执和 calldata/收款人/日志仍未核验，不代表预期转账或入账。", generation });
     if (state.status === "unknown") throw fail(WALLET_ERROR.UNKNOWN_BROADCAST, "上次发送结果未知；不要重发。请用已知交易哈希核对链上状态");
+    if (operationPort === null) throw fail(WALLET_ERROR.OPERATION_JOURNAL_REQUIRED, "没有注入 Service 持久操作 journal，禁止发送；本模块不保存跨刷新状态");
     if (state.promise) return state.promise;
     state.promise = (async () => {
       assertUsable();
@@ -1312,6 +1341,31 @@ export function createExternalWallet(options = {}) {
       if (tokenRaw < BigInt(preview.amountRaw)) throw fail(WALLET_ERROR.INSUFFICIENT_TOKEN_BALANCE, "代币余额已不足，请重新预览");
       if (nativeRaw < BigInt(preview.estimatedFeeRaw)) throw fail(WALLET_ERROR.INSUFFICIENT_NATIVE_BALANCE, "原生余额不足以支付 gas，请重新预览");
       if (preview.generation !== generation) throw fail(WALLET_ERROR.PREVIEW_STALE, "账户、网络或 gas 已变化，预览失效");
+      const operation = operationOf(preview);
+      let reservation;
+      try {
+        reservation = await operationPort.reserve(operation);
+      } catch {
+        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "Service 操作 journal 预留失败；未发送");
+      }
+      if (!reservation || typeof reservation.reservationId !== "string" || !reservation.reservationId) throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "Service journal 未返回有效预留编号；未发送");
+      if (reservation.state === "unknown") {
+        state.status = "unknown"; state.error = WALLET_ERROR.OPERATION_UNKNOWN; state.promise = null;
+        throw fail(WALLET_ERROR.OPERATION_UNKNOWN, "Service journal 记录该操作结果未知；禁止重发，请按已知哈希恢复", { hash: reservation.hash ?? null });
+      }
+      if (reservation.state === "broadcasting" || reservation.state === "broadcast") {
+        state.status = "unknown"; state.error = WALLET_ERROR.OPERATION_ALREADY_STARTED; state.promise = null;
+        throw fail(WALLET_ERROR.OPERATION_ALREADY_STARTED, "Service journal 记录该操作已开始广播；禁止重发", { hash: reservation.hash ?? null });
+      }
+      if (reservation.state !== "reserved") {
+        state.status = "unknown"; state.error = WALLET_ERROR.OPERATION_JOURNAL_FAILED; state.promise = null;
+        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "Service journal 返回了不可发送的状态；未发送");
+      }
+      try {
+        await operationPort.markBroadcasting({ reservationId: reservation.reservationId, operation });
+      } catch {
+        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "Service journal 无法标记 broadcasting；未发送");
+      }
       state.attemptedSend = true;
       let hash;
       try {
@@ -1320,23 +1374,28 @@ export function createExternalWallet(options = {}) {
           gas: preview.gasLimitHex, gasPrice: preview.gasPriceHex,
         }], sendMs);
       } catch (error) {
-        if (error.code === WALLET_ERROR.USER_REJECTED && state.attemptedSend) {
-          state.status = "preview"; state.promise = null;
-          throw error;
-        }
+        try { await operationPort.recordUnknown({ reservationId: reservation.reservationId, operation, reason: error.code ?? WALLET_ERROR.WALLET_ERROR }); } catch { /* journal failure is reported by state below */ }
         state.status = "unknown"; state.error = error.code ?? WALLET_ERROR.WALLET_ERROR;
         state.promise = null;
         throw error;
       }
       if (typeof hash !== "string" || !HEX_32_RE.test(hash)) {
+        try { await operationPort.recordUnknown({ reservationId: reservation.reservationId, operation, reason: WALLET_ERROR.INVALID_TX_HASH }); } catch { /* journal failure is reported by state below */ }
         state.status = "unknown"; state.error = WALLET_ERROR.INVALID_TX_HASH; state.promise = null;
         throw fail(WALLET_ERROR.INVALID_TX_HASH, "钱包未返回有效交易哈希；结果未知，不要重发");
+      }
+      try {
+        await operationPort.recordHash({ reservationId: reservation.reservationId, operation, hash });
+      } catch {
+        state.status = "unknown"; state.error = WALLET_ERROR.OPERATION_JOURNAL_FAILED; state.promise = null;
+        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "交易已广播但 Service journal 未记录哈希；不要自动重发", { hash });
       }
       state.status = "sent"; state.hash = hash;
       const staleAfterSend = generation !== preview.generation;
       return Object.freeze({
         hash, chainId: preview.chainId, from: preview.account, to: preview.contractAddress, amountRaw: preview.amountRaw,
-        broadcast: true, alreadySent: false, credited: false, finality: "unknown", staleAfterSend, generation,
+        broadcast: true, alreadySent: false, credited: false, transferVerified: false, finality: "unknown",
+        warning: "已广播；回执和 calldata/收款人/日志仍未核验，不代表预期转账或入账。", staleAfterSend, generation,
       });
     })();
     return state.promise;
@@ -1345,14 +1404,15 @@ export function createExternalWallet(options = {}) {
   async function getReceipt(hash) {
     if (typeof hash !== "string" || !HEX_32_RE.test(hash)) throw fail(WALLET_ERROR.INVALID_TX_HASH, "交易哈希无效");
     const receipt = await providerRequest("eth_getTransactionReceipt", [hash], rpcMs);
-    if (receipt === null) return Object.freeze({ state: "pending", hash, broadcast: true, credited: false, finality: "unknown" });
+    if (receipt === null) return Object.freeze({ state: "pending", hash, evidence: "chain-receipt", broadcast: true, credited: false, transferVerified: false, finality: "unknown", warning: "回执只证明该交易哈希的链上执行结果；未核验 from/to/input/日志，不证明预期转账或入账。" });
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw fail(WALLET_ERROR.RPC_UNKNOWN, "回执返回值无法识别；未重发");
     if (typeof receipt.transactionHash !== "string" || receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) throw fail(WALLET_ERROR.RECEIPT_MISMATCH, "回执交易哈希不匹配；未重发");
     const statusValue = typeof receipt.status === "string" ? receipt.status.toLowerCase() : "";
     const state = statusValue === "0x1" ? "success" : statusValue === "0x0" ? "reverted" : "unknown";
     return Object.freeze({
       state, hash: receipt.transactionHash, blockNumber: typeof receipt.blockNumber === "string" ? receipt.blockNumber : null,
-      broadcast: true, credited: false, finality: "unknown",
+      evidence: "chain-receipt", broadcast: true, credited: false, transferVerified: false, finality: "unknown",
+      warning: "回执只证明该交易哈希的链上执行结果；未核验 from/to/input/日志，不证明预期转账或入账。",
     });
   }
 
