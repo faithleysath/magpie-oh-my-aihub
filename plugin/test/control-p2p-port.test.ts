@@ -342,8 +342,9 @@ describe("B-core P2pBusinessPort mapping", () => {
     // The provider's read-back still accepts the old secret: rotation happened
     // but the old credential is not proven dead.
     (magpie as any).limitStatus = async () => ({ limited: true, key: "x", limit: { costLimit: 1, cost: 0, costLeft: 1, calls: 0, spent: false } });
-    const result = await port.revoke({ consumerNodeId: "dave", approvalId: "f".repeat(32), reason: "operator-revoked" });
+    const result = await port.revoke({ consumerNodeId: "dave", approvalId: "f".repeat(32), keyId: approved.keyId, generation: 1, reason: "operator-revoked" });
     expect(result && result.revoked).toBe(false);
+    expect(result && result.enforcement).toBe("safetyUncertain");
     expect(svc.provisioner.find("dave")!.revokedAt).toBeNull();
     expect(magpie.keyById(approved.keyId)).toBeDefined();
   });
@@ -364,8 +365,16 @@ describe("enforced revoke port", () => {
       memo: null,
       quote: { contentHash: HASH, identityFingerprint: FP },
     });
-    const revoked = await port.revoke({ consumerNodeId: "alice", approvalId: APPROVAL, reason: "operator-revoked" });
-    expect(revoked).toEqual({ revoked: true, detail: null });
+    const revoked = await port.revoke({ consumerNodeId: "alice", approvalId: APPROVAL, keyId: approved.keyId, generation: 1, reason: "operator-revoked" });
+    expect(revoked).toEqual({
+      revoked: true,
+      enforcement: "keyRevoked",
+      consumerNodeId: "alice",
+      approvalId: APPROVAL,
+      keyId: approved.keyId,
+      generation: 1,
+      detail: null,
+    });
     expect(magpie.keyById(approved.keyId)).toBeUndefined();
 
     // A second consumer: remove fails, rotate succeeds -> old secret is no longer the stored secret.
@@ -383,9 +392,12 @@ describe("enforced revoke port", () => {
     const originalSecret = magpie.keyById(second.keyId)!.secret;
     const originalRemove = magpie.removeKey.bind(magpie);
     (magpie as any).removeKey = async () => { throw new Error("native remove failed"); };
-    const rotated = await port.revoke({ consumerNodeId: "bob", approvalId: APPROVAL2, reason: "operator-revoked" });
-    expect(rotated && rotated.revoked).toBe(true);
-    expect(rotated && rotated.detail).toContain("remove failed");
+    const rotated = await port.revoke({ consumerNodeId: "bob", approvalId: APPROVAL2, keyId: second.keyId, generation: 1, reason: "operator-revoked" });
+    expect(rotated.revoked).toBe(true);
+    if (!rotated.revoked) throw new Error("expected a confirmed rotation");
+    expect(rotated.enforcement).toBe("secretRotated");
+    expect(rotated.keyId).toBe(second.keyId);
+    expect(rotated.detail).toContain("remove failed");
     expect(magpie.keyById(second.keyId)!.secret).not.toBe(originalSecret);
     (magpie as any).removeKey = originalRemove;
 
@@ -403,8 +415,9 @@ describe("enforced revoke port", () => {
     });
     (magpie as any).removeKey = async () => { throw new Error("remove failed"); };
     (magpie as any).rotateKey = async () => { throw new Error("rotate failed"); };
-    const failed = await port.revoke({ consumerNodeId: "carol", approvalId: "e".repeat(32), reason: "operator-revoked" });
+    const failed = await port.revoke({ consumerNodeId: "carol", approvalId: "e".repeat(32), keyId: third.keyId, generation: 1, reason: "operator-revoked" });
     expect(failed && failed.revoked).toBe(false);
+    expect(failed && failed.enforcement).toBe("capRestricted");
     expect(magpie.keyById(third.keyId)).toBeDefined();
     expect(svc.provisioner.find("carol")!.revokedAt).toBeNull();
   });
@@ -432,8 +445,9 @@ describe("enforced revoke port", () => {
     // The provider's read-back still accepts the old secret: rotation happened
     // but the old credential is not proven dead.
     (magpie as any).limitStatus = async () => ({ limited: true, key: "x", limit: { costLimit: 1, cost: 0, costLeft: 1, calls: 0, spent: false } });
-    const result = await port.revoke({ consumerNodeId: "dave", approvalId: "f".repeat(32), reason: "operator-revoked" });
+    const result = await port.revoke({ consumerNodeId: "dave", approvalId: "f".repeat(32), keyId: approved.keyId, generation: 1, reason: "operator-revoked" });
     expect(result && result.revoked).toBe(false);
+    expect(result && result.enforcement).toBe("safetyUncertain");
     expect(svc.provisioner.find("dave")!.revokedAt).toBeNull();
     expect(magpie.keyById(approved.keyId)).toBeDefined();
   });

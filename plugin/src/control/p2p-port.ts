@@ -147,9 +147,33 @@ export interface P2pAckRecord {
 
 export interface P2pRevokeRequest {
   consumerNodeId: string;
-  approvalId: string | null;
+  approvalId: string;
+  /** the key id recorded for this approval; null when it was never confirmed */
+  keyId: string | null;
+  generation: number;
   reason: P2pRevokeReason;
 }
+
+/** Only these two enforcement modes prove the native key can no longer be used. */
+export type P2pRevokeEnforcement = "keyRevoked" | "secretRotated";
+
+export interface P2pRevokeConfirmed {
+  revoked: true;
+  enforcement: P2pRevokeEnforcement;
+  consumerNodeId: string;
+  approvalId: string;
+  keyId: string;
+  generation: number;
+  detail: string | null;
+}
+
+export interface P2pRevokeRefused {
+  revoked: false;
+  enforcement: "none" | "capRestricted" | "networkWithdrawn" | "safetyUncertain" | "failed";
+  detail: string | null;
+}
+
+export type P2pRevokeOutcome = P2pRevokeConfirmed | P2pRevokeRefused;
 
 export interface P2pInboundApproval {
   approvalId: string;
@@ -175,7 +199,7 @@ export interface P2pBusinessPort {
   approve(input: P2pApprovalRequest): Promise<P2pApprovedMaterials>;
   takeAuthorization(input: P2pTakeAuthorizationInput): Promise<P2pAuthorizationDocument>;
   recordAck(input: P2pAckRecord): Promise<void>;
-  revoke(input: P2pRevokeRequest): Promise<{ revoked: boolean; detail: string | null }>;
+  revoke(input: P2pRevokeRequest): Promise<P2pRevokeOutcome>;
   recordApproval(input: P2pInboundApproval): Promise<void>;
   importAuthorization(input: {
     document: P2pAuthorizationDocument;
@@ -424,8 +448,36 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
     },
 
     async revoke(input) {
+      const before = service.provisioner.find(input.consumerNodeId);
+      if (!before) throw new ControlServiceRefusal("conflict", "no active consumer authorization");
+      if (!input.keyId || before.keyId !== input.keyId) {
+        return {
+          revoked: false,
+          enforcement: "failed",
+          detail: "the approval's keyId is not the current Provisioner key; no revocation was claimed",
+        };
+      }
       const result = await service.provisioner.revokeEnforced(input.consumerNodeId);
-      return { revoked: result.revoked, detail: result.detail };
+      const after = service.provisioner.find(input.consumerNodeId);
+      if (!after || after.keyId !== input.keyId) {
+        return { revoked: false, enforcement: "failed", detail: "the key identity changed during revocation; no revocation was claimed" };
+      }
+      if (result.revoked && (result.enforcement === "keyRevoked" || result.enforcement === "secretRotated")) {
+        return {
+          revoked: true,
+          enforcement: result.enforcement,
+          consumerNodeId: input.consumerNodeId,
+          approvalId: input.approvalId,
+          keyId: input.keyId,
+          generation: input.generation,
+          detail: result.detail,
+        };
+      }
+      const enforcement =
+        result.enforcement === "capRestricted" || result.enforcement === "safetyUncertain"
+          ? result.enforcement
+          : "failed";
+      return { revoked: false, enforcement, detail: result.detail };
     },
 
     async recordApproval() {

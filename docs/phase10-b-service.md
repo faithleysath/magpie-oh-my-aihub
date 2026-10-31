@@ -122,11 +122,14 @@ be reported as `lan-reachable`; the diagnostic must not claim overlay-only.
   `costLimit` back with `Service.providerModels`. A mismatch removes only that Remote
   and throws; no ACK is produced. Ownership (provider/approval/generation/keyId) is
   persisted atomically; a different approval cannot replace a live Remote.
-- `revoke` calls `Provisioner.revokeEnforced`. Removal is the strong stop; if
-  removal fails, rotation makes the old secret 401; a $0.0001 cap is not treated as
-  a stop. If neither removal nor rotation works, the port returns
-  `{revoked:false, detail}` and B-core must keep the approval uncertain/action-needed
-  without sending a “revoked” notice.
+- `revoke` returns a typed `P2pRevokeOutcome`, never `void`/untyped success. It
+  calls `Provisioner.revokeEnforced`; only a measured `keyRevoked`/`secretRotated`
+  with the exact `consumerNodeId`/`approvalId`/`keyId`/`generation` binding is
+  confirmed. Removal is the strong stop; if removal fails, rotation must make the old
+  secret 401 (read back via `limitStatus`); a $0.0001 cap is not a stop. Anything
+  else is `{revoked:false, enforcement: capRestricted|safetyUncertain|failed}` and
+  B-core keeps the same generation uncertain/action-needed without sending a
+  “revoked” notice.
 - `importAuthorization`/`dropAuthorization` use a persistent, non-secret ownership
   record keyed by provider/approval/generation/keyId/providerId. While a provider has
   a live Remote, a different approval for the same provider is refused; an old
