@@ -487,6 +487,27 @@ export class Wallet {
     });
     const digest = intentDigest(intent, net, asset);
     const stored = this.store.insertIntent({ ...intent, digest });
+    return this.signableIntent(stored.invoiceId)!;
+  }
+
+  /**
+   * The exact signable document of an existing unsigned, unexpired intent.
+   *
+   * This is read-only and is used to resume/open a single invoice after a crash
+   * or a lost reply: re-creating the intent would mint a second invoice for the
+   * same consumer and amount. It returns null for a signed, expired, void or
+   * unknown intent; the caller must then ask the user, not guess.
+   */
+  signableIntent(invoiceId: string): SignableIntent | null {
+    const stored = this.store.intent(invoiceId);
+    if (!stored) return null;
+    if (stored.status !== "requested" || stored.attributionStatus !== "unsigned") return null;
+    if (isExpired(stored, this.now())) return null;
+    const net = this.registry.network(stored.chainId);
+    if (!net) return null;
+    const asset = this.registry.asset(stored.assetId);
+    if (!asset) return null;
+    const digest = intentDigest(stored, net, asset);
     const nanos = convertRawToNanos({ rawAmount: BigInt(stored.expectedAmountRaw), asset, at: this.now() });
     return {
       intent: stored,
@@ -497,6 +518,11 @@ export class Wallet {
         `on ${net.displayName} (chain ${net.chainId}) to ${stored.recipientAddress}. ` +
         `Sign the EIP-712 DepositIntent so the plugin can attribute your payment. Expires ${stored.expiresAt}.`,
     };
+  }
+
+  /** Open, unexpired unsigned/signed intents of one consumer (bounded). */
+  openIntents(consumerId: string): DepositIntent[] {
+    return this.store.openIntentsFor(consumerId, this.now());
   }
 
   /**
