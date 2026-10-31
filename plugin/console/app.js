@@ -1,5 +1,5 @@
 import { ConsoleError, consumeTicketFragment, createSessionClient, pollState, waitForPairing } from "./session.js";
-import { mountProviders, checkLabel } from "./providers.js";
+import { mountProviders, checkLabel, modelEvidenceSummary } from "./providers.js";
 import { mountWallet } from "./wallet.js";
 
 // Remove the one-use credential before any asynchronous work or page rendering.
@@ -235,14 +235,8 @@ function networkSummary(state) {
 function homeNetwork(state) { return networkSummary(state); }
 
 function homeModels(state) {
-  const providers = list(object(state.status).providers);
-  const connected = providers.filter((provider) => provider?.status === "connected");
-  if (!providers.length) return ["尚未连接", "还没有连接伙伴服务；在“发现”核对身份后申请模型。"];
-  if (!connected.length) return ["待确认", `${providers.length} 个伙伴服务未连接；在“发现 → 我的连接”核对。`];
-  // Only models actually available through an authorized native Remote provider count.
-  const known = connected.reduce((total, provider) => total + (Array.isArray(provider?.models) ? provider.models.length : 0), 0);
-  if (known) return [`${known} 个已授权模型`, `${connected.length} 个伙伴服务已连接；只统计已确认可用的模型。`];
-  return [`${connected.length} 个伙伴服务已连接`, "模型清单要在“发现 → 我的连接”读取确认；确认前不算可用。"];
+  const summary = modelEvidenceSummary(list(object(state.status).providers));
+  return [summary.label, summary.detail];
 }
 
 function homeSharing(state) {
@@ -314,6 +308,39 @@ function renderHome(state) {
   const [models, modelsDetail] = homeModels(state);
   setText("home-models", models);
   setText("home-models-detail", modelsDetail);
+  const evidenceBox = $("home-models-evidence");
+  const evidenceList = $("home-models-list");
+  if (evidenceBox && evidenceList) {
+    const summary = modelEvidenceSummary(list(object(state.status).providers));
+    evidenceList.replaceChildren();
+    const usable = summary.state === "current" ? summary.entries : [];
+    show("home-models-evidence", usable.length > 0);
+    for (const entry of usable) {
+      const group = document.createElement("div");
+      group.className = "home-model-group";
+      const title = document.createElement("strong");
+      title.textContent = entry.hostname;
+      const note = document.createElement("small");
+      note.className = "muted";
+      note.textContent = `${entry.source ? `读回来源 ${entry.source}` : "真实读回"}${entry.readAt ? ` · ${time(entry.readAt)}` : ""} · ${entry.quotaText}`;
+      group.append(title, note);
+      if (entry.models.length) {
+        const ul = document.createElement("ul");
+        for (const model of entry.models) {
+          const li = document.createElement("li");
+          li.textContent = model;
+          ul.append(li);
+        }
+        group.append(ul);
+      } else if (entry.count > 0) {
+        const missing = document.createElement("p");
+        missing.className = "muted";
+        missing.textContent = "服务报告有可用模型，但没有返回清单；以计数为准，清单待重新读取。";
+        group.append(missing);
+      }
+      evidenceList.append(group);
+    }
+  }
   const [sharing, sharingDetail] = homeSharing(state);
   setText("home-sharing", sharing);
   setText("home-sharing-detail", sharingDetail);

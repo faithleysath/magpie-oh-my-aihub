@@ -29,6 +29,11 @@ describe("five page shell", () => {
     for (const gone of ["stats-grid", "overview-hero", "network-art", "readiness", "engine-status", "peer-count", "checks-list"]) {
       expect(home).not.toContain(gone);
     }
+    // Available models must come from real readback evidence, not a legacy
+    // snapshot or an authorization list.
+    expect(app).toContain("modelEvidenceSummary");
+    expect(app).not.toContain("Array.isArray(provider?.models)");
+    expect(app).not.toContain("provider.models");
     // Deposits are cumulative, not a balance, and credit is per provider.
     expect(home).toContain("资产余额尚未查询");
     expect(home).toContain("提供者信用（按伙伴）");
