@@ -14,7 +14,7 @@
 | 快照时间 | 2026-10-31 |
 | 基线 main | `8ce5c57f565fb1b835021a9b730b61014eb47d5f` |
 | PR13 | `#13`，MERGED，merge SHA = 上述 main；CI run `41056993038` success |
-| 开发/文档分支 | `feature/phase10-simplified-p2p-ux` @ `5303d38`（= PR14 head；仅 docs） |
+| 开发/文档分支 | `feature/phase10-simplified-p2p-ux` @ `6bcb058`（= PR14 head；仅 docs） |
 | 集成分支 | `feature/phase10-integration` @ `877d0bc`（worktree `/tmp/oma-phase10-integration`；仅含批准的 clock `889973f`） |
 | 盘点工作树 | `/Users/laysath/Projects/magpie-oh-my-aihub-import` |
 | 纯 main 只读工作树 | `/tmp/oma-phase10-main-8ce5c57`（detached @ `8ce5c57`） |
@@ -23,7 +23,7 @@
 | 计费/峰谷价 | 0.1.2289 的 `peak` 先 **fail-closed 拒绝**；后续单独实现，不再让用户选 |
 | 本地门禁 | typecheck / boot-check / secret-scan 通过；clock 集成本地仅跑 typecheck + 4 个纯钱包测试 32/0；**未跑全量**（防旧测试访问生产网关/公共 RPC，等 PR17 guard） |
 | 参考研究 | 审查代理 `6a326f2b-2249-4123-8f35-1fe35926e107`：`/tmp/oma-research/REFERENCE-REVIEW.md` |
-| PR14 | `#14` draft，head `5303d38`；**仅 docs，未含应用代码**；内容仅计划，无 GO；不合并 |
+| PR14 | `#14` draft，head `6bcb058`；**仅 docs，未含应用代码**；内容仅计划，无 GO；不合并 |
 | P0-clock 集成 | 源 `889973f5` → 新 `877d0bc5`；独立审通过、允许本地集成；**非产品 GO** |
 | 改动前 UI 证据 | `docs/phase10/evidence/`：3 份事实报告 + 16 张实拍 + SHA256SUMS；0.1.2289 真实宿主**空网络**；可标 REPRODUCED/已审查，**不能标 Visual UX GO** |
 | 实现代理模型 | `pi/magpie/group/deepseek-v4.1-flash`（max） |
