@@ -456,6 +456,12 @@ describe("C9 hard gates: mainnet send/credit/auto-recharge", () => {
     expect(() => assertNoMainnetSend({ chainId: 97 })).not.toThrow();
     expect(() => assertNoMainnetCredit({ chainId: 97 })).not.toThrow();
     expect(() => assertNoMainnetAutoRecharge({ chainId: 97 })).not.toThrow();
+    // A UI/JSON string must fail closed, not look like "not a mainnet".
+    for (const bad of ["56", 0, -1, 1.5, Number.NaN] as unknown as number[]) {
+      expect(() => assertNoMainnetSend({ chainId: bad })).toThrow(/positive integer|mainnet/);
+      expect(() => assertNoMainnetCredit({ chainId: bad })).toThrow(/positive integer|mainnet/);
+      expect(() => assertNoMainnetAutoRecharge({ chainId: bad })).toThrow(/positive integer|mainnet/);
+    }
   });
 
   test("no environment variable can unlock a mainnet", () => {

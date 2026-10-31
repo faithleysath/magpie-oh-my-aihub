@@ -77,6 +77,11 @@ export function mainnetCapabilityAllowed(chainId: number, capability: NetworkCap
 
 /** Refuses one capability, with the chain id checked independently of the registry. */
 export function assertMainnetCapability(chainId: number, capability: NetworkCapability, operation: string = capability): void {
+  // A JSON/UI caller can hand a string even though TypeScript says number. A
+  // non-integer chain id must not fall through to "not a mainnet".
+  if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId <= 0) {
+    throw new MainnetGateError("mainnet-capability-forbidden", `chain id ${String(chainId)} is not a positive integer; refusing ${operation}`);
+  }
   if (mainnetCapabilityAllowed(chainId, capability)) return;
   const code =
     capability === "send"
