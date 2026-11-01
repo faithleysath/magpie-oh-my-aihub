@@ -21,7 +21,7 @@
 // tables already existed, so the schema is unchanged.
 
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { decimalsForChain } from "./chain.ts";
 import { logger } from "./log.ts";
@@ -107,95 +107,12 @@ export function secureLedgerFiles(path = ledgerPath()): void {
   for (const suffix of ["", "-wal", "-shm"]) secureFile(`${path}${suffix}`);
 }
 
-/** Columns this version needs; a table that exists without them is not ours. */
-const REQUIRED_COLUMNS: Record<string, string[]> = {
-  deposits: [
-    "id", "chain_id", "token", "from_addr", "to_addr", "amount_raw",
-    "block_number", "block_hash", "tx_hash", "log_index", "state",
-    "first_seen", "credited_at", "reverted_at",
-  ],
-  requests: ["address", "models", "ts", "state"],
-  consumers: [
-    "address", "granted_models", "requested_models", "key_name",
-    "key_secret", "state", "created_at", "revoked_at",
-  ],
-  payouts: ["tx_hash", "chain_id", "token", "to_addr", "amount_raw", "state", "created_at"],
-  meta: ["k", "v"],
-};
-
-function columnsOf(db: Database, table: string): string[] {
-  try {
-    return (db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((row) => row.name);
-  } catch {
-    return [];
-  }
-}
-
-/** The reason an existing file is not this ledger, or null when it is usable. */
-function incompatibleReason(db: Database): string | null {
-  for (const [table, required] of Object.entries(REQUIRED_COLUMNS)) {
-    const have = columnsOf(db, table);
-    if (have.length === 0) continue; // absent: SCHEMA creates it
-    const missing = required.filter((column) => !have.includes(column));
-    if (missing.length > 0) return `${table} lacks ${missing.join(", ")}`;
-  }
-  return null;
-}
-
-/**
- * Moves a pre-v2 database (the old ledger/provisioner schema) aside instead of
- * failing every query against it. Nothing is deleted: the main file keeps its
- * data, and a sidecar that cannot be renamed is removed so the new file starts
- * clean.
- */
-function moveIncompatibleLedger(path: string, why: string): void {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const target = `${path}.pre-v2-${stamp}`;
-  for (const suffix of ["", "-wal", "-shm"]) {
-    const from = `${path}${suffix}`;
-    if (!existsSync(from)) continue;
-    try {
-      renameSync(from, `${target}${suffix}`);
-    } catch {
-      try {
-        rmSync(from, { force: true });
-      } catch {
-        /* the new database will fail loudly if a sidecar still blocks it */
-      }
-    }
-  }
-  logger.warn(`ledger: ${why}; the old database is now ${target}`);
-}
-
 /**
  * Opens (and creates) the ledger. `path` is a parameter so a self-check can use
  * its own file; production always uses `ledgerPath()`.
- *
- * An existing file written by the pre-v2 plugin has a different schema, and
- * `CREATE TABLE IF NOT EXISTS` cannot repair it. Such a file is moved aside
- * (`.pre-v2-<timestamp>`) and a fresh ledger is created, so an update never
- * leaves the plugin unable to boot.
  */
 export function openLedger(path = ledgerPath()): Database {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  if (existsSync(path)) {
-    let probe: Database | null = null;
-    try {
-      probe = new Database(path, { readwrite: true });
-      const reason = incompatibleReason(probe);
-      probe.close();
-      probe = null;
-      if (reason) moveIncompatibleLedger(path, `the existing ledger is not usable (${reason})`);
-    } catch (error) {
-      try {
-        probe?.close();
-      } catch {
-        /* already closed */
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      moveIncompatibleLedger(path, `the existing ledger cannot be read (${message.slice(0, 160)})`);
-    }
-  }
   const db = new Database(path, { create: true });
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA busy_timeout = 5000;");
