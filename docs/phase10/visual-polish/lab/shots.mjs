@@ -76,7 +76,7 @@ const audit = () => {
     return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
   };
   const ordinary = [...document.querySelectorAll("body *")].filter((node) => rendered(node) && node.children.length === 0 && node.textContent.trim());
-  const tech = ["EIP-6963", "TOFU", "presence", "priceVersion", "chainId", "FULL AUTO", "授信", "不可授信", "window.ethereum"];
+  const tech = ["EIP-6963", "TOFU", "presence", "priceVersion", "chainId", "FULL AUTO", "授信", "不可授信", "window.ethereum", "价格版本", "批准代次", "代次", "generation"];
   const techTerms = tech.filter((term) => ordinary.some((node) => node.textContent.includes(term)));
   // Raw protocol words that must be translated before they reach a normal row.
   const rawWords = ["ready", "delivering", "approved", "revoked", "unverified", "pending", "failed", "unknown", "enabled", "disabled"];

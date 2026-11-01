@@ -813,7 +813,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       root.append(identify, details("身份与报价", [["伙伴", peer.quote?.node?.displayName || peer.hostname || "伙伴"], ["报价指纹", acceptance.quoteHash], ["价格版本", peer.quote?.publication?.version], ["价格未锁定", "是（priceLocked: false）"]]));
       if (needsIdentity) root.append(el("p", P2P_TOFU_LABELS[security.tofu] || "首次连接，需要核对身份", "inline-warning"));
       const getModels = modelChoices(root, items(peer.quote.models).map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" })), []);
-      const accept = needsIdentity ? checkbox(`我核对并接受此完整身份指纹：${acceptance.fingerprint}`) : null;
+      const accept = needsIdentity ? checkbox("我核对并接受上述完整身份指纹") : null;
       const agree = checkbox("我已核对完整身份指纹与报价，并发送一次使用申请");
       const submit = button(needsIdentity ? "核对身份并发送申请" : "发送使用申请", async () => {
         const chosen = getModels();
@@ -842,7 +842,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     let previewing = false;
     let previewGeneration = 0;
     openDialog("核对并批准使用请求", (root) => {
-      root.append(paragraph("一次确认会绑定这次请求、对方完整身份指纹、当前报价、选中模型的价格版本与批准代次。批准后密钥通过加密会话自动交付，不需要再发文件或复制密钥。"));
+      root.append(paragraph("核对伙伴、模型、价格和额度后再批准。密钥会自动安全交付，无需发送文件。"));
       const identify = el("p", "对方完整身份指纹（请逐字核对）：");
       identify.append(el("code", request.consumerFingerprint, "fingerprint"));
       root.append(identify, details("请求身份与绑定", [
@@ -857,7 +857,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       if (current.length !== items(request.models).length) {
         root.append(el("p", "当前报价缺少请求中的模型，不能批准；请拒绝或让伙伴重新申请。", "inline-warning"));
       }
-      root.append(paragraph("选择要批准的模型（默认全部请求模型）。本页不计算价格版本；选中后由服务返回这次报价对应的价格版本。"));
+      root.append(paragraph("默认选择全部申请模型。选择变化后，需要重新预览当前报价。"));
       const choices = [];
       for (const model of current) {
         const choice = checkbox(model.displayName || model.id, selected.has(model.id));
@@ -866,18 +866,19 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
           invalidatePreview();
           updateApprove();
         });
+        // The checkbox is the choice; the single quote area below shows the price.
         const row = el("div", null, "choice-row");
-        row.append(choice.label, paragraph(priceText(model.pricing)));
+        row.append(choice.label);
         root.append(row);
         choices.push(choice);
       }
       const previewButton = button("预览选中报价", () => { void refreshPreview(); });
       const previewBox = el("div", null, "workflow-list");
       root.append(previewButton, previewBox);
-      const cap = field("本次授权的正额度（USD）", "number", typeof request.capUsd === "number" && request.capUsd > 0 ? String(request.capUsd) : "");
+      const cap = field("本次授权的额度（USD）", "number", typeof request.capUsd === "number" && request.capUsd > 0 ? String(request.capUsd) : "");
       cap.input.min = "0.0001"; cap.input.max = "1000000"; cap.input.step = "0.0001"; cap.input.required = true;
-      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍；0 在 Magpie 中表示不限制，不能当作暂停。"));
-      const accept = request.tofu === "accepted" ? null : checkbox(`我核对并接受此完整身份指纹：${request.consumerFingerprint}`);
+      cap.label.append(el("small", "额度必须大于 0；0 表示不限制，不能用于暂停。"));
+      const accept = request.tofu === "accepted" ? null : checkbox("我核对并接受上述完整身份指纹");
       const agree = checkbox("我确认批准这次请求，并接受当前报价、模型与额度");
       const submit = button("确认批准", () => {
         const chosen = [...selected];
@@ -921,6 +922,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       function renderPreview() {
         previewBox.replaceChildren();
         if (!preview) return;
+        previewBox.append(el("p", "当前报价", "subhead"));
         for (const model of preview.models) {
           const pricing = items(preview.pricing).find((row) => row.id === model)?.pricing;
           const row = el("div", null, "choice-row");
@@ -1149,7 +1151,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const getModels = modelChoices(root, items(doc.models).map((id) => ({ ...(currentModels.find((model) => model.id === id) || {}), id, completePrice: currentModels.some((model) => model.id === id && priceText(model.pricing) !== "价格不完整，不能授权") })), items(doc.models));
       if (request.status !== "pending") { root.append(paragraph(`此申请${statusNames[request.status] || "已处理"}。`)); return; }
       const cap = field("本次明确授权的额度（USD）", "number", ""); cap.input.min = "0.0001"; cap.input.max = "1000000"; cap.input.step = "0.0001"; cap.input.required = true; cap.input.placeholder = "请输入大于等于 0.0001 的金额";
-      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍。0 在 Magpie 中表示不设上限，不能作为暂停。"));
+      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍。0 表示不设上限，不能作为暂停。"));
       const agree = checkbox("我已核对申请方、当前报价、模型与额度，明确批准此次授权");
       const submit = button("批准此申请", () => {
         if (!agree.input.checked || !validCap(cap.input.value) || !getModels().length) { dialogError.textContent = "请选择至少一个当前可授权模型，填写有效正额度，并明确确认批准。"; dialogError.hidden = false; return; }

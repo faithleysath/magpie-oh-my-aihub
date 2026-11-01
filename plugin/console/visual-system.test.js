@@ -110,6 +110,16 @@ describe("plain language in ordinary UI", () => {
     for (const [name, source] of modules) expect(`${name}:${source.includes("授信")}`).toBe(`${name}:false`);
   });
 
+  test("the approval copy does not translate internal binding fields into the main view", () => {
+    const providers = modules.find(([name]) => name === "providers.js")[1];
+    expect(providers).toContain("核对伙伴、模型、价格和额度后再批准。密钥会自动安全交付，无需发送文件。");
+    expect(providers).toContain("默认选择全部申请模型。选择变化后，需要重新预览当前报价。");
+    expect(providers).toContain("额度必须大于 0；0 表示不限制，不能用于暂停。");
+    expect(providers).not.toContain("价格版本与批准代次");
+    expect(providers).not.toContain("本页不计算价格版本");
+    expect(providers).not.toContain("完整身份指纹：${");
+  });
+
   test("implementation terms stay out of ordinary headings", () => {
     const ordinary = html.replace(/<details[\s\S]*?<\/details>/g, "");
     expect(ordinary).not.toContain("EIP-6963");
@@ -206,7 +216,7 @@ function dom() {
 }
 const windowStub = { addEventListener() {}, removeEventListener() {}, dispatchEvent() {}, ethereum: undefined };
 const flush = async () => { for (let i = 0; i < 30; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
-const BANNED_ORDINARY = ["授信", "EIP-6963", "window.ethereum", "chainId", "priceVersion", "FULL AUTO"];
+const BANNED_ORDINARY = ["授信", "EIP-6963", "window.ethereum", "chainId", "priceVersion", "FULL AUTO", "价格版本", "批准代次", "代次", "generation"];
 const bannedIn = (text) => BANNED_ORDINARY.filter((term) => text.includes(term));
 const byText = (root, tag, text) => root.descendants().find((node) => node.tagName === tag.toUpperCase() && node.textContent === text);
 
@@ -308,10 +318,10 @@ describe("visible dialogs and panels carry no implementation terms", () => {
       schema: "ohmyaihub/console/1", at: "2026-11-01T00:00:00Z", configured: true,
       status: {
         config: { catalog: { discoveryEnabled: true }, share: { models: [] } },
-        catalog: { quote: { models: [{ id: "provider/alpha-model", displayName: "alpha-model", pricing: { input: 1, output: 2 } }] }, peers: [] },
+        catalog: { quote: { models: [{ id: "provider/alpha-model", displayName: "alpha-model", pricing: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, unit: "USD per 1M tokens", source: "magpie-settings" } }] }, peers: [] },
         providers: [], consumers: [], readiness: { state: "ready", reasons: [] }, checks: [],
         p2p: {
-          inboundRequests: [{ requestId: "req-1", consumerNodeId: "consumer-node", consumerHostname: "consumer-host", consumerFingerprint: fingerprint, quoteHash: "b".repeat(64), priceVersion: "c".repeat(64), models: ["provider/alpha-model"], capUsd: 0.05, expiresAt: "2026-11-01T00:10:00Z", receivedAt: "2026-11-01T00:00:00Z", state: "pending", tofu: "accepted" }],
+          inboundRequests: [{ requestId: "req-1", consumerNodeId: "consumer-node", consumerHostname: "consumer-host", consumerFingerprint: fingerprint, quoteHash: "b".repeat(64), priceVersion: "c".repeat(64), models: ["provider/alpha-model"], capUsd: 0.05, expiresAt: "2026-11-01T00:10:00Z", receivedAt: "2026-11-01T00:00:00Z", state: "pending", tofu: "pending" }],
           approvals: [{ approvalId: "appr-1", consumerNodeId: "consumer-node", consumerFingerprint: fingerprint, providerNodeId: "provider-node", providerFingerprint: "d".repeat(64), quoteHash: "b".repeat(64), priceVersion: "c".repeat(64), generation: 1, keyId: "key-1", models: ["provider/alpha-model"], capUsd: 0.05, state: "delivering", delivery: { state: "queued" }, approvedAt: "2026-11-01T00:00:00Z", expiresAt: "2026-11-01T00:10:00Z" }],
           connections: [],
         },
@@ -321,7 +331,7 @@ describe("visible dialogs and panels carry no implementation terms", () => {
     const mounted = mountProviders({
       client: { action: async (name) => {
         if (name !== "p2p-quote-preview") throw Object.assign(new Error("not used"), { status: 404 });
-        return { models: ["provider/alpha-model"], pricing: [{ id: "provider/alpha-model", pricing: { input: 1, output: 2 } }], quoteHash: "b".repeat(64), priceVersion: "c".repeat(64) };
+        return { models: ["provider/alpha-model"], pricing: [{ id: "provider/alpha-model", pricing: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, unit: "USD per 1M tokens", source: "magpie-settings" } }], quoteHash: "b".repeat(64), priceVersion: "c".repeat(64) };
       } },
       getState: () => state, onState() {}, notice() {}, setBusy() {}, refreshState: async () => {},
     });
@@ -334,9 +344,17 @@ describe("visible dialogs and panels carry no implementation terms", () => {
       await byText(env.nodes.get("sharing-panel"), "button", "核对并批准").click(); await flush();
       const dialog = env.body.children.find((node) => node.tagName === "DIALOG");
       const text = visibleText(dialog);
-      expect(text).toContain("本次授权的正额度");
+      expect(text).toContain("核对伙伴、模型、价格和额度后再批准");
+      expect(text).toContain("密钥会自动安全交付");
+      expect(text).toContain("默认选择全部申请模型。选择变化后，需要重新预览当前报价。");
+      expect(text).toContain("本次授权的额度");
+      expect(text).toContain("额度必须大于 0；0 表示不限制，不能用于暂停。");
+      expect(text).toContain("我核对并接受上述完整身份指纹");
       expect(text).toContain("alpha-model");
       expect(text).not.toMatch(/\b(delivering|queued|pending|approved)\b/);
+      // One fingerprint and one quote line, not a duplicate pair.
+      expect((text.match(/\b[0-9a-f]{64}\b/g) || []).length).toBe(1);
+      expect((text.match(/输入 \$/g) || []).length).toBe(1);
       expect(bannedIn(text)).toEqual([]);
     } finally { mounted.dispose(); env.restore(); }
   });

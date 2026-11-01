@@ -52,13 +52,21 @@ const audit = (scopeSelector) => {
   const scope = document.querySelector(scopeSelector) || document.body;
   const leaves = [...scope.querySelectorAll("*")].filter((node) => rendered(node) && node.children.length === 0 && node.textContent.trim());
   const text = leaves.map((node) => node.textContent).join(" ");
-  const tech = ["授信", "EIP-6963", "window.ethereum", "chainId", "priceVersion", "FULL AUTO", "TOFU", "presence"];
+  const tech = ["授信", "EIP-6963", "window.ethereum", "chainId", "priceVersion", "FULL AUTO", "TOFU", "presence", "价格版本", "批准代次", "代次", "generation"];
   const rawWords = ["ready", "delivering", "approved", "revoked", "unverified", "pending", "failed", "unknown", "enabled", "disabled"];
+  const fingerprints = (text.match(/\b[0-9a-f]{64}\b/g) || []).length;
+  const priceLines = leaves.filter((node) => /输入 \$/.test(node.textContent)).length;
+  const modelChoices = scope.querySelectorAll(".choice-row input[type=checkbox]").length;
   return {
     scope: scopeSelector,
     techTerms: tech.filter((term) => text.includes(term)),
     rawStates: rawWords.filter((word) => new RegExp(`\\b${word}\\b`).test(text)),
     chainIdText: leaves.filter((node) => /(^|\s)链\s*\d{2,}/.test(node.textContent)).map((node) => node.textContent.trim().slice(0, 40)),
+    fingerprints,
+    priceLines,
+    modelChoices,
+    duplicateFingerprints: fingerprints > 1,
+    duplicateQuotes: priceLines > Math.max(1, modelChoices),
     text: text.replace(/\s+/g, " ").slice(0, 600),
   };
 };
@@ -206,4 +214,5 @@ await consumer.page.waitForTimeout(500);
 await shoot(consumer.page, "consumer-light-1440-recharge-error-dialog.png", "#payment-p2p-panel");
 
 await fs.writeFile(path.join(OUT, "dialogs.json"), JSON.stringify(report, null, 2) + "\n");
-console.log(JSON.stringify({ lab: labRoot, shots: report.shots.length, bad: report.checks.filter((check) => check.techTerms.length || check.rawStates.length || check.chainIdText.length).length }));
+const bad = report.checks.filter((check) => check.techTerms.length || check.rawStates.length || check.chainIdText.length || check.duplicateFingerprints || check.duplicateQuotes);
+console.log(JSON.stringify({ lab: labRoot, shots: report.shots.length, bad: bad.length, badFiles: bad.map((check) => check.file) }));
