@@ -5,7 +5,8 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:page": "bun scripts/build-page.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",

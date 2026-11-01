@@ -1,0 +1,115 @@
+// The plugin's single configuration document.
+//
+// Stage 1 only needs the network, the shared-model selection (filled in by a
+// later stage) and the overlay hostname. The format is version 3 from
+// docs/DESIGN-V2.md §9. Older files are never deleted or rewritten in place by
+// this module: `readConfig` falls back to defaults, and `writeJsonAtomic` keeps
+// the replaced document as `state.json.prev`.
+
+import { writeJsonAtomic, readJsonWithBackup } from "./store.ts";
+import { logger } from "./log.ts";
+import { statePath } from "./paths.ts";
+
+export const CONFIG_VERSION = 3 as const;
+
+export interface NetworkConfig {
+  name: string;
+  secret: string;
+  initialNode: string | null;
+}
+
+export interface ShareConfig {
+  models: string[];
+}
+
+export interface HubConfig {
+  version: typeof CONFIG_VERSION;
+  network: NetworkConfig | null;
+  share: ShareConfig;
+  hostname: string | null;
+}
+
+export function configPath(): string {
+  return statePath("state.json");
+}
+
+export function defaultConfig(): HubConfig {
+  return { version: CONFIG_VERSION, network: null, share: { models: [] }, hostname: null };
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Reads any JSON value as a v3 config. Unknown fields are dropped, a missing or
+ * different version becomes the default, and a network without both a name and
+ * a secret is not a network.
+ */
+export function normalizeConfig(raw: unknown): HubConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return defaultConfig();
+  const o = raw as Record<string, unknown>;
+  if (o.version !== CONFIG_VERSION) return defaultConfig();
+
+  let network: NetworkConfig | null = null;
+  const n = o.network;
+  if (n && typeof n === "object" && !Array.isArray(n)) {
+    const src = n as Record<string, unknown>;
+    const name = text(src.name);
+    const secret = text(src.secret);
+    if (name && secret) {
+      network = { name, secret, initialNode: text(src.initialNode) };
+    }
+  }
+
+  const shareRaw = o.share;
+  let models: string[] = [];
+  if (shareRaw && typeof shareRaw === "object" && !Array.isArray(shareRaw)) {
+    const list = (shareRaw as Record<string, unknown>).models;
+    if (Array.isArray(list)) {
+      models = list.filter((m): m is string => typeof m === "string" && m.length > 0);
+    }
+  }
+
+  return { version: CONFIG_VERSION, network, share: { models }, hostname: text(o.hostname) };
+}
+
+export function readConfig(): HubConfig {
+  const read = readJsonWithBackup<unknown>(configPath());
+  if (read.value === null) {
+    if (read.error) logger.warn(`state.json is unreadable (${read.error}); using defaults`);
+    return defaultConfig();
+  }
+  const value = read.value;
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).version !== CONFIG_VERSION
+  ) {
+    // A file from the old implementation: leave it on disk, start clean.
+    logger.warn(
+      `state.json has version ${String((value as Record<string, unknown>).version)}; ` +
+        `using v${CONFIG_VERSION} defaults (the old file is kept as state.json.prev on the next write)`,
+    );
+  }
+  if (read.from === "previous") logger.warn("state.json was unreadable; recovered the previous copy");
+  return normalizeConfig(value);
+}
+
+export function writeConfig(cfg: HubConfig): void {
+  writeJsonAtomic(configPath(), {
+    version: CONFIG_VERSION,
+    network: cfg.network
+      ? { name: cfg.network.name, secret: cfg.network.secret, initialNode: cfg.network.initialNode }
+      : null,
+    share: { models: [...cfg.share.models] },
+    hostname: cfg.hostname,
+  });
+}
+
+/** The overlay hostname is derived from the wallet, never chosen by the user. */
+export function hostnameForAddress(address: string): string {
+  const hex = address.toLowerCase().replace(/^0x/, "");
+  return `omai-${hex.slice(-8)}`;
+}
