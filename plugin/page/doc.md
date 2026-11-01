@@ -17,7 +17,7 @@
 2. 加入网络（直接问用户索要信息）：
    名字 <网络名>，密码 <网络密码>，
    初始节点 <可选>，是否开启**secure mode**，是否；
-   入网后确认网络已经连上；
+   入网后确认网络已经连上；建议用户给自己的节点取个名字存到地址簿。
 3. 列出本机可以共享的模型和价格，
    问我共享哪些，然后按我选的共享，用户可以选择暂时不共享任何模型；
 4. 汇总网络里别人的模型和价格。
@@ -41,15 +41,14 @@
 ### 入网和身份
 
 - 「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。这个网开了 secure mode。」
-- 「把我的节点叫『美西节点』，让网络里其他人看目录时能看到这个名字。」（其实就是给**自己**的地址加一个地址簿条目；删掉这个别名名字就撤回）
-- 「顺便给我开监听，让别的节点能直连我，不要全走中继。」（对应 `listen:true`；开了之后要在主机防火墙放行 `11010` 的 tcp 和 udp）
+- 「把我的节点叫『美西节点』，让网络里其他人看目录时能看到这个名字。」
 - 「用 TUN 模式跑」（默认就是；没有 root 会自动回退到 no-TUN。服务器上还要放行 tun 设备：`ufw allow in on tun0`）
-- 「帮我装那个 root 守护进程，让 Mac 也能用 TUN」（Mac 上会弹一次系统管理员密码框；装好后再 `join_network` 一次，节点就以 TUN 运行，别再弹窗）
+- 「帮我装 root 守护进程，让 Mac 也能用 TUN」（Mac 上会弹一次系统管理员密码框；装好后再 `join_network` 一次，节点就以 TUN 运行，别再弹窗）
 - 「把节点私钥导出到 /Users/me/omai.key，不要打印私钥；换机器时告诉我怎么导入。」
 
 ### 地址簿
 
-- 「把 0xabc… 存成“张三”，备注“提供方 · Base”。」
+- 「把 0xabc… 存成“张三”，备注“xxx”。」
 - 「地址簿里都有谁？把名字和地址列出来。」
 - 「张三换成新地址 0xdef… 了，改一下地址簿。」
 - 「删掉地址簿里的张三。」
@@ -68,7 +67,7 @@
 
 - 「看看网络里有谁在线、共享了什么模型、什么价格，整理成表。」
 - 「我想用张三的 A 模型，帮我申请；批了就直接连接。」
-- 「看看张三批了没有；批了但没 Key 就告诉我还差多少充值。」
+- 「看看张三批了没有；」
 - 「列出我所有的外部连接：模型、剩余额度、状态。」
 - 「断开张三，告诉我会不会影响其他连接。」
 - 「对方换了地址，重新找一遍再重连。」
@@ -87,30 +86,3 @@
 - 「连接断了，先看对方还在不在，再决定重连。」
 - 「这笔交易的哈希是 0x…，帮我核对上链没有；不要重发。」
 - 「哪条链上的 gas 不够？告诉我补哪种原生币。」
-
-agent 报出 `E` 开头的错误码时，把错误原文贴回去，让它按上面的顺序查。
-
-## 需要知道的
-
-- **充值**：必须从自己的节点钱包付给提供方。交易所直接提到提供方地址，钱记在交易所名下，你用不上。
-- **到账**：不是即时。BSC 等 15 个确认，Base 等最终确认，插件每 15 秒扫一次。
-- **私钥**：不会通过工具返回；导出只写到你指定的文件，不会打印出来。导出后，能读本机文件的 agent 仍然能读到它。
-- **网络**：密码是入网门；密码对上但 `peers` 一直是空的，多半是网络开了 secure mode 而你没开。secure mode 下每对节点各自协商密钥，中继也解不开；普通模式下全网共用一把来自密码的密钥，中继能解。两种情况覆盖网里的 HTTP 都是明文应用层。地址不是身份，目录和申请靠签名。
-- **节点名**：在地址簿里给自己（本节点钱包地址）起一个名字，就会签到你的目录里，别人 `discover` 时能看见；它只是显示名，身份仍然是钱包地址，改名不需要重新入网。
-- **连接后长什么样**：`connect_provider` 会在你的 Magpie 里加一条 Remote Magpie，名字是「地址簿里的名字 (omai-xxxxxxxx)」，比如「美西节点 (omai-5b4fafaf)」；模型在列表里带这个前缀。连第二个节点会分配到下一个本地端口（13426…），互不影响。
-- **能不能被计费**：共享方跑在 **TUN 模式**时，对端连接带的是它的覆盖网地址，Magpie 能按 Gateway Key 收费；跑在 no-TUN 时对端会被重写成 `127.0.0.1`，Magpie 当本机免 Key，所以插件干脆不公布 3425（`status` 里的 `publishedPorts` 只有 3426）。`status.network.mode` 写的就是当前模式。
-- **价格**：共享出去的模型公布四段价（输入 / 输出 / 缓存读 / 缓存写，USD / 每百万 tokens）。阶梯价和高峰价也会一起公布（门槛是多少、高峰几倍），别人能看到全貌；一个算不出来的价格不会被共享。真实扣费在提供方的 Magpie 里，目录只负责公布。
-- **转账和断开**：转账没有二次确认、没有白名单；断开连接会重启 EasyTier，其他连接短暂中断。
-- **额度**：价格改了，剩余额度会跟着变。429 是额度用完，充值即恢复；401 是被撤销，要提供方重新批准。
-- **身份**：同一个钱包 = 同一个账户；两台机器用同一个私钥，余额共享。
-
-## 工具
-
-需要查工具名时看这里。工具名取决于接入方式：路由关闭时是 `status`，路由开启时是 `magpie-plugin__status`，手工加全部插件地址时是 `magpie-plugin_status`。
-
-- 节点：`magpie-plugin_status`、`magpie-plugin_wallet`、`magpie-plugin_wallet_import`、`magpie-plugin_wallet_export`、`magpie-plugin_join_network`、`magpie-plugin_network_daemon`
-- 地址簿：`magpie-plugin_contacts`
-- 共享：`magpie-plugin_native_models`、`magpie-plugin_share_models`
-- 发现与申请：`magpie-plugin_discover`、`magpie-plugin_request_access`、`magpie-plugin_connect_provider`、`magpie-plugin_disconnect_provider`、`magpie-plugin_connections`
-- 审批：`magpie-plugin_consumers`、`magpie-plugin_approve_request`、`magpie-plugin_reject_request`、`magpie-plugin_revoke_consumer`
-- 钱：`magpie-plugin_send_payment`、`magpie-plugin_history`
