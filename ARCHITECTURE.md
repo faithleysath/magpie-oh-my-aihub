@@ -13,8 +13,8 @@ Oh My AIHub 是 Magpie 的一个纯后端插件：让同一个 EasyTier 私有�
 | D1 | 砍掉浏览器控制台、本机回环 API、CLI；只留后端 + MCP 工具 | 用户用 agent 操作，界面是负担 |
 | D2 | Magpie 里只加一页 Markdown 文档（渲染成静态 HTML） | 教用户接 agent，而不是当控制台 |
 | D3 | 内置钱包；生成 / 文件导入 / 文件导出；私钥不进 agent，地址可以给 | 地址要给用户去交易所提币 |
-| D4 | 覆盖网内明文 HTTP，不做 E2E | EasyTier 本身端到端加密，网络密码就是门 |
-| D5 | 只「加入」网络：网络名、密码、初始节点（可选） | 不承担组网产品的复杂度 |
+| D4 | 不做应用层 E2E；传输层的加密程度交给网络：secure mode 是每对节点独立的 E2EE，普通模式是共享密码的 AES-GCM | 不在插件里重新实现一层加密 |
+| D5 | 只「加入」网络：网络名、密码、初始节点（可选）、secureMode（可选） | 不承担组网产品的复杂度；secure mode 的密钥本机自生成，不做公钥交换 |
 | D6 | 没有「共享开关」「发布开关」「发现开关」：配好网络就自动公布、自动发现 | 开关是旧产品的历史包袱 |
 | D7 | 只共享原生模型：非 `remote-magpie`、非 `group/…`、非 `auto/…`，且价格完整 | 不转售别人的通道，价格必须可算 |
 | D8 | 批准只给模型范围，不给额度；额度 = 充值余额；申请与打钱互相独立 | 只有一个钱来源，cap 可推导 |
@@ -52,10 +52,11 @@ Magpie 进程
 
 | 文件 | 内容 | 权限 |
 | --- | --- | --- |
-| `state.json` | `{version:3, network:{name,secret,initialNode}, share:{models}, publish:{mappedCidr}, connections:[{provider,localPort,mappedHost}], hostname}`；上一版留 `.prev` | `0600` |
+| `state.json` | `{version:3, network:{name,secret,initialNode,secureMode}, share:{models}, publish:{mappedCidr}, connections:[{provider,localPort,mappedHost}], hostname}`；上一版留 `.prev` | `0600` |
 | `wallet/key.hex` | 节点私钥。工具永远不返回它 | `0600` |
 | `ledger.sqlite` | 入账、申请、消费者、出金、扫描游标；WAL，`-wal`/`-shm` 同行 | `0600` |
-| `easytier/current.toml` | 生成的 EasyTier 配置（导出、ACL、SOCKS5、逐连接转发） | `0600` |
+| `easytier/current.toml` | 生成的 EasyTier 配置（导出、ACL、SOCKS5、secure mode、逐连接转发） | `0600` |
+| `easytier/secure-key.json` | 本节点的 X25519 密钥对（只在 secure mode 下生成）。换了它就不是同一个节点 | `0600` |
 | `plugin.log` | 脱敏日志（私钥、Gateway Key、网络密码不落盘） | `0600` |
 
 `consumers.key_secret` 必须落盘（要交给对方），和 Magpie 自己的 `caller-keys.json` 同级敏感度。
@@ -191,6 +192,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 - EasyTier 2.6.4 的 `port-forward remove` 会打印成功但监听不消失，所以 `disconnect_provider` 要重启核心，其他连接短暂中断。
 - EasyTier 2.6.4 的 SOCKS5 在 TOML 里绑 `127.0.0.1`；`--socks5` 会绑 `0.0.0.0`，所以只能用 TOML 的 `socks5_proxy`。
 - 没有 `listeners` 时 EasyTier 默认监听 `tcp://0.0.0.0:11010`，入网不需要额外配置监听地址。
+- EasyTier 2.6.4 的 secure mode：同网节点必须都开，没开的一方会被对端反复踢掉（官方文档说服务端能接旧客户端，实测不行）；`local_public_key` 必须显式给，否则报 `local public key is not set`；`peer_public_key` 写了不生效（填一个假公钥照样能连上），所以现在不做公钥 pin。
 - 复核：`git -C ~/Projects/lab/magpie-upstream show v0.1.2516:internal/gateway/tools_mcp.go`、`internal/library/plugin_tools.go`、`internal/gui/pluginpage.go`。
 
 ## 代码地图
@@ -217,6 +219,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 | `src/paths.ts` | 插件数据目录与 `magpie` 可执行文件的解析（`OH_MY_AIHUB_MAGPIE` 可覆盖）。 |
 | `src/store.ts` | 原子写 JSON（临时文件 + fsync + rename，保留 `.prev`）。 |
 | `src/run.ts` | 唯一启动外部程序的地方：argv 数组，没有 shell。 |
+| `src/secure-key.ts` | secure mode 的 X25519 密钥对：首用生成、持久化、注册为日志敏感值。 |
 | `src/log.ts` | 脱敏日志（私钥、Key、网络密码、bearer 不落盘）。 |
 | `src/tools/*.ts` | 19 个工具；`types.ts` 是工具定义类型，`resolve.ts` 把地址参数里的别名解析成地址，`node-wallet.ts` 是钱包生命周期（不是工具）。 |
 | `scripts/build-page.ts` | 把 `page/doc.md` 渲染成 `page/index.html`，渲染器是很小的 Markdown 子集。 |
@@ -227,7 +230,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 2. **转 USDC 需要 gas**。地址上没有 BNB/ETH 时 `send_payment` 会失败，`wallet` 会显示 gas 余额。
 3. **同一个钱包 = 同一个账户**。两台机器用同一个私钥，余额共享。
 4. **价格变更会改变剩余额度**（D13），可能出现剩余为负、Magpie 拒服务，充值即恢复。
-5. **覆盖网地址不是身份**。安全靠签名 + Gateway Key + 余额，网络密码是唯一入网门。
+5. **覆盖网地址不是身份**。安全靠签名 + Gateway Key + 余额；链路加密由网络决定（secure mode 下中继也不可解密，普通模式下中继能解）。
 6. **一笔转错地址的付款无法找回**。`send_payment` 不限目标、不二次确认。
 7. **交易所提币地址会成为账户**，但它拿不到 Key，所以那笔钱用不上。
 8. **移除连接会重启 EasyTier 核心**（上游 bug），其他连接短暂中断。

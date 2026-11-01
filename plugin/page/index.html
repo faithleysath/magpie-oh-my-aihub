@@ -45,8 +45,9 @@
    问我共享哪些，然后按我选的共享；
 4. 汇总网络里别人的模型和价格。
 不要动钱，不要导出私钥；参数不确定先问我。</code></pre>
+<p>网络方说这个网开了 <strong>secure mode</strong>，就把这句话一起说：“这个网开了 secure mode”。agent 会在入网时带上 <code>secureMode:true</code>，本机会自己生成一对密钥存在 <code>easytier/secure-key.json</code>，你不用和任何人交换密钥。</p>
 <p>好的 agent 会先读状态，再问你要网络名和密码；入网后才列模型、做发现。</p>
-<p>入网成功的标志是网络状态显示已连接、发布端口里有 <code>3426</code> 和 <code>3425</code>。发布端口为空只说明本机没有可用的局域网地址，别人看不到你，其他功能正常。</p>
+<p>入网成功的标志是状态里 <code>peers</code> <strong>不为空</strong>（能看到种子或伙伴节点）。<code>state:&quot;online&quot;</code> 只说明 EasyTier 核心跑起来了，不代表已经连上别人：网络开着 secure mode 而你这边没开时，就是这个样子（核心在跑、<code>peers</code> 一直空）。发布端口里有 <code>3426</code> 和 <code>3425</code> 只说明本机在对外公布，不代表已经连上；发布端口为空只说明本机没有可用的局域网地址，别人看不到你，其他功能正常。</p>
 <blockquote><p>首次入网要下载 EasyTier，几十秒很正常。agent 说还在启动时，让它继续查状态。</p></blockquote>
 <p>只想用别人的模型？第 3 步回答「不共享」就行。</p>
 <h2>常用说法</h2>
@@ -58,7 +59,7 @@
 </ul>
 <h3>入网和身份</h3>
 <ul>
-<li>「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。」</li>
+<li>「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。这个网开了 secure mode。」</li>
 <li>「把节点私钥导出到 /Users/me/omai.key，不要打印私钥；换机器时告诉我怎么导入。」</li>
 </ul>
 <h3>地址簿</h3>
@@ -108,7 +109,7 @@
 <li><strong>充值</strong>：必须从自己的节点钱包付给提供方。交易所直接提到提供方地址，钱记在交易所名下，你用不上。</li>
 <li><strong>到账</strong>：不是即时。BSC 等 15 个确认，Base 等最终确认，插件每 15 秒扫一次。</li>
 <li><strong>私钥</strong>：不会通过工具返回；导出只写到你指定的文件，不会打印出来。导出后，能读本机文件的 agent 仍然能读到它。</li>
-<li><strong>网络</strong>：密码是唯一入网门；覆盖网里是明文 HTTP。地址不是身份，目录和申请靠签名。</li>
+<li><strong>网络</strong>：密码是入网门；密码对上但 <code>peers</code> 一直是空的，多半是网络开了 secure mode 而你没开。secure mode 下每对节点各自协商密钥，中继也解不开；普通模式下全网共用一把来自密码的密钥，中继能解。两种情况覆盖网里的 HTTP 都是明文应用层。地址不是身份，目录和申请靠签名。</li>
 <li><strong>转账和断开</strong>：转账没有二次确认、没有白名单；断开连接会重启 EasyTier，其他连接短暂中断。</li>
 <li><strong>额度</strong>：价格改了，剩余额度会跟着变。429 是额度用完，充值即恢复；401 是被撤销，要提供方重新批准。</li>
 <li><strong>身份</strong>：同一个钱包 = 同一个账户；两台机器用同一个私钥，余额共享。</li>

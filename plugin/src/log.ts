@@ -19,6 +19,8 @@ export function redact(text: string): string {
   out = out.replace(/(Bearer\s+)[A-Za-z0-9._-]{12,}/gi, "$1<redacted>");
   out = out.replace(/(network_secret\s*=\s*")[^"]+(")/gi, "$1<redacted>$2");
   out = out.replace(/(local-private-key[= ]+)[A-Za-z0-9+/=_-]{16,}/gi, "$1<redacted>");
+  // the same key as it appears in a generated TOML (`local_private_key = "…"`)
+  out = out.replace(/(local_private_key\s*=\s*")[^"]+(")/gi, "$1<redacted>$2");
   return out;
 }
 

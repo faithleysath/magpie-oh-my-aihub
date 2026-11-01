@@ -9,7 +9,7 @@ Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTie
 1. 打开 Magpie 的 **Plugins → Discover**。
 2. 如果搜不到，在列表底部用手动添加入口填：`github:faithleysath/magpie-oh-my-aihub`
 3. 打开 **Oh My AIHub** 插件页——那一页就是用户手册（这是什么、快速开始、常用说法、需要知道的、工具名）。
-4. 让 agent 用 `join_network` 加入网络，其余按插件页走。
+4. 让 agent 用 `join_network` 加入网络，其余按插件页走。网络方说这个网开了 secure mode，就一起给 agent：它会传 `secureMode:true`。
 
 插件装好后会自动生成节点钱包，私钥在插件数据目录的 `wallet/key.hex`（`0600`）。插件不写 Magpie 选项，也不读它的管理接口。
 
@@ -34,7 +34,7 @@ Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agen
 
 ## 安全边界
 
-- **网络密码是唯一的入网门**。同一个 EasyTier 私有网里的节点彼此可达，覆盖网内是明文 HTTP，插件不做二次加密、不做配对、不做节点信任列表。
+- **网络密码是入网门，secure mode 决定加密到哪一层**。网络开了 EasyTier secure mode 时要在 `join_network` 里传 `secureMode:true`：同网节点必须一致，不一致的节点会被对端反复踢掉（`peers` 永远为空）。本机的 X25519 密钥第一次用到时自动生成在 `easytier/secure-key.json`，**不需要和任何人交换密钥**。没开 secure mode 的网也加密（AES-GCM），但密钥来自同一个密码，中继节点能解开；开了之后每对节点各自协商，中继只能转发。两种情况覆盖网内的 HTTP 都是明文应用层：插件不做应用层加密、不做配对、不做节点信任列表。
 - **私钥只在本机**。工具永远不返回私钥；`wallet_export` 只写到本机文件。导出之后能读到那个文件的人（包括 agent）就能拿走它，这是本机权限问题，插件挡不住。
 - **地址簿只是省打字**。`contacts` 把名字映射到地址，存在本机 `ledger.sqlite`；它不进签名、不进目录、不参与授权，也不是转账白名单。所有收地址的工具都接受名字，但名字换成地址之后，行为和不写名字完全一样。
 - **插件不转发 AI 请求**。它不代理、不计 token、不另写请求账单；用量和限额都在 Magpie 自己的 Gateway Key 上。

@@ -22,6 +22,13 @@ export interface NetworkConfig {
   name: string;
   secret: string;
   initialNode: string | null;
+  /**
+   * EasyTier secure mode. A network whose nodes run it rejects a node that does
+   * not (`same-network peers must use the same secure mode`), so this is a
+   * property of the network, not a preference: it is chosen when joining and
+   * kept from then on. The X25519 pair it needs lives in `easytier/secure-key.json`.
+   */
+  secureMode: boolean;
 }
 
 export interface ShareConfig {
@@ -146,7 +153,7 @@ export function normalizeConfig(raw: unknown): HubConfig {
     const name = text(src.name);
     const secret = text(src.secret);
     if (name && secret) {
-      network = { name, secret, initialNode: text(src.initialNode) };
+      network = { name, secret, initialNode: text(src.initialNode), secureMode: src.secureMode === true };
     }
   }
 
@@ -196,7 +203,12 @@ export function writeConfig(cfg: HubConfig): void {
   writeJsonAtomic(configPath(), {
     version: CONFIG_VERSION,
     network: cfg.network
-      ? { name: cfg.network.name, secret: cfg.network.secret, initialNode: cfg.network.initialNode }
+      ? {
+          name: cfg.network.name,
+          secret: cfg.network.secret,
+          initialNode: cfg.network.initialNode,
+          secureMode: cfg.network.secureMode,
+        }
       : null,
     share: { models: [...cfg.share.models] },
     publish: { mappedCidr: cfg.publish.mappedCidr },
