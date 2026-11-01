@@ -12,7 +12,7 @@
  *   bun run plugin/scripts/console-preview.ts --scenario paused --port 61394
  *   bun run plugin/scripts/console-preview.ts --scenario unshared --port 61396
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const args = process.argv.slice(2);
@@ -26,12 +26,13 @@ const root = resolve(import.meta.dir, "../console");
 
 const assets: Record<string, [string, string]> = {
   "/": ["index.html", "text/html; charset=utf-8"],
-  "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
-  "/session.js": ["session.js", "text/javascript; charset=utf-8"],
-  "/providers.js": ["providers.js", "text/javascript; charset=utf-8"],
-  "/wallet.js": ["wallet.js", "text/javascript; charset=utf-8"],
 };
+// Every console module the page imports is served from this same folder; the
+// preview must not silently 404 a module and leave the shell stuck.
+for (const name of readdirSync(root)) {
+  if (name.endsWith(".js") && !name.endsWith(".test.js")) assets[`/${name}`] = [name, "text/javascript; charset=utf-8"];
+}
 
 const model = (id: string, displayName: string, input: number, output: number) => ({
   id, displayName, completePrice: true, allowedByPolicy: true,
@@ -75,7 +76,7 @@ function configuredState(): any {
         catalog: { enabled: true, discoveryEnabled: true, port: 45872, socksPort: 45873, displayName: "Studio AI", contact: "studio@example.invalid" },
       },
       network: {
-        configured: true, name: "studio-ai", state: "online", summary: "已连接 2 个其他节点 · 目录已发布",
+        configured: true, name: "studio-ai", state: "online", summary: "已连接 2 个其他节点，目录已发布",
         at: new Date().toISOString(),
         evidence: { coreVersion: "2.6.4", readAt: new Date().toISOString(), staleMs: 1200, complete: true, problems: [] },
         core: { running: true, pid: 4210, version: "2.6.4", startedAt: "2026-10-31T01:00:10.000Z", restarts: 0, state: "running", lastError: null, aclOk: true },
