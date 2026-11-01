@@ -91,7 +91,7 @@ D13 的后果要写清楚：Magpie 改价会重算历史用量，所以「剩余
 **入网**
 1. 用户让 agent 调用 `join_network {networkName, networkSecret, initialNode?}`。
 2. 插件写配置、启 EasyTier no-TUN 核心、加入覆盖网。
-3. 插件在覆盖网公布固定端口 **3426**（目录 + 申请 + 轮询）；共享了模型时额外公布 **3425**（Magpie 网关）。
+3. 插件用 `[[proxy_network]]` 把自己 LAN 地址映射成一个稳定的覆盖网地址（`10.66.a.b/32`，首次分配后持久化），并用 Forward ACL 只放行 **3426**（目录 + 申请 + 轮询）；共享了模型时再放行 **3425**（Magpie 网关）。
 4. 之后不再需要任何用户动作。
 
 **共享（提供方）**
@@ -253,7 +253,7 @@ MCP 地址：
 
 ## 8. 覆盖网协议
 
-监听：绑定本机 LAN 地址（不是 `0.0.0.0`、不是回环），端口 **3426**，通过 EasyTier 的 `[[port_forward]]` 公布。三个端点，全部走覆盖网明文 HTTP。
+监听：绑定本机 LAN 地址（不是 `0.0.0.0`、不是回环），端口 **3426**。EasyTier 通过 `[[proxy_network]]` 把这个 LAN 地址导出成 `mapped_cidr`，Forward ACL 只放行 3426；消费者拨的是 mapped 那一侧的地址。`[[port_forward]]` **不用于入站**，它只在消费方本机把「本地端口 → 覆盖网远端端口」接起来（见 §7.3）。三个端点全部走覆盖网明文 HTTP。
 
 **签名格式**（三处共用）
 
@@ -336,7 +336,7 @@ Magpie 进程
 | 用途 | 端口 |
 |---|---|
 | Magpie 网关 | 3425（Magpie 自己的） |
-| 目录 + 申请 + 轮询（覆盖网公布） | 3426 |
+| 目录 + 申请 + 轮询（`proxy_network` + ACL 放行） | 3426 |
 | EasyTier SOCKS5（本机回环） | 13400 |
 | 每个 Remote Magpie 的本地转发 | 13425 起 |
 
@@ -344,7 +344,7 @@ Magpie 进程
 
 | 文件 | 内容 |
 |---|---|
-| `state.json` | `{version:3, network:{name,secret,initialNode}, share:{models:[]}, hostname}` |
+| `state.json` | `{version:3, network:{name,secret,initialNode}, share:{models:[]}, publish:{mappedCidr:null}, hostname}` |
 | `wallet/key.hex` | 私钥，`0600` |
 | `ledger.sqlite` | 入账、申请、消费者、出金 |
 | `easytier/current.toml` | 生成的 EasyTier 配置 |
@@ -428,6 +428,8 @@ go -C ~/Projects/lab/magpie-upstream test ./internal/plugin/ -run Tool
 - `gateway-key limit <id> <window> --cost <usd>`，window 形如 `3650d`，`--cost` 必须 ≥ `0.0001`；`0` 在 Magpie 里表示无限额。
 - `gateway-key models <id> <model…>` 拒绝空列表。
 - `provider add remote-magpie <key> url=<…> id=<…>`；替换用 `replaceRemoteProvider` 语义（先证明归属）。
+- `[[port_forward]]` 是「本地端口 → 覆盖网远端端口」，**不是入站发布**；对外导出只能用 `[[proxy_network]]`（`cidr` 是本机 LAN 地址 `/32`，`mapped_cidr` 是稳定的 `10.66.a.b/32`）。旧实现正是这样分工：提供方用 `proxy_network`，消费方用 `port_forward`。
+- 没有 `listeners` 时 EasyTier 默认监听 `tcp://0.0.0.0:11010`（`easytier/src/common/config.rs`），所以入网不需要额外配置监听地址。
 - EasyTier 2.6.4 的 `port-forward remove` 打印成功但监听不消失（`easytier-cli.rs` 只发 `bind_addr`，`api.rs` 按整结构比较删除），所以**移除转发必须重启核心**。
 - EasyTier 2.6.4 的 SOCKS5 会把监听绑在 `127.0.0.1`（`gateway/socks5.rs`），而 `--socks5` 会绑 `0.0.0.0`（`launcher.rs`），所以只能用 TOML 里的 `socks5_proxy`。
 - 一个数据目录只能有一个插件宿主（现成的 `host.lock` 逻辑保留）。
@@ -448,7 +450,8 @@ go -C ~/Projects/lab/magpie-upstream test ./internal/plugin/ -run Tool
 | `src/networks.ts`（链/资产注册表） | 精简为 BSC + Base 两条生产链、两个 USDC |
 | `src/evm.ts`（JSON-RPC 读） | 保留，补上转账所需的 `eth_sendRawTransaction` |
 | `src/watcher.ts`（最终性、去重） | 保留最终性与去重，删除入账到账本/意图的部分 |
-| `src/walletamount.ts`、`src/ports.ts`（转发口分配） | 保留 |
+| `src/walletamount.ts`、`src/ports.ts`（消费方转发口分配） | 保留 |
+| `src/addresses.ts`（`randomMappedCidr`：稳定的 `10.66.a.b/32`） | 保留，供阶段 2 的 `proxy_network` 使用 |
 | `src/store.ts`（原子写 JSON）、`src/paths.ts`、`src/lock.ts`、`src/run.ts`、`src/log.ts` | 保留（`log.ts` 保留脱敏规则） |
 | `src/state.ts` | 重写为第 9 节的 v3 结构 |
 
@@ -461,7 +464,7 @@ go -C ~/Projects/lab/magpie-upstream test ./internal/plugin/ -run Tool
 | `p2p/*`、`control/*`、`payment-p2p-host.ts`、`p2p-payment*.ts`、`payment-local-service.ts`、`payment-operations.ts` | ~16,000 |
 | `wallet-vault.ts`、`wallet-payment-send.ts`、`wallet-local-service.ts` | ~3,200（换成 ~300 行 ethers 钱包） |
 | `wallet.ts`（旧的链钱包门面）、`chainstore.ts`（并入新的 `ledger.ts`）、`production-policy.ts`、`receiving-networks.ts`（不再有“选择收款网络”） | ~2,400 |
-| `addresses.ts`（覆盖网地址交给 EasyTier）、`plugin-options.ts`（不再读写 Magpie 插件选项） | ~600 |
+| `plugin-options.ts`（不再读写 Magpie 插件选项） | ~260 |
 | `deposits.ts`、`eip712.ts`、`walletstatement.ts`、`walletview.ts`、`legacy-recovery.ts`、`mainnet-gate.ts`、`mainnet-surface.ts`、`readonly-balance.ts`、`wallet-workflows.ts`、`connection-request.ts` | ~4,500 |
 | `ledger.ts`、`provisioner.ts`、`pricing.ts`（窗口/价格快照/缺口/重签/巡检） | ~4,400（换成 ~600 行：入账 + cap 重算 + Key 签发） |
 | 手写的 keccak / secp256k1 恢复实现（文件名为 `keccak.ts`、`secp256k1.ts`；改用已有 `ethers` 依赖） | ~330 |
@@ -501,7 +504,7 @@ scripts/build-page.ts
 |---|---|---|---|
 | 0 | `docs/agent-native` | 重写 `ARCHITECTURE.md` 为约 8 条决策；旧文档加历史横幅；`AGENTS.md` 指针改到本文档 | 文档自洽，无代码改动 |
 | 1 | `feat/skeleton` | 新 `index.ts`、`config.ts`、`wallet.ts`、`tools/{status,wallet,wallet-import,wallet-export,join-network}`、文档页（含预渲染脚本） | 真 Magpie 0.1.2516+ 里，agent 通过 MCP 看到这 5 个工具，能生成钱包、拿到地址、加入网络并在 `status` 看到 online；Magpie 里能打开文档页，里面的工具名与实际一致 |
-| 2 | `feat/catalog` | 3426 目录服务、签名、SOCKS5 读取、`share_models`/`native_models`/`discover` | 两台隔离 Magpie 互见模型与价格；篡改任一字段被拒 |
+| 2 | `feat/catalog` | 探测 LAN 地址 + 分配/持久化 `mappedCidr` + `proxy_network` 与 ACL 放行 3426、3426 目录服务、签名、SOCKS5 读取、`share_models`/`native_models`/`discover` | 两台隔离 Magpie 互见模型与价格；篡改任一字段被拒 |
 | 3 | `feat/authorization` | `request`/`poll` 端点、审批、Key 签发、`connect_provider`、`revoke_consumer` | 双机：申请 → 批准（余额 0 时等待）→ 入账后拿到 Key → 原生 Remote Magpie 出现模型 → 撤销后 401 |
 | 4 | `feat/credit` | 链观察器、按 `from` 记账、`cap = D`、`send_payment`、回滚 | 本地链实验：入账→cap→原生 200；用尽→429；回滚→cap 下降；出金到任意地址成功 |
 | 5 | `feat/cleanup` | 删除旧模块与旧文档，重命名包/仓库（可选，为了短工具名） | `bun run typecheck` 通过；无死代码；`plugin-tools.json` 只剩本插件工具 |
