@@ -25,10 +25,18 @@ Every item from the review, what changed, and where to see it. Status is
 | --- | --- | --- |
 | 连接已有钱包方式 | no `window.ethereum`, EIP-6963, chainId, 授信; says "不会自动连接其他钱包" | `consumer-light-1440-connect-wallet-dialog.png`, `consumer-dark-1440-connect-wallet-dialog.png`, `consumer-light-390-connect-wallet-dialog.png`; `dialogs.json` |
 | 外置钱包区域 | no implementation term in the visible card; EIP-6963 only in the collapsed 技术说明 | `consumer-light-1440-external-wallet.png` |
-| 人工审批 + 选中报价预览 | no raw `pending/delivering/approved`; no `chainId`/`priceVersion` in the visible dialog; technical binding is collapsed | `provider-light-1440-approval-dialog.png`, `provider-dark-1440-approval-dialog.png`, `provider-light-390-approval-dialog.png` |
+| 人工审批 + 选中报价预览 | top copy is "核对伙伴、模型、价格和额度后再批准。密钥会自动安全交付，无需发送文件。"; model copy is "默认选择全部申请模型。选择变化后，需要重新预览当前报价。"; no 价格版本/批准代次/代次/generation/priceVersion; one full fingerprint and one quote line; model choice has no price; "当前报价" is the single price area; technical binding only in the collapsed "选中报价的技术绑定" | `provider-light-1440-approval-dialog.png`, `provider-dark-1440-approval-dialog.png`, `provider-light-390-approval-dialog.png`; `dialogs.json` (`fingerprints: 1`, `priceLines: 1`, `modelChoices: 1`) |
 | 充值申请 + 付款预览 | form and preview show "Base 测试网", never "链 84532"; technical fields are collapsed | `consumer-light-1440-recharge-error-dialog.png` (real), `fixture-payment-preview.png` (fixture render, labelled) |
 | 真实错误态 | recharge validation error, ended session | `consumer-light-1440-recharge-error.png`, `consumer-light-1440-session-ended.png` |
 | Sensitive export | not screenshotted; the safe error/closed states are used instead | `consumer-light-1440-connect-wallet-dialog.png` |
+
+The approval dialog's default-visible content is: the compressed purpose line,
+one full partner fingerprint, the model checkbox list (names only), the
+"当前报价" block (model + price, updated by preview), the cap field with the
+"0 表示不限制，不能用于暂停" hint, the two consent checkboxes, and the approve
+button. Only these are behind collapsed details: request binding (partner
+node/name, quote hash, approval generation, expiry), selected-price version,
+quote hash and model count.
 
 `visual-system.test.js` mounts the shipped wallet-vault, wallet-network, payment
 and providers modules in a DOM and scans the *visible* text (closed `<details>`

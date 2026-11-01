@@ -1,37 +1,37 @@
 {
   "schema": "ohmyaihub-phase10-visual-lab-cleanup/v1",
-  "at": "2026-11-01T04:29:51.745Z",
-  "root": "/tmp/ohmyaihub-visual-25450",
+  "at": "2026-11-01T04:53:27.601Z",
+  "root": "/tmp/ohmyaihub-visual-83201",
   "stopped": [
     {
-      "pid": 25846,
+      "pid": 83650,
       "command": "<lab>/Magpie.app/Contents/MacOS/magpie serve"
     },
     {
-      "pid": 26040,
+      "pid": 83833,
       "command": "<lab>/Magpie.app/Contents/MacOS/magpie serve"
     },
     {
-      "pid": 29452,
-      "command": "<lab>/provider/home/.cache/magpie/bun/1.4.4/magpie-bun run /tmp/ohmyaihub-visual-25450/provider/home/.cache/magpie/plugin-host/host-57e4026712e7.js"
+      "pid": 87554,
+      "command": "<lab>/provider/home/.cache/magpie/bun/1.4.4/magpie-bun run /tmp/ohmyaihub-visual-83201/provider/home/.cache/magpie/plugin-host/host-57e4026712e7.js"
     },
     {
-      "pid": 29557,
-      "command": "/private<lab>/provider/.config/magpie/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private/tmp/ohmyaihub-visual-25450/provider/.config/magpie/oh-m"
+      "pid": 87657,
+      "command": "/private<lab>/provider/.config/magpie/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private/tmp/ohmyaihub-visual-83201/provider/.config/magpie/oh-m"
     },
     {
-      "pid": 29824,
-      "command": "<lab>/consumer/home/.cache/magpie/bun/1.4.4/magpie-bun run /tmp/ohmyaihub-visual-25450/consumer/home/.cache/magpie/plugin-host/host-57e4026712e7.js"
+      "pid": 87918,
+      "command": "<lab>/consumer/home/.cache/magpie/bun/1.4.4/magpie-bun run /tmp/ohmyaihub-visual-83201/consumer/home/.cache/magpie/plugin-host/host-57e4026712e7.js"
     },
     {
-      "pid": 29922,
-      "command": "/private<lab>/consumer/.config/magpie/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private/tmp/ohmyaihub-visual-25450/consumer/.config/magpie/oh-m"
+      "pid": 88089,
+      "command": "/private<lab>/consumer/.config/magpie/oh-my-aihub/easytier/v2.6.4/darwin-arm64/easytier-core -c /private/tmp/ohmyaihub-visual-83201/consumer/.config/magpie/oh-m"
     }
   ],
   "remaining": [],
   "portsChecked": [
-    17934,
-    17943
+    17912,
+    17936
   ],
   "portsStillListening": [],
   "removed": true,

@@ -33,7 +33,7 @@ visible-DOM test and real dialog frames.
 | Network cards / receiving | "链 56", "链 8453", "BSC 56 与 Base 8453" | "BSC", "Base", "BSC 与 Base"; chain id in collapsed 技术详情 | `provider-light-1440-wallet.png`; matrix `chainIdText: []` |
 | Browser-wallet dialog | "浏览器扩展必须由你在下一屏选择具体钱包，不会自动使用 window.ethereum" | "连接浏览器钱包时，你需要在下一屏明确选择具体钱包，不会自动连接其他钱包" | `consumer-light-1440-connect-wallet-dialog.png`, dark + narrow |
 | External wallet area | EIP-6963 / chainId in an open details | visible account/status only; protocol and chain id in collapsed 技术详情 | `consumer-light-1440-external-wallet.png` |
-| Human approval | "…返回当前报价的 selected version" | "…由服务返回这次报价对应的价格版本" | `provider-light-1440-approval-dialog.png`, dark + narrow |
+| Human approval | top copy bound "价格版本与批准代次"; model copy said "selected version"; full fingerprint twice (paragraph + checkbox); model+price shown in the choice and again in the preview; "0 在 Magpie 中表示不限制" | top copy "核对伙伴、模型、价格和额度后再批准。密钥会自动安全交付，无需发送文件。"; model copy "默认选择全部申请模型。选择变化后，需要重新预览当前报价。"; one fingerprint; checkbox "我核对并接受上述完整身份指纹"; one "当前报价" area; "0 表示不限制，不能用于暂停"; priceVersion/generation only in collapsed details | `provider-light-1440-approval-dialog.png`, dark + narrow; `dialogs.json` fingerprints 1 / priceLines 1 |
 | Payment preview | "网络 链 84532", gas/nonce/digest as visible rows | "网络 Base 测试网"; chain id, nonce, gas, digest in collapsed 技术详情 | `fixture-payment-preview.png` (labelled fixture); `consumer-light-1440-recharge-error-dialog.png` (real form/error) |
 
 Full 48-shot matrix: [`evidence/final/`](final/) and the machine-readable

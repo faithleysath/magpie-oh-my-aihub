@@ -1,7 +1,7 @@
 {
   "schema": "ohmyaihub-phase10-visual-lab/v1",
-  "at": "2026-11-01T04:14:28.572Z",
-  "root": "/tmp/ohmyaihub-visual-97487",
+  "at": "2026-11-01T04:49:07.799Z",
+  "root": "/tmp/ohmyaihub-visual-83201",
   "platform": {
     "os": "darwin",
     "arch": "arm64"
@@ -9,13 +9,13 @@
   "magpie": {
     "version": "magpie 0.1.2289",
     "binarySha256": "9dd74b0fe4ebe93e3eadfcc160e1f0a8d7c84245e1a4867ffed6f08862df272c",
-    "isolatedCopy": "/tmp/ohmyaihub-visual-97487/Magpie.app",
+    "isolatedCopy": "/tmp/ohmyaihub-visual-83201/Magpie.app",
     "zipSha256": "c704be0d96ccaef64d5b6d7cdadd92b6bc0b650b5ca0b0a119b1c5d8900fc6a0",
     "release": "https://github.com/yetone/magpie-releases/releases/tag/v0.1.2289",
     "pinnedBinarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
     "note": "The lab copy was re-signed ad hoc with a unique bundle id so a launch cannot hand over to the user's running Magpie; its binary hash therefore differs from the pinned release binary."
   },
-  "network": "visual-ef7edaf057",
+  "network": "visual-b0590cdf5a",
   "setupWarnings": {
     "provider": [
       "FAIL        configured: no overlay configuration yet",
@@ -33,29 +33,29 @@
   "nodes": [
     {
       "name": "provider",
-      "home": "/tmp/ohmyaihub-visual-97487/provider/home",
-      "config": "/tmp/ohmyaihub-visual-97487/provider/.config",
+      "home": "/tmp/ohmyaihub-visual-83201/provider/home",
+      "config": "/tmp/ohmyaihub-visual-83201/provider/.config",
       "apiPort": 34617,
-      "consolePort": 49367,
+      "consolePort": 52934,
       "gatewayPort": 34311,
       "listen": "tcp://127.0.0.1:11010",
-      "upstreamPort": 39021,
+      "upstreamPort": 39025,
       "model": "provider/alpha-model",
-      "pid": 97784,
-      "upstreamPid": 97628
+      "pid": 83650,
+      "upstreamPid": 83444
     },
     {
       "name": "consumer",
-      "home": "/tmp/ohmyaihub-visual-97487/consumer/home",
-      "config": "/tmp/ohmyaihub-visual-97487/consumer/.config",
+      "home": "/tmp/ohmyaihub-visual-83201/consumer/home",
+      "config": "/tmp/ohmyaihub-visual-83201/consumer/.config",
       "apiPort": 34618,
-      "consolePort": 49416,
+      "consolePort": 52979,
       "gatewayPort": 34312,
       "listen": "tcp://127.0.0.1:11011",
-      "upstreamPort": 39022,
+      "upstreamPort": 39026,
       "model": "consumer/beta-model",
-      "pid": 97943,
-      "upstreamPid": 97848
+      "pid": 83833,
+      "upstreamPid": 83729
     }
   ],
   "keep": false,

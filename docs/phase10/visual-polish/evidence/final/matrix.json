@@ -1,13 +1,13 @@
 {
   "schema": "ohmyaihub-phase10-visual-matrix/v1",
-  "at": "2026-11-01T04:28:13.240Z",
-  "lab": "/tmp/ohmyaihub-visual-25450",
+  "at": "2026-11-01T04:51:41.028Z",
+  "lab": "/tmp/ohmyaihub-visual-83201",
   "magpie": {
     "version": "magpie 0.1.2289",
     "binarySha256": "9dd74b0fe4ebe93e3eadfcc160e1f0a8d7c84245e1a4867ffed6f08862df272c",
-    "isolatedCopy": "/tmp/ohmyaihub-visual-25450/Magpie.app"
+    "isolatedCopy": "/tmp/ohmyaihub-visual-83201/Magpie.app"
   },
-  "network": "visual-677abd7290",
+  "network": "visual-b0590cdf5a",
   "shots": [
     "provider-light-1440-home.png",
     "provider-light-1440-discovery.png",

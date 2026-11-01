@@ -82,7 +82,9 @@ All 48 pages: `middleDots: 0`, `arrows: 0`, `pills: 0`, `overflowX: 0`,
 `chainIdText: []`, `fontSizes: ["14px","16px","20px","26px"]`.
 All 8 dialogs and the fixture preview: `techTerms: []`, `rawStates: []`,
 `chainIdText: []` in the default-visible text; technical fields are only behind
-a collapsed `技术详情`.
+a collapsed `技术详情`. The approval dialog also records `fingerprints: 1`,
+`priceLines: 1`, `modelChoices: 1`, so a duplicated full fingerprint or a second
+model/price row fails the audit.
 Focus: `outline: solid 3px`, offset `2px`. Reduced motion:
 `transition-duration: 0s`.
 

@@ -75,7 +75,12 @@ light/dark × 1440×900/390×844 × five pages, plus 我的连接, full wallet/r
 the real recharge validation error, focus and ended session. A second set of 8
 real dialog images covers the browser-wallet connection dialog (light/dark/
 narrow), the external-wallet area, the human approval with its selected quote
-preview (light/dark/narrow) and the real recharge error. `dialogs.json` records
+preview (light/dark/narrow) and the real recharge error. The approval dialog
+shows one full fingerprint and one "当前报价" block (model + price); the
+checkbox says "我核对并接受上述完整身份指纹"; 价格版本/批准代次/代次/generation
+exist only inside the collapsed "请求身份与绑定"/"选中报价的技术绑定" details.
+`dialogs.json` records `fingerprints: 1`, `priceLines: 1`, `modelChoices: 1`
+for the one-model approval fixture. `dialogs.json` records
 the same visible-text audit for each; `fixture-payment-preview.png` +
 `fixture-payment.json` are a clearly labelled fixture render of the payment
 preview (the on-chain lab was not re-run).
