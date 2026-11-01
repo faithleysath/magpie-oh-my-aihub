@@ -377,6 +377,8 @@ meta(k TEXT PRIMARY KEY, v TEXT);
 
 `key_secret` 必须落盘（要交付给对方），与 Magpie 自己的 `caller-keys.json` 同级敏感度，文件 0600。
 
+从旧版升级时，如果 `ledger.sqlite` 还是旧 schema（旧 `deposits` 没有 `token` 列），它会被改名成 `ledger.sqlite.pre-v2-<时间>`（连同 `-wal`/`-shm`）并新建一个空账本；不删数据，也不会因为 `CREATE TABLE IF NOT EXISTS` 修不了旧表而启动失败。
+
 ### 9.1 文档页（Magpie 里唯一可见的东西）
 
 - 源文件 `plugin/page/doc.md`；`bun run build:page` 用 `scripts/build-page.ts` 渲染成 `page/index.html`（产物提交进仓库，页面运行时不带 markdown 库、不发网络请求）。
