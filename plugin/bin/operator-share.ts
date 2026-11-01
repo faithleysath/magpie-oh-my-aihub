@@ -1,17 +1,13 @@
-// `share setup`, `share approve` and `share handover`.
+// `share setup`, `share list` and `share status`.
 //
 // Sharing has three different jobs and they must not be collapsed:
 //   1. choose native models that actually exist and have a complete price;
 //   2. optionally publish the signed catalogue (priceLocked is always false);
-//   3. approve a consumer and hand its Gateway Key over out of band.
 //
 // The CLI never invents a model, a price, a cap or a key. It asks the service for
-// the candidates and reuses the existing `/share/models`, `/consumers/add` and
-// `/secret` paths.
+// the candidates and reuses the existing `/share/models` path.
 
-import { readFileSync } from "node:fs";
 import { catalogPriceVersion } from "../src/pricing.ts";
-import { validateConnectionRequest, validateRequestApproval } from "../src/connection-request.ts";
 import {
   OperatorApi,
   boolFlag,
@@ -21,8 +17,6 @@ import {
   listFlag,
   parseArgs,
   printJson,
-  sha256Prefix,
-  writeSecretFile,
   type WizardIO,
 } from "./operator-lib.ts";
 import type { ShareCandidate, ShareCandidatesView } from "../src/service.ts";
@@ -30,8 +24,6 @@ import type { ShareCandidate, ShareCandidatesView } from "../src/service.ts";
 const USAGE = `usage:
   ohmyaihub share setup [--models a,b|--all-priced] [--enable-sharing]
     [--publish|--no-publish] [--display-name <name>] [--contact <text>] [--json]
-  ohmyaihub share approve <request.json> --cap <usd> [--yes] [--json]
-  ohmyaihub share handover <consumer> --key-file <0600 path> [--force]
   ohmyaihub share list [--json]
   ohmyaihub share status [--json]`;
 
@@ -47,10 +39,6 @@ export async function runShare(argv: string[], dataDir: string, io: WizardIO = d
   switch (sub) {
     case "setup":
       return shareSetup(api, args, io);
-    case "approve":
-      return shareApprove(api, args, io);
-    case "handover":
-      return shareHandover(api, args);
     case "list":
     case "status":
       return shareList(api, args);
@@ -290,108 +278,6 @@ async function candidates(api: OperatorApi): Promise<ShareCandidatesView> {
       blocking: models.filter((m: any) => !m.completePrice).map((m: any) => ({ id: m.id, reason: "no published price" })),
     };
   }
-}
-
-async function shareApprove(api: OperatorApi, args: ReturnType<typeof parseArgs>, io: WizardIO): Promise<number> {
-  const file = args.positionals[0];
-  if (!file) fail("share approve <request.json> --cap <usd>");
-  let raw: any;
-  try {
-    raw = JSON.parse(readFileSync(file, "utf8"));
-  } catch (e) {
-    fail(`cannot read request JSON ${file}: ${(e as Error).message}`);
-  }
-  raw = validateConnectionRequest(raw);
-  const requestModels: string[] = raw.models;
-  const approval = raw.approval;
-  const requestQuote = raw.quote;
-  if (args.one("consumer") !== undefined && args.one("consumer") !== raw.consumer.nodeId) {
-    fail("--consumer must equal the request's consumer id; do not redirect a key silently");
-  }
-  const status = await api.get<any>("/status", 60_000);
-  const gatewayPort = Number(new URL(status.magpie?.gateway ?? "http://127.0.0.1:3425").port || 3425);
-  const catalog = (await api.get<any>("/catalog", 30_000))?.catalog;
-  validateRequestApproval(raw, {
-    provider: { nodeId: status.config?.nodeId ?? null, mappedCidr: status.config?.mappedCidr ?? null, gatewayPort },
-    quote: catalog?.quote ?? null,
-  });
-
-  let cap = args.one("cap");
-  if (cap === undefined) {
-    if (!io.isTTY) fail("the provider must choose the cap: pass --cap <usd> (a positive amount on Magpie's $0.0001 grid)");
-    cap = await io.prompt(`Positive cap in USD for ${raw.consumer.nodeId} (request suggested ${approval.capUsd ?? "?"})`, {
-      default: String(approval.capUsd ?? "1"),
-    });
-  }
-  const capUsd = Number(cap);
-  if (!Number.isFinite(capUsd) || capUsd < 0.0001) fail("the cap must be a positive number of at least $0.0001");
-  if (Math.abs(Math.round(capUsd * 1e4) / 1e4 - capUsd) > 1e-9) {
-    fail(`$${capUsd} is not on Magpie's $0.0001 cap grid`);
-  }
-
-  line(`provider   ${raw.provider.hostname ?? "?"} (${raw.provider.nodeId}) @ ${raw.provider.mappedCidr}:${gatewayPort}`);
-  line(`consumer   ${raw.consumer.nodeId}${raw.consumer.hostname ? ` (${raw.consumer.hostname})` : ""}`);
-  line(`models     ${requestModels.join(", ")}`);
-  line(`cap        $${capUsd.toFixed(4)} · quote ${requestQuote.contentHash.slice(0, 16)}… · price ${requestQuote.priceVersion.slice(0, 16)}… · priceLocked false`);
-  if (!args.has("yes")) {
-    if (!io.isTTY) fail("non-interactive approval requires --yes after reviewing the request");
-    const confirmed = await io.prompt("Issue this model-scoped, capped Gateway Key? [y/N]", { default: "n" });
-    if (!/^y(es)?$/i.test(confirmed.trim())) fail("approval cancelled");
-  }
-
-  const view = await api.post<any>(
-    "/consumers/add",
-    {
-      consumerId: raw.consumer.nodeId,
-      models: requestModels,
-      capUsd,
-      quoteHash: requestQuote.contentHash,
-      quotePriceVersion: requestQuote.priceVersion,
-    },
-    180_000,
-  );
-  const result = {
-    approved: true,
-    consumerId: raw.consumer.nodeId,
-    models: view.models ?? requestModels,
-    capUsd: view.capUsd ?? capUsd,
-    quoteHash: requestQuote.contentHash,
-    quotePriceVersion: requestQuote.priceVersion,
-    keyPrinted: false,
-  };
-  if (args.has("json")) printJson(result);
-  else {
-    line(`approved ${result.consumerId}: models ${result.models.join(", ")} · cap $${Number(result.capUsd).toFixed(4)}`);
-    line(`quote binding: hash ${requestQuote.contentHash.slice(0, 16)}… · price ${requestQuote.priceVersion.slice(0, 16)}…`);
-    line(`no key was printed. Hand it over with \`share handover ${raw.consumer.nodeId} --key-file <0600 file>\`.`);
-  }
-  return 0;
-}
-
-async function shareHandover(api: OperatorApi, args: ReturnType<typeof parseArgs>): Promise<number> {
-  const consumerId = args.positionals[0];
-  const keyFile = args.one("key-file");
-  if (!consumerId) fail("share handover <consumer> --key-file <0600 file>");
-  if (!keyFile) fail("share handover needs --key-file <0600 path>; the Gateway Key is never printed to stdout");
-  const handed = await api.post<any>("/secret", { consumerId }, 30_000);
-  if (typeof handed?.key !== "string" || !handed.key) fail("the host did not return a key");
-  const file = writeSecretFile(keyFile, handed.key, { force: args.has("force") });
-  const result = {
-    consumerId,
-    keyName: handed.keyName ?? null,
-    models: handed.models ?? [],
-    capUsd: handed.capUsd ?? null,
-    keyFile: file,
-    keySha256Prefix: sha256Prefix(handed.key),
-    keyPrinted: false,
-  };
-  if (args.has("json")) printJson(result);
-  else {
-    line(`wrote the Gateway Key for ${consumerId} to ${file} (mode 0600).`);
-    line(`models ${result.models.join(", ") || "?"} · cap $${Number(result.capUsd ?? 0).toFixed(4)} · key sha256 ${result.keySha256Prefix}…`);
-    line("send the file out of band; delete it after the consumer has stored the key.");
-  }
-  return 0;
 }
 
 async function shareList(api: OperatorApi, args: ReturnType<typeof parseArgs>): Promise<number> {

@@ -60,9 +60,9 @@ The controls that replace the blanket gate:
 
 ### Decision 38 — Wallet/accounting browser workflow, no financial scope expansion
 
-Phase9实现“测试网钱包”“用量与账单”；Ego/Chromium与WebKit已完成受控本地模拟金融路径，范围见下方验证矩阵和报告。动作沿用 Wallet、ChainWatcher、Ledger、Provisioner 与纯 walletView；普通状态本地投影，RPC/额度读回/扫描显式执行并显示证据时间，秘密 RPC URL 不回显。BSC97/Base84532平等、显式选链，只注册测试资产，无新链、主网、私钥代管或自动转账。
+（历史）Phase9实现“测试网钱包”“用量与账单”；测试网钱包与文件流程已从产品移除。Ego/Chromium与WebKit已完成受控本地模拟金融路径，范围见下方验证矩阵和报告。动作沿用 Wallet、ChainWatcher、Ledger、Provisioner 与纯 walletView；普通状态本地投影，RPC/额度读回/扫描显式执行并显示证据时间，秘密 RPC URL 不回显。BSC97/Base84532平等、显式选链，只注册测试资产，无新链、主网、私钥代管或自动转账。
 
-提供方选实际消费者/网络/资产/精确金额，预览再创建一次入账申请，下载真实 EIP-712 文档；使用方导入申请后经本机服务纯校验，下载真实 EIP-712 签名数据，在自己的外部钱包审阅并签署；返回控制台填写公开付款地址和65字节签名，由服务校验摘要/恢复地址并生成签名交付文件，不要求钱包导出 AIHub 格式。提供方导入验证付款地址/签名后才交付精确转账指引。可选注入浏览器钱包在完整文档审阅确认后才请求账户，核对精确链后用服务已验证的文档调用 `eth_signTypedData_v4`；不自动切链、不广播交易，无 WalletConnect/SDK/私钥输入，缺扩展时保留文件流程。目前仅模拟注入钱包测试，实际实验走文件，不声称通用扩展兼容。普通用户不构造 JSON、不提交私钥。待处理/未知创建先恢复或取消，不盲目创建第二份。链最终性、账本应用、Key额度读回和可调用是独立证据，充值不忽略暂停。异常备注不新增信用，日志基线审计不补造消费，消费者账单摘要不是签名/付款证明；普通界面无手动测试充值。
+（历史，文件流程已移除）提供方选实际消费者/网络/资产/精确金额，预览再创建一次入账申请，下载真实 EIP-712 文档；使用方导入申请后经本机服务纯校验，下载真实 EIP-712 签名数据，在自己的外部钱包审阅并签署；返回控制台填写公开付款地址和65字节签名，由服务校验摘要/恢复地址并生成签名交付文件，不要求钱包导出 AIHub 格式。提供方导入验证付款地址/签名后才交付精确转账指引。可选注入浏览器钱包在完整文档审阅确认后才请求账户，核对精确链后用服务已验证的文档调用 `eth_signTypedData_v4`；不自动切链、不广播交易，无 WalletConnect/SDK/私钥输入，缺扩展时保留文件流程。目前仅模拟注入钱包测试，实际实验走文件，不声称通用扩展兼容。普通用户不构造 JSON、不提交私钥。待处理/未知创建先恢复或取消，不盲目创建第二份。链最终性、账本应用、Key额度读回和可调用是独立证据，充值不忽略暂停。异常备注不新增信用，日志基线审计不补造消费，消费者账单摘要不是签名/付款证明；普通界面无手动测试充值。该测试网钱包与文件流程已从产品移除，生产充值走零文件通道。
 
 ### Current Phase 9 acceptance boundary
 
@@ -498,14 +498,12 @@ raw 32-byte public key) and stores the first-seen key per signed `node.id` in
 ## Decision 16 — The catalogue is display data; connection stays manual
 
 A quote never creates a key, a balance, a charge or a Magpie provider. The flow
-is: discover -> browse -> guided `connect` displays the full TOFU fingerprint, quote hash,
-`priceLocked:false`, `priceVersion` and models, and requires explicit `--trust --fingerprint …
---quote …` -> `connect --request-out` writes a structured request with the consumer's node id, the
-provider's mapped address, models, quote hash and a **structured** approval block (no shell command)
--> the provider reviews it and runs `share approve <request.json> --cap <usd> --yes` with a native
-model whitelist and a provider-chosen positive cap -> `share handover --key-file` writes the key to
-a 0600 file -> the consumer runs `connect --key-file` or `remote add --key-file`. The catalogue
-itself has no endpoint that accepts a key, a deposit or a write.
+is: discover -> browse -> the console shows the full TOFU fingerprint, quote hash,
+`priceLocked:false`, `priceVersion` and models, and requires explicit confirmation -> the consumer
+sends a signed request over the control channel -> the provider reviews it, chooses native models
+and a provider-chosen positive cap, and approves -> the plugin issues the key and delivers the
+authorization over the signed channel. No request, key or statement files are exchanged. The
+catalogue itself has no endpoint that accepts a key, a deposit or a write.
 
 Price display is read from Magpie's own `settings.json` `modelPrices` (and from
 the local gateway's `magpie_price` when the gateway answers on loopback), in USD

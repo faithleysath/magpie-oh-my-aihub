@@ -1,7 +1,6 @@
 import { ConsoleError, consumeTicketFragment, createSessionClient, pollState, waitForPairing } from "./session.js";
 import { mountProviders, checkLabel, modelEvidenceSummary } from "./providers.js";
 import { networkFacts, neighborStatus } from "./network.js";
-import { mountWallet } from "./wallet.js";
 import { mountWalletVault } from "./wallet-vault-ui.js";
 import { mountWalletNetwork } from "./wallet-network-ui.js";
 import { mountPaymentP2p } from "./payment-p2p-ui.js";
@@ -104,8 +103,7 @@ function sessionEnded(reason = "expired") {
   poller?.stop();
   stopPairing();
   providers.clearSecrets();
-  wallet.clearSecrets();
-  walletVault.reset();
+    walletVault.reset();
   walletNetwork.reset();
   paymentP2p.dispose();
   client.reset();
@@ -139,7 +137,6 @@ function sessionEnded(reason = "expired") {
 
 const client = createSessionClient({ onExpired: () => sessionEnded(everAuthenticated ? "expired" : "unauthorized") });
 const providers = mountProviders({ client, getState: () => consoleState, onState: renderState, notice, setBusy, refreshState: () => poller?.refresh() });
-const wallet = mountWallet({ client, getState: () => consoleState, onState: renderState, notice, setBusy, refreshState: () => poller?.refresh() });
 const walletVault = mountWalletVault({ client, getState: () => consoleState, notice, refreshState: () => poller?.refresh(), windowTarget: window });
 const walletNetwork = mountWalletNetwork({ client, getState: () => consoleState, notice, refreshState: () => poller?.refresh() });
 const paymentP2p = mountPaymentP2p({ client, getState: () => consoleState, notice, refreshState: () => poller?.refresh() });
@@ -330,8 +327,6 @@ function todos(state) {
   if (typeof counts.awaitingApproval === "number" && counts.awaitingApproval > 0) items.push({ text: `${counts.awaitingApproval} 个使用申请等待批准`, goto: "discovery", tab: "connections" });
   if (typeof counts.actionNeeded === "number" && counts.actionNeeded > 0) items.push({ text: `${counts.actionNeeded} 个无文件连接需要处理`, goto: "discovery", tab: "connections" });
   if (object(p2p.listener).state === "failed") items.push({ text: "P2P 控制通道失败，无文件申请无法收发", goto: "network" });
-  const operations = list(object(state.wallet).intentOperations).filter((operation) => ["pending", "reserved", "unknown"].includes(operation?.status || operation?.state));
-  if (operations.length) items.push({ text: `${operations.length} 个入账申请状态待核对`, goto: "wallet" });
   if (object(s.accounting).uncertain) items.push({ text: `计费检查存在不确定性：${object(s.accounting).uncertainReason || "暂时无法验证"}`, goto: "wallet" });
   return items;
 }
@@ -589,7 +584,6 @@ function renderState(value) {
   for (const id of ["nav-home", "nav-discovery", "nav-sharing", "nav-wallet", "nav-network"]) $(id).disabled = !value.configured;
   $("nav-network").disabled = false;
   providers.render(value);
-  wallet.render(value);
   // One panel failing to render must not starve the others (for example a
   // read-only network projection error must not leave the payment panel empty).
   for (const [name, panel] of [["walletVault", walletVault], ["walletNetwork", walletNetwork], ["paymentP2p", paymentP2p]]) {
@@ -841,7 +835,7 @@ $("logout")?.addEventListener("click", async () => {
   if (!complete) setText("session-detail", "未能确认服务器退出。本页已清除会话信息，请关闭此页；需要继续时从 Magpie 重新打开。");
 });
 
-window.addEventListener("pagehide", () => { poller?.stop(); stopPairing(); providers.clearSecrets(); wallet.clearSecrets(); walletVault.dispose(); walletNetwork.dispose(); paymentP2p.dispose(); client.dispose(); });
+window.addEventListener("pagehide", () => { poller?.stop(); stopPairing(); providers.clearSecrets(); walletVault.dispose(); walletNetwork.dispose(); paymentP2p.dispose(); client.dispose(); });
 window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
 
 applyTheme(storedTheme());

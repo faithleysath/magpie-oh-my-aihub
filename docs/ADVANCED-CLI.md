@@ -11,13 +11,12 @@ the plugin never proxies a request.
 
 **Safety rules**
 
-- Testnet only for chain credit. Real funds are NO-GO.
+- BSC/Base production payments are supported; testnets are development-only and are not exposed in the console.
 - Never expose Magpie's administrative interface (`magpie web` or `/api/*`), even to overlay members.
   Do not use `magpie web --lan`, and do not share the plugin page URL or screenshots: the page is a
   capability URL and its snapshot can contain operator/accounting data.
-- A Gateway Key is a bearer secret. Do not paste it into a ticket, a screenshot or a chat. Use the
-  0600-file handover path (`share handover` / `remote add --key-file`), not `--key` on the command
-  line.
+- A Gateway Key is a bearer secret. Do not paste it into a ticket, a screenshot or a chat. It is
+  delivered over the signed network control channel; never copy or forward the authorization.
 - Stop Magpie completely before copying its data directory. A live SQLite copy can be inconsistent.
 - Do not hand-edit `state.json`, `consumers.json`, `caller-keys.json`, `providers.json` or the
   generated EasyTier TOML. Use the CLI/page; a hand edit can silently change what a key can reach.
@@ -121,8 +120,8 @@ transient read error.
   the next window does not restore the key.
 - `revoked` means the key was removed and its secret wiped. A revoked consumer id cannot be reused;
   create a new id and hand over a new key.
-- A `401` with a key that should work means the key was revoked, rotated or never handed over. Re-run
-  `share handover` on the provider, then `remote update-key <id> --key-file <file>` on the consumer.
+- A `401` with a key that should work means the key was revoked, rotated or never delivered. Revoke
+  and approve a fresh network request in the console.
 
 ### 2.5 Chain anomalies
 
@@ -133,7 +132,6 @@ ohmyaihub wallet assets
 ohmyaihub wallet intents
 ohmyaihub wallet events
 ohmyaihub wallet anomalies
-ohmyaihub wallet statement <consumer> --out "$HOME/<consumer>-statement.json"
 ohmyaihub wallet resolve <id> --note '<what you checked>'
 ```
 
@@ -153,13 +151,10 @@ ohmyaihub wallet resolve <id> --note '<what you checked>'
 - A chain's configured finality is not a suggestion. BSC testnet uses 15 confirmations; Base
   Sepolia waits for the real `finalized` tag (~17–24 minutes). Do not resend while waiting.
 
-The wallet wizard and watcher run on the **provider** node. The consumer only signs the typed data
-externally and sends back a `signature`/`payerAddress` file; the consumer does not run the provider's
-wizard and does not access the provider's loopback API. The provider then resumes with
-`wallet wizard --batch --invoice <id> --signature-file <file>` and sends the exact transfer instructions.
-`wallet statement` is an **unsigned** file with a digest; it proves only that the file was not
-edited by hand, not that a payment happened. `wallet resolve` records an operator note; it does not
-create credit, adjust a balance or delete a deposit. That is deliberate.
+Recharge is done in the console over the authenticated payment channel: the consumer previews the
+network, asset, recipient and amount, then confirms one signed transfer. No request, signature or
+statement files are exchanged. `wallet resolve` records an operator note; it does not create credit,
+adjust a balance or delete a deposit. That is deliberate.
 
 ## 3. Stop sharing, revoke and remove a provider
 
@@ -272,7 +267,7 @@ broken:
    keys are not part of the overlay secret.
 
 If the secret itself leaked, rotate it this way and treat any exposed Gateway Key separately
-(`revoke`/`share handover`).
+(`revoke` or a fresh network approval).
 
 Removing the plugin does not remove Magpie's own providers, models or Gateway Keys. Remove those in
 Magpie deliberately, or keep them for a later reinstall.
@@ -394,7 +389,7 @@ Start with `checks`, then `status`, then `plugin.log`. The log redacts registere
 | `catalog`/peer offline | The catalogue is not published, its port is outside the bounded probe range, or the peer is offline | `catalog status`; use port 3426 (or 3427–3430) on the provider or match C's base; `catalog refresh` |
 | `degraded`/`identity-mismatch` | The provider is down or its hostname no longer owns the mapped prefix | Other providers keep serving; wait for the real peer; do not reuse its key elsewhere |
 | `429` | Native cap spent, or a native window boundary paused the key | `topup` raises the cap; a `window-rollover` pause needs `consumers reissue <id>` (and the new price version if it changed). Waiting does not auto-resume |
-| `401` | Wrong/revoked key, or a loopback caller bypass | Re-handover with `share handover`; `remote update-key`; check `consumers`/Magpie key list |
+| `401` | Wrong/revoked key, or a loopback caller bypass | Revoke and approve a fresh network request; check `consumers`/Magpie key list |
 | `connection refused` from CLI | Plugin host not running or page save restart in progress | Open the page/restart Magpie; wait for `api-port`; retry |
 | Page has old data | Snapshot is read-only; it updates on host writes/reload | Press **Reload snapshot**; `pid`/`generatedAt` show freshness |
 | Page says “no chain wallet” when enabled | The snapshot was written before the wallet was enabled, or an older host filled its cache only after a `wallet` call | Run `ohmyaihub wallet status` and press **Reload snapshot**; the phase-8 host writes the wallet projection into the snapshot |

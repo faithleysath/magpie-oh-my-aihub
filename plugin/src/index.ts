@@ -262,8 +262,8 @@ export async function boot(input?: PluginInput, optionsRaw?: unknown): Promise<R
         state: () => consoleState(service!),
         action: (name: string, body: Record<string, unknown>, context: ConsoleActionContext) => consoleAction(service!, name, body, context),
         allowedActions: CONSOLE_ACTIONS,
-        sensitiveActions: ["key-reveal", ...WALLET_VAULT_SENSITIVE_ACTIONS, "payment-p2p-sign", "payment-local-send"],
-        staticModules: ["/session.js", "/providers.js", "/network.js", "/wallet.js", "/wallet-vault-ui.js", "/wallet-network-ui.js", "/payment-p2p-ui.js", "/external-wallet.js", "/payment-local-port.js"],
+        sensitiveActions: [...WALLET_VAULT_SENSITIVE_ACTIONS, "payment-p2p-sign", "payment-local-send"],
+        staticModules: ["/session.js", "/providers.js", "/network.js", "/wallet-vault-ui.js", "/wallet-network-ui.js", "/payment-p2p-ui.js", "/external-wallet.js", "/payment-local-port.js"],
         pairingFile: statePath("console-pairing.json"),
         onSessionEnd: (sessionId: string) => endWalletLocalSession(service!, sessionId),
       };

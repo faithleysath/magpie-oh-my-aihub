@@ -5,7 +5,7 @@ import { configureInput } from "./server.ts";
 import { consoleWorkflows } from "./console-workflows.ts";
 import { NETWORK_LOCAL_ACTIONS, consoleNetworkAction, consoleNetworkState } from "./console-network.ts";
 import { PAYMENT_P2P_ACTIONS, paymentP2pAction, paymentP2pFor } from "./payment-p2p-host.ts";
-import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
+import { consoleWalletState } from "./console-wallet.ts";
 import { WALLET_VAULT_ACTIONS, walletLocalAction, walletLocalState, WalletLocalError } from "./wallet-local-service.ts";
 import { hex64, modelList, RequestValidationError } from "./connection-request.ts";
 import type { Service } from "./service.ts";
@@ -18,7 +18,6 @@ export const CONSOLE_ACTIONS = [
   "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
   "p2p-request", "p2p-quote-preview", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
-  ...WALLET_CONSOLE_ACTIONS,
   ...WALLET_VAULT_ACTIONS,
   ...NETWORK_LOCAL_ACTIONS,
   ...PAYMENT_LOCAL_ACTIONS,
@@ -106,7 +105,6 @@ export async function consoleAction(
       }
     }
     if ((NETWORK_LOCAL_ACTIONS as readonly string[]).includes(name)) return consoleNetworkAction(service, name, input);
-    if ((WALLET_CONSOLE_ACTIONS as readonly string[]).includes(name)) return consoleWalletAction(service, name, input);
     const w = () => consoleWorkflows(service);
     if (name.startsWith("p2p-")) {
       const app = controlAppFor(service);

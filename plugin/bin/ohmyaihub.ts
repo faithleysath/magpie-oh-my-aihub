@@ -3,8 +3,7 @@
 // state changes: Magpie's own plugin does, with its binary and argv arrays.
 //
 //   bun bin/ohmyaihub.ts --data <magpie config dir> setup [--resume|--check|--reconfigure]
-//   ... share setup | share approve <request.json> --cap <usd> | share handover <id> --key-file <0600>
-//   ... connect [--node <id>] [--fingerprint <sha256> --quote <sha256>] [--key-file <0600>]
+//   ... share setup | share list | share status
 //   ... remote list|test|models|update-key|add|remove|recover
 //   ... status
 //   ... providers                                   list remote providers
@@ -42,16 +41,13 @@
 //   ... wallet start | wallet stop
 //   ... wallet anomalies [--chain <chainId>] | wallet resolve <id> --note <text>
 //   ... wallet status                    view model from local evidence
-//   ... wallet statement <consumerId> [--out <directory>] [--print]
 //   ... wallet credit <consumerId>       chain credit as the ledger sees it
-//   ... wallet wizard                    guided one-deposit request (needs host evidence)
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CliError, fail, limitDisplay, promptText, readSecretFile, writeSecretFile } from "./operator-lib.ts";
+import { CliError, fail, limitDisplay, promptText, readSecretFile } from "./operator-lib.ts";
 import { runSetup } from "./operator-setup.ts";
 import { runShare } from "./operator-share.ts";
-import { runConnect } from "./operator-connect.ts";
 import { runRemote } from "./operator-remote.ts";
 import { redact } from "../src/log.ts";
 
@@ -153,45 +149,6 @@ function positional(offset: number): string[] {
   return rest.filter((a, i) => !a.startsWith("--") && !(i > 0 && rest[i - 1].startsWith("--"))).slice(offset);
 }
 
-async function statementFromEvidence(evidence: any, consumerId: string, providerId: string): Promise<any> {
-  const consumer = (evidence.consumers ?? []).find((c: any) => c.consumerId === consumerId);
-  if (!consumer) fail(`no consumer ${consumerId}`);
-  const { buildStatement } = await import("../src/walletstatement.ts");
-  const networks = (evidence.wallet.registry?.networks ?? []).map((n: any) => ({
-    ...n,
-    family: "evm",
-    rpcEndpoints: n.endpoints ?? [],
-    nativeSymbol: "",
-    reorgDepth: n.finality?.confirmations ?? 0,
-    scanIntervalSec: 0,
-    maxBlockRange: 0,
-    notes: null,
-  }));
-  const assets = (evidence.wallet.registry?.assets ?? []).map((a: any) => ({
-    ...a,
-    pricing: { nanosPerToken: a.nanosPerToken, version: a.priceVersion, kind: "fixed-test-rate", note: "" },
-  }));
-  return buildStatement({
-    providerId,
-    consumerId,
-    generatedAt: new Date().toISOString(),
-    networks,
-    assets,
-    intents: evidence.wallet.intents ?? [],
-    events: evidence.wallet.events ?? [],
-    deposits: evidence.deposits?.[consumerId] ?? [],
-    consumer,
-    // The statement allowlist is state/reason/openSettlements; `serving` is a
-    // live view field and is deliberately not written into a historical file.
-    accounting: {
-      state: evidence.accounting.state,
-      reason: evidence.accounting.reason,
-      openSettlements: consumer.ledger?.openSettlements ?? 0,
-    },
-    readback: evidence.readbacks?.[consumerId] ?? null,
-  } as never);
-}
-
 function printProviders(providers: any[]): void {
   if (!providers.length) {
     console.log("no remote providers");
@@ -231,7 +188,6 @@ const preflightDeps = { preflight: { lan: process.env.OH_MY_AIHUB_PREFLIGHT_LAN 
 if (cmd === "setup") process.exit(await runSetup(rest.slice(1), dataDir, undefined, preflightDeps));
 if (cmd === "resume") process.exit(await runSetup(["--resume", ...rest.slice(1)], dataDir, undefined, preflightDeps));
 if (cmd === "preflight" || cmd === "doctor") process.exit(await runSetup(["--check", ...rest.slice(1)], dataDir, undefined, preflightDeps));
-if (cmd === "connect") process.exit(await runConnect(rest.slice(1), dataDir));
 if (cmd === "remote") process.exit(await runRemote(rest.slice(1), dataDir));
 if (
   cmd === "share" &&
@@ -486,13 +442,7 @@ switch (cmd) {
   case "secret": {
     const [id] = positional(1);
     const c = await call("POST", "/secret", { consumerId: id });
-    const keyFile = flag("key-file");
-    if (keyFile) {
-      const file = writeSecretFile(keyFile, c.key, { force: has("force") });
-      console.log(JSON.stringify({ consumerId: id, keyFile: file, keyName: c.keyName, keyPrinted: false }, null, 2));
-    } else {
-      console.log(c.key);
-    }
+    console.log(c.key);
     break;
   }
   case "revoke": {
@@ -513,78 +463,7 @@ switch (cmd) {
   }
   case "wallet": {
     const sub = rest[1];
-    if (sub === "wizard") {
-      // The wizard is its own module; this entry only adapts the loopback client
-      // and the visible prompt. A POST whose outcome is unknown is surfaced as
-      // such so the wizard never blindly retries an intent.
-      const { runWalletWizard, WizardApiError } = await import("./wallet-wizard.ts");
-      const wrap = async (run: () => Promise<any>): Promise<any> => {
-        try {
-          return await run();
-        } catch (e) {
-          const message = (e as Error)?.message ?? String(e);
-          const status = Number(/HTTP\s+(\d+)/.exec(message)?.[1] ?? NaN);
-          throw new WizardApiError(message, Number.isFinite(status) ? status : null);
-        }
-      };
-      const code = await runWalletWizard({
-        api: {
-          get: (path) => wrap(() => call("GET", path)),
-          post: (path, body) => wrap(() => call("POST", path, body)),
-        },
-        io: {
-          prompt: async (question, opts) => {
-            const answer = (await promptText(`${question}${opts?.default ? ` [${opts.default}]` : ""}: `)).trim();
-            return answer || opts?.default || "";
-          },
-          print: (text) => console.log(text),
-        },
-        argv: rest.slice(2),
-        evidence: async () => {
-          try {
-            return await call("GET", "/wallet/evidence", undefined, 15_000);
-          } catch {
-            return null;
-          }
-        },
-      });
-      process.exit(code);
-    }
-    if (sub === "statement") {
-      const consumerId = positional(2)[0];
-      if (!consumerId) throw new Error("wallet statement <consumerId> [--out <directory|file.json>] [--provider <id>] [--print]");
-      let statement: any = null;
-      try {
-        const response = await call("GET", `/wallet/statement?consumerId=${encodeURIComponent(consumerId)}`, undefined, 60_000);
-        statement = response?.statement?.statement ? response.statement : response;
-      } catch (e) {
-        if (!/HTTP 404/.test((e as Error).message)) throw e;
-      }
-      if (!statement) {
-        const evidence = await call("GET", "/wallet/evidence", undefined, 60_000);
-        if (!evidence || !evidence.wallet) fail("the host did not return wallet evidence; update the plugin host");
-        const providerId = flag("provider") ?? evidence.wallet.receiving?.[0]?.providerId;
-        if (!providerId) fail("this node has no receiving provider; pass --provider <id>");
-        statement = await statementFromEvidence(evidence, consumerId, providerId);
-      }
-      const { statementText, writeStatementFile, verifyStatement } = await import("../src/walletstatement.ts");
-      const check = verifyStatement(statement);
-      if (!check.ok) fail(`statement verification failed: ${check.reason}`);
-      const out = flag("out");
-      let statementFile: string;
-      if (out && /\.json$/i.test(out)) {
-        // Exact file path: use the statement writer's hardened {path} branch.
-        // --force keeps the older exact-file overwrite escape hatch.
-        statementFile = has("force")
-          ? writeSecretFile(out, statementText(statement), { force: true })
-          : writeStatementFile(statement, { path: out }).path;
-      } else {
-        const outDir = out ?? join(dataDir, "oh-my-aihub", "statements");
-        statementFile = writeStatementFile(statement, { dir: outDir }).path;
-      }
-      console.log(JSON.stringify({ consumerId, statementFile, digest: statement.digest, keyPrinted: false }, null, 2));
-      if (has("print")) console.log(statementText(statement));
-    } else if (sub === "status") {
+    if (sub === "status") {
       let evidence: any = null;
       try {
         evidence = await call("GET", "/wallet/evidence", undefined, 60_000);
@@ -825,39 +704,6 @@ switch (cmd) {
       if (!flag("fingerprint")) throw new Error("catalog trust requires the exact --fingerprint <64hex> you reviewed");
       const r = await call("POST", "/catalog/trust", { nodeId, fingerprint: flag("fingerprint") });
       console.log(JSON.stringify(r, null, 2));
-    } else if (sub === "request") {
-      const [nodeId] = positional(2);
-      if (!nodeId) throw new Error("catalog request <node-id> --fingerprint <64hex> --quote <64hex> [--models a,b]");
-      if (!flag("fingerprint") || !flag("quote")) {
-        throw new Error(
-          "catalog request now requires the exact --fingerprint and --quote you reviewed; " +
-            "use the guided `connect` command (or pass both flags) — nothing is accepted implicitly",
-        );
-      }
-      const models = flag("models") ? flag("models")!.split(",") : undefined;
-      const acceptance = flag("fingerprint") && flag("quote")
-        ? { fingerprint: flag("fingerprint"), quoteHash: flag("quote"), ...(flag("price-version") ? { priceVersion: flag("price-version") } : {}) }
-        : undefined;
-      console.log(JSON.stringify(await call("POST", "/catalog/request", { nodeId, models, ...(acceptance ?? {}) }), null, 2));
-    } else if (sub === "connect") {
-      const [nodeId] = positional(2);
-      const key = keyFlag();
-      if (!nodeId || !key) throw new Error("catalog connect <node-id> --key-file <0600 file> [--id <provider-id>] --fingerprint <64hex> --quote <64hex>");
-      if (!flag("fingerprint") || !flag("quote")) {
-        throw new Error(
-          "catalog connect now requires the exact --fingerprint and --quote you reviewed; " +
-            "use the guided `connect` command (or pass both flags) — nothing is accepted implicitly",
-        );
-      }
-      const p = await call("POST", "/catalog/connect", {
-        nodeId,
-        key,
-        id: flag("id"),
-        ...(flag("fingerprint") ? { fingerprint: flag("fingerprint") } : {}),
-        ...(flag("quote") ? { quoteHash: flag("quote") } : {}),
-        ...(flag("price-version") ? { priceVersion: flag("price-version") } : {}),
-      });
-      console.log(JSON.stringify({ ok: true, provider: p }, null, 2));
     } else if (sub === "peers" || sub === undefined || sub === "status") {
       const r = await call("GET", "/catalog");
       if (has("json")) console.log(JSON.stringify(r, null, 2));
@@ -872,7 +718,7 @@ switch (cmd) {
         if (sub === "peers" || sub === undefined) printCatalogPeers(c.peers || []);
       }
     } else {
-      throw new Error("catalog [status|peers|publish on|off|discover on|off|config|refresh|trust|request|connect]");
+      throw new Error("catalog [status|peers|publish on|off|discover on|off|config|refresh|trust]");
     }
     break;
   }

@@ -20,7 +20,7 @@
 | `console/`、`src/console-api.ts` | 浏览器界面与白名单 Service 操作，普通页面读取不主动探测远端 |
 | `src/service.ts`、`easytier.ts` | 一套 EasyTier no-TUN 核心、多提供方连接、目录和原生共享限制 |
 | `src/provisioner.ts`、`ledger.ts` | 沿用现有 Gateway Key 写入/读回与本地不可变预付账本 |
-| `src/wallet.ts`、`watcher.ts`、`networks.ts` | BSC/Base 与开发测试网的注册表、已核验资产、签名归属、逐链最终性、多 RPC quorum 和账本桥接 |
+| `src/wallet.ts`、`watcher.ts`、`networks.ts` | BSC/Base 生产网络注册表、已核验资产、签名归属、逐链最终性、多 RPC quorum 和账本桥接 |
 | `bin/` | 保留的高级 CLI，不是普通用户界面的执行后端 |
 
 所有 AI 请求仍经消费方 Magpie → EasyTier → 提供方 Magpie；插件不转发 AI 内容、不计 token、不另写请求账单。Magpie 管理界面从不映射到覆盖网。只共享本机、完整定价的原生模型，拒绝 Remote Magpie、`group/…` 和 `auto/…` 转售。
