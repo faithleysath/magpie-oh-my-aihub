@@ -223,9 +223,9 @@ function printCatalogPeers(peers: any[]): void {
 
 const cmd = rest[0];
 // Phase-8 journeys. They are separate modules so the legacy switch below stays
-// small; each journey owns its own file and tests.
+// small; each journey owns its own file.
 // `OH_MY_AIHUB_PREFLIGHT_LAN=none` is for isolated fixtures: it skips the
-// best-effort LAN gateway probe so a test process never opens a socket to a real
+// best-effort LAN gateway probe so an isolated fixture process never opens a socket to a real
 // gateway. It changes a warning only; it never relaxes an enforcement check.
 const preflightDeps = { preflight: { lan: process.env.OH_MY_AIHUB_PREFLIGHT_LAN === "none" ? null : undefined } };
 if (cmd === "setup") process.exit(await runSetup(rest.slice(1), dataDir, undefined, preflightDeps));

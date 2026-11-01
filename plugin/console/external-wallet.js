@@ -2,7 +2,7 @@
 // EIP-1193 connection, EIP-712 verification and ERC-20 payment previews on the
 // same production/dev chains the plugin can credit.
 //
-// Scope and boundaries (docs/phase10-c-external-wallet.md):
+// Scope and boundaries:
 //  - pure browser module; no runtime dependency, no build step, no storage;
 //  - a wallet's `info` is untrusted display data, never an identity proof;
 //  - no generic RPC passthrough, no dynamic method or calldata from callers;

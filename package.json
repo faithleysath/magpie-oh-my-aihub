@@ -32,8 +32,7 @@
     "plugin/page/icon.svg",
     "plugin/bin/",
     "plugin/README.md",
-    "README.md",
-    "!plugin/console/*.test.js"
+    "README.md"
   ],
   "dependencies": {
     "ethers": "6.17.0"

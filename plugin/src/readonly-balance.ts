@@ -84,7 +84,7 @@ export interface ReadOnlyReaderDeps {
   registry: NetworkRegistry;
   fetchImpl?: typeof fetch;
   now?: () => Date;
-  /** injected in tests; production uses `new EvmClient` over the registry endpoints */
+  /** injectable for alternate transports; defaults to `new EvmClient` over the registry endpoints */
   clientFactory?: (opts: EvmClientOptions) => EvmClient;
 }
 

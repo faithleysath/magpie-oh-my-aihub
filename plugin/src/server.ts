@@ -79,7 +79,7 @@ export function tokenMatches(header: string | null, token: string): boolean {
  * route except `GET /health` needs the bearer token from the plugin state
  * directory: the status carries consumer ids, caps, wallet intents and the
  * credit log tail, and DNS rebinding makes "loopback only" insufficient on its
- * own (see docs/validation/phase8-security.md).
+ * own.
  *
  * Phase-4 additions: the two capabilities can be switched (`/sharing`,
  * `/consuming`), remote providers have their own endpoints (`/providers` …

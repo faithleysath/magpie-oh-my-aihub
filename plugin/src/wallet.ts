@@ -54,7 +54,7 @@ export interface WalletDeps {
   /** where the registry and the chain store live; defaults to the plugin state dir */
   registryPath?: string;
   chainDbPath?: string;
-  /** injected in tests */
+  /** injectable watcher factory; defaults to ChainWatcher */
   makeWatcher?: (deps: ConstructorParameters<typeof ChainWatcher>[0]) => ChainWatcher;
   registry?: NetworkRegistry;
   store?: ChainStore;
@@ -63,7 +63,7 @@ export interface WalletDeps {
   initialLookback?: number;
   /** receiving-network selection file; defaults to the plugin state dir */
   receivingPath?: string;
-  /** injected for read-only balance tests */
+  /** injectable fetch for read-only balance reads */
   readOnlyFetch?: typeof fetch;
 }
 

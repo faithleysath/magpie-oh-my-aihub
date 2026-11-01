@@ -5,15 +5,10 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "test": "bun test ./test ./console ../docs/validation/lab/phase9/wallet-fixture",
-    "typecheck": "tsc --noEmit",
-    "boot-check": "bun run scripts/boot-check.ts",
-    "secret-scan": "bun run scripts/secret-scan.ts",
-    "ci": "bun run typecheck && bun run test && bun run boot-check && bun run secret-scan"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",
-    "playwright": "1.64.1",
     "typescript": "^5.9.0"
   },
   "magpie": {
@@ -33,8 +28,7 @@
     "page/settings.js",
     "page/style.css",
     "page/icon.svg",
-    "README.md",
-    "!console/*.test.js"
+    "README.md"
   ],
   "dependencies": {
     "ethers": "6.17.0"

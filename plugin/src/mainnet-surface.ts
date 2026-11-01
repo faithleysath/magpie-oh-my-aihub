@@ -9,7 +9,7 @@
 //   * send/credit/auto-recharge on 56 or 8453 are refused by the core gate, not
 //     by a UI branch. A UI that hides a button is not the security boundary.
 //
-// See docs/phase10-c-registry.md ("C1 narrow API contract") for the field-level
+// See the C1 narrow API contract for the field-level
 // contract and the intended call sequence.
 
 export {

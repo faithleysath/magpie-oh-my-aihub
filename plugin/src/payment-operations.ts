@@ -28,7 +28,7 @@
 //    the service's already-verified intent, and the journal refuses a changed
 //    recipient/amount/asset/calldata for the same invoice.
 //
-// Safety invariants (each is covered by plugin/test/payment-operations.test.ts)
+// Safety invariants
 // ---------------------------------------------------------------------------
 //  1. `reserve` is a single-winner atomic claim on the stable intent key
 //     (`invoice` + authenticated consumer address), never on a preview UUID.

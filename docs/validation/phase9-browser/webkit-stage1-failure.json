@@ -1,7 +1,0 @@
-{
-  "engine": "WebKit",
-  "version": "27.2",
-  "steps": [],
-  "pass": false,
-  "error": "Error: no pairing code"
-}

@@ -160,9 +160,9 @@ export interface ServiceDeps {
   magpieVersion: string;
   supervisor?: SupervisorLike;
   probes?: Partial<Probes>;
-  /** the LAN address the provider exports; injected in tests */
+  /** the LAN address the provider exports; injectable by the caller */
   lanIp?: () => string | null;
-  /** how long an ingress probe retries before giving up (tests shorten it) */
+  /** how long an ingress probe retries before giving up; the caller may shorten it */
   probeTimeoutMs?: number;
   /**
    * How often the accounting safety check runs, independent of /status and the

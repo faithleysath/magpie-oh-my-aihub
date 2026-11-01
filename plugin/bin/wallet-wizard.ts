@@ -495,7 +495,7 @@ export async function runWalletWizard(deps: WizardDeps): Promise<number> {
     if (journey) for (const line of journeyLines(journey)) io.print(line);
     io.print(
       "This CLI has no wallet evidence source, so it cannot prove the ledger deposit and the gateway read-back. " +
-        "The host must expose GET /wallet/evidence on the authenticated loopback API (see docs/validation/phase8-wallet-ux.md).",
+        "The host must expose GET /wallet/evidence on the authenticated loopback API.",
     );
     io.print("A credit is never called usable without that evidence.");
     return 1;

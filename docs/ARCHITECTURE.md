@@ -69,15 +69,17 @@ Phase9实现“测试网钱包”“用量与账单”；Ego/Chromium与WebKit�
 
 ### Current Phase 9 acceptance boundary
 
-**REPRODUCED，限定本轮范围**：两份全新隔离 Magpie0.1.2171 GUI + EasyTier2.6.4；正常 GitHub UI install/Update；默认系统浏览器、八位码配对、首次配置；提供方发布有价本机模型、使用方完整指纹核对、申请文件交接、手动正额度批准、授权下载/隐藏与导入、原生 Remote Magpie；Magpie原生 Test models 观察到200后429，受控模拟模型上游。WebKit第二提供方完整手动流程、注入内容字面显示不执行、暂停第二方时第一方仍原生200和恢复通过，见[共享报告](validation/phase9-stage2.md)、[安全报告](validation/phase9-security.md)。不是所有版本/平台/供应商或所有计费语义验收。
+**REPRODUCED，限定本轮范围**：两份全新隔离 Magpie0.1.2171 GUI + EasyTier2.6.4；正常 GitHub UI install/Update；默认系统浏览器、八位码配对、首次配置；提供方发布有价本机模型、使用方完整指纹核对、申请文件交接、手动正额度批准、授权下载/隐藏与导入、原生 Remote Magpie；Magpie原生 Test models 观察到200后429，受控模拟模型上游。WebKit第二提供方完整手动流程、注入内容字面显示不执行、暂停第二方时第一方仍原生200和恢复通过，见共享报告、安全报告。不是所有版本/平台/供应商或所有计费语义验收。
 
-**REPRODUCED，本地模拟金融路径**：Ego以实际EIP712合成外部钱包、BSC/Base受控RPC驱动生产Watcher/Ledger/Provisioner，原生额度1.0001后2.0001；Base增加head20不入账，finalized后入账；重复事件/扫描不重复信用；原生429→入账→200、消费者无签名账单导入及RPC503未知状态通过。WebKit9步真实UI亦完成新增0.5BSC模拟信用、最终性/重放及原生Test models200，见[钱包报告](validation/phase9-wallet.md)和[WebKit记录](validation/phase9-browser/webkit-wallet.json)。
+**REPRODUCED，本地模拟金融路径**：Ego以实际EIP712合成外部钱包、BSC/Base受控RPC驱动生产Watcher/Ledger/Provisioner，原生额度1.0001后2.0001；Base增加head20不入账，finalized后入账；重复事件/扫描不重复信用；原生429→入账→200、消费者无签名账单导入及RPC503未知状态通过。WebKit9步真实UI亦完成新增0.5BSC模拟信用、最终性/重放及原生Test models200，见钱包报告和WebKit记录。
 
 **UNKNOWN / limits**：真实浏览器钱包扩展、原生WKWebView、Linux/Windows桌面与SSH端到端仍未验收；本轮无新公链付款。账单上限48KiB，未知创建预留需高级人工恢复，不由普通UI清除。0.1.2038保留历史价格/计费 pin；0.1.2171未重测完整重定价、并发超额、窗口语义。PR11真实BSC/Base付款及双主机证据仅在其历史报告范围有效；本地模拟RPC/签名器不代表新公链转账。没有本轮最终全面GO或真实资金GO。
 
 ---
 
 ## Historical decisions and evidence (Phases 3–8)
+
+> 验证报告、截图与实验室脚本已从工作树移除，下文出现的 `validation/…` 文件名与 git 历史对应（`git log -- docs/validation`）。
 
 Phase 7 adds the **testnet chain wallet**: a registry in which every network is a peer, a per-chain
 deposit watcher, signed deposit attribution and one bridge into the existing ledger and provisioner.
@@ -89,14 +91,14 @@ node (share my Magpie, consume other Magpies) and replaced the single consumer w
 remote providers. Everything measured in phase 3 still holds; the phase-4 decisions are 5–12, the
 phase-5 decisions are 13–17, the phase-6 decisions are 18–20, the phase-6 review patch's are 21–24,
 the final targeted patch's are 25–26, and the phase-7 decisions are 27–33. Evidence is in
-[`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
-[`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md) and
-[`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md) and
-[`validation/2026-10-30-phase7-multichain-wallet.md`](validation/2026-10-30-phase7-multichain-wallet.md).
+`validation/2026-10-29-phase4-multi-role-multi-provider.md`,
+`validation/2026-10-30-phase5-peer-catalog.md` and
+`validation/2026-10-30-phase6-pricing-window.md` and
+`validation/2026-10-30-phase7-multichain-wallet.md`.
 The fresh cross-host payment/EasyTier/Remote Magpie acceptance is in
-[`validation/2026-10-30-fresh-twohost-wallet.md`](validation/2026-10-30-fresh-twohost-wallet.md); the
+`validation/2026-10-30-fresh-twohost-wallet.md`; the
 original-payment replay into the real ledger and Magpie key is in
-[`validation/2026-10-30-live-magpie-chain-credit.md`](validation/2026-10-30-live-magpie-chain-credit.md).
+`validation/2026-10-30-live-magpie-chain-credit.md`.
 The phase-7 report's earlier “no real-testnet run” section and its older “fresh combined remains
 UNKNOWN” sentence are historical; the current scope is the one in those two reports, and real vendor
 execution is still UNKNOWN.
@@ -106,8 +108,8 @@ journeys. The page/bridge files were compared with Magpie 0.1.2120, but the host
 pricing/billing pin stay at **0.1.2038**; 0.1.2120 host/CLI behaviour is UNKNOWN.
 
 Supersedes the 2026-10-29 draft. Every claim below is backed by a measured result in
-[`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md) or
-[`validation/2026-10-29-acl-fix-and-two-host.md`](validation/2026-10-29-acl-fix-and-two-host.md);
+`validation/2026-10-29-local-lab.md` or
+`validation/2026-10-29-acl-fix-and-two-host.md`;
 source references are in those notes. UNCERTAINTIES.md's open questions are answered or listed
 as UNKNOWN there.
 
@@ -125,7 +127,7 @@ own model lists and routing groups.
 - The plugin never proxies an AI request, never counts tokens, never meters a call, never freezes a
   per-request balance and never writes a second usage ledger.
 - The Phase 0 standalone HTTP admission/pricing proxy is **superseded** and must not be carried
-  forward (`prototype/phase0/` stays as a historical reference only).
+  forward; the Phase 0 prototype has been removed from the tree.
 - A minimal network adapter (local relay, header-injecting proxy, provider-side TUN) is **not
   needed**: the corrected no-TUN ingress below is authenticated end to end.
 
@@ -353,7 +355,7 @@ deadlines: a provider **id/type** change is seen by the 15 s fingerprint, while 
 Gateway Key's **model whitelist** is seen by the full guard on the ~45 s reconcile pass (or at the
 next hand-over). Absolute real-time prevention would need Magpie to make a key's provider set
 immutable or a request-path intermediary; **LIMITATION**, see
-[`validation/2026-10-29-pr5-review-fixes.md`](validation/2026-10-29-pr5-review-fixes.md).
+`validation/2026-10-29-pr5-review-fixes.md`.
 
 ## Decision 11 — State: versioned, atomic, backed up, with the keys elsewhere
 
@@ -741,7 +743,7 @@ could ignore it and grant a balance the plugin could not prove.
 
 BSC and Base are the first two **registered** networks, not a privileged pair. The registry
 (`plugin/src/networks.ts`) has no `primary`, `secondary`, `preferred`, `default` or `priority` field,
-and a test asserts that the serialized registry contains none of those words. Both records have the
+and the serialized registry contains none of those words. Both records have the
 same key set. Disabling one leaves the other enabled, and the choice survives a restart.
 
 Consequences that are enforced rather than documented:
@@ -749,7 +751,7 @@ Consequences that are enforced rather than documented:
 - No chain id appears in `ledger.ts`, `provisioner.ts`, `chainstore.ts`, `deposits.ts` or
   `watcher.ts`. Adding a chain is a registry record.
 - A third EVM chain was added by data alone and the **whole** pipeline ran on it
-  (`scripts/chain-lab.ts`, chain 31337), which is the practical proof that the crediting path is not
+  (local chain lab, chain 31337), which is the practical proof that the crediting path is not
   BSC- or Base-specific.
 - Mainnet 56 and 8453 are present as `RESERVED_MAINNETS` with `enabled: false`, and three separate
   code paths refuse to enable them or to watch them.
@@ -857,8 +859,8 @@ The page carries exactly two external documentation links — BNB Chain's guide 
 BSC, and Peer's guide to buying with Alipay — as fixed HTTPS URLs with no query string, opened with
 `rel="noopener noreferrer external"`, labelled as third-party sites that are not part of this
 product, with an explicit statement that Peer and Alipay have no partnership with this project and
-that the guides are about real mainnet assets and do not obtain test tokens. Tests assert there are
-exactly two such links, that no URL is built at runtime, and that the old Phase7 page had only "Reload snapshot" and settings "Save" buttons. That button-count statement is historical and superseded by the Phase9 launcher/explicit approval controls; the financial no-buy/no-swap/no-bridge constraint remains.
+that the guides are about real mainnet assets and do not obtain test tokens. There are
+exactly two such links, no URL is built at runtime, and the old Phase7 page had only "Reload snapshot" and settings "Save" buttons. That button-count statement is historical and superseded by the Phase9 launcher/explicit approval controls; the financial no-buy/no-swap/no-bridge constraint remains.
 
 ## Preferred dataflow
 
@@ -1005,9 +1007,9 @@ Phase-7 testnet-wallet additions:
     Sepolia payments credited the same real Gateway Key through two independent hosts, real EasyTier
     no-TUN and a real native Remote Magpie, with automatic watchers, restart recovery, duplicate
     scans and cleanup. See
-    [`validation/2026-10-30-fresh-twohost-wallet.md`](validation/2026-10-30-fresh-twohost-wallet.md).
+    `validation/2026-10-30-fresh-twohost-wallet.md`.
     The earlier original-payment replay into the real ledger/Magpie key is a separate VERIFIED
-    claim ([`validation/2026-10-30-live-magpie-chain-credit.md`](validation/2026-10-30-live-magpie-chain-credit.md)).
+    claim (`validation/2026-10-30-live-magpie-chain-credit.md`).
     Real vendor/paid model execution and a local EVM reorg remain separate; the two-host run used a
     deterministic mock upstream.
 24. **BSC testnet's finality policy is a substitute.** Its RPCs report `finalized` == `latest`, so 15
@@ -1031,16 +1033,4 @@ Phase-7 testnet-wallet additions:
 
 - Magpie: https://github.com/yetone/magpie (pin above)
 - EasyTier: https://github.com/EasyTier/EasyTier (pin above)
-- Validation: [`validation/2026-10-29-local-lab.md`](validation/2026-10-29-local-lab.md),
-  [`validation/2026-10-29-acl-fix-and-two-host.md`](validation/2026-10-29-acl-fix-and-two-host.md),
-  [`validation/2026-10-30-plugin-phase3.md`](validation/2026-10-30-plugin-phase3.md),
-  [`validation/2026-10-29-phase4-multi-role-multi-provider.md`](validation/2026-10-29-phase4-multi-role-multi-provider.md),
-  [`validation/2026-10-30-phase5-peer-catalog.md`](validation/2026-10-30-phase5-peer-catalog.md),
-  [`validation/2026-10-30-phase6-pricing-window.md`](validation/2026-10-30-phase6-pricing-window.md),
-  [`validation/2026-10-30-phase7-multichain-wallet.md`](validation/2026-10-30-phase7-multichain-wallet.md),
-  [`validation/2026-10-30-testnet-handoff.md`](validation/2026-10-30-testnet-handoff.md),
-  [`validation/2026-10-30-live-magpie-chain-credit.md`](validation/2026-10-30-live-magpie-chain-credit.md),
-  [`validation/2026-10-30-fresh-twohost-wallet.md`](validation/2026-10-30-fresh-twohost-wallet.md),
-  [`validation/phase8-journey-plan.md`](validation/phase8-journey-plan.md),
-  [`validation/2026-10-30-phase8-onboarding-ux.md`](validation/2026-10-30-phase8-onboarding-ux.md)
-- Corrected provider config: [`validation/lab/provider-acl.toml`](validation/lab/provider-acl.toml)
+- Validation reports: 已从工作树移除，见 git 历史（`git log -- docs/validation`）

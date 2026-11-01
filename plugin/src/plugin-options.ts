@@ -6,7 +6,7 @@
 // plugin host for a plugin that has a host part (ours does). So an options blob
 // left in `plugins.json` must never be re-applied blindly on every boot: that is
 // how a stale `networkSecret` silently reverted a later `configure --secret` and
-// disconnected every peer (docs/validation/phase8-csp.md §6.1).
+// disconnected every peer.
 //
 // The rule, in one paragraph: options **seed** a node that has no configuration
 // yet. Once a configuration exists, the stored state wins; a change to the
