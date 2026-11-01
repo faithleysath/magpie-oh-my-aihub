@@ -8,7 +8,7 @@
 //
 // The cache is memory only, 30 seconds, keyed by the address that signed a
 // document. It keeps, per peer, the overlay endpoint the catalogue arrived on
-// (`<mappedHost>:3426`), because that is where the same peer answers `POST
+// on its overlay address, because that is where the same peer answers `POST
 // /request` and `GET /request` — `peerEndpoint()` is what `request_access` and
 // `connect_provider` use. Nothing is written to disk.
 //
@@ -38,7 +38,7 @@ export interface DiscoveredPeer {
   online: boolean;
   models: CatalogModel[];
   ts?: string;
-  /** `<mappedHost>:3426` when a document was read; null otherwise */
+  /** `<peerHost>:3426` when a document was read; null otherwise */
   endpoint: PeerEndpoint | null;
   /** short reason for an unreadable peer */
   error?: string;
@@ -62,12 +62,12 @@ function offline(neighbor: OverlayNeighbor, error: string): DiscoveredPeer {
 }
 
 async function readPeer(neighbor: OverlayNeighbor): Promise<DiscoveredPeer> {
-  if (!neighbor.mappedHost) return offline(neighbor, "no exported address");
+  if (!neighbor.ipv4) return offline(neighbor, "no overlay address yet");
   let response: { status: number; body: string };
   try {
     response = await socksHttpGet({
       socksPort: SOCKS_PORT,
-      host: neighbor.mappedHost,
+      host: neighbor.ipv4,
       port: CONTROL_PORT,
       path: CATALOG_PATH,
       timeoutMs: READ_TIMEOUT_MS,
@@ -91,7 +91,7 @@ async function readPeer(neighbor: OverlayNeighbor): Promise<DiscoveredPeer> {
     online: true,
     models: parsed.doc.models,
     ts: parsed.doc.ts,
-    endpoint: { address: parsed.doc.address, host: neighbor.mappedHost, port: CONTROL_PORT },
+    endpoint: { address: parsed.doc.address, host: neighbor.ipv4, port: CONTROL_PORT },
   };
 }
 
@@ -111,8 +111,8 @@ async function collectPeers(): Promise<DiscoveredPeer[]> {
       const index = next++;
       if (index >= neighbors.length) return;
       const neighbor = neighbors[index];
-      if (!neighbor.mappedHost) {
-        results[index] = offline(neighbor, "no exported address");
+      if (!neighbor.ipv4) {
+        results[index] = offline(neighbor, "no overlay address yet");
         continue;
       }
       if (Date.now() >= deadline) {

@@ -92,11 +92,21 @@ contacts(alias TEXT PRIMARY KEY, address TEXT NOT NULL,
 
 ## 覆盖网与协议
 
-EasyTier 用 **no-TUN** 模式。插件用 `[[proxy_network]]` 把本机 LAN 地址导出成稳定的 `10.66.a.b/32`（首次分配后持久化），Forward ACL 只放行 **3426** 和 **3425**。改共享模型只重签内存里的目录，不重启核心。`[[port_forward]]` 只用于消费方本机（本地端口 → 覆盖网远端端口），不用于入站。
+EasyTier 用 **虚拟 IP** 组网：生成的 TOML 固定写 `dhcp = true`，每个节点从 EasyTier 的 DHCP 拿一个覆盖网地址（默认 `10.126.126.0/24`，不是文档里的 `10.144.144.x`），对端一律用这个地址访问。**没有 `[[proxy_network]]`、没有 `mapped_cidr`、也不导出本机 LAN 地址** —— 那套东西在 no-TUN 下从来没通过，而且不必要。
 
-导出的那个本地地址由 `detectLanIPv4()` 选：排除容器网卡（`docker*`、`br-*`、`veth*`、`virbr*`、`podman*`、`cni*`、`flannel*`），因为它们看起来像私网。而私网优先正是排序规则；在一台真实地址是公网的 VPS 上，`docker0` 会赢过 `ens17`，导出就指向对端永远连不上的地址。网卡名按 `en0/en1/eth0/eth1/ens<数字>/enp<数字>s<数字>/wlan<数字>` 优先。真的选错时用 `OH_MY_AIHUB_LAN_IP` 覆盖。
+模式由上到下三级：
 
-默认不写 `listeners`：EasyTier 一个端口都不开，节点只能透过已经连着的对端到达，实际就是种子。`join_network` 的 `listen: true` 会写 `listeners = ["tcp://0.0.0.0:11010", "udp://0.0.0.0:11010"]`，两个传输都开才能直连（TCP 和 UDP 两种都可用），主机防火墙要放行；只在入站端口真的可达时开，否则对端会先试直连再回退到中继，白白多一轮。
+| | TUN（默认，需要 root） | no-TUN（没 root 时自动回退） |
+|---|---|---|
+| 生成的 TOML | 不写 `no_tun` | `no_tun = true` |
+| 对端看到的源地址 | 对端的覆盖网地址（`10.126.x.y`） | `127.0.0.1`（EasyTier 会重写） |
+| 3426 目录 | 入站放行 | 入站放行（所有写操作都有签名） |
+| 3425 网关 | 入站放行，Magpie 按 Gateway Key 计费 | **不公布、不放行**：看起来像本机免 Key 调用，放行就是白送 |
+| 目录服务监听 | `0.0.0.0:3426` | `127.0.0.1:3426`（重写后的落点） |
+
+所以「能不能计费」取决于提供方有没有 TUN：`status.network.mode` 会写清楚，no-TUN 提供方的 `publishedPorts` 里没有 3425。TUN 模式下主机防火墙要看得到 tun 设备（`ufw allow in on tun0`），否则覆盖网流量会被静默丢弃 —— 表现是连接超时、日志里什么都没有。
+
+`listeners` 仍然是可选的 P2P 开关：不写时 EasyTier 一个端口都不开，所有流量都经已经连着的对端中继；写了（`join_network` 的 `listen: true`）才会尝试直连。
 
 三个端点都监听 `<lan>:3426`，走覆盖网明文 HTTP。
 

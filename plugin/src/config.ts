@@ -1,16 +1,20 @@
 // The plugin's single configuration document.
 //
-// It holds the network, the shared-model selection, the overlay hostname, the
-// persisted overlay export (`publish.mappedCidr`) and the consumer-side
-// connections. The format is version 3.
+// It holds the network, the shared-model selection, the overlay hostname and the
+// consumer-side connections. The format is version 3.
+//
+// There is no exported subnet any more: every node takes a virtual IP from
+// EasyTier's DHCP (`dhcp = true`) and peers are addressed by it, so a public
+// address per host is neither required nor advertised.
 // Older files are never deleted or rewritten in place by this module:
 // `readConfig` falls back to defaults, and `writeJsonAtomic` keeps the replaced
 // document as `state.json.prev`.
 //
-// A connection is `{provider, localPort}` per the design, plus `mappedHost`: the
-// peer's exported overlay address, kept so the generated TOML can restore the
-// `[[port_forward]]` after a restart without a live discovery read. It is a
-// routing clue only — the peer's identity is still the signed document.
+// A connection is `{provider, localPort}` plus `peerHost`: the peer's overlay
+// address as last discovered (`10.126.x.y` from EasyTier's DHCP), kept so the
+// generated TOML can restore the `[[port_forward]]` after a restart without a
+// live discovery read. It is a routing clue only — the peer's identity is still
+// the signed document.
 
 import { writeJsonAtomic, readJsonWithBackup } from "./store.ts";
 import { logger } from "./log.ts";
@@ -40,6 +44,18 @@ export interface NetworkConfig {
    * port in the host's firewall.
    */
   listen: boolean;
+  /**
+   * Ask for a TUN device instead of EasyTier's user-space (no-TUN) stack.
+   *
+   * A request, not a promise: a process without root cannot create a device, so
+   * the effective mode is `tun && canCreateTun()`. The difference is not only
+   * performance — with a device a peer's packets arrive carrying the peer's
+   * overlay address as their source, so Magpie sees a real client and enforces
+   * the Gateway Key and its cost limit. Through the no-TUN stack inbound is
+   * rewritten to 127.0.0.1, which Magpie answers as the local, keyless caller,
+   * so a no-TUN provider publishes no gateway port at all.
+   */
+  tun: boolean;
 }
 
 export interface ShareConfig {
@@ -47,29 +63,20 @@ export interface ShareConfig {
 }
 
 /**
- * The overlay export. `mappedCidr` is allocated once (`10.66.a.b/32`) and never
- * changes, so a consumer's saved route keeps pointing at this node.
- */
-export interface PublishConfig {
-  mappedCidr: string | null;
-}
-
-/**
  * One Remote Magpie this node consumes. `provider` is the peer's wallet address
  * (its identity), `localPort` is the loopback forward EasyTier listens on, and
- * `mappedHost` is the peer's exported overlay address the forward points at.
+ * `peerHost` is the peer's overlay address the forward points at.
  */
 export interface ConnectionConfig {
   provider: string;
   localPort: number;
-  mappedHost: string | null;
+  peerHost: string | null;
 }
 
 export interface HubConfig {
   version: typeof CONFIG_VERSION;
   network: NetworkConfig | null;
   share: ShareConfig;
-  publish: PublishConfig;
   connections: ConnectionConfig[];
   hostname: string | null;
 }
@@ -83,7 +90,6 @@ export function defaultConfig(): HubConfig {
     version: CONFIG_VERSION,
     network: null,
     share: { models: [] },
-    publish: { mappedCidr: null },
     connections: [],
     hostname: null,
   };
@@ -93,30 +99,15 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/**
- * The persisted export must be the fixed `10.66.a.b/32` shape. Anything else (a
- * hand edit, a migrated file) is dropped so the next start allocates a fresh
- * one instead of exporting an unrelated subnet.
- */
-function mappedCidrOf(publish: unknown): string | null {
-  if (!publish || typeof publish !== "object" || Array.isArray(publish)) return null;
-  const value = (publish as Record<string, unknown>).mappedCidr;
-  if (typeof value !== "string") return null;
-  const m = /^10\.66\.(\d{1,3})\.(\d{1,3})\/32$/.exec(value.trim());
-  if (!m) return null;
-  const [, a, b] = m;
-  if (Number(a) < 1 || Number(a) > 254 || Number(b) < 1 || Number(b) > 254) return null;
-  return `10.66.${a}.${b}/32`;
-}
-
 const ADDRESS_RE = /^0x[0-9a-f]{40}$/;
-const MAPPED_HOST_RE = /^10\.66\.(\d{1,3})\.(\d{1,3})$/;
+const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 
-function isMappedHost(value: unknown): value is string {
+/** The overlay address is a plain IPv4; the subnet itself belongs to the network. */
+function isOverlayHost(value: unknown): value is string {
   if (typeof value !== "string") return false;
-  const m = MAPPED_HOST_RE.exec(value.trim());
-  if (!m) return false;
-  return Number(m[1]) >= 1 && Number(m[1]) <= 254 && Number(m[2]) >= 1 && Number(m[2]) <= 254;
+  const host = value.trim();
+  if (!IPV4_RE.test(host)) return false;
+  return host.split(".").every((part) => Number(part) >= 0 && Number(part) <= 255);
 }
 
 function isLocalPort(value: unknown): value is number {
@@ -127,7 +118,7 @@ function isLocalPort(value: unknown): value is number {
  * Connections are routing config, not authorization: a malformed or duplicate
  * entry is dropped, so a hand-edited file can never make the generated TOML
  * forward somewhere unintended. Identity is the `0x` address; the port and the
- * mapped host are only clues.
+ * overlay host are only clues.
  */
 function connectionsOf(raw: unknown): ConnectionConfig[] {
   if (!Array.isArray(raw)) return [];
@@ -142,7 +133,7 @@ function connectionsOf(raw: unknown): ConnectionConfig[] {
     if (!isLocalPort(src.localPort) || ports.has(src.localPort)) continue;
     providers.add(provider);
     ports.add(src.localPort);
-    out.push({ provider, localPort: src.localPort, mappedHost: isMappedHost(src.mappedHost) ? src.mappedHost.trim() : null });
+    out.push({ provider, localPort: src.localPort, peerHost: isOverlayHost(src.peerHost) ? src.peerHost.trim() : null });
   }
   return out;
 }
@@ -170,6 +161,7 @@ export function normalizeConfig(raw: unknown): HubConfig {
         initialNode: text(src.initialNode),
         secureMode: src.secureMode === true,
         listen: src.listen === true,
+        tun: src.tun === true,
       };
     }
   }
@@ -187,7 +179,6 @@ export function normalizeConfig(raw: unknown): HubConfig {
     version: CONFIG_VERSION,
     network,
     share: { models },
-    publish: { mappedCidr: mappedCidrOf(o.publish) },
     connections: connectionsOf(o.connections),
     hostname: text(o.hostname),
   };
@@ -226,14 +217,14 @@ export function writeConfig(cfg: HubConfig): void {
           initialNode: cfg.network.initialNode,
           secureMode: cfg.network.secureMode,
           listen: cfg.network.listen,
+          tun: cfg.network.tun,
         }
       : null,
     share: { models: [...cfg.share.models] },
-    publish: { mappedCidr: cfg.publish.mappedCidr },
     connections: cfg.connections.map((c) => ({
       provider: c.provider,
       localPort: c.localPort,
-      mappedHost: c.mappedHost,
+      peerHost: c.peerHost,
     })),
     hostname: cfg.hostname,
   });

@@ -61,6 +61,7 @@
 <ul>
 <li>「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。这个网开了 secure mode。」</li>
 <li>「顺便给我开监听，让别的节点能直连我，不要全走中继。」（对应 <code>listen:true</code>；开了之后要在主机防火墙放行 <code>11010</code> 的 tcp 和 udp）</li>
+<li>「用 TUN 模式跑」（默认就是；没有 root 会自动回退到 no-TUN。服务器上还要放行 tun 设备：<code>ufw allow in on tun0</code>）</li>
 <li>「把节点私钥导出到 /Users/me/omai.key，不要打印私钥；换机器时告诉我怎么导入。」</li>
 </ul>
 <h3>地址簿</h3>
@@ -111,6 +112,7 @@
 <li><strong>到账</strong>：不是即时。BSC 等 15 个确认，Base 等最终确认，插件每 15 秒扫一次。</li>
 <li><strong>私钥</strong>：不会通过工具返回；导出只写到你指定的文件，不会打印出来。导出后，能读本机文件的 agent 仍然能读到它。</li>
 <li><strong>网络</strong>：密码是入网门；密码对上但 <code>peers</code> 一直是空的，多半是网络开了 secure mode 而你没开。secure mode 下每对节点各自协商密钥，中继也解不开；普通模式下全网共用一把来自密码的密钥，中继能解。两种情况覆盖网里的 HTTP 都是明文应用层。地址不是身份，目录和申请靠签名。</li>
+<li><strong>能不能被计费</strong>：共享方跑在 <strong>TUN 模式</strong>时，对端连接带的是它的覆盖网地址，Magpie 能按 Gateway Key 收费；跑在 no-TUN 时对端会被重写成 <code>127.0.0.1</code>，Magpie 当本机免 Key，所以插件干脆不公布 3425（<code>status</code> 里的 <code>publishedPorts</code> 只有 3426）。<code>status.network.mode</code> 写的就是当前模式。</li>
 <li><strong>价格</strong>：共享出去的模型公布四段价（输入 / 输出 / 缓存读 / 缓存写，USD / 每百万 tokens）。阶梯价和高峰价也会一起公布（门槛是多少、高峰几倍），别人能看到全貌；一个算不出来的价格不会被共享。真实扣费在提供方的 Magpie 里，目录只负责公布。</li>
 <li><strong>转账和断开</strong>：转账没有二次确认、没有白名单；断开连接会重启 EasyTier，其他连接短暂中断。</li>
 <li><strong>额度</strong>：价格改了，剩余额度会跟着变。429 是额度用完，充值即恢复；401 是被撤销，要提供方重新批准。</li>

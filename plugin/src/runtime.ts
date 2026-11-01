@@ -29,7 +29,6 @@ import { hostnameForAddress, readConfig, writeConfig, type HubConfig } from "./c
 import { clearScanCursors, openLedger } from "./db.ts";
 import { Grants } from "./grants.ts";
 import { DirectoryServer } from "./http-router.ts";
-import { detectLanIPv4 } from "./lan.ts";
 import { logger } from "./log.ts";
 import { CONTROL_PORT, GATEWAY_PORT, Overlay } from "./overlay.ts";
 import { stateDir } from "./paths.ts";
@@ -181,14 +180,6 @@ async function resolveSharedModels(runtime: Runtime): Promise<CatalogModel[] | n
   }
 }
 
-function probeLan(): string | null {
-  try {
-    return detectLanIPv4();
-  } catch (error) {
-    logger.warn(`catalogue: LAN probe failed: ${detailOf(error)}`);
-    return null;
-  }
-}
 
 /** A resolver a test can replace without a real Magpie. */
 export type SharedModelResolver = (runtime: Runtime) => Promise<CatalogModel[] | null>;
@@ -206,9 +197,12 @@ export async function refreshCatalog(runtime: Runtime, resolve: SharedModelResol
   catalogRefreshing = true;
   try {
     if (runtime.config.network && !runtime.server.listening) {
-      // The LAN address may have appeared after boot; re-probe before giving up.
-      const lan = runtime.overlay.lanAddress() ?? probeLan();
-      if (lan) runtime.server.start(lan);
+      // Where a peer's connection lands depends on the mode: with a device the
+      // kernel delivers it to whatever address it was sent to, so the listener
+      // takes every interface. Through the user-space stack EasyTier rewrites it
+      // to 127.0.0.1, so that is what the listener binds.
+      const mode = runtime.overlay.currentMode();
+      runtime.server.start(mode === "tun" ? "0.0.0.0" : "127.0.0.1");
     }
 
     const selected = runtime.config.share.models;

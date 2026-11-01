@@ -495,7 +495,7 @@ export const connectTool: ToolDef = {
       ...runtime.config,
       connections: [
         ...runtime.config.connections.filter((connection) => connection.provider !== provider),
-        { provider, localPort, mappedHost: endpoint.host },
+        { provider, localPort, peerHost: endpoint.host },
       ].sort((a, b) => a.provider.localeCompare(b.provider)),
     };
     try {
@@ -647,9 +647,9 @@ export const connectionsTool: ToolDef = {
           gatewayPort: cached?.gatewayPort ?? GATEWAY_PORT,
           localPort: connection.localPort,
         };
-        if (!connection.mappedHost) return base;
+        if (!connection.peerHost) return base;
         try {
-          const poll = await signedPoll(runtime, connection.mappedHost);
+          const poll = await signedPoll(runtime, connection.peerHost);
           rememberPoll(runtime, connection.provider, poll);
           return {
             ...base,

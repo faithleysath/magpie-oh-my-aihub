@@ -26,6 +26,12 @@ export const joinNetworkTool: ToolDef = {
           "网络是否启用了 EasyTier secure mode。开了的网会拒掉没开的节点（同网节点必须一致）；" +
           "开启后本机会自动生成并复用一对 X25519 密钥，不需要和网络里任何人交换密钥",
       },
+      tun: {
+        type: "boolean",
+        description:
+          "是否用 TUN 设备（默认 true，没 root 会自动回退到 no-TUN）。TUN 下对端连进来时源地址是它的覆盖网地址，" +
+          "Magpie 才能按 Gateway Key 计费；no-TUN 下源地址会被重写成 127.0.0.1，看起来像本机免 Key 调用，所以那时不对外公布 3425",
+      },
       listen: {
         type: "boolean",
         description:
@@ -60,8 +66,17 @@ export const joinNetworkTool: ToolDef = {
       : previous?.name === name
         ? previous.listen
         : false;
+    // TUN is the default: a device is the only mode where a peer's source address
+    // survives, which is what makes the Gateway Key (and the cost limit behind it)
+    // enforceable. A process without root falls back to user space on its own.
+    const tunExplicit = args.tun !== undefined && args.tun !== null;
+    const tun = tunExplicit
+      ? optionalBoolean(args, "tun")
+      : previous?.name === name
+        ? previous.tun
+        : true;
 
-    const network: NetworkConfig = { name, secret, initialNode, secureMode, listen };
+    const network: NetworkConfig = { name, secret, initialNode, secureMode, listen, tun };
     const next = { ...runtime.config, network };
     try {
       writeConfig(next);
