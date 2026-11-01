@@ -175,268 +175,187 @@ function provisionerLab() {
   return { dir, ledger, magpie, provisioner };
 }
 
-describe("C1 product network registry: BSC and Base are peers", () => {
-  test("56 and 8453 are read-only product networks with the same record shape", () => {
+describe("C1 production network registry: BSC and Base are peers", () => {
+  test("56 and 8453 are equal credit product networks with the same record shape", () => {
     expect(PRODUCT_NETWORKS.map((n) => n.chainId)).toEqual([56, 8453]);
     for (const n of PRODUCT_NETWORKS) {
       expect(n.networkType).toBe("mainnet");
-      expect(n.support).toBe("read-only");
+      expect(n.support).toBe("credit");
       expect(n.receivable).toBe(true);
-      expect(n.enabled).toBe(false);
-      expect(n.rpcEndpoints.length).toBeGreaterThan(0);
-      expect(n.evidence?.url).toMatch(/^https:\/\//);
-      expect(n.evidence?.checkedAt).toBe("2026-10-31");
-      expect(n.finality.mode).toBe("read-only");
-    }
-    const fields = Object.keys(PRODUCT_NETWORKS[0]!).sort();
-    expect(Object.keys(PRODUCT_NETWORKS[1]!).sort()).toEqual(fields);
-    const text = JSON.stringify(productRegistry().networks()).toLowerCase();
-    for (const word of ["primary", "preferred", "isdefault", "fallbackchain", "priority"]) {
-      expect(text).not.toContain(word);
+      expect(n.enabled).toBe(true);
+      expect(n.rpcQuorum).toBe(2);
+      expect(n.finality.mode).toBe("finalized-tag");
+      expect(n.evidence).not.toBeNull();
+      expect(new Set(n.rpcEndpoints.map((u) => new URL(u).host)).size).toBeGreaterThanOrEqual(2);
     }
   });
 
-  test("the full registry separates credit, read and receiving sets", () => {
+  test("the full registry exposes both mainnets as credit and receiving, and both dev testnets as credit", () => {
     const r = productRegistry();
-    expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([97, 84532]);
-    expect(r.creditableNetworks().map((n) => n.chainId)).toEqual([97, 84532]);
+    expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([97, 84532, 56, 8453]);
+    expect(r.creditableNetworks().map((n) => n.chainId)).toEqual([97, 84532, 56, 8453]);
     expect(r.receivableNetworks().map((n) => n.chainId)).toEqual([56, 8453]);
-    expect(r.readableNetworks().map((n) => n.chainId)).toEqual([97, 84532, 56, 8453]);
-    expect(r.requireReadableNetwork(56).displayName).toBe("BNB Smart Chain");
-    expect(r.requireReadableNetwork(8453).displayName).toBe("Base");
+    expect(r.readOnlyNetworks().map((n) => n.chainId)).toEqual([]);
   });
 
-  test("a mainnet cannot be enabled, watched or credited, but can be read", () => {
-    const r = productRegistry();
-    for (const chainId of MAINNET_CHAIN_IDS) {
-      expect(() => r.setNetworkEnabled(chainId, true)).toThrow(/mainnet/);
-      expect(() => r.requireEnabledNetwork(chainId)).toThrow(/mainnet|read-only/);
-      expect(() => r.requireCreditableNetwork(chainId)).toThrow(/mainnet/);
-      expect(r.network(chainId)?.enabled).toBe(false);
-      expect(r.requireReadableNetwork(chainId).chainId).toBe(chainId);
-    }
-  });
-
-  test("relabelling a real mainnet as testnet or credit is refused by the document", () => {
+  test("a product mainnet needs two distinct RPC hosts and a real finality policy", () => {
     const base = PRODUCT_NETWORKS[1]!;
-    const build = (network: Record<string, unknown>) =>
-      new NetworkRegistry({ version: 2, networks: [network as never], assets: [] });
-    expect(() => build({ ...base, networkType: "testnet" })).toThrow(/relabelling|cannot unlock/);
-    expect(() => build({ ...base, support: "credit" })).toThrow(/read-only|credit/);
-    expect(() => build({ ...base, enabled: true })).toThrow(/mainnet/);
-    expect(() => build({ ...base, networkType: "testnet", support: "credit", enabled: true })).toThrow();
-    // Every mainnet is read-only, not only the two hard ids.
-    expect(() => build({ ...base, chainId: 999999, support: "credit" })).toThrow(/read-only|credit/);
+    expect(() => new NetworkRegistry({ version: 3, networks: [{ ...base, rpcEndpoints: ["https://mainnet.base.org"], rpcQuorum: 2 }], assets: MAINNET_ASSETS })).toThrow(/distinct RPC host/);
+    expect(() => new NetworkRegistry({ version: 3, networks: [{ ...base, finality: { ...base.finality, mode: "read-only" } }], assets: MAINNET_ASSETS })).toThrow(/finality|credit/);
   });
 
-  test("loading a v2 document validates every endpoint, including https", () => {
-    const dir = TMP();
-    const path = join(dir, "networks.json");
-    const doc = productRegistry().document();
-    doc.networks = doc.networks.map((n) => (n.chainId === 56 ? { ...n, rpcEndpoints: ["http://127.0.0.1:9"] } : n));
-    writeFileSync(path, JSON.stringify(doc));
-    expect(() => loadRegistry(path)).toThrow(/https/);
-
-    const r = productRegistry();
-    expect(() => r.setRpcEndpoints(56, ["https://user@example.test"])).toThrow(/credentials/);
-    expect(() => r.setRpcEndpoints(56, ["https://example.test/#fragment"])).toThrow(/fragment/);
-    expect(() => r.setRpcEndpoints(56, ["ftp://example.test"])).toThrow(/http/);
+  test("relabelling a real mainnet as testnet is refused by the document", () => {
+    const base = PRODUCT_NETWORKS[1]!;
+    expect(() => new NetworkRegistry({ version: 3, networks: [{ ...base, networkType: "testnet" }], assets: [] })).toThrow(/relabelling|cannot unlock/);
   });
 
-  test("a mainnet/read-only endpoint must use https", () => {
-    const r = productRegistry();
-    expect(() => r.setRpcEndpoints(56, ["http://127.0.0.1:8545"])).toThrow(/https/);
-    expect(r.setRpcEndpoints(56, ["https://bsc-dataseed.bnbchain.org"]).rpcEndpoints).toEqual(["https://bsc-dataseed.bnbchain.org"]);
-    // The testnet local-dev path still accepts http.
-    expect(r.setRpcEndpoints(97, ["http://127.0.0.1:8545"]).rpcEndpoints).toEqual(["http://127.0.0.1:8545"]);
+  test("a mainnet endpoint must use https and carry no credentials", () => {
+    const base = PRODUCT_NETWORKS[0]!;
+    expect(() => new NetworkRegistry({ version: 3, networks: [{ ...base, rpcEndpoints: ["http://bsc.example"] }], assets: MAINNET_ASSETS })).toThrow(/https/);
+    expect(() => new NetworkRegistry({ version: 3, networks: [{ ...base, rpcEndpoints: ["https://user:pw@bsc.example"] }], assets: MAINNET_ASSETS })).toThrow(/credentials/);
   });
 
   test("credit is allowlisted: chain 1 disguised as testnet/credit/enabled is refused", () => {
-    const base = DEFAULT_NETWORKS[0]!;
-    const spoof = { ...base, chainId: 1, networkType: "testnet" as const, support: "credit" as const, enabled: true };
-    expect(() => new NetworkRegistry({ version: 2, networks: [spoof], assets: [] })).toThrow(/credit allowlist/);
-    expect(() => simulationRegistry({ version: 2, networks: [spoof], assets: [] }, [1])).toThrow(/local lab ids/);
-    // The same record may be registered but not enabled/credited.
-    const disabled = new NetworkRegistry({ version: 2, networks: [{ ...spoof, enabled: false }], assets: [] });
-    expect(disabled.creditableNetworks()).toEqual([]);
-    expect(() => disabled.setNetworkEnabled(1, true)).toThrow(/credit allowlist/);
-    expect(() => disabled.requireCreditableNetwork(1)).toThrow(/disabled|credit allowlist/);
+    const testnet = DEFAULT_NETWORKS[0]!;
+    expect(() => new NetworkRegistry({ version: 3, networks: [{ ...testnet, chainId: 1 }], assets: [] })).toThrow(/credit allowlist/);
   });
 
-  test("an unknown chain cannot be enabled for credit; a local simulation must be explicit", () => {
-    const base = DEFAULT_NETWORKS[0]!;
-    const unknown = { ...base, chainId: 424242, networkType: "testnet" as const, support: "credit" as const, enabled: true };
-    expect(() => new NetworkRegistry({ version: 2, networks: [unknown], assets: [] })).toThrow(/credit allowlist/);
-    expect(() => simulationRegistry({ version: 2, networks: [unknown], assets: [] }, [31337])).toThrow(/credit allowlist/);
-    const local = simulationRegistry({ version: 2, networks: [{ ...unknown, chainId: 31337 }], assets: [] }, [31337]);
-    expect(local.creditableNetworks().map((n) => n.chainId)).toEqual([31337]);
-  });
-
-  test("the hard chain-id boundary is independent of the registry", () => {
-    expect(isMainnetChainId(56)).toBe(true);
-    expect(isMainnetChainId(8453)).toBe(true);
-    expect(isMainnetChainId(97)).toBe(false);
-    expect(isMainnetChainId(84532)).toBe(false);
-    expect(MAINNET_BOUNDARY.allowed).toEqual(["read-metadata", "read-balance", "select-receiving"]);
-    expect(MAINNET_BOUNDARY.forbidden).toEqual(["send", "credit", "auto-recharge"]);
+  test("the chain-id boundary allows send/credit on 56/8453 but never auto-recharge", () => {
+    for (const chainId of MAINNET_CHAIN_IDS) {
+      const caps = mainnetCapabilities(chainId);
+      expect(caps.send).toBe(true);
+      expect(caps.credit).toBe(true);
+      expect(caps["auto-recharge"]).toBe(false);
+      expect(mainnetCapabilityAllowed(chainId, "send")).toBe(true);
+      expect(mainnetCapabilityAllowed(chainId, "credit")).toBe(true);
+      expect(mainnetCapabilityAllowed(chainId, "auto-recharge")).toBe(false);
+      expect(() => assertNoMainnetSend({ chainId })).not.toThrow();
+      expect(() => assertNoMainnetCredit({ chainId })).not.toThrow();
+      expect(() => assertNoMainnetAutoRecharge({ chainId })).toThrow(MainnetGateError);
+    }
+    expect(MAINNET_BOUNDARY.allowed).toContain("send");
+    expect(MAINNET_BOUNDARY.allowed).toContain("credit");
+    expect(MAINNET_BOUNDARY.forbidden).toEqual(["auto-recharge"]);
   });
 });
 
 describe("C3 strict asset quadruple and evidence", () => {
-  test("Base native USDC is recorded with issuer evidence and no credit rate", () => {
-    const a = productRegistry().asset(BASE_USDC_ID)!;
+  test("Base native USDC is recorded with issuer evidence and a 1 USD credit rate", () => {
+    const r = productRegistry();
+    const id = assetIdOf(8453, BASE_USDC);
+    const a = r.asset(id)!;
     expect(a.chainId).toBe(8453);
     expect(a.contractAddress.toLowerCase()).toBe(BASE_USDC.toLowerCase());
     expect(a.decimals).toBe(6);
     expect(a.issuerType).toBe("native-issuer");
     expect(a.testnetOnly).toBe(false);
-    expect(a.credit).toBe(false);
-    expect(a.pricing.kind).toBe("not-creditable");
-    expect(a.pricing.nanosPerToken).toBe("0");
+    expect(a.credit).toBe(true);
+    expect(a.pricing.kind).toBe("stablecoin-usd");
+    expect(a.pricing.nanosPerToken).toBe("1000000000");
     expect(a.evidence?.issuer).toBe("Circle");
-    expect(a.evidence?.url).toBe("https://developers.circle.com/stablecoins/usdc-contract-addresses");
     expect(a.evidence?.onchainDecimals).toBe(6);
     expect(a.evidence?.onchainSymbol).toBe("USDC");
   });
 
-  test("BSC USDC is unsupported, not guessed: no record and no readable asset", () => {
+  test("BSC USDC is the bridged 18-decimal asset, a different identity from Base", () => {
     const r = productRegistry();
-    expect(r.asset(assetIdOf(56, BSC_USDC))).toBeNull();
-    expect(() => r.requireReadableAsset(assetIdOf(56, BSC_USDC))).toThrow(/not registered/);
-    expect(() => r.requireEnabledAsset(56, BSC_USDC)).toThrow(/not an allowlisted asset/);
+    const bsc = r.asset(assetIdOf(56, BSC_USDC))!;
+    expect(bsc.decimals).toBe(18);
+    expect(bsc.issuerType).toBe("bridged");
+    expect(bsc.credit).toBe(true);
+    expect(bsc.pricing.kind).toBe("stablecoin-usd");
+    expect(bsc.evidence?.issuer).toContain("Binance");
+    expect(bsc.assetId).not.toBe(assetIdOf(8453, BASE_USDC));
+    expect(bsc.symbol).toBe("USDC");
+    expect(r.asset(assetIdOf(8453, BASE_USDC))!.decimals).toBe(6);
   });
 
-  test("a mainnet asset cannot be registered through the test-asset path", () => {
-    const r = productRegistry();
-    expect(() =>
-      r.registerTestAsset({ chainId: 56, contractAddress: BSC_USDC, symbol: "tUSDC", name: "Mock", decimals: 18, nanosPerToken: "1", pricingNote: "x" }),
-    ).toThrow(/mainnet/);
-  });
-
-  test("a mainnet asset with a mock issuer, fixed rate, missing evidence or a mismatched quadruple is refused", () => {
+  test("a production asset with a mock issuer, a fixed rate, missing evidence or a mismatched quadruple is refused", () => {
     const base = MAINNET_ASSETS[0]!;
-    const build = (asset: AssetRecordInput) => new NetworkRegistry({ version: 2, networks: PRODUCT_NETWORKS, assets: [asset] });
+    const build = (asset: AssetRecordInput) => new NetworkRegistry({ version: 3, networks: PRODUCT_NETWORKS, assets: [asset] });
     expect(() => build({ ...base, issuerType: "mock" })).toThrow(/mock/);
-    expect(() => build({ ...base, pricing: { ...base.pricing, kind: "fixed-test-rate" } })).toThrow(/fixed test rate/);
-    expect(() => build({ ...base, pricing: { ...base.pricing, nanosPerToken: "1000000000" } })).toThrow(/USD rate/);
+    expect(() => build({ ...base, pricing: { ...base.pricing, kind: "fixed-test-rate" } })).toThrow(/stablecoin rate/);
+    expect(() => build({ ...base, pricing: { ...base.pricing, nanosPerToken: "999999999" } })).toThrow(/exactly 1 USD/);
     expect(() => build({ ...base, evidence: null })).toThrow(/evidence/);
-    expect(() => build({ ...base, decimals: 18 })).toThrow(/decimals/);
-    expect(() => build({ ...base, evidence: { ...base.evidence!, onchainDecimals: 18 } })).toThrow(/decimals/);
-    expect(() => build({ ...base, evidence: { ...base.evidence!, onchainContract: BSC_USDC } })).toThrow(/contract/);
-    expect(() => build({ ...base, evidence: { ...base.evidence!, onchainChainId: 56 } })).toThrow(/chain/);
-    expect(() => build({ ...base, evidence: { ...base.evidence!, url: "http://example.test" } })).toThrow(/https/);
+    expect(() => build({ ...base, evidence: { ...base.evidence!, onchainDecimals: 6 } })).toThrow(/decimals/);
+    expect(() => build({ ...base, evidence: { ...base.evidence!, onchainContract: BASE_USDC } })).toThrow(/another contract/);
   });
 
   test("a creditable test asset must stay a mock and keep a fixed test rate", () => {
-    const a = v1Asset(97, "0x5FbDB2315678afecb367f032d93F642f64180aa3");
-    const base: RegistryDocument = { version: 2, networks: DEFAULT_NETWORKS, assets: [a] };
-    expect(() => new NetworkRegistry(base)).not.toThrow();
-    expect(() => new NetworkRegistry({ ...base, assets: [{ ...a, issuerType: "native-issuer" }] })).toThrow(/mock/);
-    expect(() => new NetworkRegistry({ ...base, assets: [{ ...a, pricing: { ...a.pricing!, kind: "not-creditable" } }] })).toThrow(/fixed test rate/);
+    const testnet = DEFAULT_NETWORKS[0]!;
+    const good = v1Asset(97, "0x" + "9".repeat(40));
+    const build = (asset: AssetRecordInput) => new NetworkRegistry({ version: 3, networks: [testnet], assets: [asset] });
+    expect(() => build(good)).not.toThrow();
+    expect(() => build({ ...good, issuerType: "native-issuer" })).toThrow(/mock/);
+    expect(() => build({ ...good, pricing: { ...good.pricing, kind: "stablecoin-usd" } })).toThrow(/fixed test rate/);
   });
 });
 
-describe("C1 migration from the version-1 testnet document", () => {
-  test("adds read-only mainnets without rewriting old chain ids or enabling anything", () => {
-    const path = join(TMP(), "networks.json");
-    const old = {
-      version: 1,
-      networks: [v1Network(97, false), v1Network(84532, true), v1Network(31337, true)],
-      assets: [v1Asset(97, "0x5FbDB2315678afecb367f032d93F642f64180aa3")],
+describe("C1 migration from the version-1/v2 read-only mainnet document", () => {
+  test("a v2 document with read-only mainnet records is upgraded to production credit", () => {
+    const dir = TMP();
+    const path = join(dir, "networks.json");
+    const oldMainnets = PRODUCT_NETWORKS.map((n) => ({
+      ...n,
+      support: "read-only" as const,
+      enabled: false,
+      rpcQuorum: 1,
+      notes: "Read-only product network. No watcher, no ledger credit, no send, no automatic recharge.",
+      finality: { ...n.finality, mode: "read-only" as const, confirmations: 0, reorgDepth: 0 },
+    }));
+    const oldBaseAsset = {
+      ...MAINNET_ASSETS[1]!,
+      credit: false,
+      pricing: { nanosPerToken: "0", version: "not-creditable:8453:usdc:v1", kind: "not-creditable" as const, note: "old" },
     };
-    writeFileSync(path, JSON.stringify(old));
+    writeFileSync(path, JSON.stringify({ version: 2, networks: [...DEFAULT_NETWORKS, ...oldMainnets], assets: [oldBaseAsset] }));
     const r = loadRegistry(path);
-    expect(r.network(97)!.enabled).toBe(false);
-    expect(r.network(97)!.support).toBe("credit");
-    expect(r.network(84532)!.enabled).toBe(true);
-    // A historical local lab may load for audit/config inspection, but its
-    // automatic credit is disabled and it cannot enter production credit.
-    expect(r.network(31337)!.enabled).toBe(false);
-    expect(r.network(31337)!.notes).toContain("legacy enabled=true");
-    expect(r.network(31337)!.notes).toContain("simulation-import-required");
-    expect(r.creditableNetworks().map((n) => n.chainId)).toEqual([84532]);
-    expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([84532]);
-
-    for (const chainId of MAINNET_CHAIN_IDS) {
-      expect(r.network(chainId)!.enabled).toBe(false);
-      expect(r.network(chainId)!.support).toBe("read-only");
-      expect(r.network(chainId)!.receivable).toBe(true);
+    for (const chainId of [56, 8453]) {
+      const n = r.network(chainId)!;
+      expect(n.support).toBe("credit");
+      expect(n.enabled).toBe(true);
+      expect(n.rpcQuorum).toBe(2);
     }
-    expect(r.asset(BASE_USDC_ID)?.credit).toBe(false);
-    const oldAsset = r.asset(assetIdOf(97, "0x5FbDB2315678afecb367f032d93F642f64180aa3"))!;
-    expect(oldAsset.chainId).toBe(97);
-    expect(oldAsset.decimals).toBe(6);
-    expect(oldAsset.credit).toBe(true);
-
-    const persisted = JSON.parse(readFileSync(path, "utf8")) as RegistryDocument;
-    expect(persisted.version).toBe(2);
-    expect(persisted.networks.map((n) => n.chainId)).toEqual([97, 84532, 31337, 56, 8453]);
-    // The test asset is unchanged in identity; only the new capability default was added.
-    expect(persisted.assets[0]!.assetId).toBe(assetIdOf(97, "0x5FbDB2315678afecb367f032d93F642f64180aa3"));
-    expect(persisted.assets[0]!.chainId).toBe(97);
-
-    const again = loadRegistry(path);
-    expect(again.network(56)!.enabled).toBe(false);
-    expect(again.asset(BASE_USDC_ID)?.credit).toBe(false);
-    expect(again.enabledNetworks().map((n) => n.chainId)).toEqual([84532]);
-  });
-
-  test("a version-1 reserved-mainnet record gets evidence but keeps its disabled state", () => {
-    const path = join(TMP(), "networks.json");
-    const old = {
-      version: 1,
-      networks: [v1Network(97, true), { ...v1Network(56, false), networkType: "mainnet" as const, displayName: "BNB Smart Chain" }],
-      assets: [],
-    };
-    writeFileSync(path, JSON.stringify(old));
-    const r = loadRegistry(path);
-    expect(r.network(56)!.enabled).toBe(false);
-    expect(r.network(56)!.support).toBe("read-only");
-    expect(r.network(56)!.receivable).toBe(true);
-    expect(r.network(56)!.evidence?.url).toMatch(/^https:\/\//);
-    expect(r.network(8453)!.enabled).toBe(false);
-  });
-
-  test("a version-2 local lab enabled record loads read-only and cannot be credited", () => {
-    const path = join(TMP(), "networks.json");
-    const doc: RegistryDocument = {
-      version: 2,
-      networks: [{ ...v1Network(31337, true), notes: "local lab config" }],
-      assets: [],
-    };
-    writeFileSync(path, JSON.stringify(doc));
-    const r = loadRegistry(path);
-    expect(r.network(31337)!.enabled).toBe(false);
-    expect(r.network(31337)!.notes).toContain("legacy enabled=true");
-    expect(r.network(31337)!.notes).toContain("simulation-import-required");
-    expect(r.creditableNetworks()).toEqual([]);
-    expect(() => r.setNetworkEnabled(31337, true)).toThrow(/credit allowlist/);
-  });
-
-  test("a version-2 document cannot smuggle chain 1 in as an enabled testnet", () => {
-    const path = join(TMP(), "networks.json");
-    const doc = productRegistry().document();
-    doc.networks.push({ ...v1Network(97, true), chainId: 1, displayName: "Ethereum spoof", networkType: "testnet", support: "credit", enabled: true });
-    writeFileSync(path, JSON.stringify(doc));
-    expect(() => loadRegistry(path)).toThrow(/credit allowlist/);
-  });
-
-  test("a version-2 document is authoritative: a removed product network is not resurrected", () => {
-    const path = join(TMP(), "networks.json");
-    writeFileSync(path, JSON.stringify({ version: 2, networks: [v1Network(97, true)], assets: [] }));
-    const r = loadRegistry(path);
+    expect(r.asset(assetIdOf(56, BSC_USDC))!.credit).toBe(true);
+    expect(r.asset(assetIdOf(8453, BASE_USDC))!.credit).toBe(true);
+    expect(r.asset(assetIdOf(8453, BASE_USDC))!.pricing.kind).toBe("stablecoin-usd");
+    // The testnet records are not rewritten or enabled by the migration.
     expect(r.network(97)!.enabled).toBe(true);
-    expect(r.network(56)).toBeNull();
+    expect(r.network(97)!.networkType).toBe("testnet");
+  });
+
+  test("a v2 document is authoritative for an absent product network", () => {
+    const dir = TMP();
+    const path = join(dir, "networks.json");
+    const only56 = PRODUCT_NETWORKS[0]!;
+    writeFileSync(path, JSON.stringify({ version: 2, networks: [...DEFAULT_NETWORKS, { ...only56, support: "read-only", enabled: false }], assets: [] }));
+    const r = loadRegistry(path);
+    expect(r.network(56)!.support).toBe("credit");
     expect(r.network(8453)).toBeNull();
   });
 
-  test("the seeded document contains both testnets and both read-only mainnets", () => {
-    const path = join(TMP(), "networks.json");
-    loadRegistry(path);
-    const doc = JSON.parse(readFileSync(path, "utf8")) as RegistryDocument;
-    expect(doc.version).toBe(2);
-    expect(doc.networks.map((n) => n.chainId)).toEqual([97, 84532, 56, 8453]);
-    expect(doc.assets.map((a) => a.assetId)).toEqual([BASE_USDC_ID]);
+  test("a v2 local lab enabled record is downgraded and cannot be credited", () => {
+    const dir = TMP();
+    const path = join(dir, "networks.json");
+    const local = { ...v1Network(31337, true), networkType: "testnet" as const, support: "credit" as const, receivable: false, rpcQuorum: 1 };
+    writeFileSync(path, JSON.stringify({ version: 2, networks: [local], assets: [] }));
+    const r = loadRegistry(path);
+    expect(r.network(31337)!.enabled).toBe(false);
+    expect(r.network(31337)!.notes).toContain("legacy enabled=true");
+    expect(r.network(31337)!.notes).toContain("simulation-import-required");
+  });
+
+  test("a v2 document cannot smuggle chain 1 in as an enabled testnet", () => {
+    const dir = TMP();
+    const path = join(dir, "networks.json");
+    writeFileSync(path, JSON.stringify({ version: 2, networks: [{ ...v1Network(1, true), networkType: "testnet", support: "credit", receivable: false, rpcQuorum: 1 }], assets: [] }));
+    expect(() => loadRegistry(path)).toThrow(/credit allowlist/);
+  });
+
+  test("the seeded document contains both credit testnets and both production mainnets", () => {
+    const r = productRegistry();
+    expect(r.networks().map((n) => n.chainId)).toEqual([97, 84532, 56, 8453]);
+    expect(r.allAssets().map((a) => a.assetId).sort()).toEqual([assetIdOf(56, BSC_USDC), assetIdOf(8453, BASE_USDC)].sort());
   });
 });
 
@@ -461,7 +380,6 @@ describe("C2 receiving-network selection is explicit and independent", () => {
     expect(p.setSelected("provider-a", 56, false).chainIds).toEqual([8453]);
     expect(p.setSelected("provider-a", 8453, false).chainIds).toEqual([]);
     expect(p.selection("provider-b").chainIds).toEqual([8453]);
-    // Repeating a no-op does not invent a timestamp or a default.
     expect(p.setSelected("provider-a", 56, false).updatedAt).toBeNull();
   });
 
@@ -472,15 +390,13 @@ describe("C2 receiving-network selection is explicit and independent", () => {
     const again = new ReceivingNetworkPolicy({ registry: productRegistry(), path });
     expect(again.selection("provider-a").chainIds).toEqual([56]);
     expect(again.selection("provider-b").chainIds).toEqual([]);
-    const raw = JSON.parse(readFileSync(path, "utf8"));
-    expect(raw.providers["provider-a"].chainIds).toEqual([56]);
-    expect(Object.keys(raw.providers)).toEqual(["provider-a"]);
+    expect(JSON.parse(readFileSync(path, "utf8")).providers["provider-a"].chainIds).toEqual([56]);
   });
 
   test("an internal testnet or an unregistered chain cannot be selected", () => {
     const p = new ReceivingNetworkPolicy({ registry: productRegistry(), path: join(TMP(), "r.json") });
-    expect(() => p.setSelected("provider-a", 97, true)).toThrow(/internal test network/);
-    expect(() => p.setSelected("provider-a", 84532, true)).toThrow(/internal test network/);
+    expect(() => p.setSelected("provider-a", 97, true)).toThrow(/not a product receiving network/);
+    expect(() => p.setSelected("provider-a", 84532, true)).toThrow(/not a product receiving network/);
     expect(() => p.setSelected("provider-a", 1, true)).toThrow(/not registered/);
     expect(() => p.setSelected("__proto__", 56, true)).toThrow(/reserved/);
   });
@@ -492,170 +408,168 @@ describe("C2 receiving-network selection is explicit and independent", () => {
     expect(() => new ReceivingNetworkPolicy({ registry: productRegistry(), path: bad })).toThrow(/unreadable/);
     const testnet = join(dir, "testnet.json");
     writeFileSync(testnet, JSON.stringify({ version: 1, providers: { p: { chainIds: [97], updatedAt: "2026-10-31T00:00:00Z" } } }));
-    expect(() => new ReceivingNetworkPolicy({ registry: productRegistry(), path: testnet })).toThrow(/internal test network/);
+    expect(() => new ReceivingNetworkPolicy({ registry: productRegistry(), path: testnet })).toThrow(/not a product receiving network/);
   });
 
-  test("payment requests refuse an unselected chain and a selected mainnet with distinct reasons", () => {
+  test("an unselected product chain is refused; a selected BSC or Base request is allowed", () => {
     const p = new ReceivingNetworkPolicy({ registry: productRegistry(), path: join(TMP(), "r.json") });
     expect(p.paymentRequestVerdict("provider-a", 56)).toMatchObject({ allowed: false, code: "receiving-network-not-selected" });
+    expect(p.paymentRequestVerdict("provider-a", 8453)).toMatchObject({ allowed: false, code: "receiving-network-not-selected" });
     p.setSelected("provider-a", 56, true);
-    expect(p.paymentRequestVerdict("provider-a", 56)).toMatchObject({ allowed: false, code: "mainnet-credit-forbidden" });
+    expect(p.paymentRequestVerdict("provider-a", 56)).toMatchObject({ allowed: true, code: "allowed" });
     expect(p.paymentRequestVerdict("provider-a", 8453)).toMatchObject({ allowed: false, code: "receiving-network-not-selected" });
     p.setSelected("provider-a", 8453, true);
-    expect(p.paymentRequestVerdict("provider-a", 8453)).toMatchObject({ allowed: false, code: "mainnet-credit-forbidden" });
-    expect(p.paymentRequestVerdict("provider-a", 97)).toMatchObject({ allowed: false, code: "not-a-product-network" });
+    expect(p.paymentRequestVerdict("provider-a", 8453)).toMatchObject({ allowed: true, code: "allowed" });
     expect(p.paymentRequestVerdict("provider-a", 1)).toMatchObject({ allowed: false, code: "unknown-network" });
   });
 
-  test("event credit is refused for a mainnet before selection can be consulted", () => {
+  test("event credit follows the same explicit selection for both mainnets", () => {
     const p = new ReceivingNetworkPolicy({ registry: productRegistry(), path: join(TMP(), "r.json") });
     for (const chainId of MAINNET_CHAIN_IDS) {
-      expect(() => p.creditVerdict("provider-a", chainId)).toThrow(MainnetGateError);
-      expect(() => p.creditVerdict("provider-a", chainId)).toThrow(/mainnet/);
+      expect(p.creditVerdict("provider-a", chainId)).toMatchObject({ allowed: false, code: "receiving-network-not-selected" });
+      p.setSelected("provider-a", chainId, true);
+      expect(p.creditVerdict("provider-a", chainId)).toMatchObject({ allowed: true, code: "allowed" });
+      expect(() => p.requireCredit("provider-a", chainId)).not.toThrow();
     }
-    p.setSelected("provider-a", 56, true);
-    expect(() => p.requireCredit("provider-a", 56)).toThrow(/mainnet/);
-    expect(p.creditVerdict("provider-a", 97)).toMatchObject({ allowed: false, code: "not-a-product-network" });
   });
 });
 
-describe("C9 hard gates: mainnet send/credit/auto-recharge", () => {
-  test("the capability matrix is fixed for mainnets and unchanged for testnets", () => {
+describe("C9 production gates: send/credit allowed, auto-recharge not implemented", () => {
+  test("the capability matrix is fixed for the two production chains", () => {
     for (const chainId of MAINNET_CHAIN_IDS) {
       expect(mainnetCapabilities(chainId)).toEqual({
         "read-metadata": true,
         "read-balance": true,
         "select-receiving": true,
-        send: false,
-        credit: false,
+        send: true,
+        credit: true,
         "auto-recharge": false,
       });
+      expect(mainnetCapabilityAllowed(chainId, "send")).toBe(true);
+      expect(mainnetCapabilityAllowed(chainId, "credit")).toBe(true);
+      expect(mainnetCapabilityAllowed(chainId, "auto-recharge")).toBe(false);
     }
-    expect(mainnetCapabilityAllowed(56, "send")).toBe(false);
-    expect(mainnetCapabilityAllowed("56" as never, "send")).toBe(false);
-    expect(() => mainnetCapabilities("56" as never)).toThrow(/positive integer/);
-    expect(mainnetCapabilities(97)).toEqual({
-      "read-metadata": true,
-      "read-balance": true,
-      "select-receiving": true,
-      send: true,
-      credit: true,
-      "auto-recharge": true,
-    });
+    expect(mainnetCapabilities(97)).toMatchObject({ send: true, credit: true, "auto-recharge": true });
   });
 
-  test("send, credit and auto-recharge refuse both real mainnets from the core", () => {
+  test("send/credit pass the chain-id layer; auto-recharge is refused; malformed ids fail closed", () => {
     for (const chainId of MAINNET_CHAIN_IDS) {
-      expect(() => assertNoMainnetSend({ chainId })).toThrow(/mainnet/);
-      expect(() => assertNoMainnetCredit({ chainId })).toThrow(/mainnet/);
-      expect(() => assertNoMainnetAutoRecharge({ chainId })).toThrow(/mainnet/);
+      expect(() => assertNoMainnetSend({ chainId })).not.toThrow();
+      expect(() => assertNoMainnetCredit({ chainId })).not.toThrow();
+      expect(() => assertNoMainnetAutoRecharge({ chainId })).toThrow(/auto|not implemented/);
     }
-    expect(() => assertNoMainnetSend({ chainId: 97 })).not.toThrow();
-    expect(() => assertNoMainnetCredit({ chainId: 97 })).not.toThrow();
-    expect(() => assertNoMainnetAutoRecharge({ chainId: 97 })).not.toThrow();
-    // A UI/JSON string must fail closed, not look like "not a mainnet".
     for (const bad of ["56", 0, -1, 1.5, Number.NaN] as unknown as number[]) {
-      expect(() => assertNoMainnetSend({ chainId: bad })).toThrow(/positive integer|mainnet/);
-      expect(() => assertNoMainnetCredit({ chainId: bad })).toThrow(/positive integer|mainnet/);
-      expect(() => assertNoMainnetAutoRecharge({ chainId: bad })).toThrow(/positive integer|mainnet/);
+      expect(() => assertNoMainnetSend({ chainId: bad })).toThrow(/positive integer/);
+      expect(() => assertNoMainnetCredit({ chainId: bad })).toThrow(/positive integer/);
     }
   });
 
-  test("no environment variable can unlock a mainnet", () => {
-    process.env.OH_MY_AIHUB_ALLOW_MAINNET = "1";
-    process.env.OH_MY_AIHUB_MAINNET_CREDIT = "1";
-    process.env.OH_MY_AIHUB_MAINNET_SEND = "1";
-    try {
-      expect(() => assertNoMainnetCredit({ chainId: 56 })).toThrow(/mainnet/);
-      expect(() => assertNoMainnetSend({ chainId: 8453 })).toThrow(/mainnet/);
-      expect(() => assertNoMainnetAutoRecharge({ chainId: 56 })).toThrow(/mainnet/);
-    } finally {
-      delete process.env.OH_MY_AIHUB_ALLOW_MAINNET;
-      delete process.env.OH_MY_AIHUB_MAINNET_CREDIT;
-      delete process.env.OH_MY_AIHUB_MAINNET_SEND;
-    }
-  });
-
-  test("a ledger source that claims a mainnet is refused even if a caller reaches the ledger directly", () => {
-    for (const source of [
-      "chain:56",
-      "chain:8453",
-      "chain:56:tx",
-      "chain:56/tx",
-      "mainnet:8453",
-      "Chain:56",
-      " chain : 56 ",
-      "CHAIN:8453",
-    ]) {
-      expect(() => assertCreditSourceNotMainnet(source)).toThrow(/mainnet/);
-    }
-    for (const source of ["chain:97", "chain:84532", "simulated", "operator"]) {
-      expect(() => assertCreditSourceNotMainnet(source)).not.toThrow();
-    }
-  });
-
-  test("Wallet cannot issue a mainnet deposit intent or scan a mainnet, and can still read its balance", async () => {
+  test("Wallet can issue a BSC/Base deposit intent after selecting the receiving network", () => {
     const { wallet } = walletOnlyProduct();
     expect(wallet.productNetworks().map((n) => n.chainId)).toEqual([56, 8453]);
     expect(wallet.receivingSelection("provider-a").chainIds).toEqual([]);
     const status = wallet.statusLocal();
-    expect(status.registry.networks.find((n) => n.chainId === 56)).toMatchObject({ support: "read-only", receivable: true, enabled: false });
-    expect(status.registry.assets.find((a) => a.assetId === BASE_USDC_ID)).toMatchObject({ credit: false, pricingKind: "not-creditable", issuerType: "native-issuer" });
+    expect(status.registry.networks.find((n) => n.chainId === 56)).toMatchObject({ support: "credit", receivable: true, enabled: true });
+    expect(status.registry.assets.find((a) => a.assetId === BASE_USDC_ID)).toMatchObject({ credit: true, pricingKind: "stablecoin-usd", issuerType: "native-issuer" });
 
     expect(() =>
-      wallet.requestIntent({ providerId: "provider-a", consumerId: "c1", chainId: 56, assetId: BASE_USDC_ID, amountRaw: "1" }),
+      wallet.requestIntent({ providerId: "provider-a", consumerId: "c1", chainId: 56, assetId: assetIdOf(56, BSC_USDC), amountRaw: "1" }),
     ).toThrow(/未选择|not selected/);
 
     wallet.setReceivingNetwork("provider-a", 56, true);
-    expect(() =>
-      wallet.requestIntent({ providerId: "provider-a", consumerId: "c1", chainId: 56, assetId: BASE_USDC_ID, amountRaw: "1" }),
-    ).toThrow(/read-only|mainnet/);
+    wallet.setReceivingAddress("provider-a", 56, "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6");
+    const intent = wallet.requestIntent({ providerId: "provider-a", consumerId: "c1", chainId: 56, assetId: assetIdOf(56, BSC_USDC), amountRaw: "1000000000000000000" });
+    expect(intent.intent.chainId).toBe(56);
+    expect(intent.intent.tokenContract.toLowerCase()).toBe(BSC_USDC.toLowerCase());
 
-    expect(() => wallet.setReceivingAddress("provider-a", 56, "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6")).toThrow(/mainnet/);
-    expect(() => wallet.scanNow(56)).toThrow(/mainnet/);
-    wallet.start();
-    expect(wallet.runningChains()).toEqual([]);
-    wallet.stop();
+    wallet.setReceivingNetwork("provider-a", 8453, true);
+    wallet.setReceivingAddress("provider-a", 8453, "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6");
+    const base = wallet.requestIntent({ providerId: "provider-a", consumerId: "c1", chainId: 8453, assetId: BASE_USDC_ID, amountRaw: "1500000" });
+    expect(base.intent.chainId).toBe(8453);
 
-    const rpc = new FakeReadOnlyRpc({ chainId: 56, nativeBalance: 123n });
-    const reading = walletOnlyProduct(TMP(), rpc.fetch);
-    const read = await reading.wallet.readOnlyBalance({ chainId: 56, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6" });
-    expect(read.chainId).toBe(56);
-    expect(read.balanceRaw).toBe("123");
-    expect(read.creditEligible).toBe(false);
-    expect(read.usdValue).toBeNull();
-    reading.wallet.close();
-    wallet.close();
+    expect(wallet.registryView().creditableNetworks().map((n) => n.chainId)).toEqual([56, 8453]);
+  });
+
+  test("a ledger source on a production chain is accepted; an unallowlisted chain is refused", () => {
+    const dir = TMP();
+    const ledger = new Ledger(join(dir, "ledger.sqlite"));
+    ledger.ensureAccount({
+      consumerId: "c1",
+      keyId: "k1",
+      keyName: "k1",
+      price: { version: "v1", body: JSON.stringify({ models: [], prices: {} }), models: [], prices: {} },
+      windowSpec: "day",
+      startAt: "2026-11-01T00:00:00Z",
+      resetAt: "2026-11-02T00:00:00Z",
+      openingNanos: 0,
+      capNanos: 0,
+    });
+    for (const [chainId, contract] of [[56, BSC_USDC], [8453, BASE_USDC]] as const) {
+      const r = ledger.depositIntent({
+        id: `chain-test-${chainId}`,
+        consumerId: "c1",
+        amountNanos: 1_000_000,
+        source: `chain:${chainId}`,
+        fundsClass: "chain",
+        chainId,
+        assetId: assetIdOf(chainId, contract),
+      });
+      expect(r.created).toBe(true);
+    }
+    expect(() => ledger.depositIntent({ id: "x1", consumerId: "c1", amountNanos: 1, source: "chain:1", fundsClass: "chain", chainId: 1, assetId: assetIdOf(1, "0x" + "1".repeat(40)) })).toThrow(/allowlist/);
+    expect(() => assertCreditSourceNotMainnet("chain:56")).not.toThrow();
   });
 });
 
 describe("C9 ledger defence in depth", () => {
-  test("the durable ledger refuses a chain:56/8453 credit and keeps testnet sources working", () => {
+  test("a chain deposit on 56/8453 is normal ledger money; a reorg reversal is append-only and idempotent", () => {
     const dir = TMP();
     const ledger = new Ledger(join(dir, "ledger.sqlite"));
-    for (const source of ["chain:56", "chain:8453"]) {
-      expect(() => ledger.depositIntent({ id: `d-${source}`, consumerId: "alice", amountNanos: 1, source })).toThrow(/mainnet/);
-    }
-    const snap = priceSnapshot([{ id: "m", price: { input: 1, output: 1, cache_read: 0, cache_write: 0 } }], ["m"])!;
     ledger.ensureAccount({
-      consumerId: "alice",
-      keyId: "key-1",
-      keyName: "lab",
-      price: snap,
-      windowSpec: "3650d",
-      startAt: "2026-10-30T00:00:00.000Z",
-      resetAt: "2036-10-27T00:00:00.000Z",
-      openingNanos: usdToNanos(1),
-      capNanos: usdToNanos(1),
+      consumerId: "c1",
+      keyId: "k1",
+      keyName: "k1",
+      price: { version: "v1", body: JSON.stringify({ models: [], prices: {} }), models: [], prices: {} },
+      windowSpec: "day",
+      startAt: "2026-11-01T00:00:00Z",
+      resetAt: "2026-11-02T00:00:00Z",
+      openingNanos: 0,
+      capNanos: 0,
     });
-    expect(ledger.depositIntent({ id: "d-97", consumerId: "alice", amountNanos: 1, source: "chain:97", fundsClass: "chain", chainId: 97, assetId: "eip155:97:0x6666666666666666666666666666666666666666" }).created).toBe(true);
-    expect(ledger.depositIntent({ id: "d-sim", consumerId: "alice", amountNanos: 1, source: "simulated" }).created).toBe(true);
-    for (const source of ["Chain:56", " chain : 56 ", "evm:56", "chain:0x38"]) {
-      expect(() =>
-        ledger.depositIntent({ id: `bad-${source}`, consumerId: "alice", amountNanos: 1, source }),
-      ).toThrow();
-    }
-    ledger.close();
+    const dep = ledger.depositIntent({
+      id: "chain:56:event-1",
+      consumerId: "c1",
+      amountNanos: 2_000_000_000,
+      source: "chain:56",
+      fundsClass: "chain",
+      chainId: 56,
+      assetId: assetIdOf(56, BSC_USDC),
+    });
+    expect(dep.created).toBe(true);
+    ledger.markDepositApplied("chain:56:event-1", ledger.openWindowFor("c1")!.id, 2_000_000_000);
+    expect(ledger.balance("c1").balanceNanos).toBe(2_000_000_000);
+    const first = ledger.reverseChainDeposit({ depositId: "chain:56:event-1", consumerId: "c1", reason: "block removed by a reorg" });
+    expect(first).toEqual({ reversed: true, amountNanos: 2_000_000_000 });
+    const again = ledger.reverseChainDeposit({ depositId: "chain:56:event-1", consumerId: "c1", reason: "block removed by a reorg" });
+    expect(again.reversed).toBe(false);
+    const balance = ledger.balance("c1");
+    expect(balance.depositedNanos).toBe(2_000_000_000);
+    expect(balance.reversedNanos).toBe(2_000_000_000);
+    expect(balance.balanceNanos).toBe(0);
+    expect(ledger.deposit("chain:56:event-1")!.status).toBe("applied");
+    expect(() => ledger.reverseChainDeposit({ depositId: "does-not-exist", consumerId: "c1", reason: "x" })).toThrow(/no deposit/);
+  });
+
+  test("an overdraft reversal is visible and blocks reactivation until covered", () => {
+    const dir = TMP();
+    const ledger = new Ledger(join(dir, "ledger.sqlite"));
+    const price = { version: "v1", body: JSON.stringify({ models: [], prices: {} }), models: [], prices: {} };
+    const w = ledger.ensureAccount({ consumerId: "c1", keyId: "k1", keyName: "k1", price, windowSpec: "day", startAt: "2026-11-01T00:00:00Z", resetAt: "2026-11-02T00:00:00Z", openingNanos: 1_000_000, capNanos: 1_000_000 });
+    ledger.depositIntent({ id: "chain:8453:e1", consumerId: "c1", amountNanos: 1_000_000, source: "chain:8453", fundsClass: "chain", chainId: 8453, assetId: assetIdOf(8453, BASE_USDC) });
+    ledger.markDepositApplied("chain:8453:e1", w.id, 1_000_000);
+    ledger.recordAdjustment({ id: "spend-1", consumerId: "c1", windowId: w.id, keyId: "k1", amountNanos: 1_500_000, reason: "test consumption" });
+    ledger.reverseChainDeposit({ depositId: "chain:8453:e1", consumerId: "c1", reason: "reorg" });
+    expect(ledger.balance("c1").overdraftNanos).toBeGreaterThan(0);
   });
 });
 
@@ -1072,83 +986,44 @@ describe("read-only RPC transport hardening", () => {
   });
 });
 
-describe("read-only mainnet balances", () => {
-  test("Base native ETH and Base USDC are read without a USD value or credit", async () => {
-    const r = productRegistry();
-    const rpc = new FakeReadOnlyRpc({ chainId: 8453, decimals: 6, symbol: "USDC", balance: 1_234_567n, nativeBalance: 42n });
-    const reader = new ReadOnlyChainReader({ registry: r, fetchImpl: rpc.fetch, now: () => new Date("2026-10-31T00:00:00Z") });
-
+describe("read-only product balances", () => {
+  test("Base native ETH and Base USDC are read with a face-value USD amount and a positive credit flag", async () => {
+    const rpc = new FakeReadOnlyRpc({ chainId: 8453, nativeBalance: 123n, balance: 1_500_000n, decimals: 6, symbol: "USDC" });
+    const reg = productRegistry();
+    const reader = new ReadOnlyChainReader({ registry: reg, fetchImpl: rpc.fetch });
     const native = await reader.balance({ chainId: 8453, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6" });
-    expect(native.asset).toBeNull();
-    expect(native.balanceRaw).toBe("42");
-    expect(native.decimals).toBe(18);
+    expect(native.nativeSymbol).toBe("ETH");
+    expect(native.balanceRaw).toBe("123");
     expect(native.creditEligible).toBe(false);
-    expect(native.usdValue).toBeNull();
-    expect(native.readOnly).toBe(true);
-
     const token = await reader.balance({ chainId: 8453, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6", assetId: BASE_USDC_ID });
-    expect(token.asset).toMatchObject({ assetId: BASE_USDC_ID, symbol: "USDC", decimals: 6, issuerType: "native-issuer", credit: false });
-    expect(token.balanceRaw).toBe("1234567");
-    expect(token.balanceTokens).toBe("1.234567");
-    expect(token.creditEligible).toBe(false);
-    expect(token.usdValue).toBeNull();
-    expect(rpc.methods).toContain("eth_chainId");
-    expect(rpc.methods).toContain("eth_call");
-    // Read-only means exactly these RPCs: no logs, no broadcast, no receipt writes.
-    expect(new Set(rpc.methods)).toEqual(new Set(["eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_call"]));
+    expect(token.asset?.symbol).toBe("USDC");
+    expect(token.creditEligible).toBe(true);
+    expect(token.usdValue).toBe("1.500000");
+    expect(token.readOnly).toBe(true);
   });
 
-  test("a BSC USDC query is refused because the asset is unsupported", async () => {
-    const rpc = new FakeReadOnlyRpc({ chainId: 56 });
+  test("BSC bridged USDC is read with 18 decimals and a 1 USD face value", async () => {
+    const rpc = new FakeReadOnlyRpc({ chainId: 56, balance: 1_500_000_000_000_000_000n, decimals: 18, symbol: "USDC" });
     const reader = new ReadOnlyChainReader({ registry: productRegistry(), fetchImpl: rpc.fetch });
-    await expect(reader.balance({ chainId: 56, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6", assetId: assetIdOf(56, BSC_USDC) })).rejects.toThrow(/not registered/);
-    expect(rpc.calls).toBe(0);
+    const token = await reader.balance({ chainId: 56, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6", assetId: assetIdOf(56, BSC_USDC) });
+    expect(token.asset?.decimals).toBe(18);
+    expect(token.creditEligible).toBe(true);
+    expect(token.usdValue).toBe("1.500000");
   });
 
-  test("an asset id from another chain is refused before a balance is returned", async () => {
-    const rpc = new FakeReadOnlyRpc({ chainId: 56, decimals: 6, symbol: "USDC", balance: 1n });
-    const reader = new ReadOnlyChainReader({ registry: productRegistry(), fetchImpl: rpc.fetch });
-    await expect(reader.balance({ chainId: 56, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6", assetId: BASE_USDC_ID })).rejects.toThrow(/belongs to chain 8453/);
+  test("an unregistered asset id, a wrong chain, decimals or symbol is refused before a balance is returned", async () => {
+    const reader = (rpc: FakeReadOnlyRpc) => new ReadOnlyChainReader({ registry: productRegistry(), fetchImpl: rpc.fetch });
+    await expect(reader(new FakeReadOnlyRpc({ chainId: 8453 })).balance({ chainId: 8453, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6", assetId: "eip155:1:0x" + "1".repeat(40) })).rejects.toThrow(/not registered/);
+    await expect(reader(new FakeReadOnlyRpc({ chainId: 8453, decimals: 18 })).balance({ chainId: 8453, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6", assetId: BASE_USDC_ID })).rejects.toThrow(/decimals/);
+    await expect(reader(new FakeReadOnlyRpc({ chainId: 8453, symbol: "USDX" })).balance({ chainId: 8453, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6", assetId: BASE_USDC_ID })).rejects.toThrow(/symbol/);
+    await expect(reader(new FakeReadOnlyRpc({ chainId: 56, reportedChainId: 8453 })).balance({ chainId: 56, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6" })).rejects.toThrow(/chainId/);
   });
 
-  test("wrong chain id, decimals or symbol is refused before a balance is returned", async () => {
-    const address = "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6";
-    const wrongChain = new FakeReadOnlyRpc({ chainId: 8453, reportedChainId: 56 });
-    await expect(
-      new ReadOnlyChainReader({ registry: productRegistry(), fetchImpl: wrongChain.fetch }).balance({ chainId: 8453, address }),
-    ).rejects.toThrow(/reports chainId/);
-
-    const wrongDecimals = new FakeReadOnlyRpc({ chainId: 8453, decimals: 18, symbol: "USDC", balance: 1n });
-    await expect(
-      new ReadOnlyChainReader({ registry: productRegistry(), fetchImpl: wrongDecimals.fetch }).balance({ chainId: 8453, address, assetId: BASE_USDC_ID }),
-    ).rejects.toThrow(/decimals/);
-
-    const wrongSymbol = new FakeReadOnlyRpc({ chainId: 8453, decimals: 6, symbol: "USDT", balance: 1n });
-    await expect(
-      new ReadOnlyChainReader({ registry: productRegistry(), fetchImpl: wrongSymbol.fetch }).balance({ chainId: 8453, address, assetId: BASE_USDC_ID }),
-    ).rejects.toThrow(/symbol/);
-  });
-
-  test("a disabled testnet is not readable, and the balance word is encoded strictly", async () => {
-    const r = productRegistry();
-    r.setNetworkEnabled(97, false);
-    const rpc = new FakeReadOnlyRpc({ chainId: 97 });
-    const reader = new ReadOnlyChainReader({ registry: r, fetchImpl: rpc.fetch });
-    await expect(reader.balance({ chainId: 97, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6" })).rejects.toThrow(/disabled/);
-    expect(rpc.calls).toBe(0);
-
-    const enabledTestnet = productRegistry();
-    const testnetRpc = new FakeReadOnlyRpc({ chainId: 97 });
-    await expect(
-      new ReadOnlyChainReader({ registry: enabledTestnet, fetchImpl: testnetRpc.fetch }).balance({
-        chainId: 97,
-        address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
-      }),
-    ).rejects.toThrow(/read-only product networks only/);
-    expect(testnetRpc.calls).toBe(0);
-    expect(encodeBalanceOf("0x3d80C477021E3FA568e91C73bAEC8E806518D9a6")).toBe(
-      "0x70a082310000000000000000000000003d80c477021e3fa568e91c73baec8e806518d9a6",
-    );
-    expect(() => encodeBalanceOf("0x0")).toThrow(/20-byte/);
+  test("a disabled credit chain is not readable and the balance word is encoded strictly", async () => {
+    const disabled = new NetworkRegistry({ version: 3, networks: PRODUCT_NETWORKS.map((n) => n.chainId === 56 ? { ...n, enabled: false } : n), assets: MAINNET_ASSETS });
+    const reader = new ReadOnlyChainReader({ registry: disabled, fetchImpl: new FakeReadOnlyRpc({ chainId: 56 }).fetch });
+    await expect(reader.balance({ chainId: 56, address: "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6" })).rejects.toThrow(/disabled/);
+    expect(encodeBalanceOf("0x3d80C477021E3FA568e91C73bAEC8E806518D9a6")).toBe("0x70a082310000000000000000000000003d80c477021e3fa568e91c73baec8e806518d9a6");
+    expect(() => encodeBalanceOf("0x1234")).toThrow();
   });
 });

@@ -41,15 +41,15 @@ describe("five page shell", () => {
     expect(home).not.toContain("资产余额</dt>");
   });
 
-  test("the wallet page states the testnet scope exactly once", () => {
-    expect(html).toContain("本地钱包只加密保存在这台设备，不执行主网或自动付款。");
-    expect(html.split("不执行主网或自动付款").length - 1).toBe(1);
+  test("the wallet page states the production payment scope exactly once", () => {
+    expect(html).toContain("在 BSC 或 Base 上向已授权的伙伴充值。每笔付款都要先预览再确认，不会自动转账。");
+    expect(html.split("每笔付款都要先预览再确认").length - 1).toBe(1);
     // The new wallet path is the built-in vault + read-only network view; the
     // legacy file-based testnet wallet stays collapsed below it.
     expect(html).toContain('id="wallet-vault-panel"');
     expect(html).toContain('id="wallet-network-panel"');
     expect(html).toContain('id="legacy-wallet-flows"');
-    expect(html).not.toContain("仅支持测试网资产。BSC Testnet 与 Base Sepolia");
+    expect(html).not.toContain("本地钱包只加密保存在这台设备，不执行主网或自动付款。");
   });
 
   test("discovery merges native connections and wallet merges bills", () => {

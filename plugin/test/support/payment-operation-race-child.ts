@@ -35,7 +35,7 @@ const payload = JSON.parse(process.argv[2] ?? "{}") as Payload;
 // parent suite.
 const assetRegistry: PaymentAssetRegistry = {
   resolveSendableAsset(input) {
-    return { ...input, networkType: "testnet" as const };
+    return { ...input, networkType: "testnet" as const, credit: true as const, issuerType: "mock" as const, pricingKind: "fixed-test-rate" as const };
   },
 };
 const identityAuthority: PaymentIdentityAuthority = { assertCurrent() {} };

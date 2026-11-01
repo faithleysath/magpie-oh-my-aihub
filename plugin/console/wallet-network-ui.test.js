@@ -31,10 +31,13 @@ const baseState = () => ({
   schema: "ohmyaihub.network-local/v1", at: "2026-10-31T00:00:00Z", available: true, configured: true, reason: null,
   product: {
     networks: [
-      { chainId: 56, displayName: "BNB Smart Chain", networkType: "mainnet", support: "read-only", receivable: true, nativeSymbol: "BNB", nativeDecimals: 18, blockExplorer: "https://bscscan.com" },
-      { chainId: 8453, displayName: "Base", networkType: "mainnet", support: "read-only", receivable: true, nativeSymbol: "ETH", nativeDecimals: 18, blockExplorer: "https://basescan.org" },
+      { chainId: 56, displayName: "BNB Smart Chain", networkType: "mainnet", support: "credit", receivable: true, nativeSymbol: "BNB", nativeDecimals: 18, blockExplorer: "https://bscscan.com" },
+      { chainId: 8453, displayName: "Base", networkType: "mainnet", support: "credit", receivable: true, nativeSymbol: "ETH", nativeDecimals: 18, blockExplorer: "https://basescan.org" },
     ],
-    assets: [{ assetId: USDC_ID, chainId: 8453, contractAddress: USDC, symbol: "USDC", decimals: 6, issuerType: "native-issuer", testnetOnly: false, credit: false, pricingKind: "not-creditable" }],
+    assets: [
+      { assetId: "eip155:56:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", chainId: 56, contractAddress: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", symbol: "USDC", decimals: 18, issuerType: "bridged", testnetOnly: false, credit: true, pricingKind: "stablecoin-usd" },
+      { assetId: USDC_ID, chainId: 8453, contractAddress: USDC, symbol: "USDC", decimals: 6, issuerType: "native-issuer", testnetOnly: false, credit: true, pricingKind: "stablecoin-usd" },
+    ],
   },
   receiving: { providerId: "local-node", chainIds: [], updatedAt: null, available: true, errorCode: null }, watchAddresses: [], lastBalance: null,
   readOnly: true, creditEligible: false, usdValue: null,
@@ -64,18 +67,18 @@ function inputByLabel(root, label) {
 }
 
 describe("read-only network/asset UI", () => {
-  test("formats native and token decimals exactly and keeps BSC USDC unsupported", () => {
+  test("formats native and token decimals exactly and keeps BSC/Base USDC distinct", () => {
     expect(formatTokenUnits("1234567", 6)).toBe("1.234567");
     expect(formatTokenUnits("1000000000000000000", 18)).toBe("1");
     expect(formatTokenUnits("1", 18)).toBe("0.000000000000000001");
     const state = baseState();
     expect(productNetworks(state).map((n) => n.chainId)).toEqual([56, 8453]);
     expect(productAssets(state, 8453).map((a) => a.symbol)).toEqual(["USDC"]);
-    expect(productAssets(state, 56)).toEqual([]);
+    expect(productAssets(state, 56)).toEqual([expect.objectContaining({ symbol: "USDC", decimals: 18, issuerType: "bridged", credit: true })]);
     expect(receivingChainIds(state)).toEqual([]);
   });
 
-  test("shows both networks equally, native symbols separated, Base USDC, and no BSC USDC guess", async () => {
+  test("shows both networks equally with their verified USDC assets", async () => {
     const ui = mount({ "network-local-state": async () => baseState() });
     try {
       await ui.show();
@@ -84,9 +87,9 @@ describe("read-only network/asset UI", () => {
       expect(ui.root.textContent).toContain("BNB");
       expect(ui.root.textContent).toContain("ETH");
       expect(ui.root.textContent).toContain("USDC");
-      expect(ui.root.textContent).toContain("BSC USDC 未在只读注册表列出时不支持");
-      expect(ui.root.textContent).toContain("不计入可消费额度");
-      expect(ui.root.textContent).toContain("主网付款、自动充值和资金流仍未开放");
+      expect(ui.root.textContent).toContain("BSC 的 USDC 是 Binance-Peg 桥接资产");
+      expect(ui.root.textContent).toContain("按 1 美元面值计入额度");
+      expect(ui.root.textContent).toContain("每笔付款仍需逐笔确认");
       expect(ui.root.textContent).not.toContain("授信");
       expect(ui.root.textContent).not.toContain("链 56");
       expect(ui.root.textContent).not.toContain("链 8453");
@@ -123,12 +126,12 @@ describe("read-only network/asset UI", () => {
     try {
       await ui.show();
       const input = inputByLabel(ui.root, "公开地址");
-      input.value = "0x0"; await find(ui.root, "button", "添加只读地址").click(); await flush();
+      input.value = "0x0"; await find(ui.root, "button", "添加查询地址").click(); await flush();
       expect(ui.calls.filter((call) => call.name === "network-local-watch-address")).toHaveLength(0);
-      input.value = ADDRESS; await find(ui.root, "button", "添加只读地址").click(); await flush();
+      input.value = ADDRESS; await find(ui.root, "button", "添加查询地址").click(); await flush();
       expect(ui.calls.find((call) => call.name === "network-local-watch-address").input).toEqual({ address: ADDRESS });
       expect(ui.root.textContent).toContain(ADDRESS);
-      expect(ui.root.textContent).toContain("已添加 1 个只读查询地址");
+      expect(ui.root.textContent).toContain("已添加 1 个查询地址");
     } finally { ui.restore(); }
   });
 
@@ -143,12 +146,12 @@ describe("read-only network/asset UI", () => {
       const chain = selectByLabel(ui.root, "网络"); chain.value = "8453"; await chain.emit("change");
       const asset = selectByLabel(ui.root, "资产"); expect([...asset.descendants()].some((node) => node.tagName === "OPTION" && node.value === USDC_ID)).toBe(true);
       asset.value = USDC_ID; await asset.emit("change");
-      const address = selectByLabel(ui.root, "只读地址"); address.value = ADDRESS; await address.emit("change");
+      const address = selectByLabel(ui.root, "查询地址"); address.value = ADDRESS; await address.emit("change");
       await find(ui.root, "button", "读取余额").click(); await flush();
       expect(ui.calls.find((call) => call.name === "network-local-balance-refresh").input).toEqual({ chainId: 8453, address: ADDRESS, addressSource: "watch", assetId: USDC_ID });
       expect(ui.root.textContent).toContain("1.234567");
       expect(ui.root.textContent).toContain("未估值");
-      expect(ui.root.textContent).toContain("只读余额不是可消费额度");
+      expect(ui.root.textContent).toContain("余额只用于核对收款");
       expect(ui.root.textContent).not.toContain("$0");
     } finally { ui.restore(); }
   });
@@ -160,7 +163,7 @@ describe("read-only network/asset UI", () => {
       await ui.show();
       expect(ui.root.textContent).toContain("历史已知余额");
       expect(ui.root.textContent).toContain("不是实时");
-      expect(ui.root.textContent).toContain("你添加的只读地址");
+      expect(ui.root.textContent).toContain("你添加的查询地址");
       expect(ui.root.textContent).not.toContain("实时绿");
     } finally { ui.restore(); }
   });
@@ -183,7 +186,7 @@ describe("read-only network/asset UI", () => {
     try {
       await ui.show();
       const input = inputByLabel(ui.root, "公开地址"); input.value = ADDRESS;
-      await find(ui.root, "button", "添加只读地址").click(); await flush();
+      await find(ui.root, "button", "添加查询地址").click(); await flush();
       expect(ui.root.textContent).toContain("最多只能添加 32");
       expect(ui.calls.filter((call) => call.name === "network-local-watch-address")).toHaveLength(0);
     } finally { ui.restore(); }
@@ -196,7 +199,7 @@ describe("read-only network/asset UI", () => {
       await ui.show();
       const chain = selectByLabel(ui.root, "网络"); chain.value = "56"; await chain.emit("change");
       const asset = selectByLabel(ui.root, "资产"); asset.value = "native"; await asset.emit("change");
-      const address = selectByLabel(ui.root, "只读地址"); address.value = ADDRESS; await address.emit("change");
+      const address = selectByLabel(ui.root, "查询地址"); address.value = ADDRESS; await address.emit("change");
       await find(ui.root, "button", "读取余额").click(); await flush();
       expect(ui.root.textContent).toContain("余额未知");
       expect(ui.root.textContent).not.toContain("0 BNB");
@@ -208,7 +211,7 @@ describe("read-only network/asset UI", () => {
     const ui = mount();
     try {
       await ui.show();
-      expect(ui.root.textContent).toContain("只读网络服务未接入");
+      expect(ui.root.textContent).toContain("本机网络服务未接入");
       expect(ui.root.textContent).not.toContain("USDC");
       expect(all(ui.root, "button").filter((node) => node.textContent === "读取余额")).toHaveLength(0);
       expect(ui.calls.map((call) => call.name)).toEqual(["network-local-state"]);

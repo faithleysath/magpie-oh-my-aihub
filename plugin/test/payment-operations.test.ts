@@ -262,18 +262,18 @@ afterEach(() => {
 /* The hard chain gate                                                 */
 /* ------------------------------------------------------------------ */
 
-describe("hard testnet chain gate", () => {
-  test("the exported allowlist is exactly 97/84532 and mainnet is listed as blocked", () => {
-    expect([...SENDABLE_TESTNET_CHAIN_IDS]).toEqual([97, 84532]);
-    expect([...HARD_BLOCKED_MAINNET_CHAIN_IDS]).toEqual([56, 8453]);
+describe("hard payment chain gate", () => {
+  test("the exported allowlist contains the two production chains and the two dev chains", () => {
+    expect([...SENDABLE_TESTNET_CHAIN_IDS]).toEqual([56, 97, 8453, 84532]);
+    expect([...HARD_BLOCKED_MAINNET_CHAIN_IDS]).toEqual([]);
   });
 
-  test("56 and 8453 are refused before any row can be written", () => {
+  test("an unsupported chain is refused before any row can be written", () => {
     const j = openJournal();
-    for (const chainId of [56, 8453]) {
+    for (const chainId of [1, 137]) {
       expectSyncCode(
         () => j.operationPort(binding({ chainId, assetId: assetIdOf(chainId, CONTRACT) })),
-        "PAYMENT_OPERATION_MAINNET_BLOCKED",
+        "PAYMENT_OPERATION_CHAIN_NOT_ALLOWED",
       );
     }
     const db = new Database(j.path);
@@ -295,14 +295,14 @@ describe("hard testnet chain gate", () => {
       () => defaultJournal.operationPort(binding({ chainId: ISOLATED_TEST_CHAIN_ID, assetId: assetIdOf(ISOLATED_TEST_CHAIN_ID, CONTRACT) })),
       "PAYMENT_OPERATION_CHAIN_NOT_ALLOWED",
     );
-    expect(defaultJournal.chainIds()).toEqual([97, 84532]);
+    expect(defaultJournal.chainIds()).toEqual([56, 97, 8453, 84532]);
 
     const isolated = openJournal({
       dbName: "isolated/payment.sqlite",
       registry: networkRegistryAssetResolver(isolatedRegistry()),
       isolated: true,
     });
-    expect(isolated.chainIds()).toEqual([97, ISOLATED_TEST_CHAIN_ID, 84532]);
+    expect(isolated.chainIds()).toEqual([56, 97, 8453, ISOLATED_TEST_CHAIN_ID, 84532]);
     const value = binding({ chainId: ISOLATED_TEST_CHAIN_ID, assetId: assetIdOf(ISOLATED_TEST_CHAIN_ID, CONTRACT) });
     expect(() => isolated.operationPort(value)).not.toThrow();
   });
@@ -319,12 +319,9 @@ describe("hard testnet chain gate", () => {
         }),
       "PAYMENT_OPERATION_CHAIN_NOT_ALLOWED",
     );
-    // A mainnet id is still blocked on port creation even with the isolated option.
-    const j = openJournal({ isolated: true, registry: networkRegistryAssetResolver(isolatedRegistry()) });
-    expectSyncCode(
-      () => j.operationPort(binding({ chainId: 56, assetId: assetIdOf(56, CONTRACT) })),
-      "PAYMENT_OPERATION_MAINNET_BLOCKED",
-    );
+    // Chain 56 is a normal production chain; the isolated option cannot smuggle
+    // an unlisted chain, but it does not demote the production allowlist.
+    expect(() => openJournal({ isolated: true })).not.toThrow();
   });
 });
 

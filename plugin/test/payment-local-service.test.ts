@@ -324,7 +324,9 @@ describe("local payment service over real console auth", () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ invoice: id, state: "unknown", txHash: null, reason: "TIMEOUT" });
     expect(pending[0]).not.toHaveProperty("idemKey");
-    expect(pending[0]).not.toHaveProperty("reservationId");
+    // The reservation id is an opaque UUID, not a secret; it is required to
+    // attach a verified on-chain hash to this row after a restart.
+    expect(pending[0]).toHaveProperty("reservationId");
 
     // Even a fresh preview/reserve is blocked by the persisted unknown row.
     const p2 = await jsonOf(await action(h, s2, "payment-obligation-preview", { obligationId: id }));
@@ -338,7 +340,7 @@ describe("local payment service over real console auth", () => {
     expect(expired.status).toBe(401);
   });
 
-  test("mainnet, unknown chain, expired and unsigned obligations are rejected before the journal", async () => {
+  test("an unverified mainnet asset, unknown chain, expired and unsigned obligations are rejected before the journal", async () => {
     const current: { value: TrustedPaymentObligation | null } = {
       value: obligation(binding({ chainId: 56, assetId: assetIdOf(56, CONTRACT) })),
     };
@@ -401,7 +403,9 @@ describe("local payment service over real console auth", () => {
     expect(mark.status).toBe(400);
     const pending = await jsonOf(await action(h, s, "payment-operation-pending", {}));
     expect(pending[0]).toMatchObject({ invoice: id, state: "broadcasting", txHash: null });
-    expect(pending[0]).not.toHaveProperty("reservationId");
+    // The reservation id is an opaque UUID, not a secret; it is required to
+    // attach a verified on-chain hash to this row after a restart.
+    expect(pending[0]).toHaveProperty("reservationId");
   });
 
   test("a session that ends during reserve does not return a reservation", async () => {

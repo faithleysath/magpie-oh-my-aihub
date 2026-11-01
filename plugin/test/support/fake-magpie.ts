@@ -24,6 +24,7 @@ export interface FakeKey {
   reset: number;
   window: string;
   calls: number;
+  tokenCap?: number;
 }
 
 export class FakeMagpie {
@@ -87,6 +88,10 @@ export class FakeMagpie {
   async setQuotasOff(_id: string): Promise<void> {}
 
   async setCostLimit(id: string, window: string, usd: number): Promise<void> {
+    await this.setLimit(id, window, { costUsd: usd });
+  }
+
+  async setLimit(id: string, window: string, limit: { costUsd?: number; tokens?: number }): Promise<void> {
     if (this.failCapWrites > 0) {
       this.failCapWrites -= 1;
       throw new Error("the cap write was refused");
@@ -97,7 +102,8 @@ export class FakeMagpie {
       k.reset = k.start + 3650 * 86_400_000;
       k.window = window;
     }
-    k.cap = usd;
+    if (limit.costUsd !== undefined) k.cap = limit.costUsd;
+    if (limit.tokens !== undefined) k.tokenCap = limit.tokens;
   }
 
   async limitStatus(secret: string) {
@@ -119,11 +125,13 @@ export class FakeMagpie {
             days: 3650,
             start: new Date(k.start).toISOString(),
             reset: new Date(k.reset).toISOString(),
+            tokens: this.tokensUsed(k),
+            tokenLimit: k.tokenCap ?? 0,
             costLimit: k.cap,
             cost: used,
             costLeft: Math.max(k.cap - used, 0),
             calls: k.calls,
-            spent: used >= k.cap,
+            spent: used >= k.cap || (k.tokenCap !== undefined && this.tokensUsed(k) >= k.tokenCap),
           },
     } as never;
   }
@@ -138,11 +146,22 @@ export class FakeMagpie {
     return nanos / 1_000_000_000;
   }
 
+  tokensUsed(key: FakeKey): number {
+    let tokens = 0;
+    for (const row of this.rows) {
+      if (row.callerKeyId !== key.id) continue;
+      if (Date.parse(row.t) < key.start) continue;
+      tokens += row.in + row.out;
+    }
+    return tokens;
+  }
+
   /** One model call, refused with 429 when the cap cannot cover it. */
   call(keyId: string, input: number, output: number): { status: number } {
     const k = this.keys.get(keyId)!;
     const estimate = costNanos(LAB_PRICE, { input, output, cacheRead: 0, cacheWrite: 0 }) / 1_000_000_000;
     if (k.cap > 0 && this.used(k) + estimate > k.cap) return { status: 429 };
+    if (k.tokenCap !== undefined && this.tokensUsed(k) + input + output > k.tokenCap) return { status: 429 };
     const row = { callerKeyId: keyId, t: new Date().toISOString(), in: input, out: output };
     this.rows.push(row);
     appendFileSync(this.logPath, JSON.stringify({ ...row, provider: "lab", model: "lab-model", cache_read: 0, cache_write: 0, status: 200 }) + "\n");

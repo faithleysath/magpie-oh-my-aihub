@@ -115,23 +115,9 @@ describe("the page's product claims", () => {
   const html = readFileSync(join(import.meta.dir, "..", "page", "index.html"), "utf8");
   const app = readFileSync(join(import.meta.dir, "..", "page", "app.js"), "utf8");
 
-  test("exactly two external links, both fixed HTTPS, no query, safe rel", () => {
+  test("no external links or third-party purchase tutorials", () => {
     const hrefs = [...html.matchAll(/<a[^>]*href="(https?:[^"]*)"[^>]*>/g)].map((m) => m[1]!);
-    expect(hrefs).toEqual([
-      "https://www.bnbchain.org/en/blog/moving-from-a-centralized-exchange-to-bnb-chain",
-      "https://docs.peer.xyz/guides/zh/alipay-buy",
-    ]);
-    for (const href of hrefs) {
-      expect(href).not.toContain("?");
-      expect(href.startsWith("https://")).toBe(true);
-    }
-    const rels = [...html.matchAll(/<a[^>]*href="https?:\/\/[^"]*"[^>]*rel="([^"]*)"/g)].map((m) => m[1]!);
-    expect(rels).toHaveLength(2);
-    for (const rel of rels) {
-      expect(rel).toContain("noopener");
-      expect(rel).toContain("noreferrer");
-      expect(rel).toContain("external");
-    }
+    expect(hrefs).toEqual([]);
   });
 
   test("no address, amount or consumer id is ever appended to a link", () => {
@@ -156,15 +142,14 @@ describe("the page's product claims", () => {
     expect(html).toContain("不买、不卖、不兑换、不跨链桥接");
   });
 
-  test("the page states it is testnet only and that the tokens are not real", () => {
-    expect(html).toContain("只有测试网");
+  test("the page states the production networks and the development testnet boundary", () => {
+    expect(html).toContain("BSC 与 Base");
+    expect(html).toContain("BSC 为 Binance-Peg 桥接版本，Base 为 Circle 原生版本");
+    expect(html).toContain("BSC Testnet 与 Base Sepolia 保留为开发工具");
     expect(html).toContain("不是 USDC");
     expect(html).toContain("不值钱");
     expect(html).toContain("不买、不卖、不兑换、不跨链桥接");
-    // the third party is named as independent and liable for its own service
-    expect(html).toContain("与本项目没有合作、代理或背书关系");
-    expect(html).toContain("由第三方负责");
-    expect(html).toContain("当地法律");
+    expect(html).toContain("不会自动转账");
   });
 
   test("the page never shows a key, an address list or a payment association", () => {
