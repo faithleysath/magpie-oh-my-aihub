@@ -705,7 +705,7 @@ export class Overlay {
    * the signed directory says who answers.
    */
   async neighbors(): Promise<OverlayNeighbor[]> {
-    if (!this.proc || this.proc.exitCode !== null) {
+    if (!this.running()) {
       throw new Error("E_PEER_OFFLINE: EasyTier is not running");
     }
     try {
@@ -749,7 +749,7 @@ export class Overlay {
    */
   async addForward(bindAddr: string, dstAddr: string): Promise<boolean> {
     assertLoopbackBind(bindAddr);
-    if (!this.bin || !this.proc || this.proc.exitCode !== null) {
+    if (!this.bin || !this.running()) {
       throw new Error("E_PEER_OFFLINE: EasyTier is not running, so the forward cannot be added");
     }
     const listed = await this.cli(["-o", "json", "port-forward", "list"], 6_000);
@@ -787,7 +787,12 @@ export class Overlay {
    */
   async applyConfig(cfg: HubConfig): Promise<{ restarted: boolean }> {
     this.cfg = cfg;
-    if (!this.desired || !this.proc || this.proc.exitCode !== null) return { restarted: false };
+    if (!this.desired || !this.running()) return { restarted: false };
+    if (this.delegate) {
+      // The daemon owns the process: rewriting the TOML is the restart.
+      this.writeConfigFile(this.ensureSecureKey());
+      return { restarted: true };
+    }
     const generation = ++this.generation;
     await this.stopProcess();
     if (generation !== this.generation || !this.desired) return { restarted: false };
