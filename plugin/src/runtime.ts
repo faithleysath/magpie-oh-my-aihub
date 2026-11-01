@@ -14,13 +14,19 @@
 // are opened before the overlay starts, and both are reachable from tools as
 // `runtime.db` / `runtime.grants`. The single listener on <lan>:3426 is owned by
 // `http-router.ts`; this module only decides when to bind it.
+//
+// Stage 4 adds the chain watcher. It runs from boot, not from `join_network`: a
+// deposit is addressed to the wallet, not to the overlay, and money must be
+// booked even while the network is down. Its address is a getter so a
+// `wallet_import` moves the watcher to the new identity, and the scan cursors are
+// dropped at that point (they refer to the old address's logs).
 
 import { mkdirSync } from "node:fs";
 import type { Database } from "bun:sqlite";
 import type { Wallet } from "ethers";
 import { CatalogService, type CatalogModel } from "./catalog-service.ts";
 import { hostnameForAddress, readConfig, writeConfig, type HubConfig } from "./config.ts";
-import { openLedger } from "./db.ts";
+import { clearScanCursors, openLedger } from "./db.ts";
 import { Grants } from "./grants.ts";
 import { DirectoryServer } from "./http-router.ts";
 import { detectLanIPv4 } from "./lan.ts";
@@ -29,6 +35,7 @@ import { CONTROL_PORT, GATEWAY_PORT, Overlay } from "./overlay.ts";
 import { stateDir } from "./paths.ts";
 import { listNativeModels } from "./tools/native-models.ts";
 import { loadOrCreateWallet } from "./tools/node-wallet.ts";
+import { Watcher } from "./chain-watcher.ts";
 
 export interface Runtime {
   config: HubConfig;
@@ -41,6 +48,8 @@ export interface Runtime {
   db: Database;
   /** applications, approvals, revocations and Gateway Keys */
   grants: Grants;
+  /** the per-chain deposit scanner (started at boot, stopped on exit) */
+  watcher: Watcher;
 }
 
 const GLOBAL_KEY = "__ohMyAiHubRuntimeV3__";
@@ -63,11 +72,16 @@ function clearCatalogTimer(): void {
   catalogTimer = null;
 }
 
-function installHooks(overlay: Overlay, server: DirectoryServer, db: Database): void {
+function installHooks(overlay: Overlay, server: DirectoryServer, db: Database, watcher: Watcher): void {
   if (hooksInstalled) return;
   hooksInstalled = true;
   const stop = () => {
     clearCatalogTimer();
+    try {
+      watcher.stop();
+    } catch {
+      /* the loop is already gone */
+    }
     try {
       server.stop();
     } catch {
@@ -230,6 +244,46 @@ function startCatalogRefresh(runtime: Runtime): void {
   catalogTimer.unref?.();
 }
 
+/**
+ * Re-derives `D → cap → key` for every authorized consumer, then cleans up keys
+ * this plugin owns but no longer points at, in the background.
+ *
+ * Two gaps close here, and both come from the same fact: the Magpie write happens
+ * after the ledger write, so a crash can separate them.
+ *  - a `credited` row whose cap was never applied (the cursor moved on, so no
+ *    later scan revisits that deposit);
+ *  - a key created by `gateway-key add` and never narrowed — Magpie's default for
+ *    a new key is all models and no cost limit.
+ *
+ * Boot never waits for either. One summary line, and a failure in one phase does
+ * not skip the other.
+ */
+function resyncCapAndKeys(runtime: Runtime, reason: string): void {
+  void (async () => {
+    let resync: string;
+    try {
+      const summary = await runtime.grants.resyncAll();
+      resync =
+        `checked=${summary.checked} updated=${summary.updated} failed=${summary.failed}` +
+        (summary.detail ? ` (${summary.detail})` : "");
+    } catch (error) {
+      resync = `failed (${detailOf(error)})`;
+    }
+
+    let sweep: string;
+    try {
+      const summary = await runtime.grants.sweepOrphanKeys();
+      sweep =
+        `checked=${summary.checked} removed=${summary.removed} clamped=${summary.clamped} failed=${summary.failed}` +
+        (summary.detail ? ` (${summary.detail})` : "");
+    } catch (error) {
+      sweep = `failed (${detailOf(error)})`;
+    }
+
+    logger.info(`${reason}: cap/key resync ${resync}; orphan key sweep ${sweep}`);
+  })();
+}
+
 async function bootOnceInner(): Promise<Runtime> {
   mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
   const config = readConfig();
@@ -273,13 +327,26 @@ async function bootOnceInner(): Promise<Runtime> {
       if (runtime) void refreshCatalog(runtime);
     },
   });
-  runtime = { config, wallet, overlay, catalog, server, db, grants };
+  const watcher = new Watcher({
+    db,
+    // wallet_import replaces the identity; the scanner must follow it.
+    address: () => runtime?.wallet.address ?? wallet.address,
+    credit: grants,
+  });
+  runtime = { config, wallet, overlay, catalog, server, db, grants, watcher };
 
-  installHooks(overlay, server, db);
+  installHooks(overlay, server, db, watcher);
   // The tick runs from boot: a node whose LAN address or Magpie came up late
   // must still start publishing, and a price change must reach peers without a
   // tool call.
   startCatalogRefresh(runtime);
+  // Scanning starts with the host, not with `join_network`: a deposit is booked
+  // against the wallet address and does not need the overlay.
+  watcher.start();
+  // A deposit booked just before a crash may have left its cap unwritten.
+  // Reconcile in the background so boot stays fast and a missing Magpie only
+  // costs a log line.
+  resyncCapAndKeys(runtime, "boot");
   logger.info(
     `boot: wallet ${wallet.address}, hostname ${hostname}, network ${config.network?.name ?? "none"}, ` +
       `ledger ${stateDir()}/ledger.sqlite`,
@@ -312,6 +379,18 @@ export function getRuntime(): Promise<Runtime> {
  */
 export function replaceWallet(runtime: Runtime, wallet: Wallet): void {
   runtime.wallet = wallet;
+  // The scan cursor is per chain, not per address: the logs behind it were
+  // filtered to the old address. Start the new identity from the 24h lookback
+  // instead of silently inheriting a cursor that skipped its deposits.
+  try {
+    const dropped = clearScanCursors(runtime.db);
+    if (dropped > 0) logger.info(`watcher: dropped ${dropped} scan cursor(s) after the wallet change`);
+  } catch (error) {
+    logger.error(`watcher: cannot drop the scan cursors: ${detailOf(error)}`);
+  }
+  // The new identity has its own `D` per payer (deposits were addressed to the
+  // old wallet), so every cap has to be re-derived for it.
+  resyncCapAndKeys(runtime, "wallet change");
   const hostname = hostnameForAddress(wallet.address);
   runtime.catalog.setWallet(wallet, hostname);
   void runtime.catalog

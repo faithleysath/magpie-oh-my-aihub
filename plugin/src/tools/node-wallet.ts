@@ -4,6 +4,10 @@
 // the address and balances; they never return the key. Import/export exist
 // because a user may want to move the identity to another machine or back it up,
 // and both only ever return the address (and, for export, the path).
+//
+// Chain facts (RPC endpoints, USDC contract, decimals) live in `chain.ts`. This
+// module only reads balances through that registry's client, so there is no
+// second copy of a contract address in the codebase.
 
 import {
   chmodSync,
@@ -17,39 +21,9 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { Interface, JsonRpcProvider, Wallet as EthersWallet, formatUnits } from "ethers";
+import { Wallet as EthersWallet, formatUnits } from "ethers";
+import { PRODUCT_CHAINS, clientFor, type ChainRecord } from "../chain.ts";
 import { stateDir, statePath } from "../paths.ts";
-
-export const BSC_USDC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d";
-export const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-
-interface ChainSpec {
-  chain: "bsc" | "base";
-  chainId: number;
-  rpc: string;
-  usdc: string;
-  decimals: number;
-}
-
-const CHAINS: ChainSpec[] = [
-  {
-    chain: "bsc",
-    chainId: 56,
-    // Built-in default; DESIGN-V2 D12 has no user-facing RPC configuration.
-    rpc: "https://bsc-dataseed.bnbchain.org",
-    usdc: BSC_USDC,
-    decimals: 18,
-  },
-  {
-    chain: "base",
-    chainId: 8453,
-    rpc: "https://mainnet.base.org",
-    usdc: BASE_USDC,
-    decimals: 6,
-  },
-];
-
-const USDC = new Interface(["function balanceOf(address owner) view returns (uint256)"]);
 
 export interface WalletChainReady {
   chain: "bsc" | "base";
@@ -230,37 +204,17 @@ export function exportWallet(path: string, overwrite = false): { address: string
   return { address: wallet.address, path };
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    timer.unref?.();
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
-    // A late rejection from the losing promise must not become unhandled.
-    void promise.catch(() => {});
-  });
-}
-
-async function readChain(spec: ChainSpec, address: string): Promise<WalletChain> {
-  let provider: JsonRpcProvider | null = null;
+async function readChain(spec: ChainRecord, address: string): Promise<WalletChain> {
   try {
-    provider = new JsonRpcProvider(spec.rpc, spec.chainId, { staticNetwork: true });
-    const data = USDC.encodeFunctionData("balanceOf", [address]);
-    const [native, result] = await withTimeout(
-      Promise.all([provider.getBalance(address), provider.call({ to: spec.usdc, data })]),
-      8_000,
-      `${spec.chain} RPC`,
-    );
-    let usdc: bigint;
-    try {
-      usdc = BigInt(result);
-    } catch {
-      throw new Error("USDC balanceOf returned malformed data");
-    }
+    // Same client as the watcher: ordered endpoints, sticky failover, no cached
+    // head. A single dead public RPC must not turn a balance into "unavailable".
+    const client = clientFor(spec, { timeoutMs: 8_000 });
+    const [native, usdc] = await Promise.all([
+      client.balance(address),
+      client.erc20Balance(spec.usdc, address),
+    ]);
     return {
-      chain: spec.chain,
+      chain: spec.key as WalletChainReady["chain"],
       chainId: spec.chainId,
       usdcRaw: usdc.toString(),
       usdcUsd: formatUnits(usdc, spec.decimals),
@@ -269,22 +223,16 @@ async function readChain(spec: ChainSpec, address: string): Promise<WalletChain>
     };
   } catch (error) {
     return {
-      chain: spec.chain,
+      chain: spec.key as WalletChainUnavailable["chain"],
       chainId: spec.chainId,
       status: "unavailable",
       detail: shortError(error),
     };
-  } finally {
-    try {
-      provider?.destroy();
-    } catch {
-      /* the provider is already gone */
-    }
   }
 }
 
 /** Read-only balances. One chain failing never fails the whole call. */
 export async function walletBalances(address: string): Promise<WalletBalance> {
-  const chains = await Promise.all(CHAINS.map((spec) => readChain(spec, address)));
+  const chains = await Promise.all(PRODUCT_CHAINS.map((spec) => readChain(spec, address)));
   return { address, chains };
 }

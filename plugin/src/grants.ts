@@ -11,8 +11,11 @@
 // per-request budget: there is exactly one source of money, the deposit.
 //
 // A key is issued only for `D >= $0.0001` (Magpie reads `--cost 0` as
-// unlimited). With no deposits — the whole of stage 3 — approval is recorded as
-// `waiting-deposit` and the poll answers `approved` with `key: null`.
+// unlimited). Before stage 4 there are no deposits; stage 4's watcher calls
+// `onDeposit`/`onRevert` after every bookkeeping change, and both recompute the
+// whole chain `D → cap → key` for that payer. With no money the approval stays
+// `waiting-deposit` and the poll answers `approved` with `key: null`; when the
+// balance drops to zero the key is removed (never left at an unlimited cap).
 //
 // The secret is stored here because it has to be handed to the consumer. It is
 // never logged, never part of `status`, and only ever leaves through the
@@ -20,7 +23,7 @@
 
 import type { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
-import { Magpie } from "./magpie.ts";
+import { Magpie, type KeyRecord } from "./magpie.ts";
 import { resolveMagpieBin } from "./paths.ts";
 import { catalogTimestamp } from "./catalog-service.ts";
 import {
@@ -33,7 +36,7 @@ import {
   microFromUsd,
   MIN_CAP_MICRO,
 } from "./db.ts";
-import { logger } from "./log.ts";
+import { logger, registerSecret } from "./log.ts";
 import { listNativeModels } from "./tools/native-models.ts";
 
 export type ConsumerState = "pending" | "waiting-deposit" | "active" | "revoked";
@@ -42,6 +45,8 @@ export type PollState = "none" | "pending" | "approved" | "revoked";
 const ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 const MODEL_LIMIT = 200;
 const MODEL_ID_LIMIT = 200;
+/** Effectively perpetual: 10 years, so `used` never resets (DESIGN-V2 §6). */
+export const LIMIT_WINDOW = "3650d";
 
 export interface ConsumerDbRow {
   address: string;
@@ -96,6 +101,44 @@ export interface RevokeResult {
   detail?: string;
 }
 
+/**
+ * What one `D → cap → key` recomputation did. Returned to the watcher (which
+ * only logs it) and never to a tool: a consumer sees the effects through
+ * `GET /request` and `history`.
+ */
+export interface CreditResult {
+  address: string;
+  state: ConsumerState | "none";
+  balanceUsd: string;
+  capUsd: string;
+  keyIssued: boolean;
+  keyRemoved: boolean;
+  /** the cap could not be written to Magpie (the ledger is still the truth) */
+  keyError?: boolean;
+  detail?: string;
+}
+
+/** What one boot-time reconciliation pass did. Logged, never returned by a tool. */
+export interface ResyncSummary {
+  checked: number;
+  updated: number;
+  failed: number;
+  detail?: string;
+}
+
+/** What one orphan-key sweep did. Logged, never returned by a tool. */
+export interface SweepSummary {
+  /** `omai-` keys inspected */
+  checked: number;
+  /** keys deleted because no consumer row backs them */
+  removed: number;
+  /** keys rotated (and) or cost-clamped to $0.0001 instead of deleted */
+  clamped: number;
+  /** keys that could not be cleaned up at all */
+  failed: number;
+  detail?: string;
+}
+
 export interface ConsumerView {
   address: string;
   grantedModels: string[];
@@ -129,6 +172,16 @@ export interface GrantsOptions {
 function shortError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw.replace(/\s+/g, " ").trim().slice(0, 200) || "unknown error";
+}
+
+/**
+ * The same, but longer: an `ensureKey` failure ends with the fail-closed note
+ * ("the half-configured key was removed"), which is the part a reader needs, and
+ * a 200-character cut would drop exactly that.
+ */
+function longError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw.replace(/\s+/g, " ").trim().slice(0, 600) || "unknown error";
 }
 
 export function normalizeAddress(value: unknown): string {
@@ -344,30 +397,21 @@ export class Grants {
     const askedFor = parseModels(request?.models);
     this.writeRequest(target, askedFor.length > 0 ? askedFor : granted, request?.ts ?? now, "approved");
 
-    if (cap < MIN_CAP_MICRO) {
+    // One code path for `D → cap → key`, shared with the watcher: below $0.0001
+    // it also removes a key left over from a larger earlier balance, so the
+    // approval cannot keep an unlimited-or-stale cap alive.
+    const resynced = await this.resync(target, "deposit");
+    if (resynced.state !== "active") {
+      if (cap >= MIN_CAP_MICRO) {
+        throw new Error(
+          `E_MAGPIE: ${target} is approved, but the Gateway Key could not be issued ` +
+            `(${resynced.detail ?? "unknown reason"}); the approval is recorded as waiting-deposit — ` +
+            "approve again to retry",
+        );
+      }
       return { address: target, grantedModels: granted, state: "waiting-deposit", keyIssued: false };
     }
-
-    try {
-      const key = await this.ensureKey(target, granted, cap);
-      this.writeConsumer({
-        address: target,
-        granted,
-        requested: [],
-        keyName: key.name,
-        keySecret: key.secret,
-        state: "active",
-        createdAt: keep.created,
-        revokedAt: null,
-      });
-      return { address: target, grantedModels: granted, state: "active", keyIssued: true };
-    } catch (error) {
-      logger.error(`approve ${target}: the Gateway Key could not be issued: ${shortError(error)}`);
-      throw new Error(
-        `E_MAGPIE: ${target} is approved, but the Gateway Key could not be issued (${shortError(error)}); ` +
-          `the approval is recorded as waiting-deposit — approve again to retry`,
-      );
-    }
+    return { address: target, grantedModels: granted, state: "active", keyIssued: true };
   }
 
   /**
@@ -464,6 +508,238 @@ export class Grants {
   }
 
   /**
+   * A deposit was credited for `payer` (DESIGN-V2 §6). The balance is already in
+   * the ledger; this recomputes `D → cap` and moves the Gateway Key to match. A
+   * payer without an authorization is not an error: the money is visible in
+   * `consumers.unclaimed`, and approving that address later issues the key.
+   */
+  async onDeposit(payer: string): Promise<CreditResult> {
+    return this.resync(payer, "deposit");
+  }
+
+  /**
+   * A credited deposit reverted. Same recomputation, but the only outcome that
+   * matters here is a lower cap (or no key at all when `D` reached zero).
+   */
+  async onRevert(payer: string): Promise<CreditResult> {
+    return this.resync(payer, "revert");
+  }
+
+  /**
+   * Boot-time reconciliation of every authorized consumer (DESIGN-V2 §6, §9).
+   *
+   * The ledger row and the scan cursor are written in one transaction, but the
+   * Magpie cap (and key) are written after it. A host killed between the two
+   * leaves a `credited` row whose cap was never applied — and because the cursor
+   * already moved, no later scan will revisit that deposit. This walks the
+   * consumers table once and re-derives `D → cap → key` for each of them, so the
+   * gap closes at the next start instead of at the next deposit.
+   *
+   * One consumer failing must not stop the others: each row is independent and a
+   * failure is logged and counted, never thrown.
+   */
+  async resyncAll(): Promise<ResyncSummary> {
+    let rows: { address: string; granted_models: string; state: string }[];
+    try {
+      rows = this.db
+        .query("SELECT address, granted_models, state FROM consumers ORDER BY address")
+        .all() as { address: string; granted_models: string; state: string }[];
+    } catch (error) {
+      logger.error(`resync: cannot list consumers: ${shortError(error)}`);
+      return { checked: 0, updated: 0, failed: 0, detail: shortError(error) };
+    }
+
+    let checked = 0;
+    let updated = 0;
+    let failed = 0;
+    for (const row of rows) {
+      if (parseModels(row.granted_models).length === 0) continue;
+      checked += 1;
+      try {
+        const result = await this.resync(row.address, "resync");
+        if (result.keyError) failed += 1;
+        else if (result.state === "active" || result.keyRemoved || result.state !== row.state) updated += 1;
+      } catch (error) {
+        failed += 1;
+        logger.error(`resync: ${row.address} could not be reconciled: ${shortError(error)}`);
+      }
+    }
+    return { checked, updated, failed };
+  }
+
+  private async resync(payer: string, kind: "deposit" | "revert" | "resync"): Promise<CreditResult> {
+    const target = normalizeAddress(payer);
+    const consumer = this.consumer(target);
+    const balance = balanceMicro(this.db, this.provider(), target);
+    const cap = capMicroOf(balance);
+    const base = { address: target, balanceUsd: formatUsd4(balance), capUsd: formatUsd4(cap) };
+
+    if (!consumer) {
+      logger.info(
+        `${kind}: ${target} has ${formatUsd4(balance)} but no authorization here; ` +
+          "it is listed in consumers.unclaimed",
+      );
+      return {
+        ...base,
+        state: "none",
+        keyIssued: false,
+        keyRemoved: false,
+        detail: "no authorization; approve_request issues the key once the address is approved",
+      };
+    }
+
+    if (consumer.state !== "active" && consumer.state !== "waiting-deposit") {
+      // A revocation wins over money: the provider said no, and a deposit does
+      // not undo it. `approve` is the only way back.
+      logger.info(`${kind}: ${target} is ${consumer.state}; the balance changed but no key is issued`);
+      return {
+        ...base,
+        state: consumer.state === "pending" ? "pending" : "revoked",
+        keyIssued: Boolean(consumer.key_secret),
+        keyRemoved: false,
+        detail: "the address is not approved, so the key is left alone",
+      };
+    }
+
+    const granted = parseModels(consumer.granted_models);
+    const requested = parseModels(consumer.requested_models);
+    const stopped = granted.length === 0 || cap < MIN_CAP_MICRO;
+
+    if (stopped) {
+      let keyRemoved = false;
+      let name = consumer.key_name;
+      let secret = consumer.key_secret;
+      let detail: string | undefined;
+      if (name || secret) {
+        const dropped = await this.dropKey(target, consumer);
+        keyRemoved = dropped.removed;
+        name = dropped.name;
+        secret = dropped.secret;
+        detail = dropped.detail;
+      }
+      this.writeConsumer({
+        address: target,
+        granted,
+        requested,
+        keyName: name,
+        keySecret: secret,
+        state: "waiting-deposit",
+        createdAt: consumer.created_at,
+        revokedAt: null,
+      });
+      return {
+        ...base,
+        state: "waiting-deposit",
+        keyIssued: false,
+        keyRemoved,
+        ...(name || secret ? { keyError: true } : {}),
+        detail:
+          detail ??
+          (cap < MIN_CAP_MICRO
+            ? "below the $0.0001 minimum, so no key is issued (a $0 limit means unlimited in Magpie)"
+            : "no granted models, so no key is issued"),
+      };
+    }
+
+    try {
+      const key = await this.ensureKey(target, granted, cap);
+      this.writeConsumer({
+        address: target,
+        granted,
+        requested,
+        keyName: key.name,
+        keySecret: key.secret,
+        state: "active",
+        createdAt: consumer.created_at,
+        revokedAt: null,
+      });
+      logger.info(
+        `${kind}: ${target} now has ${formatUsd4(balance)} → cap $${formatUsd4(cap)} ` +
+          `on ${granted.length} model(s)${key.rotatedSecret ? " (key secret replaced)" : ""}`,
+      );
+      return { ...base, state: "active", keyIssued: true, keyRemoved: false };
+    } catch (error) {
+      // The money is booked; only the cap failed to follow. Keep the row so the
+      // next deposit (or an approve) retries instead of silently forgetting.
+      logger.error(`${kind}: ${target} could not have its key updated: ${shortError(error)}`);
+      return {
+        ...base,
+        state: "waiting-deposit",
+        keyIssued: false,
+        keyRemoved: false,
+        keyError: true,
+        detail: `the Gateway Key could not be updated: ${longError(error)}`,
+      };
+    }
+  }
+
+  /**
+   * Takes a key away fail-closed. Removing it is the clean path; when Magpie
+   * refuses, the secret is rotated (so the consumer's copy stops working) and the
+   * limit is set to the smallest value Magpie accepts. That is **not** a stop:
+   * Magpie still admits requests until about `$0.0001` has been spent, so the
+   * result says exactly that instead of claiming the balance cannot be used.
+   * When Magpie cannot be reached at all the local state still stops handing the
+   * secret out, and the result says so too.
+   */
+  private async dropKey(
+    target: string,
+    consumer: ConsumerDbRow,
+  ): Promise<{ removed: boolean; name: string | null; secret: string | null; detail?: string }> {
+    const name = consumer.key_name ?? gatewayKeyName(target);
+    let magpie: Magpie;
+    try {
+      magpie = this.magpie();
+    } catch (error) {
+      return {
+        removed: false,
+        name: consumer.key_name,
+        secret: consumer.key_secret,
+        detail: `Magpie is unreachable (${shortError(error)}), so the cap could not be lowered`,
+      };
+    }
+    let record;
+    try {
+      record = magpie.keyByName(name);
+    } catch (error) {
+      return {
+        removed: false,
+        name: consumer.key_name,
+        secret: consumer.key_secret,
+        detail: `Magpie is unreachable (${shortError(error)}), so the cap could not be lowered`,
+      };
+    }
+    if (!record) return { removed: true, name: null, secret: null };
+    try {
+      await magpie.removeKey(record.id);
+      return { removed: true, name: null, secret: null };
+    } catch (removeError) {
+      try {
+        const secret = await magpie.rotateKey(record.id);
+        await magpie.setCostLimit(record.id, LIMIT_WINDOW, Number(MIN_CAP_MICRO) / 1_000_000);
+        return {
+          removed: false,
+          name,
+          secret,
+          detail:
+            `the key could not be removed (${shortError(removeError)}); it was rotated and its cost limit was set to ` +
+            `$0.0001. The consumer's old secret stops working, but Magpie can still serve roughly $0.0001 of requests ` +
+            "under the new one — only a real delete (or a revoke in Magpie) stops it completely",
+        };
+      } catch (fallbackError) {
+        return {
+          removed: false,
+          name: consumer.key_name,
+          secret: consumer.key_secret,
+          detail:
+            `the key could not be removed (${shortError(removeError)}) or rotated (${shortError(fallbackError)}); ` +
+            "the consumer's copy may still work until Magpie is reachable",
+        };
+      }
+    }
+  }
+
+  /**
    * `consumers` / `status.sharing.consumers` (DESIGN-V2 §7.2). `usage` reads each
    * active key's used cost from Magpie's own limit endpoint and stores it; the
    * poll path never pays that cost.
@@ -544,21 +820,237 @@ export class Grants {
 
   /**
    * Creates or updates the consumer's key and sets its cap to the balance.
-   * Reuses the stored secret so a re-approve keeps the credential the consumer
-   * already has.
+   *
+   * `gateway-key add` produces a key that is **all models, no cost limit** — the
+   * widest credential Magpie has. Narrowing it is a second and third CLI call, so
+   * a crash or a refusal in between would leave a fully open key in Magpie with
+   * nothing in this plugin pointing at it. That key therefore never outlives a
+   * failed setup: the created key is removed, and if removal fails it is rotated
+   * (the secret it was created with stops working) and clamped to `$0.0001`.
+   * The original error is always rethrown — a half-built key is never returned as
+   * if it were usable.
+   *
+   * Updating an existing key is less destructive: its cap is re-applied on
+   * failure, and the key keeps the limit Magpie already had rather than being
+   * taken away from a consumer who paid.
    */
-  private async ensureKey(address: string, models: string[], cap: bigint): Promise<{ name: string; secret: string }> {
+  private async ensureKey(
+    address: string,
+    models: string[],
+    cap: bigint,
+  ): Promise<{ name: string; secret: string; rotatedSecret: boolean }> {
     const magpie = this.magpie();
     const name = gatewayKeyName(address);
     const stored = this.consumer(address)?.key_secret ?? undefined;
-    let record = magpie.keyByName(name);
+    const existing = magpie.keyByName(name);
+    const capUsd = Number(cap) / 1_000_000;
+
+    if (existing) {
+      let modelsSet = false;
+      try {
+        await magpie.setModels(existing.id, models);
+        modelsSet = true;
+        await magpie.setCostLimit(existing.id, LIMIT_WINDOW, capUsd);
+      } catch (error) {
+        const note = modelsSet
+          ? (await this.reapplyCap(magpie, existing.id, capUsd)).note
+          : "the model list could not be updated, so the cap was left at its previous value";
+        throw new Error(
+          `E_MAGPIE: cannot update the Gateway Key ${name}: ${shortError(error)}; ` +
+            `${note}. The authorization keeps the last limit Magpie accepted`,
+        );
+      }
+      return { name, secret: existing.secret, rotatedSecret: Boolean(stored && existing.secret !== stored) };
+    }
+
     // The secret is ours: it is generated here, stored in `consumers`, and handed
     // to this one address through the poll response. Magpie only stores it.
-    if (!record) record = await magpie.addKey(name, stored ?? newKeySecret());
-    if (!record.secret) throw new Error("Magpie returned a key without a secret");
-    await magpie.setModels(record.id, models);
-    await magpie.setCostLimit(record.id, "3650d", Number(cap) / 1_000_000);
-    return { name, secret: record.secret };
+    const record = await magpie.addKey(name, stored ?? newKeySecret());
+    let narrowed = false;
+    try {
+      if (!record.secret) throw new Error("Magpie returned a key without a secret");
+      await magpie.setModels(record.id, models);
+      narrowed = true;
+      await magpie.setCostLimit(record.id, LIMIT_WINDOW, capUsd);
+      return { name, secret: record.secret, rotatedSecret: Boolean(stored && record.secret !== stored) };
+    } catch (error) {
+      const retired = await this.retireKey(magpie, record.id, name, narrowed ? models : null);
+      throw new Error(
+        `E_MAGPIE: the Gateway Key ${name} could not be configured: ${shortError(error)}; ${retired.note}`,
+      );
+    }
+  }
+
+  /**
+   * Re-applies the intended cap after a failed update: `setCostLimit` once more,
+   * because "it failed once" must not leave a cap wider than `D`.
+   */
+  private async reapplyCap(magpie: Magpie, id: string, capUsd: number): Promise<{ ok: boolean; note: string }> {
+    try {
+      await magpie.setCostLimit(id, LIMIT_WINDOW, capUsd);
+      return { ok: true, note: `the cost limit was re-applied to $${capUsd.toFixed(4)}` };
+    } catch (error) {
+      return {
+        ok: false,
+        note: `its cost limit could not be set to $${capUsd.toFixed(4)} either (${shortError(error)})`,
+      };
+    }
+  }
+
+  /**
+   * Disposes of a key this plugin created but could not finish configuring.
+   *
+   * `attemptRemove` is false when the caller already tried to delete it (the
+   * sweep): retrying a delete that Magpie just refused would only blur the
+   * reported outcome.
+   */
+  private async retireKey(
+    magpie: Magpie,
+    id: string,
+    name: string,
+    models: string[] | null,
+    attemptRemove = true,
+  ): Promise<{ outcome: "removed" | "clamped" | "failed"; note: string }> {
+    if (attemptRemove) {
+      try {
+        await magpie.removeKey(id);
+        return { outcome: "removed", note: "the half-configured key was removed from Magpie" };
+      } catch (removeError) {
+        const retired = await this.retireKey(magpie, id, name, models, false);
+        return {
+          outcome: retired.outcome,
+          note: `it could not be removed (${shortError(removeError)}); ${retired.note}`,
+        };
+      }
+    }
+    let rotated: string;
+    try {
+      const secret = await magpie.rotateKey(id);
+      registerSecret(secret);
+      rotated = "it was rotated, so the secret it was created with no longer works";
+    } catch (rotateError) {
+      return {
+        outcome: "failed",
+        note:
+          `the key could not be rotated either (${shortError(rotateError)}); ` +
+          `a key named ${name} may still exist in Magpie and must be deleted by hand`,
+      };
+    }
+    const clamp = await this.clampCap(magpie, id, models);
+    return {
+      outcome: clamp.ok ? "clamped" : "failed",
+      note: `${rotated} and ${clamp.note}`,
+    };
+  }
+
+  /**
+   * Pushes a key's cost limit to `$0.0001`. That is **not** a stop: Magpie still
+   * serves requests until about that much has been spent. It is only the smallest
+   * bound Magpie accepts, and the note says so.
+   */
+  private async clampCap(
+    magpie: Magpie,
+    id: string,
+    models: string[] | null,
+  ): Promise<{ ok: boolean; note: string }> {
+    if (models && models.length > 0) {
+      try {
+        await magpie.setModels(id, models);
+      } catch {
+        // The cap is what bounds the money; the model list is secondary here.
+      }
+    }
+    try {
+      await magpie.setCostLimit(id, LIMIT_WINDOW, Number(MIN_CAP_MICRO) / 1_000_000);
+      return {
+        ok: true,
+        note: "its cost limit was set to $0.0001 (Magpie can still serve roughly that much)",
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        note: `its cost limit could not be lowered to $0.0001 (${shortError(error)}), so it may still be unrestricted`,
+      };
+    }
+  }
+
+  /**
+   * Finds Gateway Keys this plugin owns but no consumer row backs, and clamps
+   * `omai-` keys that have no cost limit at all.
+   *
+   * The only names this plugin may own are `gatewayKeyName(address)` for the
+   * addresses in `consumers`. Anything else with the `omai-` prefix is the debris
+   * of an interrupted `ensureKey` (a key created by `gateway-key add` and never
+   * narrowed), and nothing else in the system would ever look for it.
+   * Keys the user created themselves are never touched: only this plugin uses the
+   * `omai-` prefix.
+   */
+  async sweepOrphanKeys(): Promise<SweepSummary> {
+    let magpie: Magpie;
+    let keys: KeyRecord[];
+    let legal: Set<string>;
+    try {
+      magpie = this.magpie();
+      keys = magpie.keys();
+      // Only a consumer we actually hand a key to protects that key name. A
+      // revoked consumer, or one whose key was removed because D reached zero,
+      // must not shield a same-named key that reappears (an interrupted
+      // re-approval, or a hand-made leftover): that key is an orphan.
+      const rows = this.db
+        .query("SELECT address FROM consumers WHERE key_secret IS NOT NULL ORDER BY address")
+        .all() as { address: string }[];
+      legal = new Set(rows.map((row) => gatewayKeyName(row.address)));
+    } catch (error) {
+      return { checked: 0, removed: 0, clamped: 0, failed: 0, detail: shortError(error) };
+    }
+
+    let checked = 0;
+    let removed = 0;
+    let clamped = 0;
+    let failed = 0;
+    const notes: string[] = [];
+
+    for (const key of keys) {
+      const name = typeof key.name === "string" ? key.name : "";
+      if (!/^omai-/i.test(name)) continue; // the user's own key
+      checked += 1;
+
+      if (legal.has(name)) {
+        // A legal name without a cost limit means the setup died between
+        // `gateway-key add` and `limit`; it must not stay unrestricted.
+        if (typeof key.limit?.cost !== "number") {
+          const clamp = await this.clampCap(magpie, key.id, null);
+          if (clamp.ok) {
+            clamped += 1;
+            notes.push(`${name}: had no cost limit, ${clamp.note}`);
+          } else {
+            failed += 1;
+            notes.push(`${name}: ${clamp.note}`);
+          }
+        }
+        continue;
+      }
+
+      try {
+        await magpie.removeKey(key.id);
+        removed += 1;
+        notes.push(`${name}: no consumer holds this key, removed`);
+      } catch (removeError) {
+        logger.warn(`sweep: ${name} could not be removed (${shortError(removeError)})`);
+        const retired = await this.retireKey(magpie, key.id, name, null, false);
+        if (retired.outcome === "clamped") clamped += 1;
+        else failed += 1;
+        notes.push(`${name}: ${retired.note}`);
+      }
+    }
+
+    return {
+      checked,
+      removed,
+      clamped,
+      failed,
+      ...(notes.length > 0 ? { detail: notes.slice(0, 4).join("; ") } : {}),
+    };
   }
 
   private writeRequest(address: string, models: string[], ts: string, state: string): void {

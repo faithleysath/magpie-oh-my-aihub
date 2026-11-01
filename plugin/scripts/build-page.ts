@@ -30,6 +30,8 @@ const REQUIRED_TOOLS = [
   "approve_request",
   "reject_request",
   "revoke_consumer",
+  "send_payment",
+  "history",
 ];
 const REQUIRED_URL = "http://127.0.0.1:3425/mcp/magpie/tools";
 
