@@ -104,7 +104,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
     } catch (error) {
       if (error?.status === 404) {
         service = "unavailable"; loaded = true;
-        serviceError = "本机网络服务未接入或当前版本不支持；请更新 Magpie 中的 Oh My AIHub 插件后重试。";
+        serviceError = "本机服务暂时不可用，请更新 Magpie 中的 Oh My AIHub 插件后重试。";
         render(); throw new Error(serviceError);
       }
       throw error;
@@ -120,7 +120,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
       loaded = true;
       service = "unavailable";
       serviceError = error?.status === 404 || error?.status === 400
-        ? "本机网络服务未接入或当前版本不支持；请更新 Magpie 中的 Oh My AIHub 插件后重试。"
+        ? "本机服务暂时不可用，请更新 Magpie 中的 Oh My AIHub 插件后重试。"
         : "暂时无法读取网络状态；未知状态没有按零处理。";
       // The panel renders this state itself; a page-level notice would repeat it.
     } finally { loading = false; render(); }
@@ -156,7 +156,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
     head.append(el("h3", networkLabel(network)));
     card.append(head, p(`原生资产 ${network.nativeSymbol}，${network.nativeDecimals} 位小数；两条网络平权，没有默认网络。`));
     const assets = productAssets(state, network.chainId);
-    if (!assets.length) card.append(p("注册表没有列出该网络的代币；不会按符号猜测或补造。", "muted small"));
+    if (!assets.length) card.append(p("这个网络还没有登记代币；不会按符号猜测。", "muted small"));
     else {
       const list = el("ul", null, "wallet-network-assets");
       for (const asset of assets) {
@@ -216,7 +216,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
       const freshnessText = freshness === "fresh" ? "5 分钟内的查询证据，仍需按观察/过期时间判断" : freshness === "stale" ? "历史已知余额，已过期或需手动刷新；不是实时余额" : "新鲜度未知；请手动刷新，不显示为实时绿";
       if (freshness !== "fresh") card.append(p(freshnessText, "inline-warning"));
       card.append(details("最近一次余额查询", [["网络", lastBalance.chainId], ["地址", lastBalance.address, true], ["地址来源", lastBalance.addressSource === "watch" ? "你添加的查询地址" : "非查询地址（不能作为可信余额）"], ["资产", lastBalance.asset?.symbol || lastBalance.nativeSymbol], ["原始余额", lastBalance.balanceRaw, true], ["显示余额", amount, true], ["小数位", decimals], ["区块", lastBalance.blockNumber], ["只读", lastBalance.readOnly === true ? "是" : "未知"], ["可计入额度", lastBalance.creditEligible === true ? "是" : "否"], ["美元估值", lastBalance.usdValue === null ? "未估值（不伪造 $）" : lastBalance.usdValue], ["观察时间", lastBalance.observedAt], ["过期时间", lastBalance.expiresAt], ["新鲜度", freshnessText]], true));
-      card.append(p("余额只用于核对收款；到账由观察器在链上最终性后计入。", "muted small"));
+      card.append(p("余额只用于核对收款；到账在链上最终性后计入。", "muted small"));
     }
     return card;
   }
@@ -251,13 +251,13 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
     if (disposed) return;
     root.replaceChildren();
     const heading = el("div", null, "section-heading");
-    heading.append(el("h2", "网络与资产"), statusText(service === "unavailable" ? "服务未接入" : loading ? "正在读取" : "BSC / Base", service === "unavailable" ? "warn" : "neutral"));
+    heading.append(el("h2", "网络与资产"), statusText(service === "unavailable" ? "暂时不可用" : loading ? "正在读取" : "BSC / Base", service === "unavailable" ? "warn" : "neutral"));
     root.append(heading, p("BSC 与 Base 生产网络；这里核对资产与收款地址，付款在“充值”中逐笔确认。", "muted"));
     if (loading || service === "unknown") { root.append(p("正在读取网络状态…")); return; }
-    if (service === "unavailable") { const card = section("本机网络服务未接入", serviceError || "当前服务没有提供网络查询动作。"); card.append(button("重新读取", () => { service = "unknown"; loaded = true; void loadState(); }), p("未接入时不会显示模拟余额或可计入额度。", "inline-warning")); root.append(card); return; }
+    if (service === "unavailable") { const card = section("本机网络暂时不可用", serviceError || "当前版本不支持网络查询。"); card.append(button("重新读取", () => { service = "unknown"; loaded = true; void loadState(); }), p("不可用时不会显示模拟余额或可计入额度。", "inline-warning")); root.append(card); return; }
     if (!state || state.available !== true) { const card = section("网络状态暂不可用", state?.reason || "服务返回 available:false；没有把未知当作零资产。"); card.append(button("重新读取", () => { service = "unknown"; loaded = true; void loadState(); })); root.append(card); return; }
     const networks = productNetworks(state);
-    if (networks.length !== 2) { root.append(p("注册表没有同时提供 BSC 56 与 Base 8453；不会补造缺失网络。", "inline-warning")); }
+    if (networks.length !== 2) { root.append(p("暂时没有同时读取到 BSC 与 Base 网络；不会补造缺失网络。", "inline-warning")); }
     const grid = el("div", null, "wallet-network-grid");
     for (const network of networks) grid.append(renderNetworkCard(network));
     root.append(grid, renderReceiving(), renderBalance(), errorLine);

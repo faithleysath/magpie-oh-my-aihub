@@ -182,6 +182,7 @@ function fillNetworkForm(state) {
   const node = object(c.peers)[0] || "";
   if ($("network-name")) { $("network-name").value = c.networkName || ""; $("network-name").disabled = false; }
   if ($("network-peers")) $("network-peers").value = Array.isArray(c.peers) ? (c.peers[0] || "") : String(node || "");
+  if ($("network-intro")) $("network-intro").hidden = Boolean(state?.configured);
   if ($("network-secret")) {
     $("network-secret").value = "";
     $("network-secret").required = !state?.configured;
@@ -278,38 +279,10 @@ function homeSharing(state) {
   ];
 }
 
-/**
- * Chain deposits are cumulative incoming transfers, not the current token
- * balance. Without a balance read the only honest answer is "尚未查询".
- */
-function homeWallet(state) {
-  const walletState = object(state.wallet);
-  if (walletState.availability !== "available") {
-    return { status: "资产余额尚未查询", detail: walletState.error || "钱包记录未初始化；在钱包页初始化或刷新。", credit: [] };
-  }
-  const consumers = list(object(walletState.view).consumers);
-  const credit = consumers
-    .filter((consumer) => typeof consumer?.ledger?.balanceUsd === "number")
-    .map((consumer) => ({ id: consumer.consumerId, amount: consumer.ledger.balanceUsd }));
-  const deposits = list(object(walletState.view).deposits)
-    .filter((deposit) => typeof deposit?.creditedUsd === "number" && deposit.creditedUsd > 0)
-    .sort((left, right) => String(right?.updatedAt || "").localeCompare(String(left?.updatedAt || "")));
-  const latest = deposits[0];
-  return {
-    status: latest ? `最近入账 ${money(latest.creditedUsd)}（累计，非余额）` : "资产余额尚未查询",
-    detail: latest
-      ? `最近一笔充值 ${time(latest.updatedAt)}；观察器与 RPC 状态在网络页的诊断里。`
-      : "还没有已确认的充值记录；观察器与 RPC 状态在网络页的诊断里。",
-    credit,
-  };
-}
-
 function todos(state) {
   const s = object(state.status);
   const c = object(s.config);
   const items = [];
-  const pending = list(state.workflows?.requests).filter((request) => request?.status === "pending");
-  if (pending.length) items.push({ text: `${pending.length} 份伙伴申请待审批`, goto: "sharing" });
   if (!s.checksAt) items.push({ text: "还没有运行过安全检查", goto: "network" });
   const readiness = object(s.readiness);
   if (s.checksAt && readiness.state && readiness.state !== "ready") {
@@ -323,11 +296,10 @@ function todos(state) {
   if (unverified.length) items.push({ text: `${unverified.length} 个伙伴身份待核对`, goto: "discovery" });
   const p2p = object(s.p2p);
   const counts = object(p2p.counts);
-  if (typeof counts.pendingInbound === "number" && counts.pendingInbound > 0) items.push({ text: `${counts.pendingInbound} 个无文件使用请求待批准`, goto: "sharing" });
+  if (typeof counts.pendingInbound === "number" && counts.pendingInbound > 0) items.push({ text: `${counts.pendingInbound} 个使用请求待批准`, goto: "sharing" });
   if (typeof counts.awaitingApproval === "number" && counts.awaitingApproval > 0) items.push({ text: `${counts.awaitingApproval} 个使用申请等待批准`, goto: "discovery", tab: "connections" });
-  if (typeof counts.actionNeeded === "number" && counts.actionNeeded > 0) items.push({ text: `${counts.actionNeeded} 个无文件连接需要处理`, goto: "discovery", tab: "connections" });
-  if (object(p2p.listener).state === "failed") items.push({ text: "P2P 控制通道失败，无文件申请无法收发", goto: "network" });
-  if (object(s.accounting).uncertain) items.push({ text: `计费检查存在不确定性：${object(s.accounting).uncertainReason || "暂时无法验证"}`, goto: "wallet" });
+  if (typeof counts.actionNeeded === "number" && counts.actionNeeded > 0) items.push({ text: `${counts.actionNeeded} 个连接需要处理`, goto: "discovery", tab: "connections" });
+  if (object(p2p.listener).state === "failed") items.push({ text: "申请通道异常，暂时无法收发请求", goto: "network" });
   return items;
 }
 
@@ -381,33 +353,9 @@ function renderHome(state) {
   const [sharing, sharingDetail] = homeSharing(state);
   setText("home-sharing", sharing);
   setText("home-sharing-detail", sharingDetail);
-  const wallet = homeWallet(state);
-  setText("home-wallet-assets", wallet.status);
-  setText("home-wallet-detail", wallet.detail);
-  const creditList = $("home-wallet-credit");
-  creditList.replaceChildren();
-  if (!wallet.credit.length) {
-    const li = document.createElement("li");
-    li.className = "muted";
-    li.textContent = "还没有提供者账目";
-    creditList.append(li);
-  } else {
-    for (const entry of wallet.credit.slice(0, 4)) {
-      const li = document.createElement("li");
-      const name = document.createElement("span");
-      name.textContent = entry.id;
-      const amount = document.createElement("strong");
-      amount.textContent = money(entry.amount);
-      li.append(name, amount);
-      creditList.append(li);
-    }
-    if (wallet.credit.length > 4) {
-      const li = document.createElement("li");
-      li.className = "muted";
-      li.textContent = `另有 ${wallet.credit.length - 4} 个伙伴账目，见钱包页`;
-      creditList.append(li);
-    }
-  }
+  const payment = object(object(state.status).paymentP2p);
+  setText("home-wallet-assets", payment.available === false ? "充值服务未启动" : "BSC / Base 充值");
+  setText("home-wallet-detail", "付款逐笔预览并确认，不会自动转账。");
   const listNode = $("home-todos");
   listNode.replaceChildren();
   const entries = todos(state);
@@ -434,6 +382,7 @@ function renderHome(state) {
 
 /* ---------------- network ---------------- */
 const NEIGHBOR_LINK = { self: "本机", direct: "直连", relay: "中继", unknown: "未知路径" };
+const LISTENER_STATE = { starting: "正在启动", listening: "正在监听", ready: "已就绪", failed: "失败", stopped: "已停止", unknown: "未知" };
 const NETWORK_STATE = { unconfigured: ["尚未加入网络", "neutral"], starting: ["正在连接", "info"], online: ["已连接", "good"], degraded: ["部分可用", "warn"], offline: ["未连接", "bad"], failed: ["连接失败", "bad"], unknown: ["尚未验证", "neutral"] };
 
 function renderNetwork(state) {
@@ -516,7 +465,7 @@ function renderNetwork(state) {
     { purpose: "catalog", label: "目录发布端口", host: "127.0.0.1", port: object(c.catalog).port ?? null, editable: false, state: object(c.catalog).port ? "stable" : "unverified" },
     { purpose: "catalog-socks", label: "目录查询端口", host: "127.0.0.1", port: object(c.catalog).socksPort ?? null, editable: false, state: object(c.catalog).socksPort ? "stable" : "unverified" },
   ];
-  const REACHABILITY = { loopback: "本机回环", overlay: "覆盖网", lan: "局域网", unknown: "范围未知" };
+  const REACHABILITY = { loopback: "本机回环", overlay: "私有网络", lan: "局域网", unknown: "范围未知" };
   const PORT_STATE = { stable: "地址稳定", migrated: "已迁移", conflict: "冲突", unverified: "未验证", failed: "失败", unknown: "未知" };
   const portList = $("network-ports");
   portList.replaceChildren();
@@ -547,9 +496,9 @@ function renderNetwork(state) {
     listenerList.replaceChildren();
     const rows = Object.keys(listener).length
       ? [
-        ["状态", `${listener.state || "unknown"}${listener.verified === true ? "，已验证" : listener.verified === false ? "，未验证" : ""}`],
+        ["状态", `${LISTENER_STATE[listener.state] || "未知"}${listener.verified === true ? "，已验证" : listener.verified === false ? "，未验证" : ""}`],
         ["地址", listener.host ? `${listener.host}${listener.port ? `:${listener.port}` : ""}` : "未报告"],
-        ["可达范围", listener.reachability || "未知"],
+        ["可达范围", REACHABILITY[listener.reachability] || "未知"],
         ["说明", listener.detail || "无"],
       ]
       : [["状态", "尚未读取"]];

@@ -24,7 +24,7 @@ export function networkFacts(network = {}, et = {}, config = {}, time = () => ""
     ? `${node.virtualIpv4}${lastKnown}`
     : (config.virtualIpv4 ? `${config.virtualIpv4}（配置值，未在线确认）` : "未分配");
   const engine = coreRunning
-    ? (coreVersion ? `EasyTier ${coreVersion}，no-TUN` : "运行中")
+    ? (coreVersion ? `EasyTier ${coreVersion}` : "运行中")
     : (coreVersion ? `EasyTier ${coreVersion}，已停止（最后已知版本）` : "未运行");
   const catalog = network.catalog || {};
   const publishing = typeof catalog.publishing === "boolean"
@@ -39,10 +39,10 @@ export function networkFacts(network = {}, et = {}, config = {}, time = () => ""
     rows: [
       ["网络名称", `${networkName}${lastKnown}`, false],
       ["本机节点名", `${hostname}${lastKnown}`, true],
-      ["虚拟地址", virtualIpv4, true],
+      ["网络地址", virtualIpv4, true],
       ["网络引擎", engine, false],
       ["目录发布", publishing, false],
-      ["状态证据", evidenceText, false],
+      ["状态更新时间", evidenceText, false],
     ],
   };
 }

@@ -119,13 +119,32 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
 
   const shell = el("section", null, "card workflow-section wallet-payment-section");
   shell.append(el("h2", "充值"));
-  shell.append(p("向已授权的伙伴充值。付款条件通过已认证的连接交换，签名只在本机钱包确认，付款只在明确预览后发送。"));
-  const unavailable = p("本机 P2P 付款服务尚未启动。", "inline-warning");
+  shell.append(p("向已授权的伙伴充值。付款条件通过已认证的连接发送；签名只在本机钱包确认，付款只在明确预览后发送。"));
+  const unavailable = p("充值服务尚未启动。", "inline-warning");
   unavailable.hidden = true;
   const providerBox = el("div", null, "wallet-payment-group");
   const consumerBox = el("div", null, "wallet-payment-group");
   const autoBox = el("details", null, "workflow-details wallet-payment-auto");
-  shell.append(unavailable, providerBox, consumerBox, autoBox);
+  const roleTabs = el("div", null, "tabs");
+  const consumerTab = button("我要充值", () => setRole("consumer"));
+  const providerTab = button("我的收款", () => setRole("provider"));
+  consumerTab.type = "button"; providerTab.type = "button";
+  consumerTab.setAttribute("role", "tab"); providerTab.setAttribute("role", "tab");
+  roleTabs.append(consumerTab, providerTab);
+  let role = "consumer";
+  function setRole(next) {
+    role = next;
+    consumerTab.setAttribute("aria-selected", String(next === "consumer"));
+    providerTab.setAttribute("aria-selected", String(next === "provider"));
+    consumerBox.hidden = next !== "consumer";
+    providerBox.hidden = next !== "provider";
+    autoBox.hidden = next !== "consumer" || !state;
+  }
+  shell.append(roleTabs, unavailable, providerBox, consumerBox, autoBox);
+  providerBox.hidden = true;
+  consumerTab.setAttribute("aria-selected", "true");
+  providerTab.setAttribute("aria-selected", "false");
+  consumerTab.className = "tab"; providerTab.className = "tab";
   root.replaceChildren(shell);
 
   const requestForm = el("div", null, "wallet-payment-form");
@@ -135,7 +154,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   const requestAmount = field("金额（代币单位）", "text", "例如 1.5");
   const requestError = p("", "form-error");
   requestError.hidden = true;
-  const requestButton = button("申请充值条件", () => void requestPayment(), true);
+  const requestButton = button("下一步：核对付款", () => void requestPayment(), true);
   const requestRow = el("div", null, "wallet-payment-actions");
   requestRow.append(requestButton);
   requestForm.append(requestProvider.wrap, requestChain.wrap, requestAsset.wrap, requestAmount.wrap, requestRow, requestError);
@@ -190,7 +209,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       discovery,
       selectionId,
       registry: () => externalRegistry(),
-      allowedChainIds: [56, 97, 8453, 84532],
+      allowedChainIds: [56, 8453],
       now: Date.now,
       operationPort: {
         reserve: (operation) => client.action("payment-operation-reserve", {
@@ -330,12 +349,12 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
 
   const obligations = el("ul", null, "wallet-payment-list");
   const providerRequests = el("ul", null, "wallet-payment-list");
-  providerBox.append(el("h3", "提供方：我的收款与发票"), providerRequests);
-  consumerBox.append(el("h3", "我的充值"), obligations);
+  providerBox.append(el("h3", "收款请求"), providerRequests);
+  consumerBox.append(el("h3", "我的充值记录"), obligations);
 
   const recoveryBox = el("details", null, "workflow-details wallet-payment-recovery");
-  recoveryBox.append(el("summary", "付款恢复（结果不明的发送）"));
-  recoveryBox.append(p("只在这里处理已经产生 journal 记录、但钱包没有返回明确结果的那一笔。不要重复发送；先用钱包或区块浏览器找到已知交易哈希，再让服务核对链上收款人、金额和代币。", "muted small"));
+  recoveryBox.append(el("summary", "结果不明？查看待恢复的发送"));
+  recoveryBox.append(p("只处理本机已有发送记录、但钱包没有返回明确结果的那一笔。不要重复发送；先用钱包或区块浏览器找到交易哈希，再让服务核对收款人、金额和代币。", "muted small"));
   const recoveryList = el("div");
   const recoveryReload = button("刷新待恢复记录", () => void loadPending());
   recoveryBox.append(recoveryList, recoveryReload);
@@ -356,6 +375,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     }
   }
 
+  const JOURNAL_STATE = { unknown: "结果未知", broadcasting: "已广播", reserved: "已预留", sent: "已发送", confirmed: "已确认", failed: "失败" };
   function renderRecovery() {
     if (unmounted) return;
     recoveryList.replaceChildren();
@@ -365,9 +385,9 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     }
     for (const row of pendingJournal) {
       const card = el("article", null, "wallet-payment-recovery-row");
-      card.append(el("strong", `${row.invoice}，状态 ${row.state}`));
+      card.append(el("strong", `${row.invoice}，状态 ${JOURNAL_STATE[row.state] || "处理中"}`));
       const meta = el("ul", null, "meta-list");
-      meta.append(el("li", chainName(row.chainId)), el("li", `保留编号 ${row.reservationId}`));
+      meta.append(el("li", chainName(row.chainId)), el("li", `记录编号 ${row.reservationId}`));
       if (row.txHash) meta.append(el("li", `已知哈希 ${row.txHash}`));
       if (Array.isArray(row.hashes) && row.hashes.length) meta.append(el("li", `全部哈希 ${row.hashes.join(", ")}`));
       if (row.reason) meta.append(el("li", `原因 ${row.reason}`));
@@ -456,7 +476,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   function renderForm() {
     if (!state) return;
     setOptions(requestProvider.select, providerChoices(state), "选择已授权的伙伴");
-    const chains = [...new Set((state.provider?.assets || []).map((a) => a.chainId))].sort((a, b) => a - b);
+    const chains = [...new Set((state.provider?.assets || []).map((a) => a.chainId))].filter((id) => id === 56 || id === 8453).sort((a, b) => a - b);
     setOptions(requestChain.select, chains.map((chain) => [chain, chainName(chain)]), "选择网络");
     setOptions(requestAsset.select, assetChoices(state, requestChain.select.value), "选择资产");
     setOptions(autoProvider.select, providerChoices(state), "选择伙伴");
@@ -720,7 +740,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       if (result?.broadcast === true) {
         try { notice(`已广播 ${result.hash}；广播不等于到账，等待提供方观察链上最终性`, "good"); } catch { /* advisory */ }
       } else {
-        try { notice(`未发送：${result?.state || "journal 未授权"}`, "warn"); } catch { /* advisory */ }
+        try { notice(`未发送：${result?.state || "发送未获授权"}`, "warn"); } catch { /* advisory */ }
       }
       previewBox.hidden = true;
       previewBox.replaceChildren();
@@ -846,9 +866,9 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       autoBox.hidden = true;
       return;
     }
-    providerBox.hidden = false;
-    consumerBox.hidden = false;
-    autoBox.hidden = false;
+    providerBox.hidden = role !== "provider";
+    consumerBox.hidden = role !== "consumer";
+    autoBox.hidden = role !== "consumer";
     renderForm();
     renderProviderRequests(state);
     renderObligations(state);

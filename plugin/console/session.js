@@ -64,7 +64,7 @@ export function createSessionClient({ fetch: fetcher = globalThis.fetch.bind(glo
         }
         if (!response.ok) {
           const messages = {
-            400: "输入未通过检查，请检查网络名称、密码和节点地址。",
+            400: "输入未通过检查，请核对填写内容后重试。",
             403: "打开凭证已失效或请求未获授权，请从 Magpie 重新打开控制台。",
             409: "当前操作发生冲突，请刷新状态后再决定下一步。",
             413: "输入内容过长，请减少后再试。",
@@ -74,7 +74,7 @@ export function createSessionClient({ fetch: fetcher = globalThis.fetch.bind(glo
           if (response.status === 400) {
             try {
               const detail = await response.json();
-              if (typeof detail.message === "string" && detail.message.trim()) validationMessage = detail.message.slice(0, 300);
+              if (typeof detail.message === "string" && /[\u4e00-\u9fff]/.test(detail.message)) validationMessage = detail.message.slice(0, 300);
             } catch { /* The fixed local mapping remains the fallback. */ }
           }
           throw new ConsoleError(validationMessage || messages[response.status] || "操作未完成，请检查当前状态。不要重复提交结果不明的操作。", response.status);

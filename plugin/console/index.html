@@ -26,13 +26,14 @@
     <div class="workspace">
       <header class="topbar">
         <div class="topbar-status"><span class="session-state" id="connection" role="status">正在连接</span><span class="evidence-time" id="last-update">等待首次更新</span></div>
+        <button type="button" id="logout" class="text-button" hidden>退出</button>
         <button type="button" id="theme" class="icon-button" aria-label="切换深色模式" title="切换深色模式">◐</button>
       </header>
       <main id="main" tabindex="-1">
         <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
         <section id="session-panel" class="session-panel card">
-          <h1 id="session-title">正在连接你的工作空间</h1>
+          <h1 id="session-title">正在连接本机控制台</h1>
           <p id="session-detail">正在验证本机会话，网络密码不会出现在页面地址中。</p>
           <button class="button secondary" id="retry" type="button" hidden>重新连接本机服务</button>
           <div id="pairing-entry" class="pairing-entry" hidden>
@@ -82,8 +83,6 @@
                 <h2 id="home-wallet-title">钱包</h2>
                 <p class="status-line" id="home-wallet-assets">资产余额尚未查询</p>
                 <p class="muted" id="home-wallet-detail">BSC / Base；余额需要单独查询，付款逐笔确认。</p>
-                <h3 class="subhead">提供者信用（按伙伴）</h3>
-                <ul class="credit-list" id="home-wallet-credit"><li class="muted">尚未读取</li></ul>
                 <button type="button" class="text-button" data-goto="wallet">查看钱包</button>
               </section>
               <section class="home-row" aria-labelledby="home-todo-title">
@@ -125,26 +124,28 @@
               <div><h1 id="network-title">网络</h1><p>用同一个网络名称和密钥连接伙伴。</p></div>
             </div>
 
+            <p class="muted" id="network-intro">第一次使用：先和伙伴约定同一个网络名称和密钥，再把一方的节点地址填到另一方；双方都填好后点“连接网络”。</p>
             <form id="settings-form" class="card form-card" autocomplete="off" novalidate>
               <div class="field-row">
                 <label class="field">
-                  <span>网络名称</span>
+                  <span>网络名称（双方一致）</span>
                   <input id="network-name" name="networkName" type="text" minlength="2" maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,62}" required placeholder="例如 studio-ai" autocapitalize="off" spellcheck="false">
                 </label>
                 <label class="field">
-                  <span>网络密钥</span>
+                  <span>网络密钥（双方一致）</span>
                   <input id="network-secret" name="networkSecret" type="password" minlength="8" maxlength="1024" autocomplete="new-password" data-1p-ignore data-bwignore placeholder="至少 8 位字符">
                 </label>
               </div>
               <label class="field">
-                <span>初始节点</span>
+                <span>伙伴节点地址（可选）</span>
                 <input id="network-peers" name="initialNode" type="text" maxlength="256" placeholder="例如 tcp://203.0.113.10:11010" autocapitalize="off" spellcheck="false">
-                <small id="peers-help">填写一个已知节点即可加入。也可以留空，等伙伴连入或稍后补上。</small>
+                <small id="peers-help">填一个已在线伙伴的地址即可加入；没有就先留空。</small>
               </label>
               <p class="form-error" id="form-error" role="alert" hidden></p>
-              <p class="muted small">已保存的密码不会回显，也不会写入浏览器存储；它是网络密钥，不是 Magpie 访问密钥。</p>
+              <p class="muted small">密钥不会回显，也不会写进浏览器；它不是 Magpie 访问密钥。</p>
               <div class="actions">
                 <button type="submit" class="button primary" id="save">连接网络</button>
+                <button type="button" class="text-button" id="generate-secret">生成并复制密钥</button>
                 <span class="muted small" id="network-save-hint">保存只表示配置已写入；是否在线看下方实际结果。</span>
               </div>
             </form>
@@ -157,36 +158,24 @@
                   <button type="button" class="button quiet" id="network-refresh">刷新网络状态</button>
                 </div>
               </div>
-              <p class="muted" id="network-result-detail">首次准备网络引擎可能需要几分钟；这里只显示本机真实读取到的状态。</p>
+              <p class="muted" id="network-result-detail">首次加入网络可能需要几分钟。</p>
               <dl class="facts" id="network-facts"></dl>
               <h3 class="subhead">节点</h3>
               <ul class="peer-list" id="network-peers-list"></ul>
               <p class="muted" id="network-peers-empty">还没有看到其他节点。邻居状态来自本机网络引擎，只用于诊断。</p>
               <details class="diagnostics" id="network-diagnostics">
-                <summary>诊断与端口</summary>
+                <summary>高级：诊断与端口</summary>
                 <p class="muted small">端口来自本机读取，只作诊断。地址或端口被占用不等于由本插件验证；Magpie 自己持有的监听不在这些条目里。</p>
                 <dl class="facts" id="network-ports"></dl>
                 <div class="section-heading">
                   <h3 class="subhead">安全检查</h3>
                   <button type="button" class="button secondary" id="run-checks">重新检查</button>
                 </div>
-                <h3 class="subhead">P2P 控制通道</h3>
+                <h3 class="subhead">申请通道</h3>
                 <dl class="facts" id="p2p-listener"></dl>
                 <p class="muted small" id="checks-time">尚未运行主动检查</p>
                 <ul class="check-list" id="checks-list"></ul>
               </details>
-            </section>
-
-            <details class="diagnostics" id="wallet-diagnostics">
-              <summary>钱包与链诊断</summary>
-            </details>
-
-            <section class="card" aria-labelledby="network-session-title">
-              <div class="section-heading"><h2 id="network-session-title">会话</h2></div>
-              <p class="muted small">这个浏览器只在本机连接；退出后需要从 Magpie 重新打开控制台。外观切换在右上角。</p>
-              <div class="actions">
-                <button type="button" class="button quiet" id="logout" hidden>退出本机会话</button>
-              </div>
             </section>
           </section>
 

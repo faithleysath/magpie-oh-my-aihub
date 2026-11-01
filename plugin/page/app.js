@@ -28,19 +28,19 @@
     var cfg = status.config || {};
     var core = status.easytier || {};
     $("node-status").textContent = cfg.networkName
-      ? "已配置网络：" + cfg.networkName + " · 覆盖网核心" + (core.running ? "正在运行" : "未运行")
+      ? "已配置网络：" + cfg.networkName + " · 私有网络" + (core.running ? "正在运行" : "未运行")
       : "尚未配置网络。在控制台完成首次设置。";
-    $("snapshot-time").textContent = "快照时间：" + (status.generatedAt || "未知") + "（本地记录）";
+    $("snapshot-time").textContent = "更新时间：" + (status.generatedAt || "未知") + "（本地记录）";
   }
   var fresh = launcher && Date.now() - Date.parse(launcher.at) < 15000;
   var coherent = !status || !status.plugin || !launcher || Number(status.plugin.pid) === Number(launcher.ownerPid);
-  if (!coherent) say("状态来自不同的宿主，请刷新后再打开。每个 Magpie 配置需要独立的插件副本。");
+  if (!coherent) say("状态已过期，请刷新后再打开。");
   else if (fresh) say(launcher.message);
-  else say("尚未收到新鲜的控制台状态；可点打开发出请求，或刷新等待宿主启动。");
+  else say("尚未收到新鲜的控制台状态；可点打开发出请求，或刷新等待插件启动。");
   // The fallback address is public origin only. Never render a ticket, fragment
   // or credential from a snapshot as a link/address.
   var ordinaryOrigin = launcher && typeof launcher.origin === "string" && /^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(launcher.origin) && Number(launcher.origin.split(":")[2]) <= 65535;
-  $("console-origin").textContent = coherent && fresh && ordinaryOrigin ? launcher.origin : "等待新鲜的控制台地址，请刷新状态。";
+  $("console-origin").textContent = coherent && fresh && ordinaryOrigin ? launcher.origin : "等待控制台地址，请刷新。";
   function node(tag, text, cls) {
     var n = document.createElement(tag);
     if (text) n.textContent = text;
@@ -74,7 +74,7 @@
         await bridge.options.set(settings.mergeLaunch(base, { approval: {
           id: request.id, code: request.code, issuedAt: at, expiresAt: Math.min(expiry, at + 120000),
         } }));
-        $("pairing-status").textContent = "批准已提交，尚未验证。请保持浏览器页面打开，等待新宿主完成配对。";
+        $("pairing-status").textContent = "批准已提交，尚未验证。请保持浏览器页面打开，等待插件完成配对。";
         window.location.replace(window.location.pathname + "?approval=" + encodeURIComponent(request.id));
       } catch (e) {
         $("pairing-status").textContent = "批准未能确认，请刷新查看状态后重试。";
@@ -89,14 +89,14 @@
   if (approvalId && /^[a-f0-9]{32}$/.test(approvalId)) {
     var observed = coherent && fresh && launcher.approval && launcher.approval.id === approvalId;
     $("pairing-status").textContent = observed && launcher.approval.accepted
-      ? "宿主已接受此配对批准。浏览器持有的临时凭据完成验证后才会登录。"
+      ? "已接受此配对批准；浏览器完成验证后会登录。"
       : "批准已提交；请保持浏览器页面打开。若请求已用完或过期，请在浏览器重新发起并核对新码。";
   }
   if (pending && /^[a-f0-9]{32}$/.test(pending)) {
     var acknowledged = coherent && fresh && launcher.requestNonce === pending && launcher.state !== "attempting";
     if (acknowledged) say(launcher.message);
     else if (until > Date.now() && until <= Date.now() + 125000) {
-      say("打开请求已提交，正在等待唯一宿主处理。忙碌的旧宿主可能正在交接；不会启动第二个节点。");
+      say("正在打开，请稍候。");
       setTimeout(function () { reloadPending(pending, until, Number(params.get("try") || 0) + 1); }, 2000);
     } else say("尚未确认打开结果。请求已过期，不会自动重试；请重新点打开控制台。");
   }
@@ -115,7 +115,7 @@
       var at = Date.now();
       var request = { nonce: nonce, issuedAt: at, expiresAt: at + 120000 };
       await bridge.options.set(settings.mergeLaunch(base, { request: request }));
-      say("打开请求已提交，未验证；正在重新打开插件页以唤醒宿主。");
+      say("打开请求已提交，未验证；正在重新打开插件页以唤醒插件。");
       // options.set is lazy: reload the hosted HTML to warm the new host.
       reloadPending(nonce, request.expiresAt, 0);
     } catch (e) {
@@ -131,11 +131,11 @@
       var base = await latest();
       var wanted = $("auto-open").checked;
       if ((base.consoleLaunch || {}).autoOpen === wanted) {
-        $("saved").textContent = "偏好没有变化，未重启宿主。";
+        $("saved").textContent = "偏好没有变化，未重启插件。";
         busy = false; disable(false); return;
       }
       await bridge.options.set(settings.mergeLaunch(base, { autoOpen: wanted }));
-      $("saved").textContent = "已提交，未验证；正在重新加载宿主。";
+      $("saved").textContent = "已提交，未验证；正在重新加载插件。";
       window.location.replace(window.location.pathname);
     } catch (e) {
       $("saved").textContent = "偏好未能保存，请刷新后重试。";

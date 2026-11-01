@@ -9,35 +9,35 @@
 <body>
   <main>
     <header><p class="eyebrow">MAGPIE · 私人 AI 共享</p><h1>Oh My AIHub</h1>
-      <p class="sub">共享自己的 Magpie，或使用朋友的模型。所有设置都在独立浏览器控制台完成，没有 AI 请求经过本插件。</p></header>
+      <p class="sub">共享自己的 Magpie，或使用朋友的模型。设置都在独立浏览器控制台完成。</p></header>
     <section aria-labelledby="entry-title">
       <h2 id="entry-title">打开控制台</h2>
-      <p>请在运行 Magpie 的这台电脑上操作。控制台只监听本机，不会开放 Magpie 管理界面。</p>
+      <p>请在运行 Magpie 的这台电脑上操作。控制台只在本机运行，不开放 Magpie 管理界面。</p>
       <div class="actions"><button type="button" id="open" disabled>打开控制台</button><button type="button" id="reload">刷新状态</button></div>
-      <p id="launch-status" role="status" aria-live="polite">正在读取宿主状态…</p>
-      <p class="muted">按钮会通过 Magpie 官方选项桥请求本机默认浏览器。选项保存会重启插件宿主（所有插件共用的 Bun 进程），覆盖网可能短暂中断。旧宿主忙碌时先由原来的唯一节点处理打开请求，新宿主等待交接；不启动第二个节点。</p>
-      <p class="muted">浏览器页面过期或宿主重启后，请回到这里重新打开。通过远端 Magpie web 访问不能打开你这边的浏览器。</p>
+      <p id="launch-status" role="status" aria-live="polite">正在读取插件状态…</p>
+      <p class="muted">会打开系统默认浏览器。保存打开偏好或批准配对时，插件会短暂重启，网络可能短暂中断。</p>
+      <p class="muted">页面过期或插件重启后，回到这里重新打开。</p>
     </section>
     <section aria-labelledby="pairing-title">
       <h2 id="pairing-title">在其他浏览器中打开</h2>
       <p>在你选择的浏览器打开下面的普通地址，点击「配对此浏览器」，再回到本页刷新、核对八位配对码并批准。地址本身不提供登录权限。</p>
       <p><code id="console-origin">等待控制台启动…</code></p>
-      <p class="muted">远端使用时，先通过你已有的 SSH 端口转发连接同一个端口；这里只接受本机回环连接。浏览器与本页的配对码必须完全一致，切勿批准他人发来的请求。</p>
+      <p class="muted">两边的配对码必须完全一致；不要批准不是你发起的请求。</p>
       <p id="pairing-status" role="status" aria-live="polite">尚无等待批准的配对。</p>
       <div id="pairing-requests"></div>
-      <p class="muted">配对请求两分钟内有效。批准会让 Magpie 重启共用插件宿主；待配对请求会保留，浏览器随后建立新会话。已有会话在重启后需要重新登录。</p>
+      <p class="muted">配对请求两分钟内有效。批准后插件会短暂重启，已有控制台会话需要重新登录。</p>
     </section>
-    <section aria-labelledby="node-title"><h2 id="node-title">本机状态</h2><p id="node-status">尚无状态快照。</p><p id="snapshot-time" class="muted"></p>
-      <p class="muted">本页只显示本地快照，不是实时远端检查；不显示任何 Gateway Key、网络密钥、会话票据或钱包付款对应关系。</p>
+    <section aria-labelledby="node-title"><h2 id="node-title">本机状态</h2><p id="node-status">尚无状态。</p><p id="snapshot-time" class="muted"></p>
+      <p class="muted">这里只显示本机状态；不显示 Gateway Key、网络密钥或会话票据。</p>
     </section>
     <section aria-labelledby="prefs-title"><h2 id="prefs-title">打开偏好</h2>
       <label class="row"><input id="auto-open" type="checkbox" checked /> 首次在本机桌面启用时自动打开一次</label>
-      <p class="muted">只有确认由原生 Magpie 桌面启动时才自动打开；终端、SSH、无桌面环境不自动打开、不循环重试。关闭浏览器标签不会关闭节点。</p>
+      <p class="muted">只在原生 Magpie 桌面启动时自动打开一次；终端、SSH 环境不会自动打开。</p>
       <div class="actions"><button type="button" id="save" disabled>保存偏好</button><span id="saved" role="status" class="muted"></span></div>
     </section>
-    <details><summary>生产网络与开发工具</summary>
-      <p>生产付款在 BSC 与 Base 上进行，只使用注册表中核验过的 USDC（BSC 为 Binance-Peg 桥接版本，Base 为 Circle 原生版本）。付款在独立控制台逐笔预览并确认，不会自动转账。</p>
-      <p>BSC Testnet 与 Base Sepolia 保留为开发工具，mock 测试代币不是 USDC、不值钱。本项目不买、不卖、不兑换、不跨链桥接任何代币，也不发行代币。</p>
+    <details><summary>生产网络说明</summary>
+      <p>生产付款在 BSC 与 Base 上进行，只使用已核验的 USDC（BSC 为 Binance-Peg 桥接版本，Base 为 Circle 原生版本）。付款在独立控制台逐笔预览并确认，不会自动转账。</p>
+      <p>控制台只提供 BSC 与 Base 生产网络；测试网不在控制台提供。本项目不买、不卖、不兑换、不跨链桥接任何代币，也不发行代币。</p>
       <p class="muted">链上资产由发行方/桥接方与其合约决定；本插件不托管资金，也不代表任何第三方。</p>
     </details>
   </main>

@@ -177,7 +177,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       if (disposed || token !== generation) throw error;
       if (error?.status === 404) {
         service = "unavailable";
-        serviceError = "本地钱包服务未接入或当前版本不支持；请更新 Magpie 中的 Oh My AIHub 插件后重试。";
+        serviceError = "本地钱包服务暂时不可用，请更新 Magpie 中的 Oh My AIHub 插件后重试。";
         loaded = true;
         render();
         throw new Error(serviceError);
@@ -230,7 +230,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       loaded = true;
       service = "unavailable";
       serviceError = error?.status === 404 || error?.status === 400
-        ? "本地钱包服务未接入或当前版本不支持；请更新 Magpie 中的 Oh My AIHub 插件后重试。"
+        ? "本地钱包服务暂时不可用，请更新 Magpie 中的 Oh My AIHub 插件后重试。"
         : "暂时无法读取本地钱包状态；没有把未知状态当作未创建。";
       // The panel renders this state itself; a page-level notice would repeat it.
     } finally {
@@ -433,16 +433,16 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     if (disposed) return;
     localRoot.replaceChildren();
     const heading = el("div", null, "section-heading");
-    heading.append(el("h2", "本地钱包"), statusText(service === "unavailable" ? "服务未接入" : loading ? "正在读取" : wallet ? walletStatusLabel(wallet.status) : "尚未读取", service === "unavailable" || wallet?.status === "locked" ? "warn" : wallet?.status === "unlocked" ? "good" : "neutral"));
+    heading.append(el("h2", "本地钱包"), statusText(service === "unavailable" ? "暂时不可用" : loading ? "正在读取" : wallet ? walletStatusLabel(wallet.status) : "尚未读取", service === "unavailable" || wallet?.status === "locked" ? "warn" : wallet?.status === "unlocked" ? "good" : "neutral"));
     localRoot.append(heading);
     if (loading || service === "unknown") { localRoot.append(p("正在读取本地钱包状态…")); renderExternal(); return; }
     if (service === "unavailable") {
-      const card = section("本地钱包服务未接入", serviceError || "当前服务没有提供钱包动作。");
+      const card = section("本地钱包暂时不可用", serviceError || "当前版本不支持钱包操作。");
       card.append(button("重新读取状态", () => { loaded = true; service = "unknown"; void loadStatus(); }), p("服务接入前不会创建钱包，也不会假装已创建或模拟发送。", "inline-warning"));
       localRoot.append(card); renderExternal(); return;
     }
     if (!wallet || wallet.status === "absent") {
-      const absent = section("还没有本地钱包", "创建后会一次性显示恢复助记词；也可以导入助记词、恢复加密备份或连接浏览器钱包。");
+      const absent = section("还没有本地钱包", "第一次使用：创建或连接钱包 → 备份恢复信息 → 到下方充值。也可以导入助记词、恢复加密备份或连接浏览器钱包。");
       if (lateCreate) {
         const recovery = el("div", null, "inline-warning");
         recovery.append(p("上次创建请求已返回；请手动刷新状态确认，页面不会自动重复创建或把旧结果当已验证钱包。"));
@@ -537,7 +537,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
         card.append(details("已连接外部钱包", [["账户", snapshot.account || "未返回", true], ["状态", snapshot.status]], true));
         // Chain id and the discovery protocol are technical, not ordinary rows.
         card.append(details("技术详情", [["chainId", snapshot.chainId ?? "未返回", true], ["连接方式", snapshot.selection?.source === "legacy" ? "显式旧式注入" : "EIP-6963 显式选择"]]));
-        card.append(p("这里只显示账户与网络；余额查询需要已接入的资产注册表，也不会发起付款。", "muted small"));
+        card.append(p("这里只显示账户与网络；余额查询需要已接入的资产列表，也不会发起付款。", "muted small"));
         card.append(button("断开外部钱包", () => { externalSession?.dispose(); externalSession = null; externalState = null; renderExternal(); }));
       } else {
         card.append(button("连接所选钱包", async () => {

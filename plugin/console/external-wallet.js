@@ -705,8 +705,8 @@ function assetIdOf(chainId, contract) {
 
 function registrySnapshot(registry) {
   let raw;
-  try { raw = typeof registry === "function" ? registry() : registry; } catch { throw fail(WALLET_ERROR.INVALID_REGISTRY, "资产注册表不可读取"); }
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw fail(WALLET_ERROR.INVALID_REGISTRY, "资产注册表格式无效");
+  try { raw = typeof registry === "function" ? registry() : registry; } catch { throw fail(WALLET_ERROR.INVALID_REGISTRY, "资产列表不可读取"); }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw fail(WALLET_ERROR.INVALID_REGISTRY, "资产列表格式无效");
   const networks = Array.isArray(raw.networks) ? raw.networks : [];
   const assets = Array.isArray(raw.assets) ? raw.assets : [];
   return { networks, assets };
@@ -716,7 +716,7 @@ function findNetwork(registry, chainId) {
   if (!Number.isSafeInteger(chainId) || chainId <= 0) throw fail(WALLET_ERROR.INVALID_CHAIN_ID, "chainId 无效");
   const matches = registrySnapshot(registry).networks.filter((network) => network && network.chainId === chainId);
   if (matches.length === 0) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, `未登记 chainId ${chainId}`);
-  if (matches.length > 1) throw fail(WALLET_ERROR.INVALID_REGISTRY, `chainId ${chainId} 在注册表重复`);
+  if (matches.length > 1) throw fail(WALLET_ERROR.INVALID_REGISTRY, `chainId ${chainId} 在资产列表中重复`);
   const network = matches[0];
   if (network.family !== undefined && network.family !== "evm") throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "只支持 EVM 网络");
   if (typeof network.enabled !== "boolean") throw fail(WALLET_ERROR.INVALID_REGISTRY, "网络 enabled 字段无效");
@@ -741,7 +741,7 @@ function findAsset(registry, assetId) {
   if (typeof assetId !== "string" || assetId.length > 160) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币标识无效");
   const matches = registrySnapshot(registry).assets.filter((asset) => asset && asset.assetId === assetId);
   if (matches.length === 0) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币未登记");
-  if (matches.length > 1) throw fail(WALLET_ERROR.INVALID_REGISTRY, "代币标识在注册表重复");
+  if (matches.length > 1) throw fail(WALLET_ERROR.INVALID_REGISTRY, "代币标识在资产列表中重复");
   const asset = matches[0];
   if (!Number.isSafeInteger(asset.chainId) || asset.chainId <= 0) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币 chainId 无效");
   if (typeof asset.contractAddress !== "string" || !ADDRESS_RE.test(asset.contractAddress) || /^0x0{40}$/i.test(asset.contractAddress)) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币合约地址无效");
@@ -793,7 +793,7 @@ function assertSendableAsset(asset, network) {
 
 /** A signature is not credit, but it still needs a credit-capable network record. */
 function assertDepositNetworkKnown(registry, chainId) {
-  if (registry === undefined || registry === null) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "签名需要本地网络登记；未提供注册表");
+  if (registry === undefined || registry === null) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "签名需要本地网络登记；未提供网络列表");
   const network = findNetwork(registry, chainId);
   assertNoMainnetSend(chainId);
   if (!network.enabled || network.support !== "credit" || !network.receivable) throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该网络当前未开启收款，不能签名");
@@ -801,7 +801,7 @@ function assertDepositNetworkKnown(registry, chainId) {
 
 /** Signing never credits, but the asset must always be locally registered. */
 function assertDepositAssetKnown(registry, checked) {
-  if (registry === undefined || registry === null) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "签名需要本地资产登记；未提供注册表");
+  if (registry === undefined || registry === null) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "签名需要本地资产登记；未提供资产列表");
   const asset = findAsset(registry, checked.asset.assetId);
   if (asset.chainId !== checked.chainId) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币不属于请求网络");
   if (registry && registry.networks) {
@@ -1155,7 +1155,7 @@ export function createExternalWallet(options = {}) {
     const rpcUrls = Array.isArray(entry?.rpcEndpoints)
       ? entry.rpcEndpoints.filter((u) => typeof u === "string" && (/^https:\/\//.test(u) || /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/.test(u)))
       : [];
-    if (!rpcUrls.length) throw fail(WALLET_ERROR.CHAIN_NOT_ADDED, "本地注册表没有可用于添加网络的 HTTPS RPC");
+    if (!rpcUrls.length) throw fail(WALLET_ERROR.CHAIN_NOT_ADDED, "本地网络列表没有可用于添加网络的 HTTPS RPC");
     await providerRequest("wallet_addEthereumChain", [{
       chainId: toQuantity(target),
       chainName: network.displayName,
@@ -1353,7 +1353,7 @@ export function createExternalWallet(options = {}) {
     const state = previews.get(preview);
     if (state.status === "sent") return Object.freeze({ hash: state.hash, chainId: preview.chainId, from: preview.account, to: preview.contractAddress, amountRaw: preview.amountRaw, broadcast: true, alreadySent: true, credited: false, transferVerified: false, finality: "unknown", warning: "已广播；回执和 calldata/收款人/日志仍未核验，不代表预期转账或入账。", generation });
     if (state.status === "unknown") throw fail(WALLET_ERROR.UNKNOWN_BROADCAST, "上次发送结果未知；不要重发。请用已知交易哈希核对链上状态");
-    if (operationPort === null) throw fail(WALLET_ERROR.OPERATION_JOURNAL_REQUIRED, "没有注入 Service 持久操作 journal，禁止发送；本模块不保存跨刷新状态");
+    if (operationPort === null) throw fail(WALLET_ERROR.OPERATION_JOURNAL_REQUIRED, "本机发送记录不可用，已阻止发送；请刷新后重试");
     if (state.promise) return state.promise;
     state.promise = (async () => {
       assertUsable();
@@ -1381,25 +1381,25 @@ export function createExternalWallet(options = {}) {
       try {
         reservation = await operationPort.reserve(operation);
       } catch {
-        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "Service 操作 journal 预留失败；未发送");
+        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "本机发送记录 预留失败；未发送");
       }
-      if (!reservation || typeof reservation.reservationId !== "string" || !reservation.reservationId) throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "Service journal 未返回有效预留编号；未发送");
+      if (!reservation || typeof reservation.reservationId !== "string" || !reservation.reservationId) throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "本机发送记录 未返回有效预留编号；未发送");
       if (reservation.state === "unknown") {
         state.status = "unknown"; state.error = WALLET_ERROR.OPERATION_UNKNOWN; state.promise = null;
-        throw fail(WALLET_ERROR.OPERATION_UNKNOWN, "Service journal 记录该操作结果未知；禁止重发，请按已知哈希恢复", { hash: reservation.hash ?? null });
+        throw fail(WALLET_ERROR.OPERATION_UNKNOWN, "本机发送记录 记录该操作结果未知；禁止重发，请按已知哈希恢复", { hash: reservation.hash ?? null });
       }
       if (reservation.state === "broadcasting" || reservation.state === "broadcast") {
         state.status = "unknown"; state.error = WALLET_ERROR.OPERATION_ALREADY_STARTED; state.promise = null;
-        throw fail(WALLET_ERROR.OPERATION_ALREADY_STARTED, "Service journal 记录该操作已开始广播；禁止重发", { hash: reservation.hash ?? null });
+        throw fail(WALLET_ERROR.OPERATION_ALREADY_STARTED, "本机发送记录 记录该操作已开始广播；禁止重发", { hash: reservation.hash ?? null });
       }
       if (reservation.state !== "reserved") {
         state.status = "unknown"; state.error = WALLET_ERROR.OPERATION_JOURNAL_FAILED; state.promise = null;
-        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "Service journal 返回了不可发送的状态；未发送");
+        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "本机发送记录 返回了不可发送的状态；未发送");
       }
       try {
         await operationPort.markBroadcasting({ reservationId: reservation.reservationId, operation });
       } catch {
-        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "Service journal 无法标记 broadcasting；未发送");
+        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "本机发送记录 无法标记 broadcasting；未发送");
       }
       state.attemptedSend = true;
       let hash;
@@ -1423,7 +1423,7 @@ export function createExternalWallet(options = {}) {
         await operationPort.recordHash({ reservationId: reservation.reservationId, operation, hash });
       } catch {
         state.status = "unknown"; state.error = WALLET_ERROR.OPERATION_JOURNAL_FAILED; state.promise = null;
-        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "交易已广播但 Service journal 未记录哈希；不要自动重发", { hash });
+        throw fail(WALLET_ERROR.OPERATION_JOURNAL_FAILED, "交易已广播但 本机发送记录 未记录哈希；不要自动重发", { hash });
       }
       state.status = "sent"; state.hash = hash;
       const staleAfterSend = generation !== preview.generation;
