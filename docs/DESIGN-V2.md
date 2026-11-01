@@ -2,7 +2,7 @@
 
 **状态**：产品决策已锁定，尚未实现。本文替代 `docs/ARCHITECTURE.md` 中的产品决策部分。
 **决策日期**：2026-11-01。
-**替代关系**：`ARCHITECTURE.md`（33 条 Decision）、`ONBOARDING.md`、`OPERATIONS.md`、`ADVANCED-CLI.md`、`VALIDATION.md` 描述的是旧版（浏览器控制台 + CLI + 链上付款协议）产品，**只作为历史证据阅读**，不再代表当前产品。
+**替代关系**：旧版（浏览器控制台 + CLI + P2P + 存款意图/付款 journal）的文档已删除；`ARCHITECTURE.md` 保留在 `docs/history/ARCHITECTURE-pre-v2.md`，**只作为历史证据阅读**。用户手册是插件页 `plugin/page/doc.md`。
 **当前代码状态**：工作树仍是旧实现，约 48,000 行 TypeScript + 6,461 行浏览器前端 + 2,124 行 CLI。按第 11 节的清单大部分要删除。
 
 读法：先读第 1–6 节（产品与钱），再看第 7–8 节（对外接口），动手前看第 11–13 节（复用、删除、实施顺序）。
@@ -432,73 +432,37 @@ go -C ~/Projects/lab/magpie-upstream test ./internal/plugin/ -run Tool
 - 没有 `listeners` 时 EasyTier 默认监听 `tcp://0.0.0.0:11010`（`easytier/src/common/config.rs`），所以入网不需要额外配置监听地址。
 - EasyTier 2.6.4 的 `port-forward remove` 打印成功但监听不消失（`easytier-cli.rs` 只发 `bind_addr`，`api.rs` 按整结构比较删除），所以**移除转发必须重启核心**。
 - EasyTier 2.6.4 的 SOCKS5 会把监听绑在 `127.0.0.1`（`gateway/socks5.rs`），而 `--socks5` 会绑 `0.0.0.0`（`launcher.rs`），所以只能用 TOML 里的 `socks5_proxy`。
-- 一个数据目录只能有一个插件宿主（现成的 `host.lock` 逻辑保留）。
+- Magpie 每个进程只起一个插件宿主；本实现**没有** host.lock。快速重启时旧宿主的 parent-watchdog 会在约 5 秒内退出，新宿主的 EasyTier 在这段时间里会按上限重试；不要同时用两个 Magpie 进程挂同一个数据目录。
 
 ---
 
-## 11. 复用与删除清单
+## 11. 最终代码清单（阶段 5 之后）
 
-**保留 / 改造**
+`plugin/src` 34 个文件、8,317 行（删前 54,891）。逐文件说明在 `plugin/README.md`，这里只列边界：
 
-| 文件 | 去向 |
+| 层 | 文件 |
 |---|---|
-| `src/easytier.ts`（监督器、TOML 生成、状态解析） | 保留核心，去掉动态端口与目录/控制面的双模式分支 |
-| `src/acl.ts`（生成配置的严格校验） | 保留，公布端口集合改为固定 `{3426, 3425?}` |
-| `src/easytier-manifest.ts` | 原样保留（SHA-256 固定二进制） |
-| `src/magpie.ts` | 保留 CLI 封装；删掉与旧账本/窗口有关的方法 |
-| `src/catalog.ts` | 保留 `canonicalJson`、签名/验签、SOCKS5 读取；删 TOFU、身份文件、端口探测、字段版本绑定 |
-| `src/networks.ts`（链/资产注册表） | 精简为 BSC + Base 两条生产链、两个 USDC |
-| `src/evm.ts`（JSON-RPC 读） | 保留，补上转账所需的 `eth_sendRawTransaction` |
-| `src/watcher.ts`（最终性、去重） | 保留最终性与去重，删除入账到账本/意图的部分 |
-| `src/walletamount.ts`、`src/ports.ts`（消费方转发口分配） | 保留 |
-| `src/addresses.ts`（`randomMappedCidr`：稳定的 `10.66.a.b/32`） | 保留，供阶段 2 的 `proxy_network` 使用 |
-| `src/store.ts`（原子写 JSON）、`src/paths.ts`、`src/lock.ts`、`src/run.ts`、`src/log.ts` | 保留（`log.ts` 保留脱敏规则） |
-| `src/state.ts` | 重写为第 9 节的 v3 结构 |
+| 入口与运行时 | `index.ts`、`runtime.ts`、`config.ts`、`paths.ts`、`store.ts`、`run.ts`、`log.ts` |
+| 节点身份 | `tools/node-wallet.ts`（ethers 钱包：生成、导入/导出、只读余额） |
+| 覆盖网 | `overlay.ts`、`lan.ts`、`addresses.ts`、`easytier-manifest.ts`、`socks.ts` |
+| 目录与协议 | `catalog-service.ts`、`http-router.ts`、`signing.ts` |
+| 授权与账本 | `db.ts`、`grants.ts` |
+| 链 | `chain.ts`、`chain-watcher.ts` |
+| Magpie 上游 | `magpie.ts` |
+| 工具 | `tools/*.ts`（18 个工具、`types.ts`、`node-wallet.ts`） |
+| 文档页 | `page/doc.md` → `scripts/build-page.ts` → `page/index.html` |
 
-**删除**
+已删除（git 历史保留）：浏览器控制台（10 个前端文件 + 8 个服务端文件）、CLI（5 个）、P2P 控制面与核心（14 个）、旧钱包/账本/链/付款（30+ 个）、旧 EasyTier 监督器与旧目录客户端、旧用户手册（4 个）。`ARCHITECTURE.md` 在 `docs/history/ARCHITECTURE-pre-v2.md`。
 
-| 范围 | 行数（旧实现） |
-|---|---|
-| `console/` 全部前端、`console-server.ts`、`console-pairing.ts`、`console-launch.ts`、`console-api.ts`、`console-workflows.ts`、`console-network.ts`、`console-wallet.ts`、`server.ts` | ~9,300 |
-| `bin/` 全部 CLI | 2,124 |
-| `p2p/*`、`control/*`、`payment-p2p-host.ts`、`p2p-payment*.ts`、`payment-local-service.ts`、`payment-operations.ts` | ~16,000 |
-| `wallet-vault.ts`、`wallet-payment-send.ts`、`wallet-local-service.ts` | ~3,200（换成 ~300 行 ethers 钱包） |
-| `wallet.ts`（旧的链钱包门面）、`chainstore.ts`（并入新的 `ledger.ts`）、`production-policy.ts`、`receiving-networks.ts`（不再有“选择收款网络”） | ~2,400 |
-| `plugin-options.ts`（不再读写 Magpie 插件选项） | ~260 |
-| `deposits.ts`、`eip712.ts`、`walletstatement.ts`、`walletview.ts`、`legacy-recovery.ts`、`mainnet-gate.ts`、`mainnet-surface.ts`、`readonly-balance.ts`、`wallet-workflows.ts`、`connection-request.ts` | ~4,500 |
-| `ledger.ts`、`provisioner.ts`、`pricing.ts`（窗口/价格快照/缺口/重签/巡检） | ~4,400（换成 ~600 行：入账 + cap 重算 + Key 签发） |
-| 手写的 keccak / secp256k1 恢复实现（文件名为 `keccak.ts`、`secp256k1.ts`；改用已有 `ethers` 依赖） | ~330 |
-| `page/status.js`、`page/options.js`、`page/launcher.js`、`page-snapshot.ts`、`network.ts` | ~1,000 |
-| 旧文档：`ONBOARDING.md`、`OPERATIONS.md`、`ADVANCED-CLI.md`、`VALIDATION.md` 标为历史 | — |
-
-目标体量：**10,000–12,000 行 TypeScript + 一页静态文档**。
-
-**新增**
-
-```
-plugin/src/
-  index.ts          // 插件入口：boot + 返回 tool 钩子
-  tools/            // 18 个工具，一个文件一组
-  wallet.ts         // ethers 钱包（新写，替换旧的同文件）
-  overlay.ts        // EasyTier 生命周期 + 公布端口
-  catalog.ts        // 重写：签名目录 + 三种端点（复用 canonicalJson/SOCKS5）
-  signing.ts        // canonical JSON + personal_sign + 验签
-  ledger.ts         // SQLite：入账/申请/消费者/出金
-  credit.ts         // D → cap 重算、Key 签发/撤销
-  chain.ts          // RPC、最终性、观察器
-  config.ts         // state.json
-plugin/page/
-  doc.md            // 源文件
-  index.html        // 预渲染产物
-  style.css
-scripts/build-page.ts
-```
+有意没有搬回来的东西：host.lock（见 §14）、价格快照/窗口/重签、存款意图与 EIP-712、TOFU、presence、加密握手、付款 journal。
 
 ---
 
 ## 12. 分阶段实施
 
 每个阶段一个分支 + 一个 PR；每阶段的验收都要留证据（第 13 节）。
+
+**实施状态（2026-11-01）**：阶段 0–5 已合并到 `main`（`151cb9e`…`da11d8b`）。阶段 5 只做了删除与文档重写，仓库/包名没有改，所以工具名前缀仍是 `magpie-oh-my-aihub`。阶段 4 验收里的「双机端到端」没有做，见 §13 的 UNKNOWN。
 
 | 阶段 | 分支 | 内容 | 验收 |
 |---|---|---|---|
@@ -519,13 +483,13 @@ scripts/build-page.ts
 
 ## 13. 验证与证据规范
 
-沿用仓库既有约定：
-
-- 每条结论标 **VERIFIED / REPRODUCED / UNKNOWN**，附平台、组件版本、可复现命令、原始（脱敏）输出。
-- 不使用真实资金做实验；链上实验只用本地链或受控模拟 RPC，除非用户明确同意。
-- 不把"签名有效"说成"现实身份已验证"；不把"链上已广播"说成"已到账"；不把"本地模拟"说成"真实付款"。
+- 每条结论标 **VERIFIED / REPRODUCED / UNKNOWN**，附平台、组件版本、可复现命令和原始（脱敏）输出。
 - 类型检查：`cd plugin && bun run typecheck`。
-- 工具端到端验证脚本：一个 MCP 客户端（`curl` 也行）依次调用 `status` → `wallet`，确认本机免 key。
+- 文档页：`cd plugin && bun run build:page`（渲染前校验 18 个工具名和两个 MCP 地址都在 `page/doc.md` 里）。
+- 临时目录 boot 冒烟：`OH_MY_AIHUB_MAGPIE=/nonexistent/magpie OH_MY_AIHUB_LAN_IP=127.0.0.1`，import `plugin/src/index.ts`；默认导出应返回 18 个工具，生成 `wallet/key.hex`（0600）与五张表，`status.network.state = "offline"`。
+- 链上实验只在本地 anvil（chainId 31337、注入链记录）或受控模拟 RPC 上做；真实链只做只读。测试文件不提交。
+- **已做（REPRODUCED，macOS arm64 / Bun 1.4.3 / ethers 6.17.0 / anvil 1.8.6）**：签名目录与篡改拒绝；申请→批准→撤销→Key 交付；connect/disconnect 与同 id 外部 provider 拒绝；入账→cap→Key、重复扫描、reorg 回滚、`send_payment` 及其拒绝路径、`getLogs` 折半、BSC/Base 只读冒烟；清理后的 18 工具 boot。
+- **未做（UNKNOWN）**：真 Magpie 0.1.2516+ 上的 `gateway-key add/limit/remove` 与 `provider add remote-magpie`；两台主机 + 真实 EasyTier 的完整双机流程；真实链入账后原生 200→429；Linux/Windows 桌面。
 
 ---
 
@@ -541,6 +505,9 @@ scripts/build-page.ts
 8. **移除连接会重启 EasyTier 核心**（上游 bug），其他连接短暂中断。
 9. **一个数据目录一个宿主**。同时开两个 Magpie 指向同一数据目录不成立。
 10. **0.1.2171 及更早版本没有 Library 自动接线**，只能手工把 MCP 地址填进 agent。
+11. **没有 host lock**：一个数据目录只应有一个 Magpie 进程，快速重启时会有一段 EasyTier 重试期（见 §10）。
+12. **目录价格最多落后一个 tick**：Magpie 没有改价通知，目录每 30 秒重签。
+13. **首次扫描只回溯 24 小时**：全新安装的钱包地址是刚生成的，正常不会有更早的入账；导入一个早已收过钱的私钥则可能漏掉旧记录。
 11. **别的机器上的 agent** 要调这些工具，需要 Magpie 打开局域网共享并持有 Gateway Key；本机 agent 默认免 key。
 
 ---
@@ -560,8 +527,8 @@ scripts/build-page.ts
 
 ## 16. 接手须知
 
-1. 只信这份文档的产品决策；`ARCHITECTURE.md` 及更早的文档是历史证据。
-2. 下一步：阶段 0（文档）→ 阶段 1（骨架）。阶段 0 完成前不要动代码。
+1. 只信这份文档的产品决策；`docs/history/ARCHITECTURE-pre-v2.md` 是历史证据。
+2. 下一步：用真 Magpie 0.1.2516+ 和两台隔离数据目录跑完整双机流程，把 §13 的 UNKNOWN 变成证据；不要先加新功能。
 3. 动代码前先读第 7 节的工具规格和第 8 节的协议，两者是唯一对外契约；改它们要先改这份文档。
 4. 任何"为了安全再加一层"的想法，先看第 2 节的 D4/D9/D10/D13：这一版是故意不做那些层的。
 5. 每次改动一个分支、一个 PR，附验证证据；不做大范围重写。

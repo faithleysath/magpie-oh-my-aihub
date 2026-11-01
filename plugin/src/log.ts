@@ -1,11 +1,8 @@
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { stateDir } from "./paths.ts";
 
 export type Level = "debug" | "info" | "warn" | "error";
-
-const MAX_MEMORY = 300;
-const memory: string[] = [];
 
 /** Values that must never appear in a log line, no matter who logs them. */
 const secrets = new Set<string>();
@@ -39,17 +36,13 @@ function ensureDir(): void {
 
 export function log(level: Level, message: string): void {
   const line = `${new Date().toISOString()} ${level.toUpperCase()} ${redact(message)}`;
-  memory.push(line);
-  if (memory.length > MAX_MEMORY) memory.splice(0, memory.length - MAX_MEMORY);
   try {
     ensureDir();
     appendFileSync(logFile(), line + "\n", { mode: 0o600 });
   } catch {
     /* the log is best effort */
   }
-  if (level === "error") console.error(`[oh-my-aihub] ${line}`);
-  else if (level === "warn") console.error(`[oh-my-aihub] ${line}`);
-  else console.error(`[oh-my-aihub] ${line}`);
+  console.error(`[oh-my-aihub] ${line}`);
 }
 
 export const logger = {
@@ -58,15 +51,3 @@ export const logger = {
   warn: (m: string) => log("warn", m),
   error: (m: string) => log("error", m),
 };
-
-export function recentLogs(n = 50): string[] {
-  return memory.slice(-n).map(redact);
-}
-
-export function readLogFile(n = 200): string[] {
-  try {
-    return readFileSync(logFile(), "utf8").trim().split("\n").slice(-n).map(redact);
-  } catch {
-    return [];
-  }
-}

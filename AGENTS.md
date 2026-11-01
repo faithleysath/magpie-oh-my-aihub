@@ -1,6 +1,6 @@
 # Local AI development contract
 
-1. Treat docs/ARCHITECTURE.md as the current product decision and docs/VALIDATION.md as the first task.
+1. Treat docs/DESIGN-V2.md as the current product decision. docs/history/ARCHITECTURE-pre-v2.md is history only; the remaining verification work is listed in DESIGN-V2 §13.
 2. Study the **pinned installed versions and actual source** of Magpie and EasyTier; provide links, commit SHAs, reproducible commands, raw sanitized responses, and platform information. Do not assume previous model claims are true.
 3. First verify remote Gateway Key enforcement through EasyTier no-TUN and dynamic cost limit semantics. No code development is authorized in the first verification task beyond minimal disposable experiments.
 4. Do not reuse prototype/phase0/p2pshare/server.py as production; its duplicate admission and pricing logic is deprecated.

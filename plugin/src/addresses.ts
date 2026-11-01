@@ -1,7 +1,7 @@
-// Addresses that must be unique across the overlay.
+// The overlay prefix this node exports its LAN address as.
 //
-// Kept separately from the supervisor so state migration can allocate a mapped
-// prefix without importing the supervisor (and without a cycle).
+// One random 10.66.a.b/32, allocated once and kept in state.json, so a consumer
+// keeps dialling the same address across restarts.
 
 /**
  * A unique, persisted per-provider overlay prefix (10.66.a.b/32). Two providers

@@ -49,7 +49,7 @@ bun run build:page     # page/doc.md -> page/index.html，并校验 18 个工具
 | `wallet/key.hex` | 节点私钥。工具永远不返回它 | `0600` |
 | `ledger.sqlite` | 入账、申请、消费者、出金、扫描游标；WAL，`-wal`/`-shm` 同行 | `0600` |
 | `easytier/current.toml` | 生成的 EasyTier 配置（导出、ACL、SOCKS5、逐连接转发） | `0600` |
-| `plugin.log` | 脱敏日志，内存里保留最近 300 行供 `status` 使用 | `0600` |
+| `plugin.log` | 脱敏日志（私钥、Gateway Key、网络密码不落盘） | `0600` |
 
 `consumers.key_secret` 必须落盘（要交给对方），和 Magpie 自己的 `caller-keys.json` 同级敏感度。
 
@@ -74,7 +74,7 @@ bun run build:page     # page/doc.md -> page/index.html，并校验 18 个工具
 1. **55 秒**。Magpie 的工具超时是 55 秒，所以首次下载 EasyTier、入网这类长操作一律返回 `{state:"starting"}`，由 `status` 轮询进度。不要在工具里做同步长等待。
 2. **删除转发要重启核心**。EasyTier 2.6.4 的 `port-forward remove` 会打印成功但监听不消失，所以 `disconnect_provider` 会重启 EasyTier，其他连接短暂中断——返回值里必须说明这点。
 3. **价格变更按新价重算**。目录 30 秒重签一次，`cap` 不动、`used` 会变；剩余为负时 Magpie 自己返回 429，Key 保留，充值即恢复。被撤销的地址返回 401，需要提供方重新批准。
-4. `discover` / `connections` 复用 30 秒内的缓存；对方换了导出地址要重新 `discover`。
+4. `discover` 有 30 秒缓存（`refresh:true` 强制重读）；`connections` 每次实时轮询，对方离线时回退到上次结果。
 5. 没有初始节点或邻居时核心仍会起来、`state` 是 `online`，但 `overlayIp` 可能为空。
 6. BSC 的 USDC 是 18 位、Base 是 6 位，金额不混用；`send_payment` 只广播一次，`E_TX_UNKNOWN` 要用哈希人工核对，不自动重发。
 7. EasyTier 首次下载依赖网络，几十秒很正常；下载的资产必须匹配 `easytier-manifest.ts` 里的 SHA-256，不匹配不运行。
