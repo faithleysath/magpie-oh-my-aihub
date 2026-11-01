@@ -69,6 +69,7 @@ agent 拿到的工具名取决于 **MCP 路由**：
 - 「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。这个网开了 secure mode。」
 - 「顺便给我开监听，让别的节点能直连我，不要全走中继。」（对应 `listen:true`；开了之后要在主机防火墙放行 `11010` 的 tcp 和 udp）
 - 「用 TUN 模式跑」（默认就是；没有 root 会自动回退到 no-TUN。服务器上还要放行 tun 设备：`ufw allow in on tun0`）
+- 「帮我装那个 root 守护进程，让 Mac 也能用 TUN」（Mac 上会弹一次系统管理员密码框；装好后再 `join_network` 一次，节点就以 TUN 运行，别再弹窗）
 - 「把节点私钥导出到 /Users/me/omai.key，不要打印私钥；换机器时告诉我怎么导入。」
 
 ### 地址簿
@@ -130,7 +131,7 @@ agent 报出 `E` 开头的错误码时，把错误原文贴回去，让它按上
 
 需要查工具名时看这里。工具名取决于接入方式：路由关闭时是 `status`，路由开启时是 `magpie-plugin__status`，手工加全部插件地址时是 `magpie-plugin_status`。
 
-- 节点：`magpie-plugin_status`、`magpie-plugin_wallet`、`magpie-plugin_wallet_import`、`magpie-plugin_wallet_export`、`magpie-plugin_join_network`
+- 节点：`magpie-plugin_status`、`magpie-plugin_wallet`、`magpie-plugin_wallet_import`、`magpie-plugin_wallet_export`、`magpie-plugin_join_network`、`magpie-plugin_network_daemon`
 - 地址簿：`magpie-plugin_contacts`
 - 共享：`magpie-plugin_native_models`、`magpie-plugin_share_models`
 - 发现与申请：`magpie-plugin_discover`、`magpie-plugin_request_access`、`magpie-plugin_connect_provider`、`magpie-plugin_disconnect_provider`、`magpie-plugin_connections`

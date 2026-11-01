@@ -5,6 +5,7 @@ import { discoverTool } from "./discover.ts";
 import { joinNetworkTool } from "./join-network.ts";
 import { historyTool, sendPaymentTool } from "./money.ts";
 import { contactsTool } from "./contacts.ts";
+import { networkDaemonTool } from "./daemon.ts";
 import { nativeModelsTool } from "./native-models.ts";
 import { shareModelsTool } from "./share-models.ts";
 import { statusTool } from "./status.ts";
@@ -13,7 +14,7 @@ import { walletImportTool } from "./wallet-import.ts";
 import { walletTool } from "./wallet.ts";
 
 /**
- * The 19 tools. Magpie prefixes each name with the plugin's short name (the
+ * The 20 tools. Magpie prefixes each name with the plugin's short name (the
  * package name without its scope: `magpie-plugin`), so these become
  * `magpie-plugin_status`, `..._wallet`, and so on.
  *
@@ -31,6 +32,7 @@ export const TOOLS: Record<string, ToolDef> = {
   wallet_import: walletImportTool,
   wallet_export: walletExportTool,
   join_network: joinNetworkTool,
+  network_daemon: networkDaemonTool,
   native_models: nativeModelsTool,
   share_models: shareModelsTool,
   discover: discoverTool,

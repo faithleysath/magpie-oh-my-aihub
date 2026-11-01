@@ -106,6 +106,8 @@ EasyTier 用 **虚拟 IP** 组网：生成的 TOML 固定写 `dhcp = true`，每
 
 所以「能不能计费」取决于提供方有没有 TUN：`status.network.mode` 会写清楚，no-TUN 提供方的 `publishedPorts` 里没有 3425。TUN 模式下主机防火墙要看得到 tun 设备（`ufw allow in on tun0`），否则覆盖网流量会被静默丢弃 —— 表现是连接超时、日志里什么都没有。
 
+没有 root 又想要 TUN 时，可以装一个 root 守护进程（`network_daemon` 工具的 `install`）：它只做一件事 —— 以 root 运行 `plugin/scripts/omai-easytier-daemon.sh`，那个脚本校验插件写的 `current.toml`（顶层键白名单），copy 到 `/var/run/omai-easytier/`（root 所有）后用副本启动 core，并在文件哈希变化时重启。所以装的时候弹一次系统管理员密码框，之后**插件全程无特权**：改写配置就等于重启。守护进程存在时 `status.mode = "tun"`、`status.delegate = true`。
+
 `listeners` 仍然是可选的 P2P 开关：不写时 EasyTier 一个端口都不开，所有流量都经已经连着的对端中继；写了（`join_network` 的 `listen: true`）才会尝试直连。
 
 三个端点都监听 `<lan>:3426`，走覆盖网明文 HTTP。

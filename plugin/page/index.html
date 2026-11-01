@@ -62,6 +62,7 @@
 <li>「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。这个网开了 secure mode。」</li>
 <li>「顺便给我开监听，让别的节点能直连我，不要全走中继。」（对应 <code>listen:true</code>；开了之后要在主机防火墙放行 <code>11010</code> 的 tcp 和 udp）</li>
 <li>「用 TUN 模式跑」（默认就是；没有 root 会自动回退到 no-TUN。服务器上还要放行 tun 设备：<code>ufw allow in on tun0</code>）</li>
+<li>「帮我装那个 root 守护进程，让 Mac 也能用 TUN」（Mac 上会弹一次系统管理员密码框；装好后再 <code>join_network</code> 一次，节点就以 TUN 运行，别再弹窗）</li>
 <li>「把节点私钥导出到 /Users/me/omai.key，不要打印私钥；换机器时告诉我怎么导入。」</li>
 </ul>
 <h3>地址簿</h3>
@@ -121,7 +122,7 @@
 <h2>工具</h2>
 <p>需要查工具名时看这里。工具名取决于接入方式：路由关闭时是 <code>status</code>，路由开启时是 <code>magpie-plugin__status</code>，手工加全部插件地址时是 <code>magpie-plugin_status</code>。</p>
 <ul>
-<li>节点：<code>magpie-plugin_status</code>、<code>magpie-plugin_wallet</code>、<code>magpie-plugin_wallet_import</code>、<code>magpie-plugin_wallet_export</code>、<code>magpie-plugin_join_network</code></li>
+<li>节点：<code>magpie-plugin_status</code>、<code>magpie-plugin_wallet</code>、<code>magpie-plugin_wallet_import</code>、<code>magpie-plugin_wallet_export</code>、<code>magpie-plugin_join_network</code>、<code>magpie-plugin_network_daemon</code></li>
 <li>地址簿：<code>magpie-plugin_contacts</code></li>
 <li>共享：<code>magpie-plugin_native_models</code>、<code>magpie-plugin_share_models</code></li>
 <li>发现与申请：<code>magpie-plugin_discover</code>、<code>magpie-plugin_request_access</code>、<code>magpie-plugin_connect_provider</code>、<code>magpie-plugin_disconnect_provider</code>、<code>magpie-plugin_connections</code></li>

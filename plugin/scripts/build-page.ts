@@ -35,6 +35,7 @@ const REQUIRED_TOOLS = [
   "wallet_import",
   "wallet_export",
   "join_network",
+  "network_daemon",
   "native_models",
   "share_models",
   "discover",

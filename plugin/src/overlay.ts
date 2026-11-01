@@ -21,7 +21,8 @@ import { logger, registerSecret } from "./log.ts";
 import { statePath } from "./paths.ts";
 import { run } from "./run.ts";
 import { loadOrCreateSecureKeyPair, type SecureKeyPair } from "./secure-key.ts";
-import { effectiveMode, type OverlayMode } from "./tun.ts";
+import { canCreateTun, type OverlayMode } from "./tun.ts";
+import { daemonLoaded } from "./daemon.ts";
 
 export type OverlayState = "offline" | "starting" | "online" | "error";
 
@@ -38,6 +39,8 @@ export interface OverlayStatus {
   secureMode: boolean;
   /** the mode this core actually runs: a device, or user space */
   mode: OverlayMode | null;
+  /** true when the root daemon runs the core and this process only writes its config */
+  delegate: boolean;
   /** this node's overlay address, from EasyTier's DHCP; null until it is assigned */
   virtualIp: string | null;
   state: OverlayState;
@@ -371,6 +374,8 @@ export class Overlay {
   private peers: OverlayPeer[] = [];
   /** the mode the running core uses; null while nothing has started */
   private mode: OverlayMode | null = null;
+  /** true when `easytier-core` is launched by the root daemon rather than here */
+  private delegate = false;
   private bin: { core: string; cli: string } | null = null;
   /** Created on first need; the same pair is reused for the life of the node. */
   private secureKey: SecureKeyPair | null = null;
@@ -405,6 +410,7 @@ export class Overlay {
       networkName: this.cfg.network?.name ?? null,
       secureMode: this.cfg.network?.secureMode ?? false,
       mode: this.mode,
+      delegate: this.delegate,
       virtualIp: this.overlayIp,
       state: this.state,
       step: this.step,
@@ -435,12 +441,17 @@ export class Overlay {
   beginStart(cfg: HubConfig): void {
     this.cfg = cfg;
     if (cfg.network?.secret) registerSecret(cfg.network.secret);
-    // Asked for a device but unable to create one? Fall back to user space rather
-    // than refuse to join; the node simply cannot serve a metered gateway.
-    this.mode = cfg.network ? effectiveMode(cfg.network.tun) : null;
+    // A device needs privilege this process does not have. Three ways out, in
+    // order: this process is root; the root daemon is installed and will run the
+    // core for us; or there is no device at all.
+    const root = cfg.network ? canCreateTun() : false;
+    const helper = cfg.network?.tun ? !root && daemonLoaded() : false;
+    this.mode = cfg.network?.tun && (root || helper) ? "tun" : "no-tun";
+    this.delegate = Boolean(cfg.network?.tun && helper);
     if (cfg.network?.tun && this.mode === "no-tun") {
-      logger.warn("TUN was requested but this process cannot create one; running in user space (no metered gateway)");
+      logger.warn("TUN was requested but neither root nor the daemon is available; running in user space (no metered gateway)");
     }
+    if (this.delegate) logger.info("easytier-core runs under the root daemon; this process only writes the config");
     this.desired = true;
     const generation = ++this.generation;
     this.state = "starting";
@@ -514,7 +525,7 @@ export class Overlay {
 
   /** Writes the generated TOML from the current config (never starts anything). */
   private writeConfigFile(secure: SecureKeyPair | null): void {
-    const text = renderOverlayConfig(this.cfg, this.mode ?? effectiveMode(this.cfg.network?.tun ?? false), secure);
+    const text = renderOverlayConfig(this.cfg, this.mode ?? "no-tun", secure);
     const configPath = currentTomlPath();
     mkdirSync(join(statePath("easytier")), { recursive: true, mode: 0o700 });
     writeFileSync(configPath, text, { mode: 0o600 });
@@ -540,6 +551,15 @@ export class Overlay {
 
   private spawn(generation: number): void {
     if (!this.bin) throw new Error("EasyTier binaries are not ready");
+    if (this.delegate) {
+      // The daemon owns the process. The config was just written; its wrapper
+      // notices the hash change and restarts the core within a couple of seconds.
+      this.state = "starting";
+      this.step = "waiting";
+      this.detail = "waiting for the root daemon's core";
+      this.startMonitor();
+      return;
+    }
     const args = [this.bin.core, "-c", currentTomlPath(), "-r", `127.0.0.1:${RPC_PORT}`];
     const proc = Bun.spawn({
       cmd: args,
@@ -605,15 +625,21 @@ export class Overlay {
     this.monitor.unref?.();
   }
 
+  /** Whether the core this instance is responsible for is answering. */
+  private running(): boolean {
+    if (this.delegate) return true;
+    return Boolean(this.proc && this.proc.exitCode === null);
+  }
+
   private async cli(args: string[], timeoutMs: number) {
     if (!this.bin) throw new Error("EasyTier binaries are not ready");
-    if (!this.proc || this.proc.exitCode !== null) throw new Error("easytier-core is not running");
+    if (!this.running()) throw new Error("easytier-core is not running");
     return run([this.bin.cli, "-p", `127.0.0.1:${RPC_PORT}`, ...args], { timeoutMs });
   }
 
   /** Reads the running core once. Never throws; a failed read leaves the state as is. */
   async refresh(): Promise<void> {
-    if (this.refreshing || !this.proc || this.proc.exitCode !== null) return;
+    if (this.refreshing || !this.running()) return;
     this.refreshing = true;
     try {
       const wasOnline = this.state === "online";
