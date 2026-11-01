@@ -153,18 +153,21 @@ remaining   = D − Magpie 原生 used（当前窗口）
 
 ## 7. 工具规格
 
-工具由 Magpie 的 plugin-tools MCP server 暴露。**名字 = `<插件短名>_<工具名>`**。按 `github:faithleysath/magpie-oh-my-aihub` 安装时短名是 `magpie-oh-my-aihub`，即：
+工具由 Magpie 的 plugin-tools MCP server 暴露。**名字 = `<插件短名>_<工具名>`**。短名是安装后 `package.json` 的包名去掉 scope（以及 `middleware-`/`opencode-`/`tools-`/`page-`/`agent-` 前缀和 `-auth` 后缀）；本插件是 `@oh-my-aihub/magpie-plugin`，所以短名是 `magpie-plugin`，即：
 
 ```
-magpie-oh-my-aihub_status
-magpie-oh-my-aihub_wallet
+magpie-plugin_status
+magpie-plugin_wallet
 …
 ```
+
+只本插件的地址（`/mcp/magpie/tools/<短名>`）返回的工具名不带前缀（`status`、`wallet`…）；走 MCP 路由时是 `<短名>__<工具名>`。
 
 MCP 地址：
 
 - 全部插件：`http://127.0.0.1:3425/mcp/magpie/tools`
-- 只本插件（Magpie 0.1.2516+）：`http://127.0.0.1:3425/mcp/magpie/tools/magpie-oh-my-aihub`
+- 只本插件（Magpie 0.1.2516+）：`http://127.0.0.1:3425/mcp/magpie/tools/magpie-plugin`
+- MCP 路由：`http://127.0.0.1:3425/mcp/magpie/hub/<agent>`（工具名 `<短名>__<工具名>`）
 
 **通用约定**
 
@@ -382,8 +385,8 @@ meta(k TEXT PRIMARY KEY, v TEXT);
 - 源文件 `plugin/page/doc.md`；`bun run build:page` 用 `scripts/build-page.ts` 渲染成 `page/index.html`（产物提交进仓库，页面运行时不带 markdown 库、不发网络请求）。
 - 页面是 sandbox iframe、`connect-src 'none'`、够不到 `/api`，所以它只能是文档，不能显示实时状态。
 - **必须加载 `_magpie/bridge.js`**：Magpie 的窗口要求页面在 10 秒内 say hello，否则整页被替换成「此页面已停止工作」。bridge 只负责握手和主题，页面本身仍是静态 HTML。
-- 必须写清：这是什么；三步装好（装插件 / 填网络 / 把 MCP 接给 agent）；MCP 地址与打开方式（0.1.2516+ 在 Library 里按 agent 打开，更早版本手工填 URL）；18 个工具表（写真实 MCP 名）；首次使用（拿地址、从交易所提 USDC、补一点 gas、共享模型、申请、connect）；安全边界（私钥、网络密码、覆盖网地址不是身份）；常见错误（429 余额不足 / 401 已撤销 / 对方离线 / 没有 gas）。
-- 工具名必须与安装后的真实名字一致（默认 `magpie-oh-my-aihub_<tool>`）。改仓库名或包名要同步改文档页，否则 agent 按文档找不到工具。
+- 必须写清：这是什么（简短，配 3–4 条整体思路）；快速开始（不写安装，页面能打开就说明已装好；把 MCP 接给 agent，含 MCP 路由开/关两种地址与工具名；首次对话的 onboarding 提示词）；常用说法（按场景给出可直接发给 agent 的提示词，覆盖共享、申请、连接、钱和排错）；需要知道的（私钥、网络密码、覆盖网地址不是身份、充值归属、到账确认、429/401）；工具名速查（18 个真实 MCP 名）。
+- 工具名必须与安装后的真实名字一致（默认 `magpie-plugin_<tool>`，由根 `package.json` 的包名推导）。改包名要同步改文档页，否则 agent 按文档找不到工具。
 
 ---
 
@@ -463,7 +466,7 @@ go -C ~/Projects/lab/magpie-upstream test ./internal/plugin/ -run Tool
 
 每个阶段一个分支 + 一个 PR；每阶段的验收都要留证据（第 13 节）。
 
-**实施状态（2026-11-01）**：阶段 0–5 已合并到 `main`（`151cb9e`…`da11d8b`）。阶段 5 只做了删除与文档重写，仓库/包名没有改，所以工具名前缀仍是 `magpie-oh-my-aihub`。阶段 4 验收里的「双机端到端」没有做，见 §13 的 UNKNOWN。
+**实施状态（2026-11-01）**：阶段 0–5 已合并到 `main`（`151cb9e`…`da11d8b`）。阶段 5 只做了删除与文档重写，仓库/包名没有改，所以工具名前缀仍是包名去掉 scope 的 `magpie-plugin`。阶段 4 验收里的「双机端到端」没有做，见 §13 的 UNKNOWN。
 
 | 阶段 | 分支 | 内容 | 验收 |
 |---|---|---|---|

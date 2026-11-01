@@ -8,8 +8,8 @@ Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTie
 
 1. 打开 Magpie 的 **Plugins → Discover**。
 2. 如果搜不到，在列表底部用手动添加入口填：`github:faithleysath/magpie-oh-my-aihub`
-3. 打开 **Oh My AIHub** 插件页——那一页就是用户手册（这是什么、三步装好、18 个工具、首次使用、安全边界、常见错误、已知限制）。
-4. 让 agent 调用 `magpie-oh-my-aihub_join_network` 加入网络，其余按插件页走。
+3. 打开 **Oh My AIHub** 插件页——那一页就是用户手册（这是什么、快速开始、常用说法、需要知道的、工具名）。
+4. 让 agent 调用 `magpie-plugin_join_network` 加入网络，其余按插件页走。
 
 插件装好后会自动生成节点钱包，私钥在插件数据目录的 `wallet/key.hex`（`0600`）。插件不写 Magpie 选项，也不读它的管理接口。
 
@@ -18,11 +18,11 @@ Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTie
 | 用途 | MCP 地址 |
 | --- | --- |
 | 全部插件 | `http://127.0.0.1:3425/mcp/magpie/tools` |
-| 只本插件 | `http://127.0.0.1:3425/mcp/magpie/tools/magpie-oh-my-aihub` |
+| 只本插件 | `http://127.0.0.1:3425/mcp/magpie/tools/magpie-plugin` |
 
-Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agent 打开即可；更早的版本手工填上面的 URL。本机 agent 免 Gateway Key；别的机器上的 agent 需要 Magpie 打开 **Share on local network** 并拿到 Gateway Key。
+Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agent 打开即可；更早的版本手工填上面的 URL。开了 MCP 路由时，agent 拿到的是 `magpie` 一个服务器（`/mcp/magpie/hub/<agent>`），工具名是 `magpie-plugin__<tool>`；关掉路由时，每个服务器单独一条，本插件是 `/mcp/magpie/tools/magpie-plugin`，工具名不带前缀。本机 agent 免 Gateway Key；别的机器上的 agent 需要 Magpie 打开 **Share on local network** 并拿到 Gateway Key。
 
-18 个工具，Magpie 会给名字加插件前缀 `magpie-oh-my-aihub_`：
+18 个工具。只本插件的地址没有前缀；全部插件地址是 `magpie-plugin_<tool>`；走 MCP 路由时是 `magpie-plugin__<tool>`：
 
 | 分类 | 工具 |
 | --- | --- |
@@ -45,7 +45,7 @@ Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agen
 
 | 文档 | 是什么 |
 | --- | --- |
-| `plugin/page/doc.md`（安装后的插件页） | **用户手册**。面向使用者：怎么装、怎么用、每个工具干什么、报错怎么处理、有哪些已知限制。 |
+| `plugin/page/doc.md`（安装后的插件页） | **用户手册**。面向使用者：这是什么、怎么把工具接给 agent、首次对话、常用操作提示词、工具速查、报错怎么处理。 |
 | [docs/DESIGN-V2.md](docs/DESIGN-V2.md) | **规格**。面向维护者：产品决策、协议字段、端口与数据文件、Magpie 上游事实与出处、分阶段实施和验收口径。 |
 | [plugin/README.md](plugin/README.md) | 维护者速查：目录结构、状态文件、数据流、自检命令。 |
 | [docs/history/ARCHITECTURE-pre-v2.md](docs/history/ARCHITECTURE-pre-v2.md) | 旧实现（本机控制台 + P2P + 旧钱包/账本）的架构记录，已不再代表当前代码。 |

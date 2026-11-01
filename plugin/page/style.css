@@ -101,7 +101,7 @@ li {
 
 li > code,
 p > code {
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 code {

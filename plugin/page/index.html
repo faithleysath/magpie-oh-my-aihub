@@ -10,119 +10,110 @@
 <body>
 <main class="doc">
 <h1>Oh My AIHub</h1>
-<p>让你的 Magpie 加入一个私有的 EasyTier 网络，并在网络里和其他节点共享原生模型。</p>
-<p>当前版本（阶段 4）提供：<strong>节点钱包、入网、目录与发现、申请与批准、连接伙伴、链上充值记账与出金</strong>。节点入网后会自动把本机 LAN 地址导出到覆盖网，并在固定的 3426 端口公布一份签名的目录；同网络里的其他节点用 <code>discover</code> 读到你的模型和价格后，可以签名申请访问，你批准后对方用 <code>connect_provider</code> 在自己的 Magpie 里生成一条 Remote Magpie。钱走链：任何人往你的地址转 USDC 都会被插件观察到，确认后按付款方地址记账，并把对方的 Gateway Key 额度调到累计充值额。插件没有自己的图形控制台，所有操作都由 agent 通过 Magpie 的 MCP 工具完成。</p>
-<h2>这是什么</h2>
+<p>Oh My AIHub 让 Magpie 加入一个私有的 EasyTier 网络，和网络里的人互相共享模型。共享的模型按 Magpie 里的价格计费；用别人的模型，按对方的价格从你充值的额度里扣。没有自己的界面，所有操作都由 agent 通过 MCP 工具完成。</p>
+<h2>整体思路</h2>
 <ul>
-<li>一个 Magpie 纯后端插件：不加界面、不开本机控制台、不转发 AI 请求。</li>
-<li>节点身份是一个内置的 EVM 钱包地址。私钥由插件生成，也可以从文件导入或导出；工具永远不会返回私钥。目录和访问申请都用这把私钥签名，所以别人能证明「这份模型和价格确实是你公布的」。</li>
-<li>入网就是加入一个 EasyTier 私有覆盖网。网络密码是唯一的入网门，覆盖网内传输是明文 HTTP，不做二次加密或配对。</li>
-<li>端口是固定的：3426 公布目录、接收申请和轮询，3425 是 Magpie 的模型网关；消费方每个连接用一个本地转发口（13425 起）。改共享模型只改目录内容，不重启 EasyTier 核心。</li>
-<li>批准只是「给你这些模型」，额度是对方在你这里的充值余额：<code>D</code> = 该付款方地址在你地址上已确认的入账总额（BSC 与 Base 相加），<code>cap = D</code> 向下取到 <code>$0.0001</code>。<code>D</code> 不足 <code>$0.0001</code> 时不发 Key（Magpie 把 <code>0</code> 当无限额），批准后状态是「等待充值」，第一笔入账会自动签发 Key。</li>
+<li><strong>共享</strong>：把本机原生模型和价格公布到网络。</li>
+<li><strong>使用</strong>：发现别人的模型，申请、对方批准，自动变成你 Magpie 里的一条 Remote Magpie。</li>
+<li><strong>付费</strong>：往对方地址转 USDC，插件按付款地址记账，额度 = 累计充值。</li>
+<li><strong>身份</strong>：每个节点一个 EVM 钱包，目录和申请都用它签名。</li>
 </ul>
-<h2>三步装好</h2>
-<h3>1. 装插件</h3>
-<p>在 Magpie 的插件里安装：</p>
-<pre><code>github:faithleysath/magpie-oh-my-aihub</code></pre>
-<p>装好后插件会自动生成节点钱包。私钥保存在插件数据目录的 <code>wallet/key.hex</code>（权限 0600），任何工具都不会把它返回给你。</p>
-<h3>2. 加入网络</h3>
-<p>让 agent 调用 <code>magpie-oh-my-aihub_join_network</code>，参数是网络名、网络密码，以及可选的初始节点。网络名和密码必须和网络里的其他节点一致。</p>
-<p>入网时会探测本机 LAN 地址，并分配一个固定的覆盖网导出地址（首次分配后不再变化）。如果本机没有可用的 LAN 地址（例如只有回环），插件不会导出，<code>status.network.detail</code> 会说明，其他功能照常。</p>
-<h3>3. 把 MCP 接给 agent</h3>
-<p><strong>Magpie 0.1.2516 及以上</strong>：打开 Library，在 MCP server 里按 agent 打开这个插件。</p>
-<p><strong>更早的版本</strong>：手工把 MCP 地址填进 agent。</p>
-<p>全部插件：</p>
-<pre><code>http://127.0.0.1:3425/mcp/magpie/tools</code></pre>
-<p>只本插件：</p>
-<pre><code>http://127.0.0.1:3425/mcp/magpie/tools/magpie-oh-my-aihub</code></pre>
-<p>本机 agent 默认免 Gateway Key。别的机器上的 agent 要调用这些工具，需要在 Magpie 里打开 <strong>Share on local network</strong>，并给它 Gateway Key。</p>
+<h2>快速开始</h2>
+<h3>1. 把工具接给 agent</h3>
+<p>打开 Magpie，进 <strong>资源库 → MCP 服务器</strong>，找到 <code>magpie-plugin</code>（本插件），点 agent 圆点，把常用的 agent 点亮。改完重启 agent。</p>
+<p>agent 拿到的工具名取决于 <strong>MCP 路由</strong>：</p>
+<ul>
+<li><strong>关闭</strong>：本插件单独一条，工具名是 <code>status</code>、<code>wallet</code>…。</li>
+<li><strong>开启</strong>：agent 只拿到一个 <code>magpie</code> 服务器，工具名是 <code>magpie-plugin__status</code>。</li>
+</ul>
+<p>手工加服务器：</p>
+<ul>
+<li>全部插件：<code>http://127.0.0.1:3425/mcp/magpie/tools</code></li>
+<li>只本插件：<code>http://127.0.0.1:3425/mcp/magpie/tools/magpie-plugin</code></li>
+<li>MCP 路由：<code>http://127.0.0.1:3425/mcp/magpie/hub/&lt;agent&gt;</code></li>
+</ul>
+<p>本机 agent 默认免 Gateway Key。别的机器上的 agent 要调这些工具，需要在 Magpie 里打开 <strong>Share on local network</strong>，并给它一个 Gateway Key。</p>
+<h3>2. 第一次对话</h3>
+<p>准备网络名、网络密码，想好共享哪些模型。把下面这段发给 agent：</p>
+<pre><code class="language-text">用 Oh My AIHub 帮我做首次设置，一步一步来：
+1. 先 status 和 wallet，
+   把地址和网络状态告诉我；
+2. 我加入网络：
+   名字 &lt;网络名&gt;，密码 &lt;网络密码&gt;，
+   初始节点 &lt;可选&gt;；
+   入网后用 status 确认 online；
+3. 用 native_models 列出可共享的模型和价格，
+   问我共享哪些，再 share_models；
+4. 用 discover 汇总网络里别人的模型和价格。
+不要动钱，不要导出私钥；参数不确定先问我。</code></pre>
+<p>好的 agent 会先读状态，再问你要网络名和密码；入网后才列模型、做发现。</p>
+<p>入网成功的标志是 <code>network.state</code> 为 <code>online</code>、<code>publishedPorts</code> 为 <code>[3426, 3425]</code>。<code>publishedPorts</code> 为空只说明本机没有可用的 LAN 地址，别人看不到你，其他功能正常。</p>
+<blockquote><p>首次入网要下载 EasyTier，几十秒很正常。<code>join_network</code> 返回 <code>starting</code> 时继续用 <code>status</code> 轮询。</p></blockquote>
+<p>只想用别人的模型？第 3 步回答「不共享」就行。</p>
+<h2>常用说法</h2>
+<p>不用记工具名，直接说目的。下面每一条都可以发给 agent；把 <code>A</code>、<code>B</code>、<code>0xabc…</code> 换成你的模型和地址。</p>
+<h3>看状态</h3>
+<ul>
+<li>「用一句话总结现在的状态：网络、共享、连接。」</li>
+<li>「我的节点钱包地址是什么？两条链上还有多少 USDC 和 gas？」</li>
+</ul>
+<h3>入网和身份</h3>
+<ul>
+<li>「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。」</li>
+<li>「把节点私钥导出到 /Users/me/omai.key，不要打印私钥；换机器时告诉我怎么导入。」</li>
+</ul>
+<h3>共享</h3>
+<ul>
+<li>「列出可以共享的模型和价格，我选 A、B 共享。」</li>
+<li>「停止共享所有模型，保留网络连接。」</li>
+<li>「列出所有申请者，谁在等我批准？」</li>
+<li>「批准 0xabc… 使用 A、B；余额不够就告诉我还差多少。」</li>
+<li>「拒绝 0xabc… 的申请，备注“暂时不开放”。」</li>
+<li>「撤销 0xabc… 的访问，确认 Key 已经删掉。」</li>
+</ul>
+<h3>用别人的模型</h3>
+<ul>
+<li>「discover 一下，把在线节点、模型和价格整理成表。」</li>
+<li>「我想用 0xabc… 的 A 模型，帮我申请；批了就直接连接。」</li>
+<li>「看看 0xabc… 批了没有；批了但没 Key 就告诉我还差多少充值。」</li>
+<li>「列出我所有的外部连接：模型、剩余额度、状态。」</li>
+<li>「断开 0xabc…，告诉我会不会影响其他连接。」</li>
+<li>「对方换了地址，discover 加 refresh 重新找，再重连。」</li>
+<li>「连接成功了，但 Magpie 里看不到模型，查一下差在哪。」</li>
+</ul>
+<h3>钱</h3>
+<ul>
+<li>「给 0xabc… 充 5 USDC（Base），先查余额和 gas 再发。」</li>
+<li>「把 10 USDC 转到 0xdef…（BSC），先告诉我余额和预计 gas。」</li>
+<li>「列出最近的入账和出金，标出 unknown 和 reverted。」</li>
+</ul>
+<h3>出问题</h3>
+<ul>
+<li>「status 看 network 的 step 和 detail，告诉我卡在哪。」</li>
+<li>「我的调用被 429 或 401 了，查剩余额度和授权状态，告诉我该充值还是重新申请。」</li>
+<li>「连接断了，先 discover 看对方在不在，再决定重连。」</li>
+<li>「这笔交易的哈希是 0x…，帮我核对上链没有；不要重发。」</li>
+<li>「wallet 显示哪条链 gas 不够？告诉我补哪种原生币。」</li>
+</ul>
+<p>agent 报 <code>E_</code> 开头的错误时，把错误原文贴回去，让它按上面的顺序查。</p>
+<h2>需要知道的</h2>
+<ul>
+<li><strong>充值</strong>：必须从自己的节点钱包付给提供方。交易所直接提到提供方地址，钱记在交易所名下，你用不上。</li>
+<li><strong>到账</strong>：不是即时。BSC 15 个确认，Base <code>finalized</code>，插件每 15 秒扫一次。</li>
+<li><strong>私钥</strong>：不会通过工具返回；<code>wallet_export</code> 只给地址和路径。导出后，能读本机文件的 agent 仍然能读到它。</li>
+<li><strong>网络</strong>：密码是唯一入网门；覆盖网里是明文 HTTP。地址不是身份，目录和申请靠签名。</li>
+<li><strong>转账和断开</strong>：<code>send_payment</code> 没有二次确认、没有白名单；断开连接会重启 EasyTier，其他连接短暂中断。</li>
+<li><strong>额度</strong>：价格改了，剩余额度会跟着变。429 是额度用完，充值即恢复；401 是被撤销，要提供方重新批准。</li>
+<li><strong>身份</strong>：同一个钱包 = 同一个账户；两台机器用同一个私钥，余额共享。</li>
+</ul>
 <h2>工具</h2>
-<table><thead><tr><th>MCP 名</th><th>作用</th><th>参数</th></tr></thead><tbody><tr><td><code>magpie-oh-my-aihub_status</code></td><td>查看网络、钱包、共享和消费状态</td><td><code>section?</code></td></tr><tr><td><code>magpie-oh-my-aihub_wallet</code></td><td>查看节点地址与 BSC/Base 余额</td><td>无</td></tr><tr><td><code>magpie-oh-my-aihub_wallet_import</code></td><td>从文件导入私钥</td><td><code>path</code>, <code>force?</code></td></tr><tr><td><code>magpie-oh-my-aihub_wallet_export</code></td><td>把私钥导出到文件</td><td><code>path</code>, <code>overwrite?</code></td></tr><tr><td><code>magpie-oh-my-aihub_join_network</code></td><td>加入或修改 EasyTier 网络，并公布目录</td><td><code>networkName</code>, <code>networkSecret</code>, <code>initialNode?</code></td></tr><tr><td><code>magpie-oh-my-aihub_native_models</code></td><td>列出本机原生模型、价格和可否共享</td><td>无</td></tr><tr><td><code>magpie-oh-my-aihub_share_models</code></td><td>选择要共享的模型，立刻重签目录</td><td><code>models</code></td></tr><tr><td><code>magpie-oh-my-aihub_discover</code></td><td>读取网络里其他节点公布的模型和价格</td><td><code>refresh?</code></td></tr><tr><td><code>magpie-oh-my-aihub_request_access</code></td><td>向一个提供方签名申请模型访问</td><td><code>provider</code>, <code>models</code></td></tr><tr><td><code>magpie-oh-my-aihub_connect_provider</code></td><td>轮询批准结果，拿到 Key 后建立连接</td><td><code>provider</code></td></tr><tr><td><code>magpie-oh-my-aihub_disconnect_provider</code></td><td>删除本插件建的 Remote Magpie 和转发</td><td><code>provider</code></td></tr><tr><td><code>magpie-oh-my-aihub_connections</code></td><td>列出本机持有的连接</td><td>无</td></tr><tr><td><code>magpie-oh-my-aihub_consumers</code></td><td>列出申请者/消费者和余额</td><td>无</td></tr><tr><td><code>magpie-oh-my-aihub_approve_request</code></td><td>批准申请（可改模型）</td><td><code>address</code>, <code>models?</code></td></tr><tr><td><code>magpie-oh-my-aihub_reject_request</code></td><td>拒绝还没批准的申请</td><td><code>address</code>, <code>note?</code></td></tr><tr><td><code>magpie-oh-my-aihub_revoke_consumer</code></td><td>撤销授权并删除 Gateway Key</td><td><code>address</code></td></tr><tr><td><code>magpie-oh-my-aihub_send_payment</code></td><td>从节点钱包发 USDC 到任意地址（充值给别人或出金）</td><td><code>chain</code>, <code>to</code>, <code>amount</code>, <code>asset?</code></td></tr><tr><td><code>magpie-oh-my-aihub_history</code></td><td>本地已确认（及已回滚）的入账与出金</td><td><code>address?</code>, <code>limit?</code></td></tr></tbody></table>
-<p><code>status</code> 不传 <code>section</code> 时返回完整快照；传 <code>network</code>、<code>wallet</code>、<code>sharing</code>、<code>consuming</code> 只返回对应部分。<code>status.network.publishedPorts</code> 在成功导出后是 <code>[3426, 3425]</code>，没有导出时为空。<code>status</code> 永远不返回 Key。</p>
-<h2>共享与发现</h2>
-<p>共享是本机的事，发现是网络的事。</p>
-<ol>
-<li>调 <code>native_models</code> 看本机有哪些原生模型。只有 Magpie 自己的 provider（非 <code>remote-magpie</code>）且价格完整的模型才是 <code>shareable: true</code>；缺价格的模型会带 <code>reason: &quot;no-price&quot;</code>。</li>
-<li>调 <code>share_models</code>，参数是你想公布的模型 id 列表。空数组表示不共享。写好后目录立刻生效：<code>GET http://&lt;你的导出地址&gt;:3426/catalog</code> 里出现这些模型和价格，签名由节点钱包完成，<strong>不重启 EasyTier</strong>。</li>
-<li>网络里其他节点调 <code>discover</code>，通过本机 EasyTier 的 SOCKS5 读取并严格验签，就能看到你的地址、hostname、模型和价格。改价格或增减模型后，对方再 <code>discover</code> 一次（或等 30 秒缓存过期）即可看到新内容。</li>
-</ol>
-<p>目录里只有模型、价格、地址、hostname、端口和时间戳，没有联系方式、本机路径和 Key。不共享模型时目录是 <code>models: []</code>、<code>gatewayPort: null</code>。</p>
-<h2>申请与批准</h2>
-<p>申请和批准是两个独立动作，各由一方决定：</p>
-<ol>
-<li>消费方先 <code>discover</code>，然后调 <code>request_access</code>，参数是提供方地址和想要的模型 id。插件用消费方钱包对 <code>{schema, address, models, ts}</code> 做 personal_sign 后 <code>POST /request</code>；提供方验签、记成一条申请。同一个地址重复申请只覆盖「想要什么」，不会撤销已有授权。</li>
-<li>提供方用 <code>consumers</code> 看到申请（地址、想要的模型、余额、已用、剩余）。调 <code>approve_request</code> 批准，可以改模型；只保留当前已共享且有价格的模型，空结果会报 <code>E_INPUT</code>。不想给就 <code>reject_request</code>。</li>
-<li>消费方调 <code>connect_provider</code>，它会签名轮询 <code>GET /request</code>：</li>
-</ol>
+<p>需要查工具名时看这里。工具名取决于接入方式：路由关闭时是 <code>status</code>，路由开启时是 <code>magpie-plugin__status</code>，手工加全部插件地址时是 <code>magpie-plugin_status</code>。</p>
 <ul>
-<li><code>pending</code>：等批准；</li>
-<li><code>approved</code> 但没有 Key（<code>waiting-deposit</code>）：提供方批了，但余额不足 $0.0001，等充值；</li>
-<li><code>ready</code>：拿到 Key，本机已有转发和 Remote Magpie；</li>
-<li><code>revoked</code>：报 <code>E_REVOKED</code>。</li>
-</ul>
-<ol>
-<li>提供方 <code>revoke_consumer</code>：删掉 Magpie 里的 Gateway Key（删除失败会用 rotate 让旧 Key 失效），账目保留。重新批准会再发新 Key，消费方再调一次 <code>connect_provider</code> 即可。</li>
-</ol>
-<h2>连接</h2>
-<p><code>connect_provider</code> 是幂等的，可以反复调用。拿到 Key 后它会：</p>
-<ol>
-<li>分配一个本地转发口（13425 起），记进 <code>state.json.connections</code>；</li>
-<li>用 EasyTier CLI 加一条 <code>127.0.0.1:&lt;本地口&gt;</code> → <code>&lt;对方导出地址&gt;:3425</code> 的转发（加转发不需要重启）；</li>
-<li>在 Magpie 里注册一条 Remote Magpie：<code>provider add remote-magpie &lt;key&gt; url=http://127.0.0.1:&lt;本地口&gt; id=omai-&lt;地址后 8 位&gt;</code>；</li>
-<li>读回模型列表，确认至少一个被批准的模型可见，才返回 <code>ready</code>。</li>
-</ol>
-<p><code>disconnect_provider</code> 只删除本插件建的那条 Remote Magpie（id 以 <code>omai-</code> 开头），然后重启 EasyTier 核心让本地转发真正消失——EasyTier 2.6.4 无法在运行时删除转发，所以<strong>其他连接会短暂中断</strong>，返回值里会说明。</p>
-<h2>钱：充值、入账与出金</h2>
-<p>钱是链上的 USDC，只有两条链：BSC（56，USDC 18 位小数）和 Base（8453，USDC 6 位小数）。<strong>两条链的金额永不换算混用</strong>。</p>
-<p><strong>消费方充值给提供方</strong>（把自己的地址变成对方那里的一个账户）：</p>
-<ol>
-<li><code>wallet</code> 拿到自己的地址。</li>
-<li>从交易所或别的钱包把 USDC 提到<strong>自己的节点钱包</strong>（BSC 或 Base），顺手提一点原生币（BNB / ETH）当 gas。</li>
-<li><code>send_payment {chain, to: 提供方地址, amount: &quot;0.5&quot;}</code>。金额是十进制字符串，按该链小数位精确换算，不接受浮点。</li>
-<li>提供方的插件每 15 秒观察一次链。BSC 要 15 个确认，Base 要 <code>finalized</code>；确认后按 <code>from</code>（= 你的地址）记一笔入账，<code>D</code> 加上这笔金额，<code>cap</code> 重算并写回 Magpie。</li>
-<li>你是首次付款的话，提供方 <code>consumers</code> 里会出现 <code>unclaimed</code>（有余额但没批准）；他 <code>approve_request</code> 之后 Key 立刻签发，你 <code>connect_provider</code> 就能用。</li>
-</ol>
-<p><strong>归属只看链上</strong>：入账条件就是「<code>Transfer.to</code> = 我的地址」，付款方是 <code>from</code>。不需要申请、不需要单据、不需要认领。所以<strong>不要把交易所的提币直接发到提供方地址</strong>：那笔钱的 <code>from</code> 是交易所地址，账会记在交易所名下，拿不到 Key。必须是「自己的钱包 → 提供方」。</p>
-<p><strong>回滚</strong>：已入账的行如果所在区块不再是 canonical，会被标记 <code>reverted</code>，<code>D</code> 重算、<code>cap</code> 调低（<code>D</code> 归零就删掉 Key）；记录不删、不退款。</p>
-<p><strong>出金</strong>：<code>send_payment</code> 也可以把 USDC 转给任意地址，包括交易所充值地址。没有二次确认、没有目标白名单，转错也找不回。</p>
-<p><strong>gas</strong>：转 USDC 需要该链的原生币。原生币为 0 时 <code>send_payment</code> 直接报 <code>E_BALANCE</code>，<code>wallet</code> 的 <code>gasOk</code> 也是 false。</p>
-<p><strong>历史</strong>：<code>history</code> 读的是本机账本——已确认和已回滚的入账、以及本钱包的出金。广播无法确认时返回 <code>state:&quot;unknown&quot;</code> 并给出哈希，工具<strong>不会重发</strong>。</p>
-<h2>首次使用</h2>
-<ol>
-<li>调 <code>wallet</code> 看自己的地址（这个地址就是你的全部身份，也是别人给你充值的收款地址）。</li>
-<li>调 <code>join_network</code> 加入网络。</li>
-<li>调 <code>status</code>，看到 <code>state: &quot;online&quot;</code> 就表示 EasyTier 核心已经跑起来；<code>publishedPorts</code> 里有 3426 和 3425 表示导出成功。</li>
-<li>调 <code>native_models</code>，再调 <code>share_models</code> 选几个 <code>shareable</code> 的模型。</li>
-<li>调 <code>discover</code> 看同网络里的其他节点公布了什么。</li>
-<li>想用别人的模型：先给提供方地址付钱——从交易所把 USDC（和一点原生币）提到<strong>自己的节点钱包</strong>，然后 <code>send_payment {chain, to: 提供方地址, amount}</code>；再 <code>request_access</code>，等对方 <code>approve_request</code>，最后 <code>connect_provider</code>。对方批准时余额还没到账的话你会拿到 <code>waiting-deposit</code>，入账后自动变成可用 Key。</li>
-<li>想给别人用：用 <code>consumers</code> 看申请和余额（<code>unclaimed</code> 里有余额但没批准的地址），<code>approve_request</code> 批准；余额足了 Key 立刻签发。</li>
-<li>出金或换回交易所充币地址：同样用 <code>send_payment</code>，目标地址不限。</li>
-</ol>
-<blockquote><p>充值必须提到<strong>你自己的节点钱包</strong>，再由 <code>send_payment</code> 转给提供方。直接把交易所的提币发到提供方地址，那笔钱算交易所付的，你用不上。</p></blockquote>
-<h2>安全边界</h2>
-<ul>
-<li>工具永远不返回私钥。<code>wallet_export</code> 只返回地址和路径；导出后，如果 agent 能读本机文件，它仍然能读到那个文件。这是本机权限问题，插件挡不住。</li>
-<li>Gateway Key 只通过「提供方 → 消费方」的签名轮询交付给对应地址，不写日志、不进 <code>status</code>、不出现在任何其他工具返回值里。</li>
-<li>网络密码是唯一的入网门。覆盖网内是明文 HTTP，不做二次加密、不做配对。</li>
-<li>覆盖网地址不是身份，只是路由线索。目录与申请都由签名证明，签名者必须就是文档里的 <code>address</code>；验不过的节点在 <code>discover</code> 里显示 <code>online: false</code>，<code>request_access</code> 会报 <code>E_PEER_OFFLINE</code>。</li>
-<li>一个钱包就是一台节点的全部身份。两台机器用同一个私钥，就是同一个账户，余额共享。</li>
-<li>插件不会把 Magpie 管理界面暴露到覆盖网。对外只开放 3426 目录/申请/轮询和 3425 模型网关两个端口。</li>
-</ul>
-<h2>常见错误</h2>
-<table><thead><tr><th>错误</th><th>意思</th><th>怎么办</th></tr></thead><tbody><tr><td><code>E_NO_NETWORK</code></td><td>还没有加入网络</td><td>先调 <code>join_network</code></td></tr><tr><td><code>E_NETWORK_TIMEOUT</code></td><td>EasyTier 下载、启动或入网失败/超时</td><td>调 <code>status</code> 看 <code>step</code> 和 <code>detail</code>；首次下载可能需要更久</td></tr><tr><td><code>E_PEER_OFFLINE</code></td><td>对方不在线、没有导出地址、目录验签不过，或读不到邻居</td><td>调 <code>status</code> 确认 <code>state</code> 是 <code>online</code>，再 <code>discover</code> 看谁在线</td></tr><tr><td><code>E_NOT_APPROVED</code></td><td>对方没有你的申请</td><td>先调 <code>request_access</code></td></tr><tr><td><code>E_REVOKED</code></td><td>对方撤销了授权</td><td>请对方重新批准，再 <code>connect_provider</code></td></tr><tr><td><code>E_MAGPIE</code></td><td>找不到/读不到本机 Magpie，或 Key、Remote Magpie 注册失败</td><td>确认 Magpie 正在运行；必要时设置 <code>OH_MY_AIHUB_MAGPIE</code> 指向它的可执行文件</td></tr><tr><td><code>E_WALLET_EXISTS</code></td><td>已有钱包，且导入的地址不同</td><td>确认要换身份后传 <code>force: true</code></td></tr><tr><td><code>E_PATH</code></td><td>路径不是绝对路径、文件已存在，或写不进状态文件</td><td>换一个绝对路径；导出已存在的文件要传 <code>overwrite: true</code></td></tr><tr><td><code>E_BALANCE</code></td><td>节点钱包没有该链的原生币付 gas，或 USDC 不够这笔转账</td><td>往节点钱包补一点原生币（BNB / ETH）或 USDC；<code>wallet</code> 看 <code>gasOk</code> 和余额</td></tr><tr><td><code>E_RPC</code></td><td>两条链的 RPC 都读不到/估算不出 gas</td><td>稍后重试；链上观察器只影响那一条链，另一条照常</td></tr><tr><td><code>E_TX_UNKNOWN</code></td><td>交易已签名广播，但没能确认是否上链</td><td>用返回的哈希去区块浏览器或 <code>history</code> 核对，<strong>不要直接重发</strong></td></tr><tr><td><code>E_INPUT</code></td><td>参数不合法、金额小数位超过该链精度、批准的模型都不在共享范围里、或对方限流</td><td>用 <code>native_models</code> 里 <code>shareable: true</code> 的 id，先 <code>share_models</code>；金额用十进制字符串</td></tr></tbody></table>
-<h2>已知限制</h2>
-<ul>
-<li>EasyTier 首次下载受网络影响，可能要几十秒。<code>join_network</code> 会先返回 <code>{state:&quot;starting&quot;}</code>，用 <code>status</code> 轮询。</li>
-<li>目录只在同一个覆盖网内可读。对方没有导出地址、核心没起来、或端口被占时，<code>discover</code> 会把该节点标成 <code>online: false</code> 并给出原因。</li>
-<li><code>discover</code> 结果缓存 30 秒；想看最新目录传 <code>refresh: true</code>。申请与连接复用的是这份缓存里的对方导出地址，所以对方换地址后要重新 <code>discover</code>。</li>
-<li>没有初始节点或邻居时，EasyTier 核心仍会启动，<code>status.state</code> 是 <code>online</code>，但 <code>overlayIp</code> 可能为空；连上邻居后覆盖网地址才会出现。</li>
-<li><code>disconnect_provider</code> 会重启 EasyTier 核心（上游 2.6.4 的 bug），其他连接短暂中断。</li>
-<li><code>used</code>（已用额度）由 Magpie 自己的 Key 用量读出，<code>consumers</code> 会刷新并缓存；<code>status</code> 和轮询只报最近一次的值。</li>
-<li>BSC 的 USDC 是 18 位，Base 的 USDC 是 6 位，金额不混用。</li>
-<li>入账的最终性：BSC 用 15 个确认（BSC 的 <code>finalized</code> 标签等于 <code>latest</code>，没有深度信息），Base 用 <code>finalized</code> 标签。两条都拿不到就不入账，等下一轮。</li>
-<li>入账只看链：钱包换了地址（<code>wallet_import</code>）之后，扫描游标会重置，旧地址的账目留在账本里但不再计入新地址的余额。</li>
-<li>价格变了会让「剩余额度」自己变（<code>cap</code> 不变、<code>used</code> 变）；剩余为负时 Magpie 返回 429，Key 保留，充钱即恢复。被撤销的地址返回 401，需要提供方重新批准。</li>
-<li>目录里的价格单位是「USD / 1M tokens」，和 Magpie 自己记录的价格一致。</li>
+<li>节点：<code>magpie-plugin_status</code>、<code>magpie-plugin_wallet</code>、<code>magpie-plugin_wallet_import</code>、<code>magpie-plugin_wallet_export</code>、<code>magpie-plugin_join_network</code></li>
+<li>共享：<code>magpie-plugin_native_models</code>、<code>magpie-plugin_share_models</code></li>
+<li>发现与申请：<code>magpie-plugin_discover</code>、<code>magpie-plugin_request_access</code>、<code>magpie-plugin_connect_provider</code>、<code>magpie-plugin_disconnect_provider</code>、<code>magpie-plugin_connections</code></li>
+<li>审批：<code>magpie-plugin_consumers</code>、<code>magpie-plugin_approve_request</code>、<code>magpie-plugin_reject_request</code>、<code>magpie-plugin_revoke_consumer</code></li>
+<li>钱：<code>magpie-plugin_send_payment</code>、<code>magpie-plugin_history</code></li>
 </ul>
 </main>
 </body>

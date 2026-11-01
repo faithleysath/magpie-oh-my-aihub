@@ -16,6 +16,19 @@ const root = join(import.meta.dir, "..");
 const sourcePath = join(root, "page", "doc.md");
 const outputPath = join(root, "page", "index.html");
 
+// Magpie names a plugin's tools by its package's short name: no scope, and no
+// middleware-/opencode-/tools-/page-/agent- prefix. The same name ends the
+// per-plugin MCP address, so both are derived from package.json rather than
+// repeated here where they drift.
+const packageJson = JSON.parse(readFileSync(join(root, "..", "package.json"), "utf8")) as { name?: unknown };
+const packageName = typeof packageJson.name === "string" ? packageJson.name : "";
+const shortName = packageName
+  .replace(/^@[^/]+\//, "")
+  .replace(/^(middleware-|opencode-|tools-|page-|agent-)/, "")
+  .replace(/-auth$/, "");
+if (!shortName) throw new Error("package.json needs a name for the plugin's MCP prefix");
+const TOOL_PREFIX = shortName;
+
 const REQUIRED_TOOLS = [
   "status",
   "wallet",
@@ -37,6 +50,7 @@ const REQUIRED_TOOLS = [
   "history",
 ];
 const REQUIRED_URL = "http://127.0.0.1:3425/mcp/magpie/tools";
+const REQUIRED_PLUGIN_URL = `${REQUIRED_URL}/${TOOL_PREFIX}`;
 
 function escapeHtml(value: string): string {
   return value
@@ -223,10 +237,11 @@ ${body}
 
 const markdown = readFileSync(sourcePath, "utf8");
 for (const tool of REQUIRED_TOOLS) {
-  const name = `magpie-oh-my-aihub_${tool}`;
+  const name = `${TOOL_PREFIX}_${tool}`;
   if (!markdown.includes(name)) throw new Error(`page/doc.md does not mention ${name}`);
 }
 if (!markdown.includes(REQUIRED_URL)) throw new Error(`page/doc.md does not mention ${REQUIRED_URL}`);
+if (!markdown.includes(REQUIRED_PLUGIN_URL)) throw new Error(`page/doc.md does not mention ${REQUIRED_PLUGIN_URL}`);
 
 const html = page(markdown);
 // Magpie's window replaces a page that never says hello with "This page

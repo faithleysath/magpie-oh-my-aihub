@@ -81,4 +81,4 @@ bun run build:page     # page/doc.md -> page/index.html，并校验 18 个工具
 
 ## 重新验证
 
-`build:page` 会在渲染前检查 `page/doc.md` 里 18 个 `magpie-oh-my-aihub_<tool>` 名和 MCP 地址都在，改工具名或仓库名要同步改文档页，否则构建直接失败。
+`build:page` 会在渲染前检查 `page/doc.md` 里 18 个 `magpie-plugin_<tool>` 名和两个 MCP 地址都在；前缀从根 `package.json` 的包名推导（去 scope 和 `page-` 等前缀），改包名要同步改文档页，否则构建直接失败。

@@ -12,8 +12,9 @@ import { walletImportTool } from "./wallet-import.ts";
 import { walletTool } from "./wallet.ts";
 
 /**
- * The 18 tools. Magpie prefixes each name with the plugin's short name, so these
- * become `magpie-oh-my-aihub_status`, `..._wallet`, and so on.
+ * The 18 tools. Magpie prefixes each name with the plugin's short name (the
+ * package name without its scope: `magpie-plugin`), so these become
+ * `magpie-plugin_status`, `..._wallet`, and so on.
  *
  * Provider side: consumers, approve_request, reject_request, revoke_consumer.
  * Consumer side: discover, request_access, connect_provider,
