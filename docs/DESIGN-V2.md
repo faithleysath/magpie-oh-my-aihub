@@ -381,6 +381,7 @@ meta(k TEXT PRIMARY KEY, v TEXT);
 
 - 源文件 `plugin/page/doc.md`；`bun run build:page` 用 `scripts/build-page.ts` 渲染成 `page/index.html`（产物提交进仓库，页面运行时不带 markdown 库、不发网络请求）。
 - 页面是 sandbox iframe、`connect-src 'none'`、够不到 `/api`，所以它只能是文档，不能显示实时状态。
+- **必须加载 `_magpie/bridge.js`**：Magpie 的窗口要求页面在 10 秒内 say hello，否则整页被替换成「此页面已停止工作」。bridge 只负责握手和主题，页面本身仍是静态 HTML。
 - 必须写清：这是什么；三步装好（装插件 / 填网络 / 把 MCP 接给 agent）；MCP 地址与打开方式（0.1.2516+ 在 Library 里按 agent 打开，更早版本手工填 URL）；18 个工具表（写真实 MCP 名）；首次使用（拿地址、从交易所提 USDC、补一点 gas、共享模型、申请、connect）；安全边界（私钥、网络密码、覆盖网地址不是身份）；常见错误（429 余额不足 / 401 已撤销 / 对方离线 / 没有 gas）。
 - 工具名必须与安装后的真实名字一致（默认 `magpie-oh-my-aihub_<tool>`）。改仓库名或包名要同步改文档页，否则 agent 按文档找不到工具。
 

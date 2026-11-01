@@ -2,9 +2,12 @@
 //
 // The Magpie page runs in a sandbox iframe with `connect-src 'none'`, so the
 // output must be self-contained apart from its own stylesheet: no markdown
-// runtime, no network requests, no client JavaScript. This is a deliberately
-// small Markdown subset (headings, paragraphs, lists, code fences, tables,
-// blockquotes, links, bold, inline code).
+// runtime, no network requests, no client JavaScript of its own. It must load
+// Magpie's bridge (`_magpie/bridge.js`), which says hello to the window — a
+// page that never says hello is replaced by "This page stopped working" after
+// 10 seconds. The bridge only paints the theme; the page stays static.
+// This is a deliberately small Markdown subset (headings, paragraphs, lists,
+// code fences, tables, blockquotes, links, bold, inline code).
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -207,6 +210,7 @@ function page(markdown: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oh My AIHub</title>
 <link rel="stylesheet" href="./style.css">
+<script src="_magpie/bridge.js"></script>
 </head>
 <body>
 <main class="doc">
@@ -225,5 +229,10 @@ for (const tool of REQUIRED_TOOLS) {
 if (!markdown.includes(REQUIRED_URL)) throw new Error(`page/doc.md does not mention ${REQUIRED_URL}`);
 
 const html = page(markdown);
+// Magpie's window replaces a page that never says hello with "This page
+// stopped working" after ten seconds; the bridge is what says it.
+if (!html.includes('src="_magpie/bridge.js"')) {
+  throw new Error("the page lost Magpie's bridge script; the window would show it as broken");
+}
 writeFileSync(outputPath, html, { mode: 0o644 });
 console.log(`wrote ${outputPath} (${Buffer.byteLength(html)} bytes, ${REQUIRED_TOOLS.length} tools documented)`);
