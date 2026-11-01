@@ -52,7 +52,7 @@ const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve()
 
 describe("workflow input rules", () => {
   test("prices require complete native values; cap uses the actual Magpie grid", () => {
-    expect(priceText(pricing)).toContain("输入 $1 / 输出 $2");
+    expect(priceText(pricing)).toContain("输入 $1，输出 $2");
     expect(priceText({ input: 1, output: 2 })).toContain("不能授权");
     expect(selectableModels([model, { ...model, id: "remote/no-price", completePrice: false }], ["native/demo", "remote/no-price", "missing"])).toEqual(["native/demo"]);
     for (const value of [0, -1, 0.00001, 0.00015, Infinity, "", "word"]) expect(validCap(value)).toBeFalse();
@@ -88,7 +88,7 @@ describe("real mounted workflow handlers", () => {
           const root = r.roots[name + "-panel"];
           expect(root.textContent).toContain(capLabel(cap));
           expect(root.textContent).toContain("剩余 $0.0000");
-          const status = all(root, "span").filter((node) => node.className?.includes("pill") && ["额度上限不安全", "额度上限待核验", "已授权", "已连接"].includes(node.textContent));
+          const status = all(root, "span").filter((node) => node.className?.includes("status-text") && ["额度上限不安全", "额度上限待核验", "已授权", "已连接"].includes(node.textContent));
           expect(status).toHaveLength(1);
           expect(status[0].className).toContain("warn");
           expect(descendants(root).some((node) => node.className === "inline-warning")).toBeTrue();
@@ -246,11 +246,11 @@ describe("real mounted workflow handlers", () => {
         const cells = Object.fromEntries(prices.children.slice(1).map((row) => [row.children[0].textContent, row.children[1].textContent]));
         expect(cells["一小时缓存写入"]).toBe("$1.5 / 百万 token");
         expect(cells["价格单位"]).toBe("USD per 1M tokens"); expect(cells["价格来源"]).toContain("Magpie 模型设置");
-        expect(cells["阶梯 1 · 门槛"]).toBe("超过 128000 token");
-        for (const [field, value] of [["输入", 3], ["输出", 4], ["缓存读取", 0.3], ["缓存写入", 3.5], ["一小时缓存写入", 5.25]]) expect(cells[`阶梯 1 · ${field}`]).toBe(`$${value} / 百万 token`);
-        expect(cells["阶梯 2 · 门槛"]).toBe("超过 256000 token");
-        expect(cells["阶梯 2 · 缓存读取"]).toBe("$0 / 百万 token");
-        expect(cells["阶梯 2 · 一小时缓存写入"]).toBe("未提供");
+        expect(cells["阶梯 1门槛"]).toBe("超过 128000 token");
+        for (const [field, value] of [["输入", 3], ["输出", 4], ["缓存读取", 0.3], ["缓存写入", 3.5], ["一小时缓存写入", 5.25]]) expect(cells[`阶梯 1${field}`]).toBe(`$${value} / 百万 token`);
+        expect(cells["阶梯 2门槛"]).toBe("超过 256000 token");
+        expect(cells["阶梯 2缓存读取"]).toBe("$0 / 百万 token");
+        expect(cells["阶梯 2一小时缓存写入"]).toBe("未提供");
         expect(cells["价格锁定"]).toContain("priceLocked: false");
         expect(root.textContent).toContain(tiered.displayName); expect(all(root, "img")).toHaveLength(0);
       }
@@ -265,7 +265,7 @@ describe("real mounted workflow handlers", () => {
       const prices = all(r.roots["discovery-panel"], "details").find((node) => node.children[0]?.textContent === "价格与能力详情");
       const cells = Object.fromEntries(prices.children.slice(1).map((row) => [row.children[0].textContent, row.children[1].textContent]));
       expect(cells["一小时缓存写入"]).toBe("未提供");
-      for (const field of ["缓存读取", "缓存写入", "一小时缓存写入"]) expect(cells[`阶梯 1 · ${field}`]).toBe("未提供");
+      for (const field of ["缓存读取", "缓存写入", "一小时缓存写入"]) expect(cells[`阶梯 1${field}`]).toBe("未提供");
       expect(cells["价格单位"]).toBe("未提供"); expect(cells["价格来源"]).toBe("未提供");
     } finally { r.cleanup(); }
   });
