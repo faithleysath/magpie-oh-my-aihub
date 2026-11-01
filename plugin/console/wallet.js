@@ -45,7 +45,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     for (const [label, value] of values) {
       const row = el("div");
       const shown = el("span", value ?? "未知");
-      if (IDENTIFIER.test(label)) shown.className = "mono";
+      if (IDENTIFIER.test(label) && !/^(未知|未提供|未报告|未验证|无)$/.test(String(value ?? "未知"))) shown.className = "mono";
       row.append(el("strong", label), shown);
       node.append(row);
     }

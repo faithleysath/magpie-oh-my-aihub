@@ -62,7 +62,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     for (const [label, value, identifier] of values) {
       const row = el("div");
       const shown = el("span", value ?? "未知");
-      if (identifier) shown.className = "mono";
+      if (identifier && !/^(未知|未提供|未报告|未验证|无)$/.test(String(value ?? "未知"))) shown.className = "mono";
       row.append(el("strong", label), shown);
       node.append(row);
     }
@@ -442,7 +442,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       localRoot.append(card); renderExternal(); return;
     }
     if (!wallet || wallet.status === "absent") {
-      localRoot.append(section("还没有本地钱包", "创建后会一次性显示恢复助记词；也可以导入助记词、恢复加密备份或连接浏览器钱包。"));
+      const absent = section("还没有本地钱包", "创建后会一次性显示恢复助记词；也可以导入助记词、恢复加密备份或连接浏览器钱包。");
       if (lateCreate) {
         const recovery = el("div", null, "inline-warning");
         recovery.append(p("上次创建请求已返回；请手动刷新状态确认，页面不会自动重复创建或把旧结果当已验证钱包。"));
@@ -451,7 +451,8 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       }
       const choices = el("div", null, "workflow-actions");
       choices.append(button("创建钱包", () => createWalletDialog(), true), button("连接已有钱包", () => connectChoiceDialog()));
-      localRoot.append(choices);
+      absent.append(choices);
+      localRoot.append(absent);
     } else {
       const view = walletAddressView(wallet);
       const card = section("钱包状态", wallet.status === "unlocked" ? "地址只在这次解锁会话内可用。" : "解锁并验证后才能把地址用作收款地址。");

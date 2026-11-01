@@ -129,7 +129,12 @@ function sessionEnded(reason = "expired") {
   setText("session-title", copy[0]);
   setText("session-detail", copy[1]);
   connection(reason === "logout" ? "已退出" : "未连接", "neutral");
-  for (const id of ["nav-home", "nav-discovery", "nav-sharing", "nav-wallet", "nav-network"]) $(id).disabled = true;
+  for (const id of ["nav-home", "nav-discovery", "nav-sharing", "nav-wallet", "nav-network"]) {
+    const button = $(id);
+    button.disabled = true;
+    button.classList.remove("active");
+    button.removeAttribute("aria-current");
+  }
 }
 
 const client = createSessionClient({ onExpired: () => sessionEnded(everAuthenticated ? "expired" : "unauthorized") });
@@ -311,7 +316,9 @@ function todos(state) {
   if (!s.checksAt) items.push({ text: "还没有运行过安全检查", goto: "network" });
   const readiness = object(s.readiness);
   if (s.checksAt && readiness.state && readiness.state !== "ready") {
-    items.push({ text: `就绪检查：${list(readiness.reasons).join("；") || readiness.state}`, goto: "network" });
+    // The raw check names/details are English protocol diagnostics; the network
+    // page lists them in Chinese under "安全检查". The home row stays a task.
+    items.push({ text: "安全检查没有通过，请到网络页查看需要处理的项", goto: "network" });
   }
   if (c.sharingEnabled && c.sharingActive === false) items.push({ text: `共享已暂停：${object(c.shareSuspended).reason || "原因未知"}`, goto: "sharing" });
   if (!c.sharingEnabled && state.configured) items.push({ text: "还没有分享任何本机模型", goto: "sharing" });
@@ -527,8 +534,11 @@ function renderNetwork(state) {
     // The word comes from the read-only projection: never upgraded to "verified" by the UI.
     const stateWord = port.state ? `，${PORT_STATE[port.state] || port.state}` : "";
     const readAt = port.verifiedAt ? `，读取 ${time(port.verifiedAt)}` : "";
-    dd.textContent = `${where}${scope}${stateWord}${readAt}`;
-    dd.className = "mono";
+    // Only the address is an identifier; the scope/state/time stays in prose.
+    const address = document.createElement("span");
+    address.className = "mono";
+    address.textContent = where;
+    dd.append(address, `${scope}${stateWord}${readAt}`);
     dd.setAttribute("aria-readonly", "true");
     div.append(dt, dd);
     portList.append(div);

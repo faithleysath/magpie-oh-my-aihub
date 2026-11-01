@@ -315,6 +315,7 @@ section.card + section.card { margin-top: var(--space-4); }
 .todo-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--line-soft); }
 .todo-list li:last-child { border-bottom: 0; }
 .todo-list .todo-empty { color: var(--muted); }
+.todo-list .text-button { flex: none; white-space: nowrap; }
 
 /* ---------- buttons ---------- */
 .button {
@@ -376,6 +377,9 @@ section.card + section.card { margin-top: var(--space-4); }
 .text-button:hover { text-decoration-thickness: 2px; }
 
 .workflow-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
+/* An explanation or a details block inside an action row gets its own line. */
+.workflow-actions > p,
+.workflow-actions > details { flex-basis: 100%; margin: 0; }
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; gap: var(--space-1); margin-bottom: var(--space-4); border-bottom: var(--stroke) solid var(--line); flex-wrap: wrap; }
@@ -449,7 +453,7 @@ input[type="file"],
 .field textarea:focus-visible,
 .field select:focus-visible,
 .workflow-search:focus-visible {
-  outline: none;
+  /* The global 3 px ink ring stays; the small hard shadow marks the field. */
   box-shadow: var(--shadow-xs);
   border-color: var(--line);
 }

@@ -16,7 +16,8 @@ export function networkFacts(network = {}, et = {}, config = {}, time = () => ""
   const factsStale = evidence.stale === true || node.stale === true;
   const lastKnown = factsStale ? "（最后已知）" : "";
   const coreRunning = core.running === true || et.running === true;
-  const coreVersion = core.version || et.coreVersion || null;
+  // The core reports "easytier-core 2.6.4-…"; the label already says EasyTier.
+  const coreVersion = (core.version || et.coreVersion || null)?.replace(/^easytier-core\s+/, "") ?? null;
   const networkName = node.networkName || config.networkName || "未配置";
   const hostname = node.hostname || config.hostname || "等待生成";
   const virtualIpv4 = node.virtualIpv4

@@ -213,8 +213,9 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
 const P2P_INBOUND_LABELS = {
   requested: "待核对", "awaiting-trust": "需要核对身份", "waiting-tofu": "需要核对身份",
   "awaiting-approval": "待批准", pending: "待批准", approved: "已批准", acked: "已交付",
-  connected: "已连接", rejected: "已拒绝", expired: "已过期", revoked: "已撤销",
-  "action-needed": "需要处理",
+  delivering: "正在交付", delivered: "已交付", uncertain: "交付结果未知",
+  connected: "已连接", rejected: "已拒绝", declined: "已拒绝", expired: "已过期",
+  revoked: "已撤销", "operator-revoked": "已撤销", "action-needed": "需要处理",
 };
 const P2P_OUTBOUND_LABELS = {
   requested: "等待批准", "awaiting-trust": "等待对方核对身份", "awaiting-approval": "等待批准",
@@ -222,7 +223,7 @@ const P2P_OUTBOUND_LABELS = {
   "action-needed": "需要处理", rejected: "已拒绝", expired: "已过期", revoked: "已撤销",
 };
 const P2P_DELIVERY_LABELS = { none: "未交付", queued: "排队中", delivering: "正在交付", delivered: "已交付", uncertain: "结果未知", revoked: "已撤销" };
-const P2P_CONNECTION_LABELS = { connected: "已连接", registering: "正在注册", "action-needed": "需要处理", disconnected: "已离线", revoked: "已撤销" };
+const P2P_CONNECTION_LABELS = { ready: "已就绪", connected: "已连接", registering: "正在注册", "action-needed": "需要处理", disconnected: "已离线", revoked: "已撤销" };
 const P2P_TOFU_LABELS = { accepted: "身份已核对", pending: "首次连接，需要核对身份", changed: "身份已变化，必须重新核对" };
 
 export function mountProviders({ client, getState, onState, notice, setBusy, refreshState }) {
@@ -265,7 +266,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     for (const [label, value, identifier] of entries) {
       const line = el("div");
       const shown = el("span", value ?? "未提供");
-      if (identifier) shown.className = "mono";
+      if (identifier && !/^(未知|未提供|未报告|未验证|无)$/.test(String(value ?? "未知"))) shown.className = "mono";
       line.append(el("strong", label), shown);
       node.append(line);
     }
@@ -642,7 +643,10 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   const legacyRequests = el("details", null, "advanced-recovery");
   legacyRequests.append(el("summary", "高级应急：旧版申请文件"));
   legacyRequests.append(requestCard);
-  roots.sharing.append(p2pRequestsCard, p2pApprovalsCard, shareIntro, publication, ownIdentity, legacyRequests, consumersCard);
+  // Publication fields belong to the sharing block, not to a floating details
+  // between two cards.
+  shareIntro.append(publication);
+  roots.sharing.append(p2pRequestsCard, p2pApprovalsCard, shareIntro, ownIdentity, legacyRequests, consumersCard);
   function policySelection(models) {
     const policy = state?.status.config.share?.models;
     return items(models).filter((model) => model.completePrice && (Array.isArray(policy) ? policy.some((rule) => rule === "*" || rule === model.id || (rule.endsWith("/*") && model.id.startsWith(rule.slice(0, -1)))) : model.allowedByPolicy)).map((model) => model.id);
