@@ -1,6 +1,6 @@
 {
   "name": "@oh-my-aihub/magpie-plugin",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Magpie plugin: signed model catalogue, private EasyTier overlay sharing and on-chain USDC credit, driven entirely through MCP tools",
   "type": "module",
   "main": "src/index.ts",

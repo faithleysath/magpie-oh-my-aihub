@@ -376,16 +376,22 @@ export class Watcher {
         `watcher: ${chain.label} cursor ${cursor} is ahead of head ${head}; rescanning the lookback window`,
       );
     }
+    const payers = new Set<string>();
+
+    // Hinted blocks first: a subscription is what makes a deposit visible when the
+    // sweep has nothing to do (cursor at the head) or is far behind it.
+    await this.recordHints(chain, client, finalBlock, self, payers, result);
+
     const start = cursor === null || rewound ? Math.max(0, head - this.lookback(chain)) : cursor + 1;
     if (start > finalBlock) {
       await this.flushCredit(revertedPayers, "revert");
+      await this.flushCredit(payers, "credit");
       return result;
     }
 
     result.fromBlock = start;
     let from = start;
     let requests = 0;
-    const payers = new Set<string>();
     try {
       while (from <= finalBlock && requests < MAX_REQUESTS_PER_PASS) {
         const hint = this.logSpan.get(chain.chainId) ?? CHUNK_BLOCKS;
@@ -434,8 +440,6 @@ export class Watcher {
       await this.flushCredit(payers, "credit");
       return result;
     }
-
-    await this.recordHints(chain, client, finalBlock, self, payers, result);
 
     if (from <= finalBlock) {
       result.detail = `${result.detail ? `${result.detail}; ` : ""}more blocks pending (next pass continues)`;
