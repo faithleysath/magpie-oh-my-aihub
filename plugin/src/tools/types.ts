@@ -34,6 +34,15 @@ export function requiredString(
   return trimmed;
 }
 
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/** A wallet address argument, lowercased; the one identity this product has. */
+export function requiredAddress(args: Record<string, unknown>, key: string, label = key): string {
+  const value = requiredString(args, key, 64, label);
+  if (!ADDRESS_RE.test(value)) fail("E_INPUT", `${label} must be a 0x… wallet address`);
+  return value.toLowerCase();
+}
+
 export function optionalString(
   args: Record<string, unknown>,
   key: string,

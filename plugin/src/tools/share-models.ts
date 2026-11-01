@@ -68,7 +68,7 @@ export const shareModelsTool: ToolDef = {
     return jsonText({
       models: doc.models,
       catalogTs: doc.ts,
-      published: runtime.catalog.listening,
+      published: runtime.server.listening,
     });
   },
 };

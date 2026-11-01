@@ -1,10 +1,16 @@
 // The plugin's single configuration document.
 //
-// It holds the network, the shared-model selection, the overlay hostname and the
-// persisted overlay export (`publish.mappedCidr`). The format is version 3 from
-// docs/DESIGN-V2.md §9. Older files are never deleted or rewritten in place by
-// this module: `readConfig` falls back to defaults, and `writeJsonAtomic` keeps
-// the replaced document as `state.json.prev`.
+// It holds the network, the shared-model selection, the overlay hostname, the
+// persisted overlay export (`publish.mappedCidr`) and the consumer-side
+// connections (DESIGN-V2 §9). The format is version 3 from docs/DESIGN-V2.md §9.
+// Older files are never deleted or rewritten in place by this module:
+// `readConfig` falls back to defaults, and `writeJsonAtomic` keeps the replaced
+// document as `state.json.prev`.
+//
+// A connection is `{provider, localPort}` per the design, plus `mappedHost`: the
+// peer's exported overlay address, kept so the generated TOML can restore the
+// `[[port_forward]]` after a restart without a live discovery read. It is a
+// routing clue only — the peer's identity is still the signed document.
 
 import { writeJsonAtomic, readJsonWithBackup } from "./store.ts";
 import { logger } from "./log.ts";
@@ -30,11 +36,23 @@ export interface PublishConfig {
   mappedCidr: string | null;
 }
 
+/**
+ * One Remote Magpie this node consumes. `provider` is the peer's wallet address
+ * (its identity), `localPort` is the loopback forward EasyTier listens on, and
+ * `mappedHost` is the peer's exported overlay address the forward points at.
+ */
+export interface ConnectionConfig {
+  provider: string;
+  localPort: number;
+  mappedHost: string | null;
+}
+
 export interface HubConfig {
   version: typeof CONFIG_VERSION;
   network: NetworkConfig | null;
   share: ShareConfig;
   publish: PublishConfig;
+  connections: ConnectionConfig[];
   hostname: string | null;
 }
 
@@ -48,6 +66,7 @@ export function defaultConfig(): HubConfig {
     network: null,
     share: { models: [] },
     publish: { mappedCidr: null },
+    connections: [],
     hostname: null,
   };
 }
@@ -70,6 +89,44 @@ function mappedCidrOf(publish: unknown): string | null {
   const [, a, b] = m;
   if (Number(a) < 1 || Number(a) > 254 || Number(b) < 1 || Number(b) > 254) return null;
   return `10.66.${a}.${b}/32`;
+}
+
+const ADDRESS_RE = /^0x[0-9a-f]{40}$/;
+const MAPPED_HOST_RE = /^10\.66\.(\d{1,3})\.(\d{1,3})$/;
+
+function isMappedHost(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const m = MAPPED_HOST_RE.exec(value.trim());
+  if (!m) return false;
+  return Number(m[1]) >= 1 && Number(m[1]) <= 254 && Number(m[2]) >= 1 && Number(m[2]) <= 254;
+}
+
+function isLocalPort(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 65535;
+}
+
+/**
+ * Connections are routing config, not authorization: a malformed or duplicate
+ * entry is dropped, so a hand-edited file can never make the generated TOML
+ * forward somewhere unintended. Identity is the `0x` address; the port and the
+ * mapped host are only clues.
+ */
+function connectionsOf(raw: unknown): ConnectionConfig[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ConnectionConfig[] = [];
+  const providers = new Set<string>();
+  const ports = new Set<number>();
+  for (const value of raw) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const src = value as Record<string, unknown>;
+    const provider = typeof src.provider === "string" ? src.provider.trim().toLowerCase() : "";
+    if (!ADDRESS_RE.test(provider) || providers.has(provider)) continue;
+    if (!isLocalPort(src.localPort) || ports.has(src.localPort)) continue;
+    providers.add(provider);
+    ports.add(src.localPort);
+    out.push({ provider, localPort: src.localPort, mappedHost: isMappedHost(src.mappedHost) ? src.mappedHost.trim() : null });
+  }
+  return out;
 }
 
 /**
@@ -107,6 +164,7 @@ export function normalizeConfig(raw: unknown): HubConfig {
     network,
     share: { models },
     publish: { mappedCidr: mappedCidrOf(o.publish) },
+    connections: connectionsOf(o.connections),
     hostname: text(o.hostname),
   };
 }
@@ -142,6 +200,11 @@ export function writeConfig(cfg: HubConfig): void {
       : null,
     share: { models: [...cfg.share.models] },
     publish: { mappedCidr: cfg.publish.mappedCidr },
+    connections: cfg.connections.map((c) => ({
+      provider: c.provider,
+      localPort: c.localPort,
+      mappedHost: c.mappedHost,
+    })),
     hostname: cfg.hostname,
   });
 }

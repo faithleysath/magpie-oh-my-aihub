@@ -9,11 +9,20 @@
 // that there is no export to reach it through. Its document is built from the
 // saved share selection and re-signed in memory whenever the selection or the
 // node wallet changes — never by restarting EasyTier.
+//
+// Stage 3 adds the ledger (`ledger.sqlite`) and the authorization store. Both
+// are opened before the overlay starts, and both are reachable from tools as
+// `runtime.db` / `runtime.grants`. The single listener on <lan>:3426 is owned by
+// `http-router.ts`; this module only decides when to bind it.
 
 import { mkdirSync } from "node:fs";
+import type { Database } from "bun:sqlite";
 import type { Wallet } from "ethers";
 import { CatalogService, type CatalogModel } from "./catalog-service.ts";
 import { hostnameForAddress, readConfig, writeConfig, type HubConfig } from "./config.ts";
+import { openLedger } from "./db.ts";
+import { Grants } from "./grants.ts";
+import { DirectoryServer } from "./http-router.ts";
 import { detectLanIPv4 } from "./lan.ts";
 import { logger } from "./log.ts";
 import { CONTROL_PORT, GATEWAY_PORT, Overlay } from "./overlay.ts";
@@ -26,6 +35,12 @@ export interface Runtime {
   wallet: Wallet;
   overlay: Overlay;
   catalog: CatalogService;
+  /** the single <lan>:3426 listener (directory + request + poll) */
+  server: DirectoryServer;
+  /** ledger.sqlite: requests, consumers, deposits, payouts, meta */
+  db: Database;
+  /** applications, approvals, revocations and Gateway Keys */
+  grants: Grants;
 }
 
 const GLOBAL_KEY = "__ohMyAiHubRuntimeV3__";
@@ -48,15 +63,25 @@ function clearCatalogTimer(): void {
   catalogTimer = null;
 }
 
-function installHooks(overlay: Overlay): void {
+function installHooks(overlay: Overlay, server: DirectoryServer, db: Database): void {
   if (hooksInstalled) return;
   hooksInstalled = true;
   const stop = () => {
     clearCatalogTimer();
     try {
+      server.stop();
+    } catch {
+      /* an exit hook has nothing left to report to */
+    }
+    try {
       overlay.stopSync();
     } catch {
       /* an exit hook has nothing left to report to */
+    }
+    try {
+      db.close();
+    } catch {
+      /* already closed */
     }
   };
   process.once("exit", stop);
@@ -166,14 +191,14 @@ export async function refreshCatalog(runtime: Runtime, resolve: SharedModelResol
   if (catalogRefreshing) return;
   catalogRefreshing = true;
   try {
-    if (runtime.config.network && !runtime.catalog.listening) {
+    if (runtime.config.network && !runtime.server.listening) {
       // The LAN address may have appeared after boot; re-probe before giving up.
       const lan = runtime.overlay.lanAddress() ?? probeLan();
-      if (lan) runtime.catalog.start(lan);
+      if (lan) runtime.server.start(lan);
     }
 
     const selected = runtime.config.share.models;
-    if (!runtime.catalog.listening && selected.length === 0) return;
+    if (!runtime.server.listening && selected.length === 0) return;
 
     const models = await resolve(runtime);
     if (models === null) {
@@ -222,7 +247,20 @@ async function bootOnceInner(): Promise<Runtime> {
     gatewayPort: GATEWAY_PORT,
   });
 
+  const db = openLedger();
+
   let runtime: Runtime | null = null;
+  const grants = new Grants({
+    db,
+    // wallet_import replaces the identity; the store must follow it.
+    address: () => runtime?.wallet.address ?? wallet.address,
+    gatewayPort: GATEWAY_PORT,
+    // A grant can only name a model this node publishes. share_models writes the
+    // selection before re-signing, so disk is the truthful source here.
+    published: () => readConfig().share.models,
+  });
+  const server = new DirectoryServer({ catalog, grants, controlPort: CONTROL_PORT });
+
   const overlay = new Overlay(config, {
     onConfigChange: (next) => {
       try {
@@ -235,15 +273,16 @@ async function bootOnceInner(): Promise<Runtime> {
       if (runtime) void refreshCatalog(runtime);
     },
   });
-  runtime = { config, wallet, overlay, catalog };
+  runtime = { config, wallet, overlay, catalog, server, db, grants };
 
-  installHooks(overlay);
+  installHooks(overlay, server, db);
   // The tick runs from boot: a node whose LAN address or Magpie came up late
   // must still start publishing, and a price change must reach peers without a
   // tool call.
   startCatalogRefresh(runtime);
   logger.info(
-    `boot: wallet ${wallet.address}, hostname ${hostname}, network ${config.network?.name ?? "none"}`,
+    `boot: wallet ${wallet.address}, hostname ${hostname}, network ${config.network?.name ?? "none"}, ` +
+      `ledger ${stateDir()}/ledger.sqlite`,
   );
 
   if (config.network) overlay.beginStart(config);

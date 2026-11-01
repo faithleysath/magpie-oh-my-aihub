@@ -9,7 +9,10 @@
 //
 // Stage 1 exported no address and published no port. Stage 2 adds
 // `[[proxy_network]]` plus the Forward ACL that allows exactly the directory
-// port and the Magpie gateway, whenever a LAN address exists.
+// port and the Magpie gateway, whenever a LAN address exists. Stage 3 adds the
+// consumer side: one `[[port_forward]]` per connection (loopback ->
+// `<peer mapped host>:<gateway>`), added live with the EasyTier CLI and restored
+// from the generated TOML after a restart.
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -117,6 +120,38 @@ function mappedHostOf(proxyCidrs: string): string | null {
   return null;
 }
 
+/**
+ * One address from `port-forward list -o json`. EasyTier 2.6.4 prints the
+ * protobuf `SocketAddr { port, ip: { Ipv4: { addr: <u32> } } }`, not the
+ * `127.0.0.1:13425` string the human table shows. Copied from the old
+ * supervisor so this module does not import it.
+ */
+function decodeForwardAddr(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  const rec = raw as { port?: unknown; ip?: unknown } | null;
+  if (!rec || typeof rec !== "object") return "";
+  const port = Number(rec.port ?? 0);
+  const ip = rec.ip as Record<string, unknown> | undefined;
+  const v4 = ip?.Ipv4 as { addr?: unknown } | undefined;
+  if (!v4 || typeof v4.addr !== "number") return port ? `:${port}` : "";
+  const n = v4.addr >>> 0;
+  return `${[(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".")}:${port}`;
+}
+
+function decodeForward(raw: Record<string, unknown>): { bindAddr: string; dstAddr: string } {
+  return {
+    bindAddr: decodeForwardAddr(raw.bind_addr ?? raw.bindAddr).replace(/^tcp:\/\//, ""),
+    dstAddr: decodeForwardAddr(raw.dst_addr ?? raw.dstAddr).replace(/^tcp:\/\//, ""),
+  };
+}
+
+function assertLoopbackBind(bindAddr: string): void {
+  const host = bindAddr.replace(/^tcp:\/\//, "").split(":")[0];
+  if (host !== "127.0.0.1" && host !== "localhost") {
+    throw new Error(`E_INPUT: refusing a port forward bound to ${bindAddr}: local proxies listen on 127.0.0.1`);
+  }
+}
+
 function toml(value: string): string {
   // JSON string escaping is valid TOML basic-string escaping.
   return JSON.stringify(value);
@@ -160,6 +195,19 @@ export function renderOverlayConfig(cfg: HubConfig, publish: OverlayPublish = { 
     lines.push(
       `proxy_network = [{ cidr = ${toml(`${publish.lanIp}/32`)}, mapped_cidr = ${toml(publish.mappedCidr!)} }]`,
     );
+  }
+
+  // Consumer side (DESIGN-V2 §7.3): `[[port_forward]]` is local -> overlay, not
+  // an inbound publish. One entry per connection; a connection without a mapped
+  // host has nothing to dial and is skipped rather than guessed.
+  for (const connection of cfg.connections) {
+    if (!connection.mappedHost) continue;
+    lines.push("");
+    lines.push("# consumer side: one loopback port per Remote Magpie");
+    lines.push("[[port_forward]]");
+    lines.push(`bind_addr = ${toml(`127.0.0.1:${connection.localPort}`)}`);
+    lines.push(`dst_addr = ${toml(`${connection.mappedHost}:${GATEWAY_PORT}`)}`);
+    lines.push('proto = "tcp"');
   }
 
   lines.push("");
@@ -458,6 +506,18 @@ export class Overlay {
     }
   }
 
+  /** Writes the generated TOML from the current config (never starts anything). */
+  private writeConfigFile(): void {
+    const text = renderOverlayConfig(this.cfg, {
+      lanIp: this.lanIp,
+      mappedCidr: this.cfg.publish.mappedCidr,
+    });
+    const configPath = currentTomlPath();
+    mkdirSync(join(statePath("easytier")), { recursive: true, mode: 0o700 });
+    writeFileSync(configPath, text, { mode: 0o600 });
+    if (process.platform !== "win32") chmodSync(configPath, 0o600);
+  }
+
   private async startNow(generation: number): Promise<void> {
     await this.stopProcess();
     if (generation !== this.generation || !this.desired) return;
@@ -468,14 +528,7 @@ export class Overlay {
     this.bin = await ensureBinaries((message) => logger.info(message));
     if (generation !== this.generation || !this.desired) return;
 
-    const configPath = currentTomlPath();
-    const text = renderOverlayConfig(this.cfg, {
-      lanIp: this.lanIp,
-      mappedCidr: this.cfg.publish.mappedCidr,
-    });
-    mkdirSync(join(statePath("easytier")), { recursive: true, mode: 0o700 });
-    writeFileSync(configPath, text, { mode: 0o600 });
-    if (process.platform !== "win32") chmodSync(configPath, 0o600);
+    this.writeConfigFile();
 
     this.step = "spawn";
     this.detail = "starting easytier-core";
@@ -667,6 +720,61 @@ export class Overlay {
       if (/^E_[A-Z_]+:/.test(message)) throw error;
       throw new Error(`E_PEER_OFFLINE: ${message}`);
     }
+  }
+
+  /**
+   * Opens the loopback listener towards a peer's gateway (DESIGN-V2 §7.3). The
+   * command shape is copied from the old supervisor's `addPortForward`: adding
+   * the same rule twice really creates two listeners in 2.6.4, so an identical
+   * rule is left alone. Adding a forward never restarts the core.
+   */
+  async addForward(bindAddr: string, dstAddr: string): Promise<boolean> {
+    assertLoopbackBind(bindAddr);
+    if (!this.bin || !this.proc || this.proc.exitCode !== null) {
+      throw new Error("E_PEER_OFFLINE: EasyTier is not running, so the forward cannot be added");
+    }
+    const listed = await this.cli(["-o", "json", "port-forward", "list"], 6_000);
+    if (listed.code !== 0) {
+      throw new Error(`E_NETWORK_TIMEOUT: port-forward list failed: ${shortError(listed.stderr || listed.stdout)}`);
+    }
+    let existing: { bindAddr: string; dstAddr: string }[] = [];
+    try {
+      const parsed = JSON.parse(listed.stdout || "{}") as { cfgs?: unknown };
+      const rows = Array.isArray(parsed.cfgs) ? (parsed.cfgs as Record<string, unknown>[]) : [];
+      existing = rows.map(decodeForward).filter((row) => row.bindAddr || row.dstAddr);
+    } catch (error) {
+      throw new Error(`E_NETWORK_TIMEOUT: cannot read the forward table: ${shortError(error)}`);
+    }
+    if (existing.some((row) => row.bindAddr === bindAddr && row.dstAddr === dstAddr)) return false;
+    const clash = existing.find((row) => row.bindAddr === bindAddr);
+    if (clash) {
+      throw new Error(
+        `E_INPUT: ${bindAddr} already forwards to ${clash.dstAddr}; run disconnect_provider first`,
+      );
+    }
+    const added = await this.cli(["port-forward", "add", "tcp", bindAddr, dstAddr], 15_000);
+    if (added.code !== 0) {
+      throw new Error(`E_NETWORK_TIMEOUT: port-forward add failed: ${shortError(added.stderr || added.stdout)}`);
+    }
+    logger.info(`forward ${bindAddr} -> ${dstAddr} added`);
+    return true;
+  }
+
+  /**
+   * Applies a new configuration and, when a core is running, restarts it. This is
+   * the only way to make a removed `[[port_forward]]` really disappear: EasyTier
+   * 2.6.4's `port-forward remove` prints success and keeps the listener. Other
+   * connections are interrupted for a few seconds; callers must say so.
+   */
+  async applyConfig(cfg: HubConfig): Promise<{ restarted: boolean }> {
+    this.cfg = cfg;
+    if (!this.desired || !this.proc || this.proc.exitCode !== null) return { restarted: false };
+    const generation = ++this.generation;
+    await this.stopProcess();
+    if (generation !== this.generation || !this.desired) return { restarted: false };
+    this.writeConfigFile();
+    this.spawn(generation);
+    return { restarted: true };
   }
 
   /** Stops the core this instance started, if any. */

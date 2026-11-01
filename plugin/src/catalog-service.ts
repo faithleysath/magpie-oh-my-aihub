@@ -1,5 +1,4 @@
-// The directory document this node publishes, and the one endpoint that serves
-// it (DESIGN-V2 §8.1).
+// The directory document this node publishes (DESIGN-V2 §8.1).
 //
 // `omai/catalog/1` is a small self-signed JSON body: the node's wallet address,
 // its hostname, the two fixed ports, and the native models it shares with their
@@ -7,10 +6,11 @@
 // field except `sig`, so a reader can prove the document was written by whoever
 // owns `address` — the overlay address a peer was reached on proves nothing.
 //
-// The service binds exactly one interface (the LAN address EasyTier exports) and
-// answers exactly one path, `GET /catalog`. No CORS, no write path, no admin
-// surface, no cache. Re-signing happens in memory: changing the shared models
-// never restarts the core.
+// This module only builds, signs and parses that document. The HTTP listener and
+// every route (`GET /catalog`, `POST /request`, `GET /request`) live in
+// `http-router.ts`, so the request/approval business never mixes with document
+// construction. Re-signing happens in memory: changing the shared models never
+// restarts the core.
 
 import type { Wallet } from "ethers";
 import { logger } from "./log.ts";
@@ -220,10 +220,10 @@ export interface CatalogServiceStatus {
 }
 
 /**
- * Holds the signed document in memory and serves it on `<lan>:3426`.
+ * Holds the signed document in memory.
  *
- * A failed bind (port taken, address gone) is recorded in `detail` and visible
- * through `status`; it never kills the plugin, and the share selection is kept.
+ * A failed re-sign is recorded in `detail` (visible through `status`) and the
+ * previous document is kept; nothing here binds a socket.
  */
 export class CatalogService {
   private wallet: Wallet;
@@ -231,9 +231,6 @@ export class CatalogService {
   private readonly controlPort: number;
   private readonly gatewayPort: number;
   private doc: CatalogDocument | null = null;
-  private server: ReturnType<typeof Bun.serve> | null = null;
-  private boundHost: string | null = null;
-  private bindDetail: string | null = null;
   private refreshDetail: string | null = null;
 
   constructor(opts: CatalogServiceOptions) {
@@ -247,25 +244,14 @@ export class CatalogService {
     return this.doc;
   }
 
-  get listening(): boolean {
-    return this.server !== null;
-  }
-
-  status(): CatalogServiceStatus {
-    return {
-      listening: this.listening,
-      host: this.boundHost,
-      port: this.controlPort,
-      modelCount: this.doc?.models.length ?? 0,
-      catalogTs: this.doc?.ts ?? null,
-      detail: this.bindDetail ?? this.refreshDetail,
-    };
+  /** Why the last re-sign failed, or null. The listener owns bind failures. */
+  get detail(): string | null {
+    return this.refreshDetail;
   }
 
   /**
    * Why the last refresh could not re-sign (Magpie unreadable). A successful
-   * refresh clears it; a bind problem is tracked separately so one never hides
-   * the other.
+   * refresh clears it.
    */
   setDetail(detail: string | null): void {
     const value = detail?.replace(/\s+/g, " ").trim().slice(0, 300) ?? "";
@@ -301,71 +287,4 @@ export class CatalogService {
     if (!this.doc) return null;
     return this.update(this.doc.models);
   }
-
-  /** Binds `<lanIp>:<controlPort>`. Idempotent; a failed bind is a status detail. */
-  start(lanIp: string | null): boolean {
-    if (!lanIp) {
-      this.bindDetail = "no exportable LAN address (没有可导出的 LAN 地址)";
-      return false;
-    }
-    if (this.server && this.boundHost === lanIp) return true;
-    if (this.server) this.stop();
-    try {
-      this.server = Bun.serve({
-        hostname: lanIp,
-        port: this.controlPort,
-        idleTimeout: 10,
-        fetch: (req) => this.handle(req),
-      });
-      this.boundHost = lanIp;
-      this.bindDetail = null;
-      logger.info(`catalogue listening on http://${lanIp}:${this.controlPort}${CATALOG_PATH}`);
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.server = null;
-      this.boundHost = null;
-      this.bindDetail = `cannot bind ${lanIp}:${this.controlPort}: ${message.slice(0, 200)}`;
-      logger.error(`catalogue: ${this.bindDetail}`);
-      return false;
-    }
-  }
-
-  stop(): void {
-    if (!this.server) return;
-    try {
-      this.server.stop(true);
-    } catch {
-      /* already stopped */
-    }
-    this.server = null;
-    this.boundHost = null;
-  }
-
-  private handle(req: Request): Response {
-    if (req.method !== "GET") return plain(405, "method not allowed");
-    const url = new URL(req.url);
-    if (url.pathname !== CATALOG_PATH || url.search !== "") return plain(404, "not found");
-    if (!this.doc) return plain(503, "the directory is not published yet");
-    const body = JSON.stringify(this.doc);
-    return new Response(body, {
-      status: 200,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "content-length": String(Buffer.byteLength(body)),
-        "cache-control": "no-store",
-      },
-    });
-  }
-}
-
-function plain(status: number, message: string): Response {
-  return new Response(message + "\n", {
-    status,
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "content-length": String(Buffer.byteLength(message) + 1),
-      "cache-control": "no-store",
-    },
-  });
 }

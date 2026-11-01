@@ -1,4 +1,4 @@
-// One HTTP GET through EasyTier's own SOCKS5 listener.
+// One HTTP request through EasyTier's own SOCKS5 listener.
 //
 // This is the on-demand path for reading a peer's directory: it creates no
 // EasyTier port forward and no listener of its own, so a discovery read cannot
@@ -14,7 +14,7 @@ import { connect, type Socket } from "node:net";
 
 export const SOCKS_MAX_BYTES = 64 * 1024;
 
-export interface SocksHttpGetOptions {
+export interface SocksHttpOptions {
   /** the local EasyTier SOCKS5 listener port (fixed 13400 in this product) */
   socksPort: number;
   /** an IPv4 address on the overlay; the SOCKS5 path is IPv4 only */
@@ -23,7 +23,13 @@ export interface SocksHttpGetOptions {
   path: string;
   timeoutMs?: number;
   maxBytes?: number;
+  /** stage 3 needs POST for `POST /request`; GET is the default */
+  method?: "GET" | "POST";
+  /** JSON body for a POST; ignored for GET */
+  body?: string;
 }
+
+export type SocksHttpGetOptions = SocksHttpOptions;
 
 function ipv4Bytes(host: string): Buffer {
   const parts = host.split(".").map(Number);
@@ -65,7 +71,14 @@ class SocketReader {
 }
 
 export async function socksHttpGet(opts: SocksHttpGetOptions): Promise<{ status: number; body: string }> {
+  return socksHttpRequest(opts);
+}
+
+/** One request through the overlay's SOCKS5 listener; the connection is closed. */
+export async function socksHttpRequest(opts: SocksHttpOptions): Promise<{ status: number; body: string }> {
   const timeoutMs = opts.timeoutMs ?? 5000;
+  const method = opts.method ?? "GET";
+  const payload = method === "POST" ? (opts.body ?? "") : "";
   const maxBytes = opts.maxBytes ?? SOCKS_MAX_BYTES;
   const host = ipv4Bytes(opts.host);
   const port = Buffer.from([(opts.port >> 8) & 255, opts.port & 255]);
@@ -97,21 +110,25 @@ export async function socksHttpGet(opts: SocksHttpGetOptions): Promise<{ status:
     await reader.read(addrLen + 2, "the SOCKS5 bound address");
 
     const req =
-      `GET ${opts.path} HTTP/1.1\r\n` +
+      `${method} ${opts.path} HTTP/1.1\r\n` +
       `Host: ${opts.host}:${opts.port}\r\n` +
       `Accept: application/json\r\n` +
+      (method === "POST"
+        ? `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n`
+        : "") +
       `User-Agent: omai-catalog/1\r\n` +
-      `Connection: close\r\n\r\n`;
+      `Connection: close\r\n\r\n` +
+      payload;
     socket.write(req);
 
     const chunks = await reader.rest(maxBytes + 8192);
     const raw = chunks.toString("utf8");
     const split = raw.indexOf("\r\n\r\n");
-    if (split < 0) throw new Error("directory response has no HTTP header");
+    if (split < 0) throw new Error("the peer answered without an HTTP header");
     const header = raw.slice(0, split).split("\r\n");
     const status = Number(/^HTTP\/1\.[01]\s+(\d{3})/.exec(header[0] ?? "")?.[1] ?? 0);
     const body = raw.slice(split + 4);
-    if (Buffer.byteLength(body) > maxBytes) throw new Error(`directory response exceeds ${maxBytes} bytes`);
+    if (Buffer.byteLength(body) > maxBytes) throw new Error(`the peer's response exceeds ${maxBytes} bytes`);
     return { status, body };
   } finally {
     clearTimeout(timer);

@@ -233,7 +233,7 @@ MCP 地址：
 
 1. 轮询提供方 `GET /request`。
 2. `pending` → 等批准；`waiting-deposit` → 等入账；`revoked` → 报 `E_REVOKED`。
-3. `approved` 且拿到 Key → 分配本地转发口（13425+）→ 建立「`127.0.0.1:<本地口>` → 提供方覆盖网地址:`catalog.gatewayPort`」的转发 → `magpie provider add remote-magpie <key> url=http://127.0.0.1:<本地口> id=<id>` → 读回模型列表 → `ready`。
+3. `approved` 且拿到 Key → 分配本地转发口（13425+，记入 `state.json.connections`，重启后由 TOML 恢复）→ 用 EasyTier CLI 加「`127.0.0.1:<本地口>` → 提供方 mapped 地址:`gatewayPort`」的转发（加转发不需要重启）→ `magpie provider add remote-magpie <key> url=http://127.0.0.1:<本地口> id=<id>` → 读回模型列表 → `ready`。
 4. 已连接再调用 = 刷新 Key/模型（提供方重新批准后走这条）。
 
 `disconnect_provider`：只删除本插件建的那条 Remote Magpie 和转发，不动用户手工创建的服务。删除转发需要重启 EasyTier 核心（EasyTier 2.6.4 的 `port-forward remove` 是坏的，见第 10 节），所以其他连接会短暂中断，这是已知代价。
@@ -344,7 +344,7 @@ Magpie 进程
 
 | 文件 | 内容 |
 |---|---|
-| `state.json` | `{version:3, network:{name,secret,initialNode}, share:{models:[]}, publish:{mappedCidr:null}, hostname}` |
+| `state.json` | `{version:3, network:{name,secret,initialNode}, share:{models:[]}, publish:{mappedCidr:null}, connections:[{provider, localPort}], hostname}` |
 | `wallet/key.hex` | 私钥，`0600` |
 | `ledger.sqlite` | 入账、申请、消费者、出金 |
 | `easytier/current.toml` | 生成的 EasyTier 配置 |
@@ -505,8 +505,8 @@ scripts/build-page.ts
 | 0 | `docs/agent-native` | 重写 `ARCHITECTURE.md` 为约 8 条决策；旧文档加历史横幅；`AGENTS.md` 指针改到本文档 | 文档自洽，无代码改动 |
 | 1 | `feat/skeleton` | 新 `index.ts`、`config.ts`、`wallet.ts`、`tools/{status,wallet,wallet-import,wallet-export,join-network}`、文档页（含预渲染脚本） | 真 Magpie 0.1.2516+ 里，agent 通过 MCP 看到这 5 个工具，能生成钱包、拿到地址、加入网络并在 `status` 看到 online；Magpie 里能打开文档页，里面的工具名与实际一致 |
 | 2 | `feat/catalog` | 探测 LAN 地址 + 分配/持久化 `mappedCidr` + `proxy_network` 与 ACL 固定放行 3426/3425、3426 目录服务、签名、SOCKS5 读取、`share_models`/`native_models`/`discover` | 两台隔离 Magpie 互见模型与价格；篡改任一字段被拒 |
-| 3 | `feat/authorization` | `request`/`poll` 端点、审批、Key 签发、`connect_provider`、`revoke_consumer` | 双机：申请 → 批准（余额 0 时等待）→ 入账后拿到 Key → 原生 Remote Magpie 出现模型 → 撤销后 401 |
-| 4 | `feat/credit` | 链观察器、按 `from` 记账、`cap = D`、`send_payment`、回滚 | 本地链实验：入账→cap→原生 200；用尽→429；回滚→cap 下降；出金到任意地址成功 |
+| 3 | `feat/authorization` | `request`/`poll` 端点、SQLite（requests/consumers）、审批/拒绝/撤销、Key 签发路径（余额为 0 时不发）、`connect_provider`/`disconnect_provider`、`consumers`/`connections` | 双机：申请 → 批准（余额 0 → waiting-deposit）→ 轮询拿到 waiting-deposit → 撤销后 poll 返回 revoked；用一行测试存款（见阶段 4）验证 Key 签发、转发与 Remote Magpie 注册路径 |
+| 4 | `feat/credit` | 链观察器、按 `from` 记账、`cap = D`、`send_payment`、`history`、回滚 | 本地链实验：入账→cap→原生 200；用尽→429；回滚→cap 下降；出金到任意地址成功；双机端到端：入账后 Key 送达、消费方出现 Remote Magpie 模型、原生调用 200→429 |
 | 5 | `feat/cleanup` | 删除旧模块与旧文档，重命名包/仓库（可选，为了短工具名） | `bun run typecheck` 通过；无死代码；`plugin-tools.json` 只剩本插件工具 |
 
 风险点：

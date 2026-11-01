@@ -13,7 +13,24 @@ const root = join(import.meta.dir, "..");
 const sourcePath = join(root, "page", "doc.md");
 const outputPath = join(root, "page", "index.html");
 
-const REQUIRED_TOOLS = ["status", "wallet", "wallet_import", "wallet_export", "join_network"];
+const REQUIRED_TOOLS = [
+  "status",
+  "wallet",
+  "wallet_import",
+  "wallet_export",
+  "join_network",
+  "native_models",
+  "share_models",
+  "discover",
+  "request_access",
+  "connect_provider",
+  "disconnect_provider",
+  "connections",
+  "consumers",
+  "approve_request",
+  "reject_request",
+  "revoke_consumer",
+];
 const REQUIRED_URL = "http://127.0.0.1:3425/mcp/magpie/tools";
 
 function escapeHtml(value: string): string {

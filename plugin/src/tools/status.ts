@@ -1,6 +1,12 @@
 // status: the one read-only snapshot an agent needs to know where the node is.
+//
+// `sharing` is what this node authorizes (its own ledger) and `consuming` is what
+// it holds elsewhere (state.json plus the last poll answer). Neither makes a
+// network call: status must answer when the overlay is down. `consumers` is the
+// tool that refreshes used cost and can be slower.
 
 import { getRuntime } from "../runtime.ts";
+import { consumingSnapshot } from "./consumer.ts";
 import { walletBalances } from "./node-wallet.ts";
 import { fail, jsonText, objectArgs, type ToolDef } from "./types.ts";
 
@@ -9,8 +15,8 @@ const SECTIONS = ["network", "wallet", "sharing", "consuming"] as const;
 export const statusTool: ToolDef = {
   description:
     "节点状态快照。network: 网络/覆盖网地址/邻居/公布端口；wallet: 地址与 BSC/Base 余额；" +
-    "sharing: 节点地址、已公布的模型与目录时间戳、消费者；consuming: 申请与连接（后续阶段）。" +
-    "不传 section 返回全部。",
+    "sharing: 节点地址、已公布的模型与目录时间戳、消费者；consuming: 申请与连接。" +
+    "不传 section 返回全部。不返回任何 Key。",
   args: {
     type: "object",
     properties: {
@@ -30,34 +36,36 @@ export const statusTool: ToolDef = {
     }
 
     const runtime = await getRuntime();
-    const catalog = runtime.catalog.status();
+    const server = runtime.server.status();
     const network = runtime.overlay.status();
-    // A directory that cannot bind is not a network state of its own, but it must
+    // A listener that cannot bind is not a network state of its own, but it must
     // be visible somewhere: `detail` is the field an agent already reads.
-    if (catalog.detail) {
-      network.detail = network.detail ? `${network.detail}; directory: ${catalog.detail}` : `directory: ${catalog.detail}`;
+    if (server.detail) {
+      network.detail = network.detail ? `${network.detail}; directory: ${server.detail}` : `directory: ${server.detail}`;
     }
     const wallet = async () => walletBalances(runtime.wallet.address);
-    const sharing = () => {
+    const sharing = async () => {
       const doc = runtime.catalog.current;
+      const listing = await runtime.grants.listing({ usage: false });
       return {
         address: runtime.wallet.address,
         models: doc?.models ?? [],
         catalogTs: doc?.ts ?? null,
-        consumers: [] as unknown[],
+        consumers: listing.consumers,
+        unclaimed: listing.unclaimed,
       };
     };
-    const consuming = () => ({ requests: [] as unknown[], connections: [] as unknown[] });
+    const consuming = () => consumingSnapshot(runtime);
 
     if (section === "network") return jsonText(network);
     if (section === "wallet") return jsonText(await wallet());
-    if (section === "sharing") return jsonText(sharing());
+    if (section === "sharing") return jsonText(await sharing());
     if (section === "consuming") return jsonText(consuming());
 
     return jsonText({
       network,
       wallet: await wallet(),
-      sharing: sharing(),
+      sharing: await sharing(),
       consuming: consuming(),
     });
   },
