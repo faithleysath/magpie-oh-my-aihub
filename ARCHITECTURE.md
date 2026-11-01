@@ -192,6 +192,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 - EasyTier 2.6.4 的 `port-forward remove` 会打印成功但监听不消失，所以 `disconnect_provider` 要重启核心，其他连接短暂中断。
 - EasyTier 2.6.4 的 SOCKS5 在 TOML 里绑 `127.0.0.1`；`--socks5` 会绑 `0.0.0.0`，所以只能用 TOML 的 `socks5_proxy`。
 - 没有 `listeners` 时 EasyTier 默认监听 `tcp://0.0.0.0:11010`，入网不需要额外配置监听地址。
+- **无 TUN 模式没有虚拟 IPv4**：`no_tun = true` 下 EasyTier 2.6.4 不给任何节点分配虚拟 IP（`--ipv4` 也不行），`peer list` 的 `ipv4` 字段恒为空。所以邻居的身份是 hostname，要拨的地址是它导出的 mapped CIDR（`proxy_cidrs`），不能用 ipv4 做过滤条件。
 - EasyTier 2.6.4 的 secure mode：同网节点必须都开，没开的一方会被对端反复踢掉（官方文档说服务端能接旧客户端，实测不行）；`local_public_key` 必须显式给，否则报 `local public key is not set`；`peer_public_key` 写了不生效（填一个假公钥照样能连上），所以现在不做公钥 pin。
 - 复核：`git -C ~/Projects/lab/magpie-upstream show v0.1.2516:internal/gateway/tools_mcp.go`、`internal/library/plugin_tools.go`、`internal/gui/pluginpage.go`。
 

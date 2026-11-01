@@ -752,7 +752,11 @@ export class Overlay {
         const ipv4 = String(row.ipv4 ?? "").replace(/\/\d+$/, "");
         if (String(row.cost ?? "") === "Local") continue;
         if (this.cfg.hostname && hostname === this.cfg.hostname) continue;
-        if (!ipv4) continue;
+        // A no-TUN node — which is every node this plugin starts — has no virtual
+        // IPv4 at all, and 2.6.4 reports an empty `ipv4` for every peer. The
+        // identity here is the hostname and the address to dial is the exported
+        // mapped CIDR, so an empty IPv4 is not a reason to drop the peer.
+        if (!hostname && !ipv4) continue;
         out.push({ hostname: hostname || ipv4, ipv4, mappedHost: mappedHostOf(routesByHost.get(hostname) ?? "") });
       }
       return out;
