@@ -21,6 +21,21 @@ pair for the same page.
 | 首页 narrow light | [`c-narrow-light-home.png`](../final-acceptance/evidence/visual/c-narrow-light-home.png) | [`provider-light-390-home.png`](final/provider-light-390-home.png) | No arrows; todo text fits and its action no longer wraps; flat rows |
 | 错误/会话结束 | [`c-desktop-light-payment-received.png`](../final-acceptance/evidence/visual/c-desktop-light-payment-received.png) (payment state) | [`consumer-light-1440-session-ended.png`](final/consumer-light-1440-session-ended.png) | Ended session clears the active nav; one status language. The recharge error state is [`consumer-light-1440-recharge-error.png`](final/consumer-light-1440-recharge-error.png) |
 
+## Dialogs and ordinary rows (the second review)
+
+The first matrix only opened pages, so the review found copy inside dialogs and
+rows that the page audit could not see. These are the same fixes, now with a
+visible-DOM test and real dialog frames.
+
+| Where | Before (source at `0db687c`) | After | Evidence |
+| --- | --- | --- | --- |
+| Wallet network section | "这里不会付款、授信或产生可消费额度"; "主网发送、授信、自动充值…"; "不开启主网发送或授信" | "这里只查询余额，不能付款或充值"; "主网付款、自动充值和资金流仍未开放…不会自动增加可用额度"; "这不会开放主网付款" | `provider-light-1440-wallet.png`, `consumer-light-1440-wallet.png`; `wallet-network-ui.js` |
+| Network cards / receiving | "链 56", "链 8453", "BSC 56 与 Base 8453" | "BSC", "Base", "BSC 与 Base"; chain id in collapsed 技术详情 | `provider-light-1440-wallet.png`; matrix `chainIdText: []` |
+| Browser-wallet dialog | "浏览器扩展必须由你在下一屏选择具体钱包，不会自动使用 window.ethereum" | "连接浏览器钱包时，你需要在下一屏明确选择具体钱包，不会自动连接其他钱包" | `consumer-light-1440-connect-wallet-dialog.png`, dark + narrow |
+| External wallet area | EIP-6963 / chainId in an open details | visible account/status only; protocol and chain id in collapsed 技术详情 | `consumer-light-1440-external-wallet.png` |
+| Human approval | "…返回当前报价的 selected version" | "…由服务返回这次报价对应的价格版本" | `provider-light-1440-approval-dialog.png`, dark + narrow |
+| Payment preview | "网络 链 84532", gas/nonce/digest as visible rows | "网络 Base 测试网"; chain id, nonce, gas, digest in collapsed 技术详情 | `fixture-payment-preview.png` (labelled fixture); `consumer-light-1440-recharge-error-dialog.png` (real form/error) |
+
 Full 48-shot matrix: [`evidence/final/`](final/) and the machine-readable
 [`matrix.json`](final/matrix.json). The base screenshots are the honest pre-fix
 source; they are not copied here, so the before set keeps one home.

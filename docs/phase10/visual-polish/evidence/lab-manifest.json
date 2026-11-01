@@ -1,7 +1,7 @@
 {
   "schema": "ohmyaihub-phase10-visual-lab/v1",
-  "at": "2026-11-01T03:00:14.399Z",
-  "root": "/tmp/ohmyaihub-visual-16725",
+  "at": "2026-11-01T04:14:28.572Z",
+  "root": "/tmp/ohmyaihub-visual-97487",
   "platform": {
     "os": "darwin",
     "arch": "arm64"
@@ -9,13 +9,13 @@
   "magpie": {
     "version": "magpie 0.1.2289",
     "binarySha256": "9dd74b0fe4ebe93e3eadfcc160e1f0a8d7c84245e1a4867ffed6f08862df272c",
-    "isolatedCopy": "/tmp/ohmyaihub-visual-16725/Magpie.app",
+    "isolatedCopy": "/tmp/ohmyaihub-visual-97487/Magpie.app",
     "zipSha256": "c704be0d96ccaef64d5b6d7cdadd92b6bc0b650b5ca0b0a119b1c5d8900fc6a0",
     "release": "https://github.com/yetone/magpie-releases/releases/tag/v0.1.2289",
     "pinnedBinarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
     "note": "The lab copy was re-signed ad hoc with a unique bundle id so a launch cannot hand over to the user's running Magpie; its binary hash therefore differs from the pinned release binary."
   },
-  "network": "visual-eeeb50c5e1",
+  "network": "visual-ef7edaf057",
   "setupWarnings": {
     "provider": [
       "FAIL        configured: no overlay configuration yet",
@@ -33,29 +33,29 @@
   "nodes": [
     {
       "name": "provider",
-      "home": "/tmp/ohmyaihub-visual-16725/provider/home",
-      "config": "/tmp/ohmyaihub-visual-16725/provider/.config",
+      "home": "/tmp/ohmyaihub-visual-97487/provider/home",
+      "config": "/tmp/ohmyaihub-visual-97487/provider/.config",
       "apiPort": 34617,
-      "consolePort": 55504,
+      "consolePort": 49367,
       "gatewayPort": 34311,
       "listen": "tcp://127.0.0.1:11010",
-      "upstreamPort": 39015,
+      "upstreamPort": 39021,
       "model": "provider/alpha-model",
-      "pid": 17360,
-      "upstreamPid": 16813
+      "pid": 97784,
+      "upstreamPid": 97628
     },
     {
       "name": "consumer",
-      "home": "/tmp/ohmyaihub-visual-16725/consumer/home",
-      "config": "/tmp/ohmyaihub-visual-16725/consumer/.config",
+      "home": "/tmp/ohmyaihub-visual-97487/consumer/home",
+      "config": "/tmp/ohmyaihub-visual-97487/consumer/.config",
       "apiPort": 34618,
-      "consolePort": 55586,
+      "consolePort": 49416,
       "gatewayPort": 34312,
       "listen": "tcp://127.0.0.1:11011",
-      "upstreamPort": 39016,
+      "upstreamPort": 39022,
       "model": "consumer/beta-model",
-      "pid": 17489,
-      "upstreamPid": 17401
+      "pid": 97943,
+      "upstreamPid": 97848
     }
   ],
   "keep": false,
@@ -68,8 +68,11 @@
     "tool": "ego-browser nodejs"
   },
   "matrix": {
-    "script": "docs/phase10/visual-polish/lab/shots.mjs",
-    "shots": 48,
-    "checks": 48
+    "pageShots": 48,
+    "dialogShots": 8,
+    "fixtureShots": 1,
+    "pageChecks": 48,
+    "dialogChecks": 8,
+    "fixtureChecks": 1
   }
 }

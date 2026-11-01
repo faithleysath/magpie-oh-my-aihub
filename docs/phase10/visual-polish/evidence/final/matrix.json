@@ -1,13 +1,13 @@
 {
   "schema": "ohmyaihub-phase10-visual-matrix/v1",
-  "at": "2026-11-01T03:31:08.557Z",
-  "lab": "/tmp/ohmyaihub-visual-16725",
+  "at": "2026-11-01T04:28:13.240Z",
+  "lab": "/tmp/ohmyaihub-visual-25450",
   "magpie": {
     "version": "magpie 0.1.2289",
     "binarySha256": "9dd74b0fe4ebe93e3eadfcc160e1f0a8d7c84245e1a4867ffed6f08862df272c",
-    "isolatedCopy": "/tmp/ohmyaihub-visual-16725/Magpie.app"
+    "isolatedCopy": "/tmp/ohmyaihub-visual-25450/Magpie.app"
   },
-  "network": "visual-eeeb50c5e1",
+  "network": "visual-677abd7290",
   "shots": [
     "provider-light-1440-home.png",
     "provider-light-1440-discovery.png",
@@ -75,6 +75,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1167
@@ -95,6 +96,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1084
@@ -115,6 +117,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1759
@@ -123,7 +126,7 @@
       "file": "provider-light-1440-wallet.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -135,9 +138,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 2299
+      "pageHeight": 2297
     },
     {
       "file": "provider-light-1440-network.png",
@@ -155,6 +159,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1319
@@ -175,6 +180,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1167
@@ -195,6 +201,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1084
@@ -215,6 +222,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1759
@@ -223,7 +231,7 @@
       "file": "provider-dark-1440-wallet.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -235,9 +243,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 2299
+      "pageHeight": 2297
     },
     {
       "file": "provider-dark-1440-network.png",
@@ -255,6 +264,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1319
@@ -275,6 +285,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1306
@@ -295,6 +306,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1352
@@ -315,6 +327,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 2055
@@ -323,7 +336,7 @@
       "file": "provider-light-390-wallet.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -335,9 +348,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 3509
+      "pageHeight": 3478
     },
     {
       "file": "provider-light-390-network.png",
@@ -355,6 +369,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1808
@@ -375,6 +390,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1306
@@ -395,6 +411,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1352
@@ -415,6 +432,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 2055
@@ -423,7 +441,7 @@
       "file": "provider-dark-390-wallet.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -435,9 +453,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 3509
+      "pageHeight": 3478
     },
     {
       "file": "provider-dark-390-network.png",
@@ -455,6 +474,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1808
@@ -475,6 +495,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1000
@@ -483,7 +504,7 @@
       "file": "provider-light-1440-wallet-full.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -495,15 +516,16 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 2299
+      "pageHeight": 2297
     },
     {
       "file": "provider-light-1440-recharge-error.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -515,9 +537,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 2299
+      "pageHeight": 2297
     },
     {
       "file": "consumer-light-1440-home.png",
@@ -535,6 +558,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1167
@@ -555,6 +579,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1051
@@ -575,6 +600,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1630
@@ -583,7 +609,7 @@
       "file": "consumer-light-1440-wallet.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -595,9 +621,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 2299
+      "pageHeight": 2297
     },
     {
       "file": "consumer-light-1440-network.png",
@@ -615,6 +642,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1319
@@ -635,6 +663,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1167
@@ -655,6 +684,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1051
@@ -675,6 +705,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1630
@@ -683,7 +714,7 @@
       "file": "consumer-dark-1440-wallet.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -695,9 +726,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 2299
+      "pageHeight": 2297
     },
     {
       "file": "consumer-dark-1440-network.png",
@@ -715,6 +747,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1319
@@ -735,6 +768,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1306
@@ -755,6 +789,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1241
@@ -775,6 +810,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1899
@@ -783,7 +819,7 @@
       "file": "consumer-light-390-wallet.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -795,9 +831,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 3509
+      "pageHeight": 3478
     },
     {
       "file": "consumer-light-390-network.png",
@@ -815,6 +852,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1808
@@ -835,6 +873,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1306
@@ -855,6 +894,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1241
@@ -875,6 +915,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1899
@@ -883,7 +924,7 @@
       "file": "consumer-dark-390-wallet.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -895,9 +936,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 3509
+      "pageHeight": 3478
     },
     {
       "file": "consumer-dark-390-network.png",
@@ -915,6 +957,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1808
@@ -935,6 +978,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1000
@@ -943,7 +987,7 @@
       "file": "consumer-light-1440-wallet-full.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -955,15 +999,16 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 2299
+      "pageHeight": 2297
     },
     {
       "file": "consumer-light-1440-recharge-error.png",
       "middleDots": 0,
       "arrows": 0,
-      "statusTexts": 4,
+      "statusTexts": 2,
       "pills": 0,
       "maxStickerDepth": 1,
       "fontSizes": [
@@ -975,9 +1020,10 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
-      "pageHeight": 2299
+      "pageHeight": 2297
     },
     {
       "file": "focus-and-motion",
@@ -1005,6 +1051,7 @@
       "monoProse": [],
       "techTerms": [],
       "rawStates": [],
+      "chainIdText": [],
       "overflowX": 0,
       "wide": [],
       "pageHeight": 1000

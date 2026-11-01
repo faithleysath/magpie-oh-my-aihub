@@ -67,12 +67,22 @@ const audit = () => {
   const fontSizes = [...new Set([...document.querySelectorAll("body *")].filter((node) => visible(node) && node.textContent.trim()).map((node) => getComputedStyle(node).fontSize))].sort();
   const mono = [...document.querySelectorAll("body *")].filter((node) => visible(node) && /monospace/.test(getComputedStyle(node).fontFamily) && node.children.length === 0 && node.textContent.trim());
   const monoProse = mono.filter((node) => /[\u4e00-\u9fff]/.test(node.textContent)).map((node) => node.textContent.trim().slice(0, 40));
-  const ordinary = [...document.querySelectorAll("body *")].filter((node) => visible(node) && node.children.length === 0 && !node.closest("details"));
-  const tech = ["EIP-6963", "TOFU", "presence", "priceVersion", "chainId", "FULL AUTO", "不可授信", "window.ethereum"];
+  // A summary is visible even when its details is closed; the body is not.
+  const inClosedDetails = (node) => Boolean(node.closest("details:not([open])")) && !node.closest("summary");
+  const rendered = (node) => {
+    if (node.hidden || inClosedDetails(node)) return false;
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  };
+  const ordinary = [...document.querySelectorAll("body *")].filter((node) => rendered(node) && node.children.length === 0 && node.textContent.trim());
+  const tech = ["EIP-6963", "TOFU", "presence", "priceVersion", "chainId", "FULL AUTO", "授信", "不可授信", "window.ethereum"];
   const techTerms = tech.filter((term) => ordinary.some((node) => node.textContent.includes(term)));
   // Raw protocol words that must be translated before they reach a normal row.
   const rawWords = ["ready", "delivering", "approved", "revoked", "unverified", "pending", "failed", "unknown", "enabled", "disabled"];
   const rawStates = rawWords.filter((word) => ordinary.some((node) => new RegExp(`\\b${word}\\b`).test(node.textContent)));
+  // A chain id in an ordinary row is the same defect as the word "chainId".
+  const chainIdText = ordinary.filter((node) => /(^|\s)链\s*\d{2,}/.test(node.textContent)).map((node) => node.textContent.trim().slice(0, 40));
   const wide = [...document.querySelectorAll("body *")].filter((node) => visible(node) && node.getBoundingClientRect().right > window.innerWidth + 1).map((node) => `${node.tagName.toLowerCase()}.${String(node.className).split(" ")[0]}`).slice(0, 8);
   return {
     middleDots: (text.match(/·/g) || []).length,
@@ -84,6 +94,7 @@ const audit = () => {
     monoProse,
     techTerms,
     rawStates,
+    chainIdText,
     overflowX: document.documentElement.scrollWidth - window.innerWidth,
     wide,
     pageHeight: document.documentElement.scrollHeight,

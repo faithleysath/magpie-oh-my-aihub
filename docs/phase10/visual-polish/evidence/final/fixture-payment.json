@@ -1,0 +1,12 @@
+{
+  "schema": "ohmyaihub-phase10-visual-fixture-payment/v1",
+  "at": "2026-11-01T04:20:57.562Z",
+  "source": "dev fixture (plugin/scripts/console-preview.ts --scenario payment), shipped console assets",
+  "screenshot": "fixture-payment-preview.png",
+  "techTerms": [],
+  "rawStates": [],
+  "chainIdText": [],
+  "hasTechnicalDetails": true,
+  "text": "充值 向已授权的伙伴充值。付款条件通过已认证的连接交换，签名只在本机钱包确认，付款只在明确预览后发送。 提供方：我的收款与发票 1.5 等待付款 Base 测试网 发票 inv-fixture-1 顾客 consumer-node 已验签 2026-11-01T00:10:00.000Z 伙伴 网络 资产 金额（代币单位） 申请充值条件 付款预览 网络 Base 测试网 资产 eip155:84532:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913 金额 1.5 收款地址 0x2222222222222222222222222222222222222222 付款地址 0x3333333333333333333333333333333333333333 技术详情 我已核对以上网络、资产、收款地址和金额；只发送这一笔。 确认并从本机钱包付款 关闭预览 我的充值 1.5 等待付款 Base 测试网 伙伴 provider-node 发票 inv-fixture-1 已签名 到期 2026-11-01T00:10:00.000Z 预览并付款 自动充值提醒（可选）",
+  "clicked": true
+}

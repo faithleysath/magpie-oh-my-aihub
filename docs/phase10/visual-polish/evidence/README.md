@@ -17,7 +17,7 @@ ego-lite (Chromium).
 | Browser | ego-lite via `ego-browser nodejs` |
 | Nodes | provider `ohmyaihub-30c37d6f`, consumer `ohmyaihub-adefaf25`, one overlay `visual-eeeb50c5e1` |
 | Console | real plugin host, random loopback ports (55504 / 55586) |
-| Lab root | `/tmp/ohmyaihub-visual-16725` (deleted after the run; see `cleanup-proof.json`) |
+| Lab root | final run `/tmp/ohmyaihub-visual-25450` (deleted after the run; see `cleanup-proof.json`) |
 
 The lab copy of the app was re-signed ad hoc with a unique bundle id so a launch
 cannot hand over to the user's running Magpie. The user's Magpie data, default
@@ -40,12 +40,13 @@ ego-browser nodejs < docs/phase10/visual-polish/lab/shots.mjs
 bun docs/phase10/visual-polish/lab/cleanup.ts --root /tmp/ohmyaihub-visual-<pid>
 ```
 
-`lab-manifest.json` is the sanitized lab report (ports, PIDs, versions, model
-names; no secret). `final/matrix.json` is the per-shot audit: overflow, sticker
+`lab-manifest.json` is the sanitized report of this lab setup (versions, hashes,
+ports, PIDs, model names; no secret); `final/matrix.json` and
+`final/dialogs.json` name the final run root. `final/matrix.json` is the per-shot audit: overflow, sticker
 nesting depth, pills, visible middle dots/arrows, raw protocol words, technical
 terms outside details, mono prose, font-size set, status-text count.
 
-## What the matrix contains (48 images)
+## What the matrix contains (48 page images + 8 dialog images + 1 fixture)
 
 - 5 pages × light/dark × 1440×900 and 390×844 × 2 nodes = 40
 - 我的连接 on both nodes = 2
@@ -53,6 +54,20 @@ terms outside details, mono prose, font-size set, status-text count.
 - real recharge validation error on both nodes = 2
 - keyboard focus ring = 1
 - ended session = 1
+
+Dialog evidence (`dialogs.json`, 8 images): the real browser-wallet connection
+dialog (light/dark/narrow), the external-wallet area, the real human approval
+with its selected quote preview (light/dark/narrow), and the real recharge form
+with its validation error. The approval modal is captured at a tall viewport
+with the modal's internal scroll expanded so the whole dialog is visible; the
+content is the real DOM, only the scroll container is expanded for the frame.
+
+The payment preview itself (`fixture-payment-preview.png`) is a **dev fixture**
+render: `plugin/scripts/console-preview.ts --scenario payment` serves the
+shipped `app.js`/`style.css` with a synthetic obligation, because the on-chain
+payment lab was not re-run in this frontend-only round. `fixture-payment.json`
+records the same visible-text audit for it. The real recharge form and its
+error are in the two-node matrix.
 
 The narrow captures are `fullPage`; the fixed bottom navigation appears at its
 viewport position in the middle of a long capture. That is a screenshot-tool
@@ -64,7 +79,10 @@ shows the bar at the bottom.
 
 All 48 pages: `middleDots: 0`, `arrows: 0`, `pills: 0`, `overflowX: 0`,
 `maxStickerDepth: 1`, `monoProse: []`, `techTerms: []`, `rawStates: []`,
-`fontSizes: ["14px","16px","20px","26px"]`.
+`chainIdText: []`, `fontSizes: ["14px","16px","20px","26px"]`.
+All 8 dialogs and the fixture preview: `techTerms: []`, `rawStates: []`,
+`chainIdText: []` in the default-visible text; technical fields are only behind
+a collapsed `技术详情`.
 Focus: `outline: solid 3px`, offset `2px`. Reduced motion:
 `transition-duration: 0s`.
 
@@ -75,6 +93,7 @@ Focus: `outline: solid 3px`, offset `2px`. Reduced motion:
   connected-call state is not claimed here. That is a transport/lab condition
   (the PR #51 report has the delivered path at its own SHA), not a visual change.
 - No on-chain recharge was run in this frontend-only round. The recharge panel
-  is shown in its real empty state and with its real validation error.
+  is shown in its real empty state and with its real validation error; the
+  payment preview dialog is a labelled fixture render (same shipped assets).
 - The two-node overlay ran on one host (loopback listen + LAN discovery), as in
   the PR #51 final lab. It is not a WAN test.

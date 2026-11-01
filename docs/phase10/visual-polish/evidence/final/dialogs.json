@@ -1,0 +1,81 @@
+{
+  "schema": "ohmyaihub-phase10-visual-dialogs/v1",
+  "at": "2026-11-01T04:25:39.340Z",
+  "lab": "/tmp/ohmyaihub-visual-25450",
+  "shots": [
+    "provider-light-1440-approval-dialog.png",
+    "provider-dark-1440-approval-dialog.png",
+    "provider-light-390-approval-dialog.png",
+    "consumer-light-1440-connect-wallet-dialog.png",
+    "consumer-dark-1440-connect-wallet-dialog.png",
+    "consumer-light-390-connect-wallet-dialog.png",
+    "consumer-light-1440-external-wallet.png",
+    "consumer-light-1440-recharge-error-dialog.png"
+  ],
+  "checks": [
+    {
+      "file": "provider-light-1440-approval-dialog.png",
+      "scope": "dialog[open]",
+      "techTerms": [],
+      "rawStates": [],
+      "chainIdText": [],
+      "text": "核对并批准使用请求 关闭 一次确认会绑定这次请求、对方完整身份指纹、当前报价、选中模型的价格版本与批准代次。批准后密钥通过加密会话自动交付，不需要再发文件或复制密钥。 3f4c3563c111679a8578b047a1ab3c9dcbf051c2dbd60cec81e2e94db246ddf1 请求身份与绑定 首次连接，需要核对身份 选择要批准的模型（默认全部请求模型）。本页不计算价格版本；选中后由服务返回这次报价对应的价格版本。 alpha-model 输入 $1000，输出 $1000，每百万 token 预览选中报价 provider/alpha-model 输入 $1000，输出 $1000，每百万 token 选中报价的技术绑定 本次授权的正额度（USD） 额度必须是 $0.0001 的整数倍；0 在 Magpie 中表示不限制，不能当作暂停。 我核对并接受此完整身份指纹：3f4c3563c111679a8578b047a1ab3c9dcbf051c2dbd60cec81e2e94db246ddf1 我确认批准这次请求，并接受当前报价、模型与额度 确认批准"
+    },
+    {
+      "file": "provider-dark-1440-approval-dialog.png",
+      "scope": "dialog[open]",
+      "techTerms": [],
+      "rawStates": [],
+      "chainIdText": [],
+      "text": "核对并批准使用请求 关闭 一次确认会绑定这次请求、对方完整身份指纹、当前报价、选中模型的价格版本与批准代次。批准后密钥通过加密会话自动交付，不需要再发文件或复制密钥。 3f4c3563c111679a8578b047a1ab3c9dcbf051c2dbd60cec81e2e94db246ddf1 请求身份与绑定 首次连接，需要核对身份 选择要批准的模型（默认全部请求模型）。本页不计算价格版本；选中后由服务返回这次报价对应的价格版本。 alpha-model 输入 $1000，输出 $1000，每百万 token 预览选中报价 provider/alpha-model 输入 $1000，输出 $1000，每百万 token 选中报价的技术绑定 本次授权的正额度（USD） 额度必须是 $0.0001 的整数倍；0 在 Magpie 中表示不限制，不能当作暂停。 我核对并接受此完整身份指纹：3f4c3563c111679a8578b047a1ab3c9dcbf051c2dbd60cec81e2e94db246ddf1 我确认批准这次请求，并接受当前报价、模型与额度 确认批准"
+    },
+    {
+      "file": "provider-light-390-approval-dialog.png",
+      "scope": "dialog[open]",
+      "techTerms": [],
+      "rawStates": [],
+      "chainIdText": [],
+      "text": "核对并批准使用请求 关闭 一次确认会绑定这次请求、对方完整身份指纹、当前报价、选中模型的价格版本与批准代次。批准后密钥通过加密会话自动交付，不需要再发文件或复制密钥。 3f4c3563c111679a8578b047a1ab3c9dcbf051c2dbd60cec81e2e94db246ddf1 请求身份与绑定 首次连接，需要核对身份 选择要批准的模型（默认全部请求模型）。本页不计算价格版本；选中后由服务返回这次报价对应的价格版本。 alpha-model 输入 $1000，输出 $1000，每百万 token 预览选中报价 provider/alpha-model 输入 $1000，输出 $1000，每百万 token 选中报价的技术绑定 本次授权的正额度（USD） 额度必须是 $0.0001 的整数倍；0 在 Magpie 中表示不限制，不能当作暂停。 我核对并接受此完整身份指纹：3f4c3563c111679a8578b047a1ab3c9dcbf051c2dbd60cec81e2e94db246ddf1 我确认批准这次请求，并接受当前报价、模型与额度 确认批准"
+    },
+    {
+      "file": "consumer-light-1440-connect-wallet-dialog.png",
+      "scope": "dialog[open]",
+      "techTerms": [],
+      "rawStates": [],
+      "chainIdText": [],
+      "text": "连接已有钱包 关闭 选择一种明确方式。导入或恢复只在本机处理；连接浏览器钱包时，你需要在下一屏明确选择具体钱包，不会自动连接其他钱包。 导入助记词 用已有钱包的恢复助记词在本机创建加密副本。 导入助记词 恢复加密备份 用密码保护的加密备份恢复。 恢复加密备份 连接浏览器扩展 使用已安装的浏览器钱包，不索取助记词。 查看浏览器钱包"
+    },
+    {
+      "file": "consumer-dark-1440-connect-wallet-dialog.png",
+      "scope": "dialog[open]",
+      "techTerms": [],
+      "rawStates": [],
+      "chainIdText": [],
+      "text": "连接已有钱包 关闭 选择一种明确方式。导入或恢复只在本机处理；连接浏览器钱包时，你需要在下一屏明确选择具体钱包，不会自动连接其他钱包。 导入助记词 用已有钱包的恢复助记词在本机创建加密副本。 导入助记词 恢复加密备份 用密码保护的加密备份恢复。 恢复加密备份 连接浏览器扩展 使用已安装的浏览器钱包，不索取助记词。 查看浏览器钱包"
+    },
+    {
+      "file": "consumer-light-390-connect-wallet-dialog.png",
+      "scope": "dialog[open]",
+      "techTerms": [],
+      "rawStates": [],
+      "chainIdText": [],
+      "text": "连接已有钱包 关闭 选择一种明确方式。导入或恢复只在本机处理；连接浏览器钱包时，你需要在下一屏明确选择具体钱包，不会自动连接其他钱包。 导入助记词 用已有钱包的恢复助记词在本机创建加密副本。 导入助记词 恢复加密备份 用密码保护的加密备份恢复。 恢复加密备份 连接浏览器扩展 使用已安装的浏览器钱包，不索取助记词。 查看浏览器钱包"
+    },
+    {
+      "file": "consumer-light-1440-external-wallet.png",
+      "scope": "#wallet-vault-panel",
+      "techTerms": [],
+      "rawStates": [],
+      "chainIdText": [],
+      "text": "本地钱包 尚未创建 还没有本地钱包 创建后会一次性显示恢复助记词；也可以导入助记词、恢复加密备份或连接浏览器钱包。 创建钱包 连接已有钱包 连接浏览器钱包 密钥留在钱包扩展里；只有你明确选择后才会请求账户。 没有找到可用的钱包扩展。安装或解锁后点“重新查找”。 重新查找 技术说明"
+    },
+    {
+      "file": "consumer-light-1440-recharge-error-dialog.png",
+      "scope": "#payment-p2p-panel",
+      "techTerms": [],
+      "rawStates": [],
+      "chainIdText": [],
+      "text": "充值 向已授权的伙伴充值。付款条件通过已认证的连接交换，签名只在本机钱包确认，付款只在明确预览后发送。 提供方：我的收款与发票 还没有收到的充值申请。 伙伴 网络 资产 金额（代币单位） 申请充值条件 请选择已授权的伙伴、网络和资产 我的充值 还没有充值记录。 自动充值提醒（可选）"
+    }
+  ]
+}

@@ -18,7 +18,7 @@
 | Area | Verdict | Basis |
 | --- | --- | --- |
 | AI-slop rework (10 review items) | **DONE — VERIFIED + REPRODUCED** | Source rules locked by `visual-system.test.js`; 48 real screenshots with 0 violations in the page audit |
-| Visual UX (five pages, light/dark, desktop/narrow) | **GO** | 48-shot matrix on real Magpie 0.1.2289 + EasyTier 2.6.4, two nodes; no overflow, one sticker layer, four type sizes, no pills/dots/arrows/raw states |
+| Visual UX (five pages, light/dark, desktop/narrow) | **GO** | 48-shot page matrix + 8 real dialog shots on Magpie 0.1.2289 + EasyTier 2.6.4, two nodes; no overflow, one sticker layer, four type sizes, no pills/dots/arrows/raw states/chain ids in ordinary rows |
 | Keyboard / reduced motion | **GO** | 3 px ink focus ring at 2 px offset; `transition-duration: 0s` under `prefers-reduced-motion: reduce` |
 | Existing functionality | **unchanged, tests green** | console behaviour tests + full plugin suite; session, CSP, three-field join and payment/wallet actions untouched |
 | Zero-file P2P (visual states) | **REPRODUCED (request + human approval)** | Real catalogue, real request, real approval with `$0.05` cap and authorized partner row; delivery stayed `正在交付 / 排队中` in this lab (see limits) |
@@ -40,7 +40,10 @@
 4. **Copy** — wallet scope once; lock/address limit once; EIP-6963,
    `window.ethereum`, TOFU/presence/chainId/priceVersion in collapsed details;
    "FULL AUTO" gone; raw protocol states translated; the home readiness row is a
-   Chinese task instead of an English check string.
+   Chinese task instead of an English check string; "授信" is gone from ordinary
+   UI ("不能付款或充值", "不会开放主网付款", "不会自动增加可用额度"); network
+   cards/checkboxes/recharge rows say BSC/Base and keep the chain id in the
+   collapsed technical details.
 5. **Middle dots** — none in shipped source or rendered pages; metadata is a
    layout row or a natural sentence.
 6. **Radii** — 16 px outer / 8 px inner with ≥16 px nested distance; most nesting
@@ -67,12 +70,20 @@
 
 ## Real matrix
 
-`docs/phase10/visual-polish/evidence/final/` — 48 images, two real nodes,
+`docs/phase10/visual-polish/evidence/final/` — 48 page images, two real nodes,
 light/dark × 1440×900/390×844 × five pages, plus 我的连接, full wallet/recharge,
-the real recharge validation error, focus and ended session.
+the real recharge validation error, focus and ended session. A second set of 8
+real dialog images covers the browser-wallet connection dialog (light/dark/
+narrow), the external-wallet area, the human approval with its selected quote
+preview (light/dark/narrow) and the real recharge error. `dialogs.json` records
+the same visible-text audit for each; `fixture-payment-preview.png` +
+`fixture-payment.json` are a clearly labelled fixture render of the payment
+preview (the on-chain lab was not re-run).
 `matrix.json` records per page: `middleDots 0`, `arrows 0`, `pills 0`,
 `overflowX 0`, `maxStickerDepth 1`, `monoProse []`, `techTerms []`,
-`rawStates []`, `fontSizes ["14px","16px","20px","26px"]`.
+`rawStates []`, `chainIdText []`, `fontSizes ["14px","16px","20px","26px"]`;
+all dialogs: no 授信/EIP-6963/window.ethereum/chainId/priceVersion/FULL AUTO and
+no raw protocol word in the default-visible text.
 
 Environment and reproduction: [`evidence/README.md`](evidence/README.md);
 sanitized lab report [`evidence/lab-manifest.json`](evidence/lab-manifest.json);
@@ -97,6 +108,7 @@ before/after [`BEFORE-AFTER.md`](BEFORE-AFTER.md); cleanup
   `正在交付 / 排队中` in this lab (transport/lab condition). The delivered path is
   evidenced at the PR #51 SHA, not claimed again here.
 - No on-chain recharge was re-run in this frontend-only round. The recharge panel
-  is shown in its real empty state and with its real validation error.
+  is shown in its real empty state and with its real validation error; the
+  payment preview dialog is a labelled fixture render using the shipped assets.
 - External MetaMask/Rabby product flow remains **UNKNOWN**, unchanged.
 - Windows `test/provisioner.test.ts` gap is inherited from PR #51 and untouched.
