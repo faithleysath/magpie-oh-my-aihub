@@ -1,14 +1,15 @@
 // External-wallet adapter for the local console: EIP-6963 discovery, explicit
-// EIP-1193 connection, EIP-712 verification and testnet-only ERC-20 payment
-// previews.
+// EIP-1193 connection, EIP-712 verification and ERC-20 payment previews on the
+// same production/dev chains the plugin can credit.
 //
 // Scope and boundaries (docs/phase10-c-external-wallet.md):
 //  - pure browser module; no runtime dependency, no build step, no storage;
 //  - a wallet's `info` is untrusted display data, never an identity proof;
 //  - no generic RPC passthrough, no dynamic method or calldata from callers;
 //  - no mnemonic/private-key field, no bridge, swap or token approval;
-//  - mainnet 56/8453 sending is refused here as defense-in-depth. The service
-//    layer remains the hard gate; this module must never be the only gate.
+//  - BSC 56 and Base 8453 are production peers of the two development testnets.
+//    The service registry, the journal and the signing permit remain the gates;
+//    this module must never be the only gate.
 //  - `eth_sendTransaction` only for a preview issued by this module, after an
 //    explicit, per-transfer confirmation. A broadcast hash is never credit.
 //
@@ -24,17 +25,18 @@ export const EIP6963_ANNOUNCE = "eip6963:announceProvider";
 export const EIP6963_REQUEST = "eip6963:requestProvider";
 export const TESTNET_CHAIN_IDS = Object.freeze([97, 84532]);
 /** Core credit allowlist: unknown chain defaults to deny, never infer from networkType. */
-export const CREDIT_CHAIN_IDS = Object.freeze([97, 84532]);
+export const CREDIT_CHAIN_IDS = Object.freeze([56, 97, 8453, 84532]);
 export const MAINNET_CHAIN_IDS = Object.freeze([56, 8453]);
+/** All chains this adapter may preview or send. */
+export const SENDABLE_CHAIN_IDS = CREDIT_CHAIN_IDS;
 
-/** Local copy of the C-registry hard set until plugin/src/mainnet-surface.ts merges. */
 export function isMainnetChainId(chainId) {
   return MAINNET_CHAIN_IDS.includes(chainId);
 }
 
-/** Hard refusal shared by every send/sign path; chainId is authoritative. */
+/** The chain-id layer is an allowlist; the production policy is the server's. */
 export function assertNoMainnetSend(chainId) {
-  if (isMainnetChainId(chainId)) throw fail(WALLET_ERROR.MAINNET_BLOCKED, "主网发送和自动入账在本模块与服务层均被阻断");
+  if (!CREDIT_CHAIN_IDS.includes(chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "该网络不在可付款链 allowlist");
 }
 export const DEPOSIT_DOMAIN_NAME = "Oh My AI Hub";
 export const DEPOSIT_DOMAIN_VERSION = "1";
@@ -753,8 +755,8 @@ function findAsset(registry, assetId) {
   // the same value as pricingKind. Accept exactly one consistent shape.
   const pricingKind = asset.pricing && typeof asset.pricing === "object" ? asset.pricing.kind : asset.pricingKind;
   if (asset.pricing && typeof asset.pricing === "object" && asset.pricingKind !== undefined && asset.pricingKind !== pricingKind) throw fail(WALLET_ERROR.INVALID_REGISTRY, "代币 pricing.kind 与 pricingKind 不一致");
-  if (pricingKind !== "fixed-test-rate" && pricingKind !== "not-creditable") throw fail(WALLET_ERROR.INVALID_REGISTRY, "代币缺少有效 pricing.kind/pricingKind");
-  if (asset.credit !== (pricingKind === "fixed-test-rate")) throw fail(WALLET_ERROR.INVALID_REGISTRY, "代币 credit 与 pricing 不一致");
+  if (pricingKind !== "fixed-test-rate" && pricingKind !== "stablecoin-usd" && pricingKind !== "not-creditable") throw fail(WALLET_ERROR.INVALID_REGISTRY, "代币缺少有效 pricing.kind/pricingKind");
+  if (asset.credit !== (pricingKind === "fixed-test-rate" || pricingKind === "stablecoin-usd")) throw fail(WALLET_ERROR.INVALID_REGISTRY, "代币 credit 与 pricing 不一致");
   const symbol = cleanText(asset.symbol, 32);
   if (!symbol) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币符号无效");
   return {
@@ -772,34 +774,29 @@ function findAsset(registry, assetId) {
 }
 
 function assertSendableNetwork(network, allowedChainIds) {
-  // ChainId is the hard gate: a forged networkType="testnet" on 56/8453 still
-  // fails here. Do not replace this with a metadata-only check.
+  // ChainId is the hard gate: an unknown chain does not become sendable because
+  // a registry record calls itself testnet.
   assertNoMainnetSend(network.chainId);
-  if (!CREDIT_CHAIN_IDS.includes(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "不在核心 credit 链 allowlist（只允许 97/84532）");
-  if (network.networkType !== "testnet") throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "只允许测试网");
-  if (!allowedChainIds.has(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "该测试网不在允许列表");
+  if (!allowedChainIds.has(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "该网络不在允许列表");
   if (!network.enabled) throw fail(WALLET_ERROR.CHAIN_DISABLED, `chainId ${network.chainId} 未启用`);
   if (network.support !== "credit") throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该网络只读，不能付款或增加可用额度");
-  if (!network.receivable) throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该网络未开启收款");
 }
 
 function assertSendableAsset(asset, network) {
   if (asset.chainId !== network.chainId) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币不属于当前网络");
   if (!asset.enabled) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币未启用");
-  if (!asset.testnetOnly) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "只允许 testnetOnly 代币");
-  if (asset.issuerType !== "mock") throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "当前只允许已登记的 mock 测试代币");
   if (!asset.credit) throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "该代币不能用于付款或增加可用额度");
-  if (asset.pricingKind !== "fixed-test-rate") throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "该代币没有可用于付款的固定测试价格");
+  if (asset.pricingKind !== "fixed-test-rate" && asset.pricingKind !== "stablecoin-usd") throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "该代币没有可用于付款的面值价格");
+  if (network.networkType === "testnet" && (asset.issuerType !== "mock" || !asset.testnetOnly)) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "测试网只允许已登记的 mock 测试代币");
+  if (network.networkType === "mainnet" && (asset.issuerType === "mock" || asset.testnetOnly)) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "主网代币不能是 mock/testnetOnly");
 }
 
-/** A signature is not credit, but it still needs a credit-capable testnet record. */
+/** A signature is not credit, but it still needs a credit-capable network record. */
 function assertDepositNetworkKnown(registry, chainId) {
   if (registry === undefined || registry === null) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "签名需要本地网络登记；未提供注册表");
   const network = findNetwork(registry, chainId);
   assertNoMainnetSend(chainId);
-  if (!CREDIT_CHAIN_IDS.includes(chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "签名不在核心 credit 链 allowlist（只允许 97/84532）");
-  if (network.networkType !== "testnet") throw fail(WALLET_ERROR.MAINNET_BLOCKED, "主网签名请求被阻断");
-  if (!network.enabled || network.support !== "credit" || !network.receivable) throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该测试网当前只读或未开启收款，不能签名");
+  if (!network.enabled || network.support !== "credit" || !network.receivable) throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该网络当前未开启收款，不能签名");
 }
 
 /** Signing never credits, but the asset must always be locally registered. */
@@ -807,11 +804,14 @@ function assertDepositAssetKnown(registry, checked) {
   if (registry === undefined || registry === null) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "签名需要本地资产登记；未提供注册表");
   const asset = findAsset(registry, checked.asset.assetId);
   if (asset.chainId !== checked.chainId) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币不属于请求网络");
+  if (registry && registry.networks) {
+    const network = registry.networks.find((n) => n && n.chainId === checked.chainId);
+    if (network?.networkType === "testnet" && (asset.issuerType !== "mock" || !asset.testnetOnly)) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "测试网只允许 mock 测试代币");
+    if (network?.networkType === "mainnet" && (asset.issuerType === "mock" || asset.testnetOnly)) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "主网代币不能是 mock/testnetOnly");
+  }
   if (!asset.enabled) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币未启用");
-  if (!asset.testnetOnly) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "代币不是测试网专用");
-  if (asset.issuerType !== "mock") throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "代币发行方类型不被当前签名策略接受");
   if (!asset.credit) throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "代币不能用于付款或增加可用额度");
-  if (asset.pricingKind !== "fixed-test-rate") throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "代币没有可用于付款的固定测试价格");
+  if (asset.pricingKind !== "fixed-test-rate" && asset.pricingKind !== "stablecoin-usd") throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "代币没有可用于付款的面值价格");
   if (asset.decimals !== checked.asset.decimals) throw fail(WALLET_ERROR.UNKNOWN_DECIMALS, "代币精度与本地登记不一致");
 }
 
@@ -828,13 +828,12 @@ function assertDepositAssetKnown(registry, checked) {
  */
 export function validateDepositDocument(document, options = {}) {
   const now = options.now ?? Date.now();
-  const allowed = options.allowedChainIds ? new Set(options.allowedChainIds) : new Set(TESTNET_CHAIN_IDS);
+  const allowed = options.allowedChainIds ? new Set(options.allowedChainIds) : new Set(CREDIT_CHAIN_IDS);
   const d = exactKeys(document, ["schema", "invoiceId", "consumerId", "providerId", "chainId", "asset", "amount", "recipientAddress", "expiresAt", "digest", "typedData"], "请求");
   if (d.schema !== "ohmyaihub.deposit-request/v1") throw fail(WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT, "不是充值请求文件");
   if (!Number.isSafeInteger(d.chainId) || d.chainId <= 0) throw fail(WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT, "chainId 无效");
   assertNoMainnetSend(d.chainId);
-  if (!CREDIT_CHAIN_IDS.includes(d.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "请求不在核心 credit 链 allowlist（只允许 97/84532）");
-  if (!allowed.has(d.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "请求不是允许的测试网络");
+  if (!allowed.has(d.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "请求不是允许的支付网络");
   if (options.expectedChainId !== undefined && options.expectedChainId !== d.chainId) throw fail(WALLET_ERROR.CHAIN_MISMATCH, "请求网络与预期不一致");
   const invoiceId = textValue(d.invoiceId, "请求编号");
   const consumerId = textValue(d.consumerId, "消费者");
@@ -1126,23 +1125,11 @@ export function createExternalWallet(options = {}) {
     assertExplicit(options);
     assertUsable();
     if (!Number.isSafeInteger(target) || target <= 0) throw fail(WALLET_ERROR.INVALID_CHAIN_ID, "目标 chainId 无效");
-    if (isMainnetChainId(target)) {
-      if (!allowMainnetRead) throw fail(WALLET_ERROR.MAINNET_BLOCKED, "主网仅允许只读，且需显式允许；本会话默认阻断");
-      const network = findNetwork(registry, target);
-      if (network.networkType !== "mainnet" || network.support !== "read-only") throw fail(WALLET_ERROR.INVALID_REGISTRY, "目标不是已登记的只读主网");
-    } else {
-      const network = findNetwork(registry, target);
-      if (!CREDIT_CHAIN_IDS.includes(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "目标不在核心 credit 链 allowlist（只允许 97/84532）");
-      if (!allowedChainIds.has(network.chainId) || network.networkType !== "testnet") throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "目标测试网不在允许列表");
-    }
+    const network = findNetwork(registry, target);
+    assertSendableNetwork(network, allowedChainIds);
     if (chainId === target) return Object.freeze({ chainId, already: true, generation });
     const before = generation;
-    try {
-      await providerRequest("wallet_switchEthereumChain", [{ chainId: toQuantity(target) }], switchMs);
-    } catch (error) {
-      if (error.code === WALLET_ERROR.CHAIN_NOT_ADDED) throw error;
-      throw error;
-    }
+    await providerRequest("wallet_switchEthereumChain", [{ chainId: toQuantity(target) }], switchMs);
     const current = await readCurrentState();
     applyState(current.list, current.chainId);
     if (current.chainId !== target) throw fail(WALLET_ERROR.CHAIN_MISMATCH, "钱包未切换到目标网络；没有自动重试");
@@ -1152,20 +1139,48 @@ export function createExternalWallet(options = {}) {
     return Object.freeze({ chainId: current.chainId, already: false, generation });
   }
 
+  /**
+   * Adds the registered network to the wallet, then switches to it. It is a
+   * separate, explicit user action because adding a network writes to the
+   * user's wallet configuration. RPC and explorer values come from the local
+   * registry, never from a page parameter.
+   */
+  async function requestAddChain(target, options = {}) {
+    assertExplicit(options);
+    assertUsable();
+    const network = findNetwork(registry, target);
+    assertSendableNetwork(network, allowedChainIds);
+    const raw = typeof registry === "function" ? registry() : registry;
+    const entry = (raw.networks || []).find((n) => n.chainId === target);
+    const rpcUrls = Array.isArray(entry?.rpcEndpoints)
+      ? entry.rpcEndpoints.filter((u) => typeof u === "string" && (/^https:\/\//.test(u) || /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/.test(u)))
+      : [];
+    if (!rpcUrls.length) throw fail(WALLET_ERROR.CHAIN_NOT_ADDED, "本地注册表没有可用于添加网络的 HTTPS RPC");
+    await providerRequest("wallet_addEthereumChain", [{
+      chainId: toQuantity(target),
+      chainName: network.displayName,
+      nativeCurrency: { name: network.nativeSymbol, symbol: network.nativeSymbol, decimals: network.nativeDecimals },
+      rpcUrls: [rpcUrls[0]],
+      blockExplorerUrls: entry?.blockExplorer ? [entry.blockExplorer] : [],
+    }], switchMs);
+    const current = await readCurrentState();
+    applyState(current.list, current.chainId);
+    if (current.chainId !== target) throw fail(WALLET_ERROR.CHAIN_MISMATCH, "钱包已添加网络但未切换；请手动切换后重试");
+    generation++;
+    lastError = null;
+    emit();
+    return Object.freeze({ chainId: current.chainId, added: true, generation });
+  }
+
   async function readBalances(options = {}) {
     assertUsable();
     const current = await readCurrentState();
     applyState(current.list, current.chainId);
     assertUsable();
     const network = findNetwork(registry, current.chainId);
-    const mainnet = isMainnetChainId(network.chainId) || network.networkType === "mainnet";
-    if (mainnet) {
-      if (!allowMainnetRead) throw fail(WALLET_ERROR.MAINNET_BLOCKED, "主网只读需要显式允许");
-      if (network.support !== "read-only") throw fail(WALLET_ERROR.INVALID_REGISTRY, "主网记录不是 read-only，拒绝读取");
-    }
-    const coreCreditChain = CREDIT_CHAIN_IDS.includes(network.chainId);
-    const readOnly = mainnet || network.support === "read-only" || !coreCreditChain;
-    const creditEligible = !mainnet && coreCreditChain && network.networkType === "testnet" && network.enabled && network.support === "credit" && network.receivable;
+    if (!CREDIT_CHAIN_IDS.includes(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "该网络不在可读链 allowlist");
+    const readOnly = true;
+    const creditEligible = network.enabled && network.support === "credit" && network.receivable;
     const wanted = options.assetId;
     let asset = null;
     if (wanted !== undefined) {
@@ -1215,6 +1230,42 @@ export function createExternalWallet(options = {}) {
     const recovered = recoverTypedDataSigner(checked.digest, signature);
     if (!recovered || !sameAddress(recovered, account)) throw fail(WALLET_ERROR.INVALID_SIGNATURE, "签名无法恢复为当前钱包账户；签名已丢弃");
     return Object.freeze({ signature, payerAddress: recovered, digest: checked.digest, chainId: checked.chainId, expiresAt: checked.expiresAt, generation });
+  }
+
+  /**
+   * Signs an already server-verified EIP-712 document. The caller must supply
+   * the exact digest it verified and the chain it checked. The signature is
+   * verified locally against the current account before it is returned; it is
+   * never a credit and never broadcasts.
+   */
+  async function signTypedData(typedData, options = {}) {
+    assertExplicit(options);
+    assertUsable();
+    if (!typedData || typeof typedData !== "object" || Array.isArray(typedData)) throw fail(WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT, "EIP-712 数据无效");
+    const domain = typedData.domain;
+    if (!domain || typeof domain !== "object") throw fail(WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT, "EIP-712 domain 无效");
+    const targetChain = Number(domain.chainId);
+    if (!Number.isSafeInteger(targetChain) || targetChain <= 0) throw fail(WALLET_ERROR.INVALID_CHAIN_ID, "EIP-712 chainId 无效");
+    if (options.expectedChainId !== undefined && options.expectedChainId !== targetChain) throw fail(WALLET_ERROR.CHAIN_MISMATCH, "EIP-712 网络与预期不一致");
+    const network = findNetwork(registry, targetChain);
+    assertSendableNetwork(network, allowedChainIds);
+    if (typeof options.expectedDigest !== "string" || !HEX_32_RE.test(options.expectedDigest)) throw fail(WALLET_ERROR.DIGEST_MISMATCH, "缺少已核对的摘要");
+    const digest = typedDataDigest(typedData);
+    if (digest.toLowerCase() !== options.expectedDigest.toLowerCase()) throw fail(WALLET_ERROR.DIGEST_MISMATCH, "EIP-712 摘要与服务核对值不一致");
+    const current = await readCurrentState();
+    applyState(current.list, current.chainId);
+    assertUsable();
+    if (current.chainId !== targetChain) throw fail(WALLET_ERROR.CHAIN_MISMATCH, "钱包当前网络与请求不一致；请显式切换网络，本模块不会自动切换");
+    const startedGen = generation;
+    const signature = await providerRequest("eth_signTypedData_v4", [account, JSON.stringify(typedData)], signMs);
+    assertCurrent(startedGen);
+    const after = await readCurrentState();
+    applyState(after.list, after.chainId);
+    if (after.chainId !== targetChain || !after.list.some((value) => sameAddress(value, account))) throw fail(WALLET_ERROR.WALLET_STATE_CHANGED, "钱包账户或网络在签名期间变化；签名已丢弃");
+    if (typeof signature !== "string" || !HEX_65_RE.test(signature)) throw fail(WALLET_ERROR.INVALID_SIGNATURE, "钱包返回的签名格式无法识别");
+    const recovered = recoverTypedDataSigner(digest, signature);
+    if (!recovered || !sameAddress(recovered, account)) throw fail(WALLET_ERROR.INVALID_SIGNATURE, "签名无法恢复为当前钱包账户；签名已丢弃");
+    return Object.freeze({ signature, payerAddress: recovered, digest, chainId: targetChain, generation });
   }
 
   async function prepareTransfer(options = {}) {
@@ -1413,7 +1464,7 @@ export function createExternalWallet(options = {}) {
   }
 
   return Object.freeze({
-    connect, refresh, requestSwitchChain, readBalances, signDeposit, prepareTransfer, confirmTransfer, getReceipt,
+    connect, refresh, requestSwitchChain, requestAddChain, readBalances, signDeposit, signTypedData, prepareTransfer, confirmTransfer, getReceipt,
     snapshot, subscribe(callback) {
       if (typeof callback !== "function") return () => {};
       subscribers.add(callback);
