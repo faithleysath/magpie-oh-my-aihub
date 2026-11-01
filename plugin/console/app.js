@@ -52,7 +52,6 @@ let ended = false;
 let everAuthenticated = false;
 let initialized = false;
 let detectionStarted = false;
-let lastUpdate = null;
 let currentPage = "home";
 let pairingController = null;
 let pairingCountdown = null;
@@ -83,14 +82,6 @@ function notice(message = "", tone = "info") {
   $("notice").className = `notice ${tone}`;
   show("notice", Boolean(message));
 }
-function connection(label, tone = "") {
-  setText("connection", label);
-  $("connection").className = `session-state ${tone}`;
-}
-function updated(stale = false) {
-  setText("last-update", `${stale ? "连接中断，读取于 " : ""}${lastUpdate ? `读取于 ${time(lastUpdate)}` : "尚未成功读取"}`);
-  setText("footer-state", lastUpdate ? `证据时间：${time(lastUpdate)}` : "还没有成功读取本机状态");
-}
 
 /**
  * Never-authenticated, expired and explicit logout are different states. A fresh
@@ -108,7 +99,6 @@ function sessionEnded(reason = "expired") {
   paymentP2p.dispose();
   client.reset();
   initialized = false;
-  lastUpdate = null;
   consoleState = null;
   if ($("network-secret")) $("network-secret").value = "";
   $("settings-form")?.reset();
@@ -126,7 +116,6 @@ function sessionEnded(reason = "expired") {
   }[reason] || ["需要从 Magpie 打开控制台", "请回到 Magpie 的 Oh My AIHub 页面重新打开控制台。"];
   setText("session-title", copy[0]);
   setText("session-detail", copy[1]);
-  connection(reason === "logout" ? "已退出" : "未连接", "neutral");
   for (const id of ["nav-home", "nav-discovery", "nav-sharing", "nav-wallet", "nav-network"]) {
     const button = $(id);
     button.disabled = true;
@@ -523,7 +512,6 @@ function renderState(value) {
   }
   if (ended) return;
   consoleState = value;
-  lastUpdate = value.at;
   authenticated = true;
   everAuthenticated = true;
   show("session-panel", false);
@@ -538,8 +526,6 @@ function renderState(value) {
   for (const [name, panel] of [["walletVault", walletVault], ["walletNetwork", walletNetwork], ["paymentP2p", paymentP2p]]) {
     try { panel.render(value); } catch (error) { console.error(`console panel ${name} failed to render`, error); }
   }
-  connection("控制台已连接", "good");
-  updated();
   if (!busy) notice();
   if (!initialized) {
     initialized = true;
@@ -577,8 +563,6 @@ function pollError(error) {
     sessionEnded("expired");
     return;
   }
-  connection("连接中断", "warn");
-  updated(true);
   notice(`${error.message} 页面保留最后一次成功读取的状态，将自动重连。`, "warn");
 }
 
@@ -608,7 +592,6 @@ async function connect() {
       setText("session-detail", "确认 Magpie 仍在运行，然后重新连接。若打开凭证未生效，请从 Magpie 重新打开控制台。");
       show("retry", true);
       show("pairing-entry", true);
-      connection("连接中断", "warn");
     }
   }
 }

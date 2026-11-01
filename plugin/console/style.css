@@ -68,7 +68,6 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   /* shell */
   --sidebar-w: 220px;
-  --topbar-h: 56px;
   --bottombar-h: 60px;
   --control-h: 44px;
   --touch: 48px;
@@ -219,31 +218,9 @@ code, .fingerprint, .secret-value, .mono { font-family: var(--font-mono); font-s
 }
 .nav-item:disabled { opacity: .45; }
 
-.sidebar-bottom { margin-top: auto; display: flex; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-sm); }
-.local-dot { width: 10px; height: 10px; border: var(--stroke) solid var(--line); border-radius: 50%; background: var(--mint); }
+.sidebar-bottom { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 
 .workspace { display: flex; flex-direction: column; min-width: 0; }
-
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  height: var(--topbar-h);
-  padding: 0 var(--space-6);
-  border-bottom: var(--stroke) solid var(--line);
-  background: var(--paper);
-}
-.topbar-status { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
-.session-state { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--body); white-space: nowrap; }
-.session-state::before { content: ""; width: 10px; height: 10px; border: var(--stroke) solid var(--line); border-radius: 50%; background: var(--sunken); flex: none; }
-.session-state.good::before { background: var(--mint); }
-.session-state.bad::before { background: var(--rose); }
-.session-state.warn::before { background: var(--accent); }
-.evidence-time { color: var(--muted); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 main {
   width: 100%;
@@ -257,8 +234,6 @@ main:focus { outline: none; }
 .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); }
 .page-heading p { margin-top: var(--space-1); color: var(--muted); }
 .page-heading h1 { margin-bottom: var(--space-1); }
-
-.page-footer { margin-top: var(--space-6); padding-top: var(--space-3); border-top: 1px solid var(--line-soft); color: var(--muted); font-size: var(--text-sm); }
 
 /* ---------- cards and sections: one sticker, flat inside ---------- */
 .card {
@@ -709,8 +684,6 @@ dialog::backdrop { background: var(--scrim); }
   .nav-item { justify-content: center; padding: 0 var(--space-1); min-height: 44px; font-size: var(--text-sm); border-radius: var(--radius-sm); }
   .nav-item.active, .nav-item[aria-current="page"] { box-shadow: none; }
   .workspace { padding-bottom: calc(var(--bottombar-h) + env(safe-area-inset-bottom, 0px)); }
-  .topbar { padding: 0 var(--space-4); }
-  .evidence-time { display: none; }
   main { padding: var(--space-4) var(--space-4) var(--space-5); }
   h1 { font-size: var(--text-xl); }
   .card, .workflow-section { padding: var(--space-4); }
@@ -727,5 +700,5 @@ dialog::backdrop { background: var(--scrim); }
 }
 
 @media print {
-  .sidebar, .topbar, .skip { display: none; }
+  .sidebar, .skip { display: none; }
 }

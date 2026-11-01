@@ -21,14 +21,12 @@
         <button class="nav-item" id="nav-wallet" type="button" disabled>钱包</button>
         <button class="nav-item" id="nav-network" type="button" disabled>网络</button>
       </nav>
-      <div class="sidebar-bottom"><span class="local-dot" aria-hidden="true"></span><span>只在这台设备运行</span></div>
+      <div class="sidebar-bottom">
+        <button type="button" id="theme" class="icon-button" aria-label="切换深色模式" title="切换深色模式">◐</button>
+        <button type="button" id="logout" class="text-button" hidden>退出</button>
+      </div>
     </aside>
     <div class="workspace">
-      <header class="topbar">
-        <div class="topbar-status"><span class="session-state" id="connection" role="status">正在连接</span><span class="evidence-time" id="last-update">等待首次更新</span></div>
-        <button type="button" id="logout" class="text-button" hidden>退出</button>
-        <button type="button" id="theme" class="icon-button" aria-label="切换深色模式" title="切换深色模式">◐</button>
-      </header>
       <main id="main" tabindex="-1">
         <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
@@ -178,8 +176,6 @@
               </details>
             </section>
           </section>
-
-          <footer class="page-footer"><span id="footer-state">本机控制台</span></footer>
         </div>
       </main>
     </div>
