@@ -94,6 +94,8 @@ contacts(alias TEXT PRIMARY KEY, address TEXT NOT NULL,
 
 EasyTier 用 **no-TUN** 模式。插件用 `[[proxy_network]]` 把本机 LAN 地址导出成稳定的 `10.66.a.b/32`（首次分配后持久化），Forward ACL 只放行 **3426** 和 **3425**。改共享模型只重签内存里的目录，不重启核心。`[[port_forward]]` 只用于消费方本机（本地端口 → 覆盖网远端端口），不用于入站。
 
+导出的那个本地地址由 `detectLanIPv4()` 选：排除容器网卡（`docker*`、`br-*`、`veth*`、`virbr*`、`podman*`、`cni*`、`flannel*`），因为它们看起来像私网。而私网优先正是排序规则；在一台真实地址是公网的 VPS 上，`docker0` 会赢过 `ens17`，导出就指向对端永远连不上的地址。网卡名按 `en0/en1/eth0/eth1/ens<数字>/enp<数字>s<数字>/wlan<数字>` 优先。真的选错时用 `OH_MY_AIHUB_LAN_IP` 覆盖。
+
 三个端点都监听 `<lan>:3426`，走覆盖网明文 HTTP。
 
 **签名**（三处共用）：原文是规范化 JSON（键排序、无空白、UTF-8），签名是 EIP-191 `personal_sign`，65 字节 hex，`v` 为 27/28；被签对象带 `schema` 做域分离（`omai/catalog/1`、`omai/request/1`、`omai/poll/1`）；验签得到的地址必须等于 `payload.address`。`request`/`poll` 的 `ts` 要求 ±5 分钟。

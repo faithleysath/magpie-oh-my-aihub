@@ -6,11 +6,18 @@
 // caller probes once per start (or per join, which is a deliberate redo) and
 // keeps the result for the life of that core.
 //
+// Two things are easy to get wrong here. A container bridge (`docker0`,
+// `br-…`, `veth…`) is a **private** range, and private ranges are preferred, so
+// on a host whose real address is public (a VPS with the provider's IP on
+// `ens17`) the bridge would win and the export would point at an address no peer
+// can reach. And the interface name is not always the tidy `enp0s17` shape the
+// old pattern assumed — `ens17` is two digits, and `enp0s17` carries a slot.
+//
 // `OH_MY_AIHUB_LAN_IP` overrides the probe. It exists for isolated tests that
 // must publish on 127.0.0.1 (a loopback value is accepted there even though the
 // real probe refuses it) and for a host whose LAN address the probe misreads.
 
-import { networkInterfaces } from "node:os";
+import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 
 export const LAN_IP_ENV = "OH_MY_AIHUB_LAN_IP";
 
@@ -48,14 +55,18 @@ function isUnusable(ip: string): boolean {
   return false;
 }
 
-const PREFERRED_INTERFACE = /^(en0|en1|eth0|eth1|ens\d+|enp\d+|wlan\d+|Wi-?Fi)$/;
+/** Interfaces that belong to a container runtime, never to the host's own LAN. */
+const CONTAINER_INTERFACE = /^(docker|br-|veth|virbr|podman|cni|flannel)/;
+const PREFERRED_INTERFACE = /^(en0|en1|eth0|eth1|ens\d+|enp\d+s\d+|wlan\d+|Wi-?Fi)$/;
 
 /**
  * The first usable LAN IPv4, preferring private ranges and ordinary interface
  * names. Returns null when the machine only has loopback (a laptop with Wi-Fi
  * off): the plugin then publishes nothing and says so in `status`.
+ *
+ * `ifaces` is a test seam; production reads the real table.
  */
-export function detectLanIPv4(): string | null {
+export function detectLanIPv4(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces()): string | null {
   const override = (process.env[LAN_IP_ENV] ?? "").trim();
   if (override) {
     if (!isIPv4(override)) throw new Error(`${LAN_IP_ENV} is not an IPv4 address: ${override}`);
@@ -63,7 +74,9 @@ export function detectLanIPv4(): string | null {
   }
 
   const candidates: { name: string; ip: string; private: boolean; preferred: boolean }[] = [];
-  for (const [name, addrs] of Object.entries(networkInterfaces())) {
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    // A bridge address is not this host's address, however usable it looks.
+    if (CONTAINER_INTERFACE.test(name)) continue;
     for (const addr of addrs ?? []) {
       if (addr.family !== "IPv4" || addr.internal) continue;
       if (isUnusable(addr.address) || isLoopback(addr.address)) continue;

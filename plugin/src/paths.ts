@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
-import { networkInterfaces } from "node:os";
 
 /** Magpie runs the plugin host with the settings directory as its working directory. */
 export function magpieDataDir(): string {
@@ -137,35 +136,6 @@ export function resolveMagpieBin(opts: ResolveOptions = {}): string {
   throw new Error("cannot locate the magpie binary (set OH_MY_AIHUB_MAGPIE to its path)");
 }
 
-function isUsableIPv4(ip: string): boolean {
-  const parts = ip.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  if (parts[0] === 0 || parts[0] === 127) return false;
-  if (parts[0] === 169 && parts[1] === 254) return false;
-  if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return false; // proxy TUN ranges
-  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return false; // CGNAT (VPN)
-  return true;
-}
-
-/**
- * The provider address EasyTier exports. The plugin exports exactly this /32 by
- * default (never a whole subnet), so it must be the interface a consumer can
- * reach after the overlay.
- */
-export function lanIPv4(): string {
-  const preferred = /^(en0|en1|eth0|eth1|ens[0-9]|enp[0-9]|wlan0|Wi-?Fi)$/;
-  const candidates: { name: string; ip: string }[] = [];
-  for (const [name, addrs] of Object.entries(networkInterfaces())) {
-    for (const a of addrs ?? []) {
-      if (a.family !== "IPv4" || a.internal) continue;
-      if (!isUsableIPv4(a.address)) continue;
-      candidates.push({ name, ip: a.address });
-    }
-  }
-  if (candidates.length === 0) throw new Error("no usable LAN IPv4 address");
-  candidates.sort((a, b) => Number(preferred.test(b.name)) - Number(preferred.test(a.name)));
-  return candidates[0].ip;
-}
 
 export function isMac(): boolean {
   return process.platform === "darwin";
