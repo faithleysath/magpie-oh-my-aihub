@@ -2,6 +2,10 @@
 
 - Branch `feature/phase10-visual-polish`, base
   `0db687ccb25d974261bd5f8694a5c04545239f14` (PR #51 final acceptance head).
+- UI head `9859b2f` (the console changes); evidence head `82558bd`; this report
+  and its hashes are a docs-only commit after it.
+- Draft PR **#52** → `feature/phase10-final-acceptance`, **not merged**:
+  <https://github.com/faithleysath/magpie-oh-my-aihub/pull/52>
 - Scope: console structure, styles, copy, their tests and evidence only. No P2P,
   payment, wallet, EasyTier, Ledger or Magpie behaviour changed; no runtime
   dependency added.
@@ -53,12 +57,12 @@
 | Gate | Result |
 | --- | --- |
 | `bun run typecheck` | PASS |
-| `bun run test` (plugin + console + phase-9 fixture) | see below |
+| `bun run test` (plugin + console + phase-9 fixture) | **1421 pass / 0 fail** (94 files) |
 | `bun run boot-check` | PASS (`magpie 0.1.2038` stub, api 34517, page snapshot 0600) |
 | `bun run secret-scan` | PASS |
 | `bun run scripts/pack-check.ts --selftest` | PASS (root 99 files / plugin 97, no tests/docs/secrets, static assets complete) |
 | Console behaviour tests | 219 pass / 0 fail (12 files), including the new `visual-system.test.js` |
-| CI (PR) | linked on the draft PR after push |
+| CI (PR #52) | all six checks green at `82558bd`: plugin linux, plugin macos, windows subset, secrets working tree, secrets history, package contents |
 
 ## Real matrix
 
@@ -81,6 +85,11 @@ before/after [`BEFORE-AFTER.md`](BEFORE-AFTER.md); cleanup
   It is not a WAN test. The installed 0.1.2516 was not used: a copied bundle on
   this machine repeatedly restarted the plugin host, so sessions could not stay
   alive long enough for a matrix. The 0.1.2289 lab was stable.
+- Two backend tests (`provider models evidence > connect writes current evidence…`,
+  `several remote providers > a failed connect…`) failed once each in two
+  earlier full-suite runs and passed in isolation and on the next full run; they
+  are timing-sensitive HTTP-gateway tests unrelated to this console-only diff.
+  The reported 1421/0 is the clean rerun.
 - The zero-file request and human approval were real; sealed delivery stayed
   `正在交付 / 排队中` in this lab (transport/lab condition). The delivered path is
   evidenced at the PR #51 SHA, not claimed again here.
