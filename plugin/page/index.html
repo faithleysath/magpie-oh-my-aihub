@@ -60,6 +60,7 @@
 <h3>入网和身份</h3>
 <ul>
 <li>「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。这个网开了 secure mode。」</li>
+<li>「把我的节点叫『美西节点』，让网络里其他人看目录时能看到这个名字。」（其实就是给<strong>自己</strong>的地址加一个地址簿条目；删掉这个别名名字就撤回）</li>
 <li>「顺便给我开监听，让别的节点能直连我，不要全走中继。」（对应 <code>listen:true</code>；开了之后要在主机防火墙放行 <code>11010</code> 的 tcp 和 udp）</li>
 <li>「用 TUN 模式跑」（默认就是；没有 root 会自动回退到 no-TUN。服务器上还要放行 tun 设备：<code>ufw allow in on tun0</code>）</li>
 <li>「帮我装那个 root 守护进程，让 Mac 也能用 TUN」（Mac 上会弹一次系统管理员密码框；装好后再 <code>join_network</code> 一次，节点就以 TUN 运行，别再弹窗）</li>
@@ -113,6 +114,7 @@
 <li><strong>到账</strong>：不是即时。BSC 等 15 个确认，Base 等最终确认，插件每 15 秒扫一次。</li>
 <li><strong>私钥</strong>：不会通过工具返回；导出只写到你指定的文件，不会打印出来。导出后，能读本机文件的 agent 仍然能读到它。</li>
 <li><strong>网络</strong>：密码是入网门；密码对上但 <code>peers</code> 一直是空的，多半是网络开了 secure mode 而你没开。secure mode 下每对节点各自协商密钥，中继也解不开；普通模式下全网共用一把来自密码的密钥，中继能解。两种情况覆盖网里的 HTTP 都是明文应用层。地址不是身份，目录和申请靠签名。</li>
+<li><strong>节点名</strong>：在地址簿里给自己（本节点钱包地址）起一个名字，就会签到你的目录里，别人 <code>discover</code> 时能看见；它只是显示名，身份仍然是钱包地址，改名不需要重新入网。</li>
 <li><strong>连接后长什么样</strong>：<code>connect_provider</code> 会在你的 Magpie 里加一条 Remote Magpie，名字是「地址簿里的名字 (omai-xxxxxxxx)」，比如「美西节点 (omai-5b4fafaf)」；模型在列表里带这个前缀。连第二个节点会分配到下一个本地端口（13426…），互不影响。</li>
 <li><strong>能不能被计费</strong>：共享方跑在 <strong>TUN 模式</strong>时，对端连接带的是它的覆盖网地址，Magpie 能按 Gateway Key 收费；跑在 no-TUN 时对端会被重写成 <code>127.0.0.1</code>，Magpie 当本机免 Key，所以插件干脆不公布 3425（<code>status</code> 里的 <code>publishedPorts</code> 只有 3426）。<code>status.network.mode</code> 写的就是当前模式。</li>
 <li><strong>价格</strong>：共享出去的模型公布四段价（输入 / 输出 / 缓存读 / 缓存写，USD / 每百万 tokens）。阶梯价和高峰价也会一起公布（门槛是多少、高峰几倍），别人能看到全貌；一个算不出来的价格不会被共享。真实扣费在提供方的 Magpie 里，目录只负责公布。</li>
