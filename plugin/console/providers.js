@@ -312,8 +312,6 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   let modelDirty = false;
   let publicationDirty = false;
   let currentDialog = null;
-  let secretDocument = null;
-  const urls = new Set();
   const caches = new Map();
   const search = { discovery: "", sharing: "" };
 
@@ -328,16 +326,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   document.body.append(dialog);
   function closeDialog() {
     generation++;
-    if (secretDocument) delete secretDocument.key;
-    secretDocument = null;
     dialog.querySelectorAll("input,textarea").forEach((node) => { node.value = ""; });
     dialogContent.replaceChildren();
     dialogError.textContent = "";
     dialogError.hidden = true;
     currentDialog = null;
     if (dialog.open) dialog.close();
-    for (const url of urls) URL.revokeObjectURL(url);
-    urls.clear();
   }
   dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialog(); });
   // Native close events are queued: an older event may arrive after this same
@@ -349,12 +343,6 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     dialogTitle.textContent = title;
     build(dialogContent);
     dialog.showModal();
-  }
-  function download(document, filename) {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2) + "\n"], { type: "application/json" }));
-    urls.add(url);
-    const link = el("a"); link.href = url; link.download = filename; link.rel = "noopener"; link.click();
-    setTimeout(() => { URL.revokeObjectURL(url); urls.delete(url); }, 1000);
   }
   async function run(name, input = {}, success, { refresh = true } = {}) {
     if (working || !getState()?.configured) return;
@@ -475,7 +463,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         const request = button(needsIdentity ? "核对身份并申请使用" : "申请使用（无文件）", () => requestUsage(peer));
         request.disabled = !allowed;
         actions.append(request);
-        if (!presenceEntry) actions.append(paragraph("此伙伴还没有可用的签名控制通道；无文件申请暂不可用，可使用下方高级应急文件流程。"));
+        if (!presenceEntry) actions.append(paragraph("此伙伴还没有可用的签名控制通道；无文件申请暂不可用。"));
         else if (!quote.usable && QUOTE_UNUSABLE_TEXT[quote.detail]) actions.append(paragraph(QUOTE_UNUSABLE_TEXT[quote.detail]));
         else if (security.signature === "invalid") actions.append(paragraph("此伙伴的签名无效，不能发起申请。"));
         else if (security.signature !== "valid") actions.append(paragraph("此伙伴的签名状态未知；确认签名前不会发送申请。"));
@@ -493,17 +481,6 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
             ["presence 到期", presenceEntry.expiresAt ? when(presenceEntry.expiresAt) : "未报告"],
           ]));
         }
-        const legacy = el("details", null, "workflow-details");
-        legacy.append(el("summary", "高级应急：旧版文件流程"));
-        const usable = peerQuoteUsability(peer);
-        const fileRequest = button("选择模型并生成文件", () => requestConnection(peer));
-        const connect = button("已有密钥，连接此伙伴", () => connectPeer(peer));
-        fileRequest.disabled = !trusted || !usable.usable;
-        connect.disabled = !trusted || !usable.usable;
-        if (!usable.usable && QUOTE_UNUSABLE_TEXT[usable.detail]) legacy.append(paragraph(QUOTE_UNUSABLE_TEXT[usable.detail]));
-        const legacyActions = el("div", null, "workflow-actions"); legacyActions.append(fileRequest, connect);
-        legacy.append(paragraph("旧版需要下载/导入 JSON 或手工交付密钥；仅在没有可用的无文件连接时使用。"), legacyActions);
-        card.append(legacy);
       } else if (presenceEntry) {
         // Signed control-only presence: the node is here and reachable, but it
         // offers no models. Nothing here can request or connect.
@@ -551,38 +528,6 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     }
     return () => choices.filter((choice) => choice.input.checked && !choice.input.disabled).map((choice) => choice.id);
   }
-  function requestConnection(peer) {
-    const acceptance = peerAcceptance(peer);
-    openDialog("选择想使用的模型", (root) => {
-      root.append(paragraph("申请会绑定你当前看到的伙伴身份、报价和模型。下载申请文件后，将它发送给共享方审批。"));
-      const getModels = modelChoices(root, items(peer.quote.models).map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" })));
-      const agree = checkbox("我已查看模型价格；价格未锁定（priceLocked: false）");
-      root.append(agree.label, button("生成连接申请", () => {
-        if (!agree.input.checked || !getModels().length) { dialogError.textContent = "请选择至少一个有完整价格的模型，并确认报价。"; dialogError.hidden = false; return; }
-        void run("connection-request", { ...acceptance, models: getModels() }, (result) => {
-          const document = result.document || result;
-          openDialog("连接申请已生成", (body) => {
-            body.append(paragraph("将下载的申请文件发送给共享方。对方导入并批准后，会另行交付授权文件；此申请不包含密钥，也不会自动扣费。"), button("下载连接申请", () => download(document, "aihub-connection-request.json"), true));
-          });
-        });
-      }, true));
-    });
-  }
-  function connectPeer(peer) {
-    const acceptance = peerAcceptance(peer);
-    openDialog("使用伙伴交付的密钥连接", (root) => {
-      root.append(paragraph("请优先导入共享方提供的授权文件；只有在对方单独交付密钥时才使用此入口。连接将绑定当前已接受的身份和报价。"));
-      const key = field("伙伴提供的 Gateway Key", "password"); key.input.required = true;
-      const agree = checkbox("我已确认密钥来自上述伙伴，并接受当前报价");
-      root.append(key.label, agree.label, button("连接此伙伴", () => {
-        if (!key.input.value.trim() || !agree.input.checked) { dialogError.textContent = "请填写密钥并确认伙伴和报价。"; dialogError.hidden = false; return; }
-        const input = { ...acceptance, key: key.input.value.trim() };
-        key.input.value = "";
-        void run("catalog-connect", input, () => closeDialog()).finally(() => { delete input.key; });
-      }, true));
-    });
-  }
-
   // Sharing policy, catalogue publication and manual imported approvals.
   // One explicit action: choose detected native models, confirm once, and the
   // service re-checks price/ACL then enables sharing and publishes the catalogue.
@@ -634,19 +579,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   const p2pApprovalsCard = el("div", null, "card workflow-section");
   p2pApprovalsCard.append(toolbar("网络授权与交付"));
   const p2pApprovalsList = el("div", null, "workflow-list"); p2pApprovalsCard.append(p2pApprovalsList);
-  const requestCard = el("div", null, "card workflow-section"); requestCard.append(toolbar("连接申请"));
-  const importRequest = button("导入伙伴的申请文件", () => importDocument("request"));
-  requestCard.append(paragraph("导入仅用于核对；每份申请都需要你明确选择额度和模型，再手动批准。"), importRequest);
-  const requestsList = el("div", null, "workflow-list"); requestCard.append(requestsList);
   const consumersCard = el("div", null, "card workflow-section"); consumersCard.append(toolbar("已授权的伙伴"));
   const consumersList = el("div", null, "workflow-list"); consumersCard.append(consumersList);
-  const legacyRequests = el("details", null, "advanced-recovery");
-  legacyRequests.append(el("summary", "高级应急：旧版申请文件"));
-  legacyRequests.append(requestCard);
   // Publication fields belong to the sharing block, not to a floating details
   // between two cards.
   shareIntro.append(publication);
-  roots.sharing.append(p2pRequestsCard, p2pApprovalsCard, shareIntro, ownIdentity, legacyRequests, consumersCard);
+  roots.sharing.append(p2pRequestsCard, p2pApprovalsCard, shareIntro, ownIdentity, consumersCard);
   function policySelection(models) {
     const policy = state?.status.config.share?.models;
     return items(models).filter((model) => model.completePrice && (Array.isArray(policy) ? policy.some((rule) => rule === "*" || rule === model.id || (rule.endsWith("/*") && model.id.startsWith(rule.slice(0, -1)))) : model.allowedByPolicy)).map((model) => model.id);
@@ -1083,89 +1021,10 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     }
   }
 
-  function importDocument(kind) {
-    openDialog(kind === "request" ? "导入连接申请" : "导入伙伴授权", (root) => {
-      root.append(paragraph(kind === "request" ? "选择伙伴从 AIHub 导出的申请文件，导入后先核对内容，再手动审批。" : "选择共享方交付的授权文件。文件包含访问密钥，本应用只在本机发送给服务验证；请妥善保存与传递。"));
-      const fileLabel = el("label", null, "field"); fileLabel.append(el("span", "选择 AIHub 文件"));
-      const file = el("input"); file.type = "file"; file.accept = ".json,application/json"; fileLabel.append(file);
-      const advanced = el("details", null, "workflow-details"); advanced.append(el("summary", "或粘贴已收到的完整文件内容"));
-      const paste = el("textarea"); paste.rows = 5; paste.maxLength = 65536; paste.autocomplete = "off"; paste.setAttribute("aria-label", "粘贴 AIHub 文件内容"); paste.setAttribute("data-1p-ignore", ""); paste.setAttribute("data-bwignore", ""); advanced.append(paste);
-      const agree = checkbox(kind === "request" ? "我确认只导入此申请，尚未授权任何访问" : "我已核对共享方身份和报价，并确认此授权是交付给本机的");
-      root.append(fileLabel, advanced, agree.label, button(kind === "request" ? "导入并核对申请" : "验证并连接", async () => {
-        if (!agree.input.checked) { dialogError.textContent = "请先确认文件用途与来源。"; dialogError.hidden = false; return; }
-        try {
-          const selected = file.files?.[0];
-          if (selected && selected.size > 64 * 1024) throw new Error("文件超过 64 KB，请选择有效的 AIHub 文件。");
-          const document = parseTransportDocument(selected ? await selected.text() : paste.value);
-          if (kind === "request" && document.schema !== "ohmyaihub.connection-request/v1") throw new Error("这不是 AIHub 连接申请文件。");
-          if (kind === "authorization" && document.schema !== "ohmyaihub.authorization/v1") throw new Error("这不是 AIHub 授权文件。");
-          paste.value = ""; file.value = "";
-          const input = { document };
-          await run(kind === "request" ? "request-import" : "connection-preview", input, (result) => {
-            if (kind === "request") { closeDialog(); renderRequests(); }
-            else previewConnection(document, result.document || result);
-          }, { refresh: kind === "request" });
-          if (kind !== "request" && secretDocument !== document) delete document.key;
-        } catch (error) { dialogError.textContent = error.message; dialogError.hidden = false; }
-      }, true));
-    });
-  }
-  function previewConnection(document, preview) {
-    openDialog("核对授权并连接", (root) => {
-      root.append(paragraph("本机已验证此文件的申请方、共享方身份和当前报价。请再次核对以下信息，确认后才会创建原生 Remote Magpie 连接。"), details("授权身份与模型", [["共享方", preview.provider?.hostname || preview.provider?.nodeId], ["接受方", preview.consumer?.nodeId], ["模型范围", items(preview.models).join("、")], ["额度", capLabel(preview.capUsd)], ["完整身份指纹", preview.quote?.identityFingerprint, true], ["完整报价指纹", preview.quote?.contentHash, true], ["完整价格版本", preview.quote?.priceVersion, true], ["价格锁定", "否（priceLocked: false）"]]));
-      const agree = checkbox("我已核对上述伙伴、模型与价格，并确认连接");
-      const submit = button("创建此伙伴连接", () => {
-        if (!agree.input.checked || !secretDocument) return;
-        const input = { document: secretDocument };
-        void run("connection-import", input, () => closeDialog());
-      }, true);
-      submit.disabled = true; agree.input.addEventListener("change", () => { submit.disabled = !agree.input.checked; });
-      root.append(agree.label, submit);
-    });
-    secretDocument = document;
-  }
-  function requestDocument(request) { return request.document || request.request || request; }
-  function renderRequests() {
-    requestsList.replaceChildren();
-    const requests = items(state?.workflows?.requests);
-    if (!requests.length) { requestsList.append(empty("还没有收到申请", "让伙伴在“发现模型”中选择你的模型，生成申请并将文件发送给你。")); return; }
-    for (const request of requests) {
-      const doc = requestDocument(request);
-      const row = el("article", null, "workflow-row");
-      const title = toolbar(doc.consumer?.hostname || doc.consumer?.nodeId || "伙伴申请"); title.append(badge(statusNames[request.status] || "待审批"));
-      const meta = el("ul", null, "meta-list");
-      meta.append(el("li", `${items(doc.models).length} 个模型`), el("li", `${doc.createdAt || request.importedAt || "待核对"}`));
-      row.append(title, meta);
-      const actions = el("div", null, "workflow-actions");
-      actions.append(button(request.status === "pending" ? "核对并审批" : "查看申请", () => approveRequest(request)));
-      row.append(actions); requestsList.append(row);
-    }
-  }
-  function approveRequest(request) {
-    const doc = requestDocument(request);
-    openDialog("核对伙伴申请", (root) => {
-      const reasons = items(request.reasons || request.comparison?.reasons);
-      root.append(details("申请身份与报价", [["申请方", doc.consumer?.hostname || doc.consumer?.nodeId], ["共享方", doc.provider?.hostname || doc.provider?.nodeId], ["申请身份指纹", doc.quote?.identityFingerprint, true], ["申请报价指纹", doc.quote?.contentHash, true], ["申请价格版本", doc.quote?.priceVersion, true], ["当前报价指纹", request.currentQuote?.contentHash || state.status.catalog?.quote?.contentHash, true], ["当前身份指纹", request.currentQuote?.identityFingerprint || state.status.catalog?.quote?.identity?.fingerprint, true], ["价格锁定", "否（priceLocked: false）"]]));
-      if (reasons.length) root.append(el("p", reasons.join("；"), "inline-warning"));
-      const currentModels = items(state.status.catalog?.quote?.models);
-      const getModels = modelChoices(root, items(doc.models).map((id) => ({ ...(currentModels.find((model) => model.id === id) || {}), id, completePrice: currentModels.some((model) => model.id === id && priceText(model.pricing) !== "价格不完整，不能授权") })), items(doc.models));
-      if (request.status !== "pending") { root.append(paragraph(`此申请${statusNames[request.status] || "已处理"}。`)); return; }
-      const cap = field("本次明确授权的额度（USD）", "number", ""); cap.input.min = "0.0001"; cap.input.max = "1000000"; cap.input.step = "0.0001"; cap.input.required = true; cap.input.placeholder = "请输入大于等于 0.0001 的金额";
-      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍。0 表示不设上限，不能作为暂停。"));
-      const agree = checkbox("我已核对申请方、当前报价、模型与额度，明确批准此次授权");
-      const submit = button("批准此申请", () => {
-        if (!agree.input.checked || !validCap(cap.input.value) || !getModels().length) { dialogError.textContent = "请选择至少一个当前可授权模型，填写有效正额度，并明确确认批准。"; dialogError.hidden = false; return; }
-        void run("request-approve", { requestId: request.id || request.requestId, capUsd: Number(cap.input.value), models: getModels() }, () => closeDialog());
-      }, true);
-      submit.disabled = request.eligible === false || request.approvable === false;
-      const rejectNote = field("拒绝说明（可选）"); rejectNote.input.maxLength = 300;
-      root.append(cap.label, agree.label, submit, rejectNote.label, button("拒绝此申请", () => void run("request-reject", { requestId: request.id || request.requestId, note: rejectNote.input.value.trim() }, () => closeDialog())));
-    });
-  }
   function renderConsumers() {
     consumersList.replaceChildren();
     const consumers = items(state?.status.consumers);
-    if (!consumers.length) { consumersList.append(empty("还没有授权伙伴", "导入并手动批准申请后，伙伴的模型范围、使用量和授权状态会显示在这里。")); return; }
+    if (!consumers.length) { consumersList.append(empty("还没有授权伙伴", "伙伴通过网络审批获得授权后，模型范围、使用量和授权状态会显示在这里。")); return; }
     for (const consumer of consumers) {
       const row = el("article", null, "workflow-row");
       const top = toolbar(consumer.consumerId);
@@ -1181,12 +1040,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         actions.append(button("检查授权", () => void run("consumer-check", { consumerId: consumer.consumerId }, (result) => {
           const current = result.consumer || consumer;
           if (current.paused || !current.acceptedQuoteHash || current.acceptedQuoteHash !== result.currentQuoteHash || current.priceVersion !== result.currentPriceVersion) reissueConsumer(current, result);
-        })), button("交付访问授权", () => revealAuthorization(consumer)), button("调整模型范围", () => editConsumerModels(consumer)));
+        })), button("调整模型范围", () => editConsumerModels(consumer)));
         // The ordinary revoke lives on the network-authorization card above.
         // This legacy file-flow consumer has no network approval, so its revoke
         // stays only as an explicit advanced recovery action.
         const legacy = el("details", null, "workflow-details");
-        legacy.append(el("summary", "高级：旧版授权撤销"), el("p", "旧版文件授权没有网络审批记录。普通撤销请使用上方网络授权中的“撤销此授权”；这里仅在紧急恢复时使用。", "inline-warning"), button("撤销旧版授权", () => confirmAction("撤销旧版伙伴授权", "撤销后，此伙伴原有密钥将失效。已有账目会保留。", "consumer-revoke", { consumerId: consumer.consumerId }, "我确认撤销此伙伴的访问授权")));
+        legacy.append(el("summary", "高级：撤销无网络审批记录的授权"), el("p", "这种授权没有网络审批记录。普通撤销请使用上方网络授权中的“撤销此授权”；这里仅在紧急恢复时使用。", "inline-warning"), button("撤销此授权", () => confirmAction("撤销此伙伴授权", "撤销后，此伙伴原有密钥将失效。已有账目会保留。", "consumer-revoke", { consumerId: consumer.consumerId }, "我确认撤销此伙伴的访问授权")));
         actions.append(legacy);
         row.append(actions);
       }
@@ -1218,30 +1077,6 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       root.append(agree.label, submit);
     });
   }
-  function revealAuthorization(consumer) {
-    openDialog("交付访问授权", (root) => {
-      root.append(paragraph("授权文件包含 Gateway Key，持有者可使用指定模型与额度。请只通过可信的私密渠道交付给该伙伴。关闭窗口会清除本页显示的密钥。"));
-      const agree = checkbox("我确认要向此伙伴交付访问密钥");
-      const reveal = button("显示本次授权文件", () => {
-        if (!agree.input.checked) return;
-        void run("key-reveal", { consumerId: consumer.consumerId }, (result) => {
-          secretDocument = result.document || result;
-          root.replaceChildren(paragraph("此文件包含访问密钥。只交付给对应伙伴；下载的文件和主动复制的内容需要由你妥善保管。"));
-          const key = el("textarea", null, "secret-value"); key.readOnly = true; key.value = secretDocument.key || ""; key.rows = 3; key.setAttribute("aria-label", "本次授权的访问密钥"); key.autocomplete = "off";
-          const actions = el("div", null, "workflow-actions");
-          actions.append(button("下载授权文件", () => { if (secretDocument) download(secretDocument, "aihub-authorization.json"); }, true), button("复制授权文件", async () => {
-            if (!secretDocument) return;
-            try { await navigator.clipboard.writeText(JSON.stringify(secretDocument, null, 2)); notice("授权文件已复制，请仅通过私密渠道交付。", "good"); }
-            catch { notice("浏览器未允许复制，请下载授权文件。", "warn"); }
-          }), button("完成并隐藏", () => closeDialog()));
-          root.append(key, actions);
-        }, { refresh: false });
-      }, true);
-      reveal.disabled = true; agree.input.addEventListener("change", () => { reveal.disabled = !agree.input.checked; });
-      root.append(agree.label, reveal);
-    });
-  }
-
   // Native Remote Magpie connections, key replacement and removal.
   const p2pConnectionsCard = el("div", null, "card workflow-section");
   p2pConnectionsCard.append(toolbar("无文件连接状态"));
@@ -1249,16 +1084,11 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   const connectionsIntro = el("div", null, "card workflow-section");
   const connectionsTop = toolbar("已连接的伙伴");
   connectionsIntro.append(connectionsTop, paragraph("伙伴模型注册为本机 Magpie 的原生远程服务后显示在这里。每个共享方的身份、模型与额度保持独立。"));
-  const legacyImport = el("details", null, "advanced-recovery");
-  legacyImport.append(el("summary", "高级应急：导入伙伴授权文件"));
-  const legacyImportButton = button("导入伙伴授权", () => importDocument("authorization"));
-  legacyImport.append(paragraph("只有伙伴无法使用无文件交付时才使用；文件里含访问密钥，不在普通流程里出现。"), legacyImportButton);
-  connectionsIntro.append(legacyImport);
   const connectionsList = el("div", null, "workflow-card-grid"); roots.connections.append(p2pConnectionsCard, connectionsIntro, connectionsList);
   function renderConnections() {
     connectionsList.replaceChildren();
     const providers = items(state?.status.providers);
-    if (!providers.length) { connectionsList.append(empty("还没有连接伙伴", "先在“发现模型”中核对身份并申请模型；收到授权文件后，点击“导入伙伴授权”。")); return; }
+    if (!providers.length) { connectionsList.append(empty("还没有连接伙伴", "先在“发现模型”中核对身份并申请使用；伙伴批准后会自动连接。")); return; }
     for (const provider of providers) {
       const row = el("article", null, "card workflow-section"); const top = toolbar(provider.fingerprint?.hostname || provider.id);
       const limit = record(provider.limit);
@@ -1325,7 +1155,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     updateSelectionControls();
     // A discovered presence changes the discovery card's actions even when the
     // catalogue rows are unchanged; it must be part of that digest.
-    for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled, next.status.p2p?.presence], renderDiscovery], ["requests", next.workflows?.requests, renderRequests], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections], ["p2pInbound", next.status.p2p?.inboundRequests, renderP2pInbound], ["p2pApprovals", next.status.p2p?.approvals, renderP2pApprovals], ["p2pConnections", next.status.p2p, renderP2pConnections]]) {
+    for (const [key, value, update] of [["identity", next.status.catalog?.quote, renderOwnIdentity], ["discovery", [next.status.catalog, next.status.config.catalog?.discoveryEnabled, next.status.p2p?.presence], renderDiscovery], ["consumers", next.status.consumers, renderConsumers], ["connections", next.status.providers, renderConnections], ["p2pInbound", next.status.p2p?.inboundRequests, renderP2pInbound], ["p2pApprovals", next.status.p2p?.approvals, renderP2pApprovals], ["p2pConnections", next.status.p2p, renderP2pConnections]]) {
       const digest = JSON.stringify(value ?? null);
       if (caches.get(key) !== digest) { caches.set(key, digest); update(); }
     }

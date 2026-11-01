@@ -52,11 +52,11 @@ The controls that replace the blanket gate:
 
 每数据目录只允许一个 Service/核心 owner。SQLite 独占事务作为崩溃可释放的文件锁，兼容 `host.lock` 元数据；不抢活 owner，不根据未知父进程终止进程，旧 `.reclaim` 目录不再参与回收。候补最多等待11分钟，失去父进程或停止时退出，不在之后接管。构造/异步启动前即注册退出保护，失败启动清理部分服务，停止自己确有 ownership 的核心后才释放锁。打开请求先写消费记录，崩溃可丢一次尝试，不能重复开浏览器；配对预授权可跨有意批准重启，登录会话不能。
 
-### Decision 37 — Explicit native model approval and private file delivery
+### Decision 37 — Explicit native model approval and signed network delivery
 
-控制台是已有目录/Service/Provisioner 的适配，不复制授权或计费规则。使用方核对完整 TOFU 指纹、当前报价/价格版本与模型，下载结构化申请；提供方导入后选择有价本机模型子集、手动正额度并确认批准。提交时重新核验当前身份/报价，拒绝过期绑定。0 原生上限表示无限额，不能当停止；网格最低0.0001USD。报价一直 `priceLocked:false`，手动初始信用不是付款。
+控制台是已有目录/Service/Provisioner 的适配，不复制授权或计费规则。使用方核对完整 TOFU 指纹、当前报价/价格版本与模型，通过覆盖网直接发送申请；提供方收到请求后选择有价本机模型子集、手动正额度并确认批准。提交时重新核验当前身份/报价，拒绝过期绑定。0 原生上限表示无限额，不能当停止；网格最低0.0001USD。报价一直 `priceLocked:false`，手动初始信用不是付款。
 
-只有明确交付动作才返回含 Key 的授权文件；普通状态、目录、原生快照、日志无 Key。敏感交付操作仅保留 UUID/请求指纹墓碑，不在通用幂等响应缓存保留密钥。使用方导入时先验证接受方、提供方、当前身份/报价与模型，明确确认后建立原生 Remote Magpie。浏览器下载/剪贴板由用户环境控制，**不承诺0600文件权限**。账目按提供方、消费者隔离，不引入跨节点统一余额。
+只有批准动作才生成含 Key 的授权，并通过签名控制通道直接交付给对应伙伴；普通状态、目录、原生快照、日志无 Key。敏感交付仅保留 UUID/请求指纹墓碑，不在通用幂等响应缓存保留密钥。使用方收到授权后先验证接受方、提供方、当前身份/报价与模型，再建立原生 Remote Magpie。账目按提供方、消费者隔离，不引入跨节点统一余额。
 
 ### Decision 38 — Wallet/accounting browser workflow, no financial scope expansion
 
@@ -66,7 +66,7 @@ Phase9实现“测试网钱包”“用量与账单”；Ego/Chromium与WebKit�
 
 ### Current Phase 9 acceptance boundary
 
-**REPRODUCED，限定本轮范围**：两份全新隔离 Magpie0.1.2171 GUI + EasyTier2.6.4；正常 GitHub UI install/Update；默认系统浏览器、八位码配对、首次配置；提供方发布有价本机模型、使用方完整指纹核对、申请文件交接、手动正额度批准、授权下载/隐藏与导入、原生 Remote Magpie；Magpie原生 Test models 观察到200后429，受控模拟模型上游。WebKit第二提供方完整手动流程、注入内容字面显示不执行、暂停第二方时第一方仍原生200和恢复通过，见共享报告、安全报告。不是所有版本/平台/供应商或所有计费语义验收。
+**REPRODUCED，限定本轮范围**：两份全新隔离 Magpie0.1.2171 GUI + EasyTier2.6.4；正常 GitHub UI install/Update；默认系统浏览器、八位码配对、首次配置；提供方发布有价本机模型、使用方完整指纹核对、网络申请、手动正额度批准、授权自动交付、原生 Remote Magpie；Magpie原生 Test models 观察到200后429，受控模拟模型上游。WebKit第二提供方完整手动流程、注入内容字面显示不执行、暂停第二方时第一方仍原生200和恢复通过，见共享报告、安全报告。不是所有版本/平台/供应商或所有计费语义验收。
 
 **REPRODUCED，本地模拟金融路径**：Ego以实际EIP712合成外部钱包、BSC/Base受控RPC驱动生产Watcher/Ledger/Provisioner，原生额度1.0001后2.0001；Base增加head20不入账，finalized后入账；重复事件/扫描不重复信用；原生429→入账→200、消费者无签名账单导入及RPC503未知状态通过。WebKit9步真实UI亦完成新增0.5BSC模拟信用、最终性/重放及原生Test models200，见钱包报告和WebKit记录。
 

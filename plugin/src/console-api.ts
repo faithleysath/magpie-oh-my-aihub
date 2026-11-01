@@ -15,8 +15,7 @@ import { controlAppFor } from "./control/app.ts";
 export const CONSOLE_ACTIONS = [
   "join-network", "share-native-models", "stop-sharing", "network-refresh",
   "configure", "checks", "share-candidates", "share-models", "consume-toggle",
-  "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer", "connection-request",
-  "request-import", "request-approve", "request-reject", "key-reveal", "connection-import", "connection-preview", "catalog-connect",
+  "catalog-discover", "catalog-refresh", "catalog-settings", "trust-peer",
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
   "p2p-request", "p2p-quote-preview", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
   ...WALLET_CONSOLE_ACTIONS,
@@ -240,16 +239,6 @@ export async function consoleAction(
           throw error;
         }
       }
-      case "connection-request": fields(input,["nodeId","models","fingerprint","quoteHash"]); return clean(service.catalogRequest(text(input.nodeId,"nodeId"),modelList(input.models),acceptance(input)));
-      case "request-import": fields(input,["document"]); return clean(await w().importRequest(input.document));
-      case "request-approve": fields(input,["requestId","capUsd","models"]); return clean(await w().approve(text(input.requestId,"requestId"),input.capUsd as number,modelList(input.models)));
-      case "request-reject": fields(input,["requestId","note"]); return clean(await w().reject(text(input.requestId,"requestId"), input.note === undefined || input.note === "" ? "operator rejected" : text(input.note,"note",300)));
-      case "key-reveal": fields(input,["consumerId"]); return w().reveal(text(input.consumerId,"consumerId")); // secret: intentionally not redacted, never cached by transport
-      case "connection-import": fields(input,["document","key"]); return clean(await w().connect(input.document,input.key === undefined ? undefined : key(input.key)));
-      case "connection-preview": {
-        fields(input,["document"]); const preview=w().previewAuthorization(input.document); const {key: _secret,...document}=preview.document; return clean({nodeId:preview.nodeId,document});
-      }
-      case "catalog-connect": fields(input,["nodeId","key","fingerprint","quoteHash"]); return clean(await service.catalogConnect(text(input.nodeId,"nodeId"),key(input.key),{acceptance:acceptance(input)}));
       case "provider-models": fields(input,["id"]); return clean(await service.providerModels(text(input.id,"provider id")));
       case "provider-check": {
         fields(input,["id"]); const id=text(input.id,"provider id"); const providers=await service.reconcileProviders({only:id,verifyModels:true});
