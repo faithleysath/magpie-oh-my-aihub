@@ -15,6 +15,8 @@ import { Magpie, type ProviderRecord } from "../magpie.ts";
 import { CONTROL_PORT, GATEWAY_PORT, SOCKS_PORT, type Overlay } from "../overlay.ts";
 import { writeConfig, type HubConfig } from "../config.ts";
 import { catalogTimestamp } from "../catalog-service.ts";
+import type { Database } from "bun:sqlite";
+import { listContacts } from "../contacts.ts";
 import { metaDelete, metaEntries, metaGet, metaSet } from "../db.ts";
 import { cleanModelList, type PollResponse, type PollState } from "../grants.ts";
 import { pollPayload, requestPayload } from "../http-router.ts";
@@ -275,6 +277,30 @@ function remoteProviderId(provider: string): string {
   return `${PROVIDER_PREFIX}${provider.replace(/^0x/, "").slice(-8)}`;
 }
 
+/**
+ * What this Remote Magpie is called in Magpie's provider list.
+ *
+ * Magpie names every one of them "Remote magpie", so with two peers connected a
+ * user cannot tell whose channel is whose. The address book is the name the user
+ * chose for that peer, so it wins; the peer's signed hostname is the fallback,
+ * and the short id is always appended so two peers cannot end up with the same
+ * label.
+ */
+function remoteProviderName(
+  db: Database,
+  id: string,
+  address: string,
+  hostname: string | null,
+): string {
+  let alias: string | null = null;
+  try {
+    alias = listContacts(db).find((contact) => contact.address === address)?.alias ?? null;
+  } catch {
+    /* the address book is a convenience: its failure must not block a connect */
+  }
+  return `${alias ?? hostname ?? "Remote magpie"} (${id})`;
+}
+
 function visibleGranted(ids: string[], granted: string[]): string[] {
   return ids.filter((id) => granted.some((model) => id === model || id.endsWith(`/${model}`)));
 }
@@ -469,6 +495,7 @@ export const connectTool: ToolDef = {
     const dstAddr = `${endpoint.host}:${poll.gatewayPort}`;
     const id = remoteProviderId(provider);
     const url = `http://127.0.0.1:${localPort}`;
+    const name = remoteProviderName(runtime.db, id, provider, endpoint.hostname);
 
     let magpie: Magpie;
     try {
@@ -522,8 +549,8 @@ export const connectTool: ToolDef = {
     }
 
     try {
-      if (record) await magpie.replaceRemoteProvider({ id, url, key: poll.key });
-      else await magpie.addRemoteProvider({ id, url, key: poll.key });
+      if (record) await magpie.replaceRemoteProvider({ id, url, key: poll.key, name });
+      else await magpie.addRemoteProvider({ id, url, key: poll.key, name });
     } catch (error) {
       fail("E_MAGPIE", `cannot register the Remote Magpie ${id}: ${shortError(error)}`);
     }

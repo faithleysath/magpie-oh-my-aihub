@@ -28,6 +28,8 @@ export interface PeerEndpoint {
   address: string;
   host: string;
   port: number;
+  /** the hostname the peer signs into its own document (`omai-…`) */
+  hostname: string;
 }
 
 export interface DiscoveredPeer {
@@ -91,7 +93,7 @@ async function readPeer(neighbor: OverlayNeighbor): Promise<DiscoveredPeer> {
     online: true,
     models: parsed.doc.models,
     ts: parsed.doc.ts,
-    endpoint: { address: parsed.doc.address, host: neighbor.ipv4, port: CONTROL_PORT },
+    endpoint: { address: parsed.doc.address, host: neighbor.ipv4, port: CONTROL_PORT, hostname: parsed.doc.hostname },
   };
 }
 

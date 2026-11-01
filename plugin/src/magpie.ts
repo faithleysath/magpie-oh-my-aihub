@@ -590,12 +590,12 @@ export class Magpie {
    * the caller must prove ownership first and call `replaceRemoteProvider`, or
    * refuse. The key is never part of an error.
    */
-  async addRemoteProvider(opts: { id: string; url: string; key: string }): Promise<void> {
-    const r = await this.serial(() =>
-      run([this.bin, "provider", "add", "remote-magpie", opts.key, `url=${opts.url}`, `id=${opts.id}`], {
-        timeoutMs: 120_000,
-      }),
-    );
+  async addRemoteProvider(opts: { id: string; url: string; key: string; name?: string }): Promise<void> {
+    const args = [this.bin, "provider", "add", "remote-magpie", opts.key, `url=${opts.url}`, `id=${opts.id}`];
+    // The name is what a human sees in Magpie's provider list; without it every
+    // Remote Magpie this plugin adds is called "Remote magpie".
+    if (opts.name) args.push(`name=${opts.name}`);
+    const r = await this.serial(() => run(args, { timeoutMs: 120_000 }));
     if (r.code !== 0) throw new Error(`provider add: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
   }
 
@@ -604,7 +604,7 @@ export class Magpie {
    * key as the one it wrote). Magpie 0.1.2038 has no in-place edit for a Remote
    * Magpie, so this is remove-then-add.
    */
-  async replaceRemoteProvider(opts: { id: string; url: string; key: string }): Promise<void> {
+  async replaceRemoteProvider(opts: { id: string; url: string; key: string; name?: string }): Promise<void> {
     await this.removeProvider(opts.id);
     await this.addRemoteProvider(opts);
   }

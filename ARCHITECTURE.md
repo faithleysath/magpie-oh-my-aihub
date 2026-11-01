@@ -328,6 +328,10 @@ bun run build:page     # page/doc.md -> page/index.html，校验 19 个工具名
 4. 任何「为了安全再加一层」的想法，先看 D4/D9/D10/D13：这一版是故意不做那些层的。
 5. 每次改动一个分支、一个 PR，不做大范围重写。
 
+## 消费方注册的 Remote Magpie
+
+`connect_provider` 会在本机 Magpie 里加一条 `remote-magpie`：`id = omai-<地址后 8 位>`，URL 是指向该节点的 loopback 转发口（`13425` 起，按连接表最小空闲分配，重连沿用）。**显示名是「地址簿别名 (id)」**，没有别名时用对端签名的 hostname，所以同时连两三个节点时不会都叫 “Remote magpie”。多个节点各自的端口、Gateway Key 与 `cap` 互相独立。
+
 ## 验证状态（2026-11-02 实测）
 
 | 结论 | 证据 |

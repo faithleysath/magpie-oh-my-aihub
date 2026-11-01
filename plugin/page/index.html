@@ -113,6 +113,7 @@
 <li><strong>到账</strong>：不是即时。BSC 等 15 个确认，Base 等最终确认，插件每 15 秒扫一次。</li>
 <li><strong>私钥</strong>：不会通过工具返回；导出只写到你指定的文件，不会打印出来。导出后，能读本机文件的 agent 仍然能读到它。</li>
 <li><strong>网络</strong>：密码是入网门；密码对上但 <code>peers</code> 一直是空的，多半是网络开了 secure mode 而你没开。secure mode 下每对节点各自协商密钥，中继也解不开；普通模式下全网共用一把来自密码的密钥，中继能解。两种情况覆盖网里的 HTTP 都是明文应用层。地址不是身份，目录和申请靠签名。</li>
+<li><strong>连接后长什么样</strong>：<code>connect_provider</code> 会在你的 Magpie 里加一条 Remote Magpie，名字是「地址簿里的名字 (omai-xxxxxxxx)」，比如「美西节点 (omai-5b4fafaf)」；模型在列表里带这个前缀。连第二个节点会分配到下一个本地端口（13426…），互不影响。</li>
 <li><strong>能不能被计费</strong>：共享方跑在 <strong>TUN 模式</strong>时，对端连接带的是它的覆盖网地址，Magpie 能按 Gateway Key 收费；跑在 no-TUN 时对端会被重写成 <code>127.0.0.1</code>，Magpie 当本机免 Key，所以插件干脆不公布 3425（<code>status</code> 里的 <code>publishedPorts</code> 只有 3426）。<code>status.network.mode</code> 写的就是当前模式。</li>
 <li><strong>价格</strong>：共享出去的模型公布四段价（输入 / 输出 / 缓存读 / 缓存写，USD / 每百万 tokens）。阶梯价和高峰价也会一起公布（门槛是多少、高峰几倍），别人能看到全貌；一个算不出来的价格不会被共享。真实扣费在提供方的 Magpie 里，目录只负责公布。</li>
 <li><strong>转账和断开</strong>：转账没有二次确认、没有白名单；断开连接会重启 EasyTier，其他连接短暂中断。</li>
