@@ -32,26 +32,25 @@
 <li>只本插件：<code>http://127.0.0.1:3425/mcp/magpie/tools/magpie-plugin</code></li>
 <li>MCP 路由：<code>http://127.0.0.1:3425/mcp/magpie/hub/&lt;agent&gt;</code></li>
 </ul>
-<p>本机 agent 默认免 Gateway Key。别的机器上的 agent 要调这些工具，需要在 Magpie 里打开 <strong>Share on local network</strong>，并给它一个 Gateway Key。</p>
+<p>本机 agent 默认免 Gateway Key。别的机器上的 agent 要调这些工具，需要在 Magpie 里打开局域网共享（Share on local network），并给它一个 Gateway Key。</p>
 <h3>2. 第一次对话</h3>
 <p>准备网络名、网络密码，想好共享哪些模型。把下面这段发给 agent：</p>
 <pre><code class="language-text">用 Oh My AIHub 帮我做首次设置，一步一步来：
-1. 先 status 和 wallet，
-   把地址和网络状态告诉我；
+1. 先看节点状态和钱包地址，把地址和网络状态告诉我；
 2. 我加入网络：
    名字 &lt;网络名&gt;，密码 &lt;网络密码&gt;，
    初始节点 &lt;可选&gt;；
-   入网后用 status 确认 online；
-3. 用 native_models 列出可共享的模型和价格，
-   问我共享哪些，再 share_models；
-4. 用 discover 汇总网络里别人的模型和价格。
+   入网后确认网络已经连上；
+3. 列出本机可以共享的模型和价格，
+   问我共享哪些，然后按我选的共享；
+4. 汇总网络里别人的模型和价格。
 不要动钱，不要导出私钥；参数不确定先问我。</code></pre>
 <p>好的 agent 会先读状态，再问你要网络名和密码；入网后才列模型、做发现。</p>
-<p>入网成功的标志是 <code>network.state</code> 为 <code>online</code>、<code>publishedPorts</code> 为 <code>[3426, 3425]</code>。<code>publishedPorts</code> 为空只说明本机没有可用的 LAN 地址，别人看不到你，其他功能正常。</p>
-<blockquote><p>首次入网要下载 EasyTier，几十秒很正常。<code>join_network</code> 返回 <code>starting</code> 时继续用 <code>status</code> 轮询。</p></blockquote>
+<p>入网成功的标志是网络状态显示已连接、发布端口里有 <code>3426</code> 和 <code>3425</code>。发布端口为空只说明本机没有可用的局域网地址，别人看不到你，其他功能正常。</p>
+<blockquote><p>首次入网要下载 EasyTier，几十秒很正常。agent 说还在启动时，让它继续查状态。</p></blockquote>
 <p>只想用别人的模型？第 3 步回答「不共享」就行。</p>
 <h2>常用说法</h2>
-<p>不用记工具名，直接说目的。下面每一条都可以发给 agent；把 <code>A</code>、<code>B</code>、<code>张三</code>、<code>0xabc…</code> 换成你的模型、名字和地址。先把它存进地址簿，后面就只说名字。</p>
+<p>不用记工具名，直接说目的。下面每一条都可以发给 agent；把 <code>A</code>、<code>B</code>、<code>张三</code>、<code>0xabc…</code> 换成你的模型、名字和地址。名字先存进地址簿，后面就只说名字。</p>
 <h3>看状态</h3>
 <ul>
 <li>「用一句话总结现在的状态：网络、共享、连接。」</li>
@@ -81,36 +80,36 @@
 </ul>
 <h3>用别人的模型</h3>
 <ul>
-<li>「discover 一下，把在线节点、模型和价格整理成表。」</li>
+<li>「看看网络里有谁在线、共享了什么模型、什么价格，整理成表。」</li>
 <li>「我想用张三的 A 模型，帮我申请；批了就直接连接。」</li>
-<li>「看看 0xabc… 批了没有；批了但没 Key 就告诉我还差多少充值。」</li>
+<li>「看看张三批了没有；批了但没 Key 就告诉我还差多少充值。」</li>
 <li>「列出我所有的外部连接：模型、剩余额度、状态。」</li>
-<li>「断开 0xabc…，告诉我会不会影响其他连接。」</li>
-<li>「对方换了地址，discover 加 refresh 重新找，再重连。」</li>
+<li>「断开张三，告诉我会不会影响其他连接。」</li>
+<li>「对方换了地址，重新找一遍再重连。」</li>
 <li>「连接成功了，但 Magpie 里看不到模型，查一下差在哪。」</li>
 </ul>
 <h3>钱</h3>
 <ul>
 <li>「给张三充 5 USDC（Base），先查余额和 gas 再发。」</li>
 <li>「把 10 USDC 转到 0xdef…（BSC），先告诉我余额和预计 gas。」</li>
-<li>「列出最近的入账和出金，标出 unknown 和 reverted。」</li>
+<li>「列出最近的入账和出金，标出还没确认的和已经回滚的。」</li>
 </ul>
 <h3>出问题</h3>
 <ul>
-<li>「status 看 network 的 step 和 detail，告诉我卡在哪。」</li>
+<li>「查一下卡在哪一步、报了什么错。」</li>
 <li>「我的调用被 429 或 401 了，查剩余额度和授权状态，告诉我该充值还是重新申请。」</li>
-<li>「连接断了，先 discover 看对方在不在，再决定重连。」</li>
+<li>「连接断了，先看对方还在不在，再决定重连。」</li>
 <li>「这笔交易的哈希是 0x…，帮我核对上链没有；不要重发。」</li>
-<li>「wallet 显示哪条链 gas 不够？告诉我补哪种原生币。」</li>
+<li>「哪条链上的 gas 不够？告诉我补哪种原生币。」</li>
 </ul>
-<p>agent 报 <code>E_</code> 开头的错误时，把错误原文贴回去，让它按上面的顺序查。</p>
+<p>agent 报出 <code>E</code> 开头的错误码时，把错误原文贴回去，让它按上面的顺序查。</p>
 <h2>需要知道的</h2>
 <ul>
 <li><strong>充值</strong>：必须从自己的节点钱包付给提供方。交易所直接提到提供方地址，钱记在交易所名下，你用不上。</li>
-<li><strong>到账</strong>：不是即时。BSC 15 个确认，Base <code>finalized</code>，插件每 15 秒扫一次。</li>
-<li><strong>私钥</strong>：不会通过工具返回；<code>wallet_export</code> 只给地址和路径。导出后，能读本机文件的 agent 仍然能读到它。</li>
+<li><strong>到账</strong>：不是即时。BSC 等 15 个确认，Base 等最终确认，插件每 15 秒扫一次。</li>
+<li><strong>私钥</strong>：不会通过工具返回；导出只写到你指定的文件，不会打印出来。导出后，能读本机文件的 agent 仍然能读到它。</li>
 <li><strong>网络</strong>：密码是唯一入网门；覆盖网里是明文 HTTP。地址不是身份，目录和申请靠签名。</li>
-<li><strong>转账和断开</strong>：<code>send_payment</code> 没有二次确认、没有白名单；断开连接会重启 EasyTier，其他连接短暂中断。</li>
+<li><strong>转账和断开</strong>：转账没有二次确认、没有白名单；断开连接会重启 EasyTier，其他连接短暂中断。</li>
 <li><strong>额度</strong>：价格改了，剩余额度会跟着变。429 是额度用完，充值即恢复；401 是被撤销，要提供方重新批准。</li>
 <li><strong>身份</strong>：同一个钱包 = 同一个账户；两台机器用同一个私钥，余额共享。</li>
 </ul>
