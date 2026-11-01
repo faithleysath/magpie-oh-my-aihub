@@ -477,11 +477,11 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
 
   function connectChoiceDialog() {
     openDialog("连接已有钱包", (body) => {
-      body.append(p("选择一种明确方式。导入/恢复只在本机处理；浏览器扩展必须由你在下一屏选择具体钱包，不会自动使用 window.ethereum。", "inline-warning"));
+      body.append(p("选择一种明确方式。导入或恢复只在本机处理；连接浏览器钱包时，你需要在下一屏明确选择具体钱包，不会自动连接其他钱包。", "inline-warning"));
       const choices = el("div", null, "wallet-choice-grid");
       choices.append(
         choice("导入助记词", "用已有钱包的恢复助记词在本机创建加密副本。", button("导入助记词", () => importWalletDialog(false), true)),
-        choice("恢复加密备份", "用密码保护的 keystore 备份恢复。", button("恢复加密备份", () => importWalletDialog(true))),
+        choice("恢复加密备份", "用密码保护的加密备份恢复。", button("恢复加密备份", () => importWalletDialog(true))),
         choice("连接浏览器扩展", "使用已安装的浏览器钱包，不索取助记词。", button("查看浏览器钱包", () => { closeDialog(); externalRoot?.scrollIntoView?.({ block: "start" }); })),
       );
       body.append(choices);
@@ -534,7 +534,9 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       card.append(p(`已选择：${selectedProviderId === "legacy" ? "旧式注入钱包" : entries.find((entry) => entry.id === selectedProviderId)?.name || "钱包"}。点击连接前不会请求账户。`, "muted small"));
       if (externalSession) {
         const snapshot = externalState || externalSession.snapshot();
-        card.append(details("已连接外部钱包", [["账户", snapshot.account || "未返回", true], ["chainId", snapshot.chainId ?? "未返回", true], ["状态", snapshot.status], ["连接方式", snapshot.selection?.source === "legacy" ? "显式旧式注入" : "EIP-6963 显式选择"]], true));
+        card.append(details("已连接外部钱包", [["账户", snapshot.account || "未返回", true], ["状态", snapshot.status]], true));
+        // Chain id and the discovery protocol are technical, not ordinary rows.
+        card.append(details("技术详情", [["chainId", snapshot.chainId ?? "未返回", true], ["连接方式", snapshot.selection?.source === "legacy" ? "显式旧式注入" : "EIP-6963 显式选择"]]));
         card.append(p("这里只显示账户与网络；余额查询需要已接入的资产注册表，也不会发起付款。", "muted small"));
         card.append(button("断开外部钱包", () => { externalSession?.dispose(); externalSession = null; externalState = null; renderExternal(); }));
       } else {

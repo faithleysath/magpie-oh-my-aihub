@@ -857,7 +857,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       if (current.length !== items(request.models).length) {
         root.append(el("p", "当前报价缺少请求中的模型，不能批准；请拒绝或让伙伴重新申请。", "inline-warning"));
       }
-      root.append(paragraph("选择要批准的模型（默认全部请求模型）。客户端不计算价格版本，选中后由服务返回当前报价的 selected version。"));
+      root.append(paragraph("选择要批准的模型（默认全部请求模型）。本页不计算价格版本；选中后由服务返回这次报价对应的价格版本。"));
       const choices = [];
       for (const model of current) {
         const choice = checkbox(model.displayName || model.id, selected.has(model.id));

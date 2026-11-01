@@ -16,6 +16,10 @@ const STATUS_LABEL = {
   signed: "已签名，等待提供方确认",
   unknown: "状态未知",
 };
+const CHAIN_NAMES = { 56: "BSC", 8453: "Base", 97: "BSC 测试网", 84532: "Base 测试网" };
+/** Ordinary network name; the numeric chain id stays in technical details. */
+const chainName = (id) => CHAIN_NAMES[Number(id)] || "未知网络";
+
 const TONE = {
   received: "good",
   waitingpayment: "info",
@@ -211,7 +215,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   function assetChoices(s, chainId) {
     const assets = Array.isArray(s?.provider?.assets) ? s.provider.assets : [];
     return assets.filter((asset) => !chainId || asset.chainId === Number(chainId)).map((asset) => {
-      const network = (s?.provider?.networks || []).includes(asset.chainId) ? `链 ${asset.chainId}` : "未知网络";
+      const network = (s?.provider?.networks || []).includes(asset.chainId) ? chainName(asset.chainId) : "未知网络";
       return [asset.assetId, `${asset.symbol}，${network}，${asset.contractAddress.slice(0, 10)}…`];
     });
   }
@@ -220,10 +224,10 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     if (!state) return;
     setOptions(requestProvider.select, providerChoices(state), "选择已授权的伙伴");
     const chains = [...new Set((state.provider?.assets || []).map((a) => a.chainId))].sort((a, b) => a - b);
-    setOptions(requestChain.select, chains.map((chain) => [chain, `链 ${chain}`]), "选择网络");
+    setOptions(requestChain.select, chains.map((chain) => [chain, chainName(chain)]), "选择网络");
     setOptions(requestAsset.select, assetChoices(state, requestChain.select.value), "选择资产");
     setOptions(autoProvider.select, providerChoices(state), "选择伙伴");
-    setOptions(autoChain.select, chains.map((chain) => [chain, `链 ${chain}`]), "选择网络");
+    setOptions(autoChain.select, chains.map((chain) => [chain, chainName(chain)]), "选择网络");
     setOptions(autoAsset.select, assetChoices(state, autoChain.select.value), "选择资产");
   }
 
@@ -312,14 +316,30 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     previewBox.replaceChildren();
     previewBox.hidden = false;
     previewBox.append(el("h4", "付款预览"));
+    // The ordinary confirmation shows only what the user must recognise. Chain
+    // id, nonce, gas and the signature digest live in one collapsed block.
     const facts = el("dl", null, "facts wallet-payment-facts");
-    const rows = [
-      ["发票", preview.invoiceId, true],
-      ["网络", `链 ${preview.chainId}`, false],
+    const visibleRows = [
+      ["网络", chainName(preview.chainId), false],
       ["资产", `${preview.assetId}`, true],
+      ["金额", `${preview.amountTokens}`, true],
       ["收款地址", preview.recipientAddress, true],
-      ["金额", `${preview.amountTokens}（原始 ${preview.amountRaw}）`, true],
       ["付款地址", preview.payerAddress, true],
+    ];
+    for (const [label, value, identifier] of visibleRows) {
+      const row = el("div");
+      const dd = el("dd", value);
+      if (identifier) dd.className = "mono";
+      row.append(el("dt", label), dd);
+      facts.append(row);
+    }
+    const technical = el("details", null, "workflow-details");
+    technical.append(el("summary", "技术详情"));
+    const technicalRows = [
+      ["发票", preview.invoiceId, true],
+      ["chainId", preview.chainId, true],
+      ["资产 ID", `${preview.assetId}`, true],
+      ["原始金额", preview.amountRaw, true],
       ["Nonce", String(preview.nonce), true],
       ["Gas 上限", `${preview.gasLimit} × ${preview.maxFeePerGas} wei`, true],
       ["最坏 Gas 花费", `${preview.maxGasCostWei} wei（${preview.nativeSymbol}）`, true],
@@ -327,23 +347,23 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       ["EIP-712 摘要", preview.digest, true],
       ["预览有效期", preview.expiresAt, false],
     ];
-    for (const [label, value, identifier] of rows) {
+    for (const [label, value, identifier] of technicalRows) {
       const row = el("div");
-      const dd = el("dd", value);
+      const dd = el("span", value);
       if (identifier) dd.className = "mono";
-      row.append(el("dt", label), dd);
-      facts.append(row);
+      row.append(el("strong", label), dd);
+      technical.append(row);
     }
     const confirm = el("input");
     confirm.type = "checkbox";
     const label = el("label", null, "workflow-check");
-    label.append(confirm, el("span", "我已核对以上网络、资产、收款地址、金额和 Gas 上限；只发送这一笔。"));
+    label.append(confirm, el("span", "我已核对以上网络、资产、收款地址和金额；只发送这一笔。"));
     const send = button("确认并从本机钱包付款", () => void sendPayment(obligation, preview.previewRef), true);
     send.disabled = true;
     confirm.addEventListener("change", () => { send.disabled = !confirm.checked; });
     const actions = el("div", null, "wallet-payment-actions");
     actions.append(send, button("关闭预览", () => { previewBox.hidden = true; previewBox.replaceChildren(); }));
-    previewBox.append(facts, label, actions);
+    previewBox.append(facts, technical, label, actions);
     previewBox.scrollIntoView?.({ block: "nearest" });
   }
 
@@ -409,7 +429,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       amount.className = "amount";
       head.append(amount, statusText(paymentStatusLabel(request.status), paymentStatusTone(request.status)));
       const meta = el("ul", null, "meta-list");
-      meta.append(el("li", `链 ${request.chainId}`), el("li", `发票 ${request.invoiceId}`), el("li", `顾客 ${request.consumerNodeId}`), el("li", request.signaturePresent ? "已验签" : "未签名"), el("li", request.expiresAt));
+      meta.append(el("li", chainName(request.chainId)), el("li", `发票 ${request.invoiceId}`), el("li", `顾客 ${request.consumerNodeId}`), el("li", request.signaturePresent ? "已验签" : "未签名"), el("li", request.expiresAt));
       li.append(head, meta);
       if (request.payerAddress) { const payer = el("small", `付款地址 ${request.payerAddress}`); payer.className = "mono"; li.append(payer); }
       if (request.error) li.append(el("small", `错误 ${request.error}`));
@@ -433,7 +453,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       head.append(amount, statusText(paymentStatusLabel(status), paymentStatusTone(status)));
       li.append(head);
       const meta = el("ul", null, "meta-list");
-      meta.append(el("li", `链 ${obligation.chainId}`), el("li", `伙伴 ${obligation.providerNodeId}`), el("li", `发票 ${obligation.invoiceId}`), el("li", obligation.signed ? "已签名" : "未签名"), el("li", `到期 ${obligation.expiresAt}`));
+      meta.append(el("li", chainName(obligation.chainId)), el("li", `伙伴 ${obligation.providerNodeId}`), el("li", `发票 ${obligation.invoiceId}`), el("li", obligation.signed ? "已签名" : "未签名"), el("li", `到期 ${obligation.expiresAt}`));
       li.append(meta);
       if (obligation.payerAddress) { const payer = el("small", `付款地址 ${obligation.payerAddress}`); payer.className = "mono"; li.append(payer); }
       const actions = el("div", null, "wallet-payment-actions");

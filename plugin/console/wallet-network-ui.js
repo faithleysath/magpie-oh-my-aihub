@@ -7,6 +7,13 @@
  */
 const PRODUCT_CHAINS = new Set([56, 8453]);
 
+/** The ordinary name of a product network; the chain id stays in technical details. */
+export function networkLabel(network) {
+  if (network?.chainId === 56) return "BSC";
+  if (network?.chainId === 8453) return "Base";
+  return network?.displayName || "未知网络";
+}
+
 export function formatTokenUnits(raw, decimals) {
   if (typeof raw !== "string" || !/^(0|[1-9]\d*)$/.test(raw)) throw new Error("raw amount must be an unsigned integer string");
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) throw new Error("unusable decimals");
@@ -126,7 +133,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
     void request("network-local-watch-address", { address: value }).then(() => { selectedWatch = value.toLowerCase(); render(); report("已加入只读查询地址。", "good"); }).catch((error) => fail(error?.message || "添加只读地址未完成"));
   }
   function setReceiving(chainId, selected) {
-    void request("network-local-receiving-set", { chainId, selected }).then(() => report("已更新充值匹配网络；这不开启主网发送或授信。", "good")).catch((error) => fail(error?.message || "更新充值匹配网络未完成"));
+    void request("network-local-receiving-set", { chainId, selected }).then(() => report("已更新充值匹配网络；这不会开放主网付款。", "good")).catch((error) => fail(error?.message || "更新充值匹配网络未完成"));
   }
   function refreshBalance() {
     if (!selectedChain || !selectedAsset || !selectedWatch) { fail("请先选择网络、资产和已添加的只读地址；不会自动使用钱包连接地址。"); return; }
@@ -146,7 +153,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
   function renderNetworkCard(network) {
     const card = el("article", null, "wallet-network-card");
     const head = el("div", null, "section-heading");
-    head.append(el("h3", network.displayName), statusText(`链 ${network.chainId}`));
+    head.append(el("h3", networkLabel(network)));
     card.append(head, p(`原生资产 ${network.nativeSymbol}，${network.nativeDecimals} 位小数；两条网络平权，没有默认网络。`));
     const assets = productAssets(state, network.chainId);
     if (!assets.length) card.append(p("注册表没有列出该网络的只读代币；不会按符号猜测或补造。", "muted small"));
@@ -164,7 +171,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
       card.append(list);
     }
     if (network.chainId === 56) card.append(p("BSC USDC 未在只读注册表列出时不支持；不会按符号推断或添加。", "muted small"));
-    card.append(details("技术详情", [["chainId", network.chainId], ["support", network.support], ["receivable", network.receivable], ["nativeDecimals", network.nativeDecimals], ["blockExplorer", network.blockExplorer, true]]));
+    card.append(details("技术详情", [["网络名称", network.displayName], ["chainId", network.chainId], ["support", network.support], ["receivable", network.receivable], ["nativeDecimals", network.nativeDecimals], ["blockExplorer", network.blockExplorer, true]]));
     return card;
   }
   function renderBalance() {
@@ -223,13 +230,13 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
     const chains = receivingChainIds(state);
     const list = el("div", null, "wallet-network-receiving");
     for (const network of productNetworks(state)) {
-      const item = check(`${network.displayName}（链 ${network.chainId}）`);
+      const item = check(networkLabel(network));
       item.input.checked = chains.includes(network.chainId);
       item.input.disabled = working;
       item.input.addEventListener("change", () => setReceiving(network.chainId, item.input.checked));
       list.append(item.label);
     }
-    card.append(list, p("主网发送、授信、自动充值和资金流仍未开放。此设置只影响本机付款请求，不表示链上禁止其他人转账。", "inline-warning"));
+    card.append(list, p("主网付款、自动充值和资金流仍未开放。此设置只影响本机付款请求的匹配，不会自动增加可用额度，也不表示链上禁止其他人转账。", "inline-warning"));
     return card;
   }
   function balanceFreshness(balance) {
@@ -245,7 +252,7 @@ export function mountWalletNetwork({ client, getState, notice = () => {}, refres
     root.replaceChildren();
     const heading = el("div", null, "section-heading");
     heading.append(el("h2", "网络与资产"), statusText(service === "unavailable" ? "服务未接入" : loading ? "正在读取" : "只读", service === "unavailable" ? "warn" : "neutral"));
-    root.append(heading, p("BSC 56 与 Base 8453 只读查询；这里不会付款、授信或产生可消费额度。", "muted"));
+    root.append(heading, p("BSC 与 Base 只读查询；这里只查询余额，不能付款或充值。", "muted"));
     if (loading || service === "unknown") { root.append(p("正在读取只读网络状态…")); return; }
     if (service === "unavailable") { const card = section("只读网络服务未接入", serviceError || "当前服务没有提供只读网络动作。"); card.append(button("重新读取", () => { service = "unknown"; loaded = true; void loadState(); }), p("未接入时不会显示模拟余额或可计入额度。", "inline-warning")); root.append(card); return; }
     if (!state || state.available !== true) { const card = section("只读网络暂不可用", state?.reason || "服务返回 available:false；没有把未知当作零资产。"); card.append(button("重新读取", () => { service = "unknown"; loaded = true; void loadState(); })); root.append(card); return; }

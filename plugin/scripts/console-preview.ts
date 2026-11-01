@@ -253,6 +253,28 @@ function staleEvidenceState() {
   provider.modelsEvidence = { ...provider.modelsEvidence, status: "stale", callable: "unknown", modelCount: null, models: [], readAt: "2026-10-30T21:00:00.000Z", expiresAt: "2026-10-30T21:05:00.000Z" };
   return state;
 }
+/** Dev-only payment fixture: a provider request and a consumer obligation. */
+function paymentState() {
+  const state = configuredState();
+  const usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+  state.status.paymentP2p = {
+    schema: "ohmyaihub.payment-p2p-state/v1", at: new Date().toISOString(), available: true, reason: null,
+    provider: {
+      enabled: true, networks: [84532],
+      assets: [{ assetId: `eip155:84532:${usdc}`, chainId: 84532, symbol: "tUSDC", decimals: 6, contractAddress: usdc }],
+      receiving: [],
+      requests: [{ invoiceId: "inv-fixture-1", amountRaw: "1500000", decimals: 6, chainId: 84532, consumerNodeId: "consumer-node", status: "waitingpayment", signaturePresent: true, expiresAt: "2026-11-01T00:10:00.000Z" }],
+    },
+    consumer: {
+      remotes: [{ providerNodeId: "provider-node", generation: 1, capUsd: 5, providerFingerprint: "f".repeat(64) }],
+      obligations: [{ invoiceId: "inv-fixture-1", amountRaw: "1500000", decimals: 6, chainId: 84532, providerNodeId: "provider-node", signed: true, peerStatus: "waitingpayment", status: "waitingpayment", expiresAt: "2026-11-01T00:10:00.000Z" }],
+      pending: [],
+    },
+    auto: { enabled: false, mode: "manual-confirm", executor: "none", fullAuto: false, triggerUsd: 1, perPaymentMaxUsd: 5, dailyMaxUsd: 20, gasMaxWei: "2000000000000000", authorizationTtlSec: 600 },
+    reminder: null, readOnly: true,
+  };
+  return state;
+}
 function unsharedState() {
   const state = configuredState();
   state.status.config.sharingEnabled = false;
@@ -271,6 +293,7 @@ let current: any = scenario === "first-run" ? firstRunState()
   : scenario === "stale" ? staleEvidenceState()
   : scenario === "paused" ? pausedEvidenceState()
   : scenario === "unshared" ? unsharedState()
+  : scenario === "payment" ? paymentState()
   : configuredState();
 const csrf = "0".repeat(32);
 const instance = "preview-instance";
@@ -314,6 +337,10 @@ const server = Bun.serve({
         return json({ result: current });
       }
       if (name === "network-refresh" || name === "catalog-refresh" || name === "checks") return json({ result: current });
+      if (name === "payment-local-send-preview") {
+        const usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+        return json({ result: { invoiceId: "inv-fixture-1", chainId: 84532, assetId: `eip155:84532:${usdc}`, recipientAddress: "0x" + "2".repeat(40), amountTokens: "1.5", amountRaw: "1500000", payerAddress: "0x" + "3".repeat(40), nonce: 3, gasLimit: "21000", maxFeePerGas: "1000000000", maxGasCostWei: "21000000000000", nativeSymbol: "ETH", tokenBalanceRaw: "5000000", decimals: 6, digest: "0x" + "a".repeat(64), expiresAt: "2026-11-01T00:10:00.000Z", previewRef: "0f3f8f0e-1111-4111-8111-111111111111" } });
+      }
       if (name === "share-candidates") return json({ result: candidates });
       if (name === "catalog-settings" || name === "share-models" || name === "share-toggle" || name === "catalog-publish") return json({ result: current });
       if (name === "p2p-quote-preview") {

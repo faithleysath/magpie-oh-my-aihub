@@ -86,7 +86,11 @@ describe("read-only network/asset UI", () => {
       expect(ui.root.textContent).toContain("USDC");
       expect(ui.root.textContent).toContain("BSC USDC 未在只读注册表列出时不支持");
       expect(ui.root.textContent).toContain("不计入可消费额度");
-      expect(ui.root.textContent).toContain("主网发送、授信、自动充值和资金流仍未开放");
+      expect(ui.root.textContent).toContain("主网付款、自动充值和资金流仍未开放");
+      expect(ui.root.textContent).not.toContain("授信");
+      expect(ui.root.textContent).not.toContain("链 56");
+      expect(ui.root.textContent).not.toContain("链 8453");
+      expect(ui.root.textContent).toContain("BSC");
       expect(ui.calls.map((call) => call.name)).toEqual(["network-local-state"]);
       expect(all(ui.root, "button").filter((node) => node.textContent === "读取余额")).toHaveLength(1);
       expect(ui.root.textContent).not.toContain("$0.00");
