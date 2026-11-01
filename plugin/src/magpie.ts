@@ -20,6 +20,24 @@ export type UnsupportedPriceReason = "rate-window" | "tier-limit";
 /** Magpie's catalogue schema accepts at most 10 tiers; bound the check too. */
 const MAX_PRICE_TIERS = 10;
 
+/**
+ * The provider model ids in one `/v1/models` answer. Routing groups (`group/…`,
+ * `auto/…`) are not a provider's model — their prices are derived — so they never
+ * become catalogue entries.
+ */
+function modelIdsFromGateway(rows: readonly Record<string, unknown>[]): string[] {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const raw = row.id;
+    if (typeof raw !== "string") continue;
+    const id = raw.trim();
+    if (!id || id.startsWith("group/") || id.startsWith("auto/")) continue;
+    if (!/^[^\s/]+\/[^\s]+$/.test(id)) continue;
+    ids.add(id);
+  }
+  return [...ids];
+}
+
 /** Refuses one price object, without looking at its provider. */
 function directUnsupportedPriceReason(price: unknown): UnsupportedPriceReason | null {
   if (!price || typeof price !== "object" || Array.isArray(price)) return null;
@@ -313,15 +331,35 @@ export class Magpie {
   }
 
   /**
-   * The model metadata the catalogue publishes: Magpie's own local
-   * `/v1/models` when the gateway answers on loopback (no key: a loopback caller
-   * is local), otherwise the explicit per-model settings. Nothing here invents a
+   * The model metadata the catalogue publishes, read from Magpie's own local
+   * `/v1/models` (no key: a loopback caller is local). Nothing here invents a
    * capability or a price.
+   *
+   * The *ids* come from that same answer, not from `magpie models`. The gateway
+   * lists every id it will actually route — which is the question a catalogue
+   * answers — and it keeps models a routing group's `unlists` hides from the
+   * picker (they are still routable; a probe reached the vendor upstream with an
+   * unlisted id). `magpie models` also costs about ten seconds per call, against
+   * two milliseconds here.
+   *
+   * `modelIds()` stays as the fallback for a gateway that is not answering on
+   * loopback (bound to a LAN address, or down). Only when neither answers is this
+   * an error, never an empty list — an empty list would unpublish everything.
    */
   async catalogModels(): Promise<CatalogModelMeta[]> {
-    const ids = await this.modelIds().catch(() => []);
-    if (ids.length === 0) return [];
     const gateway = await this.localModelList();
+    let ids: string[];
+    if (gateway) {
+      ids = modelIdsFromGateway(gateway);
+    } else {
+      try {
+        ids = await this.modelIds();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Magpie answered nothing: /v1/models is unreachable and magpie models failed (${detail})`);
+      }
+    }
+    if (ids.length === 0) return [];
     const settings = this.settings();
     const native = this.nativeProviderIds();
     const providerRecords = new Map(this.providers().map((p) => [p.id, p]));

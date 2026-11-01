@@ -220,6 +220,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 - 没有 `listeners` 时 EasyTier 默认监听 `tcp://0.0.0.0:11010`，入网不需要额外配置监听地址。
 - **无 TUN 模式没有虚拟 IPv4**：`no_tun = true` 下 EasyTier 2.6.4 不给任何节点分配虚拟 IP（`--ipv4` 也不行），`peer list` 的 `ipv4` 字段恒为空。所以邻居的身份是 hostname，要拨的地址是它导出的 mapped CIDR（`proxy_cidrs`），不能用 ipv4 做过滤条件。
 - Magpie 的 `peak` 是「低谷价 + 高峰时段翻倍」（0.1.2289），倍率按 2 处理；`tiers` 是整笔请求按档计价。两者都原样进 `omai/catalog/2`。
+- **网关 `/v1/models` 才是“真会路由”的清单**：路由组 `unlists` 藏起来的副本不在选择器里，但网关照样按 `provider/model` 路由（实测用未勾选的 `deepseek/deepseek-v4-pro` 打到了 DeepSeek 上游）。所以插件取候选 id 用网关（2 ms），`magpie models` 只当网关不在回环上时的回落（它现场查所有 provider 的目录，约 10 秒）。
 - EasyTier 2.6.4 的 secure mode：同网节点必须都开，没开的一方会被对端反复踢掉（官方文档说服务端能接旧客户端，实测不行）；`local_public_key` 必须显式给，否则报 `local public key is not set`；`peer_public_key` 写了不生效（填一个假公钥照样能连上），所以现在不做公钥 pin。
 - 复核：`git -C ~/Projects/lab/magpie-upstream show v0.1.2516:internal/gateway/tools_mcp.go`、`internal/library/plugin_tools.go`、`internal/gui/pluginpage.go`。
 
