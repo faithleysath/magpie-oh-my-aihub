@@ -2,8 +2,9 @@
 
 - Branch `feature/phase10-visual-polish`, base
   `0db687ccb25d974261bd5f8694a5c04545239f14` (PR #51 final acceptance head).
-- UI head `9859b2f` (the console changes); evidence head `82558bd`; this report
-  and its hashes are a docs-only commit after it.
+- UI head `9859b2f` (all console changes; the 48 shots are this tree); evidence
+  head `82558bd`; CI-green head `45e3a9d` (adds the test-only flake pin); this
+  report and its hashes are the docs-only commit after it.
 - Draft PR **#52** → `feature/phase10-final-acceptance`, **not merged**:
   <https://github.com/faithleysath/magpie-oh-my-aihub/pull/52>
 - Scope: console structure, styles, copy, their tests and evidence only. No P2P,
@@ -62,7 +63,7 @@
 | `bun run secret-scan` | PASS |
 | `bun run scripts/pack-check.ts --selftest` | PASS (root 99 files / plugin 97, no tests/docs/secrets, static assets complete) |
 | Console behaviour tests | 219 pass / 0 fail (12 files), including the new `visual-system.test.js` |
-| CI (PR #52) | all six checks green at `82558bd`: plugin linux, plugin macos, windows subset, secrets working tree, secrets history, package contents |
+| CI (PR #52) | all six checks green at `45e3a9d`: plugin linux, plugin macos, windows subset, secrets working tree, secrets history, package contents |
 
 ## Real matrix
 
