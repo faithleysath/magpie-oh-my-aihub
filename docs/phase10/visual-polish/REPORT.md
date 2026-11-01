@@ -2,9 +2,9 @@
 
 - Branch `feature/phase10-visual-polish`, base
   `0db687ccb25d974261bd5f8694a5c04545239f14` (PR #51 final acceptance head).
-- UI head `9859b2f` (all console changes; the 48 shots are this tree); evidence
-  head `82558bd`; CI-green head `45e3a9d` (adds the test-only flake pin); this
-  report and its hashes are the docs-only commit after it.
+- UI head `55634de` (this round's console changes; the 48 page shots and 8 dialog
+  shots are this tree); the first round's UI head was `9859b2f`; CI-green head
+  `55634de`; this report and its hashes are the docs-only commit after it.
 - Draft PR **#52** → `feature/phase10-final-acceptance`, **not merged**:
   <https://github.com/faithleysath/magpie-oh-my-aihub/pull/52>
 - Scope: console structure, styles, copy, their tests and evidence only. No P2P,
@@ -61,12 +61,12 @@
 | Gate | Result |
 | --- | --- |
 | `bun run typecheck` | PASS |
-| `bun run test` (plugin + console + phase-9 fixture) | **1421 pass / 0 fail** (94 files) |
+| `bun run test` (plugin + console + phase-9 fixture) | **1426 pass / 0 fail** (94 files) |
 | `bun run boot-check` | PASS (`magpie 0.1.2038` stub, api 34517, page snapshot 0600) |
 | `bun run secret-scan` | PASS |
 | `bun run scripts/pack-check.ts --selftest` | PASS (root 99 files / plugin 97, no tests/docs/secrets, static assets complete) |
-| Console behaviour tests | 219 pass / 0 fail (12 files), including the new `visual-system.test.js` |
-| CI (PR #52) | all six checks green at `45e3a9d`: plugin linux, plugin macos, windows subset, secrets working tree, secrets history, package contents |
+| Console behaviour tests | 224 pass / 0 fail (12 files), including the new visible-DOM dialog checks |
+| CI (PR #52) | all six checks green at `55634de`: plugin linux, plugin macos (one pre-existing RPC-timing flake, passed on rerun), windows subset, secrets working tree, secrets history, package contents |
 
 ## Real matrix
 
