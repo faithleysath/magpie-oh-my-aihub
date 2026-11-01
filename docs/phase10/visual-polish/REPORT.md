@@ -85,11 +85,13 @@ before/after [`BEFORE-AFTER.md`](BEFORE-AFTER.md); cleanup
   It is not a WAN test. The installed 0.1.2516 was not used: a copied bundle on
   this machine repeatedly restarted the plugin host, so sessions could not stay
   alive long enough for a matrix. The 0.1.2289 lab was stable.
-- Two backend tests (`provider models evidence > connect writes current evidence…`,
-  `several remote providers > a failed connect…`) failed once each in two
-  earlier full-suite runs and passed in isolation and on the next full run; they
-  are timing-sensitive HTTP-gateway tests unrelated to this console-only diff.
-  The reported 1421/0 is the clean rerun.
+- The first CI run exposed a pre-existing 1/254 test flake: the self-connect
+  guard (added in PR #51) compares a peer's virtual IPv4 with a randomly
+  allocated local one, and two backend fixtures used 10.77.0.2/10.77.0.3 without
+  pinning the local address. Two test files now pin `virtualIpv4:
+  "10.77.0.99/24"`, the same fix already present in `catalog-service.test.ts`.
+  This is test-only: no product code changed. 15× models-evidence and 12×
+  service runs pass after the pin; the full suite is green.
 - The zero-file request and human approval were real; sealed delivery stayed
   `正在交付 / 排队中` in this lab (transport/lab condition). The delivered path is
   evidenced at the PR #51 SHA, not claimed again here.

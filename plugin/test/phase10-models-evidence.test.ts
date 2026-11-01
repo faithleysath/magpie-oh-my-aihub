@@ -105,7 +105,13 @@ async function service(): Promise<Service> {
     },
   });
   services.push(svc);
-  await svc.configure({ sharingEnabled: false, consumingEnabled: true, networkName: "evidence-lab", networkSecret: "evidence-secret" });
+  await svc.configure({
+    sharingEnabled: false, consumingEnabled: true, networkName: "evidence-lab", networkSecret: "evidence-secret",
+    // Pinned away from the 10.77.0.3 peer fixture: a random local address
+    // colliding with a peer would classify it as "self" and is a 1/254 test
+    // flake (seen on CI), not a product condition. Same pin as catalog-service.
+    virtualIpv4: "10.77.0.99/24",
+  });
   sup.routeRows = [{ ipv4: "10.77.0.3/24", hostname: "peer-host", proxyCidrs: "192.0.2.84->10.66.1.2", nextHop: "DIRECT", pathLen: 1 }];
   return svc;
 }
