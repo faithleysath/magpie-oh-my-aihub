@@ -164,7 +164,7 @@ describe("local wallet UI", () => {
       expect(ui.dialog.open).toBeFalse();
       expect(ui.dialog.textContent).not.toContain("locked create seed words");
       expect(ui.root.textContent).toContain("已锁定");
-      expect(ui.root.textContent).toContain("未验证地址");
+      expect(ui.root.textContent).toContain("地址可用性尚未验证");
       expect(find(ui.root, "button", "导出恢复助记词")).toBeUndefined();
     } finally { ui.restore(); }
   });
@@ -181,7 +181,7 @@ describe("local wallet UI", () => {
       ui.mounted.render({ walletVault: { wallet: other } }); await flush();
       expect(ui.dialog.open).toBeFalse();
       expect(ui.dialog.textContent).not.toContain("different address secret");
-      expect(ui.root.textContent).toContain("未验证地址");
+      expect(ui.root.textContent).toContain("地址可用性尚未验证");
     } finally { ui.restore(); }
   });
 
@@ -190,7 +190,7 @@ describe("local wallet UI", () => {
       const ui = mount({ actions: { "wallet-vault-status": async () => ({ wallet: absent }), [action]: async () => ({ wallet: locked }) } });
       try {
         await ui.show();
-        await find(ui.root, "button", "选择已有钱包方式").click(); await flush();
+        await find(ui.root, "button", "连接已有钱包").click(); await flush();
         await find(ui.dialog, "button", label).click(); await flush();
         const secret = all(ui.dialog, "textarea")[0]; secret.value = fieldName === "mnemonic" ? "one two three" : '{"crypto":{}}';
         fillPasswordDialog(ui.dialog);
@@ -200,7 +200,7 @@ describe("local wallet UI", () => {
         expect(call.input[fieldName]).toBe(fieldName === "mnemonic" ? "one two three" : '{"crypto":{}}');
         expect(secret.value).toBe("");
         expect(ui.dialog.textContent).not.toContain("one two three");
-        expect(ui.root.textContent).toContain("未验证地址");
+        expect(ui.root.textContent).toContain("地址可用性尚未验证");
       } finally { ui.restore(); }
     }
   });
@@ -214,10 +214,10 @@ describe("local wallet UI", () => {
       const password = all(ui.dialog, "input").find((node) => node.type === "password"); password.value = "correct-horse-battery";
       await find(ui.dialog, "button", "解锁").click(); await flush();
       expect(ui.calls.find((call) => call.name === "wallet-vault-unlock").input.password).toBe("correct-horse-battery");
-      expect(ui.root.textContent).toContain("当前会话已验证");
+      expect(ui.root.textContent).toContain("本次会话已验证");
       await find(ui.root, "button", "锁定").click(); await flush();
       expect(ui.calls.some((call) => call.name === "wallet-vault-lock")).toBe(true);
-      expect(ui.root.textContent).toContain("未验证地址");
+      expect(ui.root.textContent).toContain("地址可用性尚未验证");
     } finally { ui.restore(); }
   });
 
@@ -286,7 +286,7 @@ describe("local wallet UI", () => {
       expect(ui.root.textContent).not.toContain("late create secret");
       expect(ui.notices.some(([message]) => message.includes("创建请求已返回；请手动刷新状态确认"))).toBeTrue();
       expect(ui.root.textContent).toContain("手动刷新钱包状态");
-      expect(ui.root.textContent).not.toContain("当前会话已验证");
+      expect(ui.root.textContent).not.toContain("本次会话已验证");
     } finally { ui.restore(); }
   });
 
@@ -319,7 +319,7 @@ describe("local wallet UI", () => {
         if (cancel === "reset") ui.mounted.reset(); else ui.mounted.dispose();
         resolveCreate({ wallet: unlocked, mnemonic: "late reset secret", warning: "once" }); await flush();
         expect(ui.dialog.open).toBeFalse();
-        expect(ui.root.textContent).not.toContain("当前会话已验证");
+        expect(ui.root.textContent).not.toContain("本次会话已验证");
         expect(ui.root.textContent).not.toContain("late reset secret");
         expect(ui.notices.some(([message]) => message.includes("钱包已创建"))).toBeFalse();
       } finally { ui.restore(); }
@@ -368,8 +368,8 @@ describe("local wallet UI", () => {
       ui.mounted.render({ walletVault: { wallet: locked } }); await flush();
       expect(ui.dialog.open).toBeFalse();
       expect(ui.dialog.textContent).not.toContain("state push secret");
-      expect(ui.root.textContent).toContain("未验证地址");
-      expect(ui.root.textContent).not.toContain("当前会话已验证");
+      expect(ui.root.textContent).toContain("地址可用性尚未验证");
+      expect(ui.root.textContent).not.toContain("本次会话已验证");
     } finally { ui.restore(); }
   });
 
@@ -379,7 +379,7 @@ describe("local wallet UI", () => {
       await ui.show();
       ui.mounted.render({}); ui.mounted.render({}); await flush();
       expect(all(ui.root, "h2").filter((node) => node.textContent === "本地钱包")).toHaveLength(1);
-      expect(ui.root.textContent).toContain("未验证地址");
+      expect(ui.root.textContent).toContain("地址可用性尚未验证");
     } finally { ui.restore(); }
   });
 

@@ -38,10 +38,22 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     input.append(option("", placeholder || "请明确选择")); for (const [value, title] of choices) input.append(option(value, title)); input.value = ""; label.append(el("span", text), input); return { label, input };
   };
   const option = (value, title) => { const node = el("option", title); node.value = String(value); return node; };
-  const details = (title, values, open = false) => { const node = el("details", null, "workflow-details"); node.open = open; node.append(el("summary", title)); for (const [label, value] of values) { const row = el("div"); row.append(el("strong", label), el("span", value ?? "未知")); node.append(row); } return node; };
+  // Technical details are dense; only identifier/amount values are mono.
+  const IDENTIFIER = /(指纹|摘要|哈希|地址|编号|合约|版本|标识|引用|游标|日志|id|金额|数量|余额|费用|上限|价格)/i;
+  const details = (title, values, open = false) => {
+    const node = el("details", null, "workflow-details"); node.open = open; node.append(el("summary", title));
+    for (const [label, value] of values) {
+      const row = el("div");
+      const shown = el("span", value ?? "未知");
+      if (IDENTIFIER.test(label)) shown.className = "mono";
+      row.append(el("strong", label), shown);
+      node.append(row);
+    }
+    return node;
+  };
   const section = (title, text) => { const node = el("section", null, "card workflow-section"); node.append(el("div", null, "section-heading")); node.children[0].append(el("h2", title)); if (text) node.append(p(text)); return node; };
   const empty = (title, text) => { const node = el("div", null, "workflow-empty"); node.append(el("h3", title), p(text)); return node; };
-  const pill = (text, tone = "neutral") => el("span", text, `pill ${tone}`);
+  const statusText = (text, tone = "neutral") => el("span", text, `status-text ${tone}`);
   const walletRoot = document.getElementById("wallet-panel");
   const accountingRoot = document.getElementById("accounting-panel");
   let state = null;
@@ -127,14 +139,14 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
   const creditList = el("ul", null, "credit-list"); overview.append(creditList);
   walletRoot.append(overview);
   const walletEvidence = el("div", null, "wallet-evidence");
-  const intents = section("共享方 · 发起与追踪入账申请", "为本机管理的伙伴创建入账申请；转账与签名由付款方在自己的钱包完成。");
+  const intents = section("共享方：发起与追踪入账申请", "为本机管理的伙伴创建入账申请；转账与签名由付款方在自己的钱包完成。");
   const intentActions = el("div", null, "workflow-actions");
   const createButton = button("创建测试网入账申请", () => createIntent(), true);
   const refreshButtonInline = refreshButton;
   intentActions.append(createButton);
   intents.append(intentActions);
   const intentRows = el("div", null, "workflow-list"); intents.append(intentRows); walletRoot.append(intents);
-  const guide = section("使用方 · 用自己的外部钱包付款", "导入共享方给的申请文件，核对网络、金额与收款地址，再把自己的钱包签名交回对方。");
+  const guide = section("使用方：用自己的外部钱包付款", "导入共享方给的申请文件，核对网络、金额与收款地址，再把自己的钱包签名交回对方。");
   const guideActions = el("div", null, "workflow-actions"); guideActions.append(button("导入并核对入账申请", () => importFile("deposit"))); guide.append(guideActions);
   guide.append(p("不向此页面提供钱包私钥、助记词或钱包备份文件。签名是归属证明，不能替代转账，也不代表已经入账。"));
   const tutorials = el("details", null, "workflow-details"); tutorials.append(el("summary", "第三方真实资产参考教程"), p("以下是第三方的真实主网资产教程，不会获取测试币，也不适用于本地模拟代币。本项目与 Peer、支付宝无合作关系。"));
@@ -156,7 +168,9 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
   function renderEvidence() {
     const wallet = obj(state.wallet); walletEvidence.replaceChildren();
     const text = wallet.availability === "available" ? "钱包配置已读取" : wallet.availability === "unavailable" ? "钱包暂时不可读取" : "尚未初始化钱包";
-    walletEvidence.append(pill(text, wallet.availability === "available" ? "neutral" : "warn"), p(`本地视图：${stamp(wallet.viewAt)} · 最近主动核验：${stamp(wallet.evidenceAt)} · ${wallet.source === "explicit-refresh" ? "主动刷新证据" : "本地缓存，不代表实时链状态"}`));
+    const meta = el("ul", null, "meta-list");
+    meta.append(el("li", `本地视图 ${stamp(wallet.viewAt)}`), el("li", `最近主动核验 ${stamp(wallet.evidenceAt)}`), el("li", wallet.source === "explicit-refresh" ? "主动刷新证据" : "本地缓存，不代表实时链状态"));
+    walletEvidence.append(statusText(text, wallet.availability === "available" ? "neutral" : "warn"), meta);
     if (wallet.error) walletEvidence.append(el("p", "钱包当前无法核验，请明确点击初始化 / 刷新钱包重试。", "inline-warning"));
     if (wallet.truncated || wallet.view?.truncated) walletEvidence.append(el("p", "当前只显示有界历史，未显示的旧记录不能视为不存在。创建安全检查由服务端完整记录决定。", "inline-warning"));
     createButton.disabled = wallet.availability !== "available";
@@ -175,11 +189,11 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     const fact = (label, value) => { const div = el("div"); div.append(el("dt", label), el("dd", value)); overviewFacts.append(div); };
     // There is no balance read in this phase: never print 0 as if it were one.
     fact("资产余额", available ? "尚未查询" : "尚未读取");
-    fact("最近入账（累计，非余额）", !available ? "尚未读取" : latest ? `${money0(latest.creditedUsd)} · ${stamp(latest.updatedAt)}` : "尚无记录");
+    fact("最近入账（累计，非余额）", !available ? "尚未读取" : latest ? `${money0(latest.creditedUsd)}，${stamp(latest.updatedAt)}` : "尚无记录");
     const networks = rows(wallet.registry?.networks).filter((network) => TEST_CHAINS.includes(network.chainId));
     const assets = rows(wallet.registry?.assets);
     fact("测试网络", networks.length
-      ? networks.map((network) => `${network.displayName}${assets.some((asset) => asset.chainId === network.chainId) ? `（${assets.filter((asset) => asset.chainId === network.chainId).map((asset) => asset.symbol).join("、")}）` : ""}`).join(" · ")
+      ? networks.map((network) => `${network.displayName}${assets.some((asset) => asset.chainId === network.chainId) ? `（${assets.filter((asset) => asset.chainId === network.chainId).map((asset) => asset.symbol).join("、")}）` : ""}`).join("，")
       : "尚未读取");
     const consumers = rows(wallet.view?.consumers);
     if (!available || !consumers.length) {
@@ -188,7 +202,9 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     }
     for (const consumer of consumers) {
       const li = el("li");
-      li.append(el("span", consumer.consumerId), el("strong", money0(consumer?.ledger?.balanceUsd)));
+      const amount = el("strong", money0(consumer?.ledger?.balanceUsd));
+      amount.className = "amount";
+      li.append(el("span", consumer.consumerId), amount);
       creditList.append(li);
     }
   }
@@ -201,13 +217,13 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
       const chain = rows(wallet.view?.chains).find((row) => row.chainId === network.chainId) || {};
       const policy = obj(network.finality);
       const row = el("article", null, "workflow-row");
-      const top = el("div", null, "section-heading"); top.append(el("h3", network.displayName), pill(network.enabled ? "已启用" : "已停用"));
-      row.append(top, p(`chainId ${network.chainId} · RPC ${network.rpcConfigured ? `已配置 ${network.rpcCount} 个` : "尚未配置"} · 最近扫描 ${stamp(chain.lastScanAt)}`), p(`最终性：${policy.mode === "finalized-tag" ? "等待 finalized 标签" : `等待 ${policy.confirmations} 次确认`}`));
+      const top = el("div", null, "section-heading"); top.append(el("h3", network.displayName), statusText(network.enabled ? "已启用" : "已停用", network.enabled ? "good" : "neutral"));
+      row.append(top, p(`链 ${network.chainId}，RPC ${network.rpcConfigured ? `已配置 ${network.rpcCount} 个` : "尚未配置"}，最近扫描 ${stamp(chain.lastScanAt)}`), p(`最终性：${policy.mode === "finalized-tag" ? "等待 finalized 标签" : `等待 ${policy.confirmations} 次确认`}`));
       row.append(details("收款地址与观察进度", [["本机收款地址", receivingAddress(network)], ["链头", chain.head], ["最终块", chain.finalizedBlock], ["观察游标", chain.cursor], ["最终性依据", policy.rationale]]));
       const assets = rows(wallet.registry?.assets).filter((asset) => asset.chainId === network.chainId);
       for (const asset of assets) {
         const assetRow = el("div", null, "wallet-asset");
-        assetRow.append(el("strong", `${asset.symbol} · ${asset.enabled ? "已启用" : "已停用"}`), details("代币合约与固定测试汇率", [["完整代币合约", asset.contractAddress], ["资产身份", asset.assetId], ["小数位", asset.decimals], ["链上小数位", asset.onchainDecimals], ["汇率（nanoUSD / token）", asset.nanosPerToken ?? asset.pricing?.nanosPerToken], ["价格版本", asset.priceVersion ?? asset.pricing?.version], ["测试网限制", asset.testnetOnly === false ? "需要核验" : "仅测试网"]]), button(asset.enabled ? "停用此测试代币" : "启用此测试代币", () => confirm(asset.enabled ? "停用此测试代币" : "启用此测试代币", "资产身份由网络和合约共同确定。此操作不会修改历史入账。", "wallet-asset-toggle", { assetId: asset.assetId, enabled: !asset.enabled })));
+        assetRow.append(el("strong", `${asset.symbol}，${asset.enabled ? "已启用" : "已停用"}`), details("代币合约与固定测试汇率", [["完整代币合约", asset.contractAddress], ["资产身份", asset.assetId], ["小数位", asset.decimals], ["链上小数位", asset.onchainDecimals], ["汇率（nanoUSD / token）", asset.nanosPerToken ?? asset.pricing?.nanosPerToken], ["价格版本", asset.priceVersion ?? asset.pricing?.version], ["测试网限制", asset.testnetOnly === false ? "需要核验" : "仅测试网"]]), button(asset.enabled ? "停用此测试代币" : "启用此测试代币", () => confirm(asset.enabled ? "停用此测试代币" : "启用此测试代币", "资产身份由网络和合约共同确定。此操作不会修改历史入账。", "wallet-asset-toggle", { assetId: asset.assetId, enabled: !asset.enabled })));
         row.append(assetRow);
       }
       const actions = el("div", null, "workflow-actions");
@@ -263,7 +279,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     if (creationPending) { notice("上次创建结果尚未确认。请先刷新视图，检查已有申请或待核对操作，再继续。", "warn"); return; }
     openDialog("明确选择入账申请", (root) => {
       const consumers = rows(state.wallet?.consumers).filter((consumer) => !consumer.revokedAt);
-      const consumer = select("本机已授权伙伴", consumers.map((row) => [row.consumerId, `${row.consumerId}${row.paused ? " · 已暂停" : ""}`]), "请选择伙伴");
+      const consumer = select("本机已授权伙伴", consumers.map((row) => [row.consumerId, `${row.consumerId}${row.paused ? "，已暂停" : ""}`]), "请选择伙伴");
       const chain = select("测试网络", networkChoices(), "请选择网络，不会自动选择");
       const providerOwners = [...new Map(rows(state.wallet?.receiving).filter((row) => row.providerId).map((row) => [row.providerId, row.providerId])).entries()];
       const legacyOwner = select("收款配置归属（兼容已有配置）", providerOwners, "使用本机节点的收款配置");
@@ -272,7 +288,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
       const ttl = field("有效期（秒，60–604800）", "number", "3600"); ttl.input.min = "60"; ttl.input.max = "604800"; ttl.input.step = "1";
       chain.input.addEventListener("change", () => {
         asset.input.replaceChildren(option("", "请选择此网络的测试代币")); asset.input.value = "";
-        for (const row of rows(state.wallet?.registry?.assets).filter((row) => row.chainId === explicitNetwork(chain.input.value) && row.enabled)) asset.input.append(option(row.assetId, `${row.symbol} · ${row.decimals} 位小数`));
+        for (const row of rows(state.wallet?.registry?.assets).filter((row) => row.chainId === explicitNetwork(chain.input.value) && row.enabled)) asset.input.append(option(row.assetId, `${row.symbol}，${row.decimals} 位小数`));
       });
       root.append(p("网络、伙伴和代币均需手动选择。这里只提交十进制数量；服务端负责精度、原始金额、收款人和汇率核验。"), consumer.label, chain.label, asset.label, amount.label, ttl.label);
       if (providerOwners.length) root.append(legacyOwner.label);
@@ -286,7 +302,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
   }
   function confirmIntent(input, preview) {
     openDialog("核对并创建入账申请", (root) => {
-      root.append(details("精确申请内容", [["伙伴", preview.consumerId], ["网络 chainId", preview.chainId], ["代币", `${preview.symbol} · ${preview.assetId}`], ["完整收款地址", preview.recipientAddress], ["token 数量", preview.amountTokens], ["原始金额", preview.amountRaw], ["小数位", preview.decimals], ["固定测试换算", usd(preview.estimatedUsd)], ["有效期（秒）", preview.ttlSec], ["预览指纹", preview.previewHash]], true));
+      root.append(details("精确申请内容", [["伙伴", preview.consumerId], ["网络 chainId", preview.chainId], ["代币", `${preview.symbol}，${preview.assetId}`], ["完整收款地址", preview.recipientAddress], ["token 数量", preview.amountTokens], ["原始金额", preview.amountRaw], ["小数位", preview.decimals], ["固定测试换算", usd(preview.estimatedUsd)], ["有效期（秒）", preview.ttlSec], ["预览指纹", preview.previewHash]], true));
       if (rows(preview.pending).length || rows(preview.blockers).length) root.append(el("p", [...rows(preview.blockers), ...(rows(preview.pending).length ? ["已有未完成申请，请关闭窗口后从申请列表恢复或明确取消。"] : [])].join("；"), "inline-warning"));
       if (preview.paused) root.append(el("p", "此伙伴已暂停。收到入账也不会自动解除计费保护或重新签发密钥。", "inline-warning"));
       const agree = check(preview.paused ? "我已核对申请，知晓伙伴暂停会保留，并明确创建此申请" : "我已核对网络、代币、金额、收款地址和有效期，明确创建此申请");
@@ -305,7 +321,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     return details("完整网络、金额与签名内容", [["申请编号", document.invoiceId], ["付款伙伴", document.consumerId], ["共享方", document.providerId], ["测试网络 chainId", document.chainId], ["完整代币合约", document.asset?.contractAddress], ["代币", document.asset?.symbol], ["小数位", document.asset?.decimals], ["准确 token 数量", document.amount?.tokens], ["原始金额", document.amount?.raw], ["完整收款地址", document.recipientAddress], ["有效期", document.expiresAt], ["签名摘要", document.digest], ["签名类型", "EIP-712 DepositIntent，签名不执行转账"]], true);
   }
   function showDocument(document, transfer) {
-    openDialog(transfer ? "签名已验证 · 准确转账指引" : "入账申请已生成 · 等待付款方签名", (root) => {
+    openDialog(transfer ? "签名已验证：准确转账指引" : "入账申请已生成，等待付款方签名", (root) => {
       root.append(p(transfer ? "签名已验证。下方是此申请绑定的准确转账指引，由付款方在自己的外部钱包核对并执行；此页不广播转账。" : "把申请文件交给付款方，由对方在自己的外部钱包中核对并签名。此阶段没有付款，也没有入账；不要在签名核验前使用任何转账指引。"), documentDetails(document));
       const actions = el("div", null, "workflow-actions"); actions.append(button("下载入账申请文件", () => { if (retainedDocument) download(retainedDocument, "aihub-deposit-request.json"); }, true), button("下载外部钱包签名数据", () => { if (retainedDocument) download(retainedDocument.typedData, "aihub-eip712-signing-data.json"); }));
       root.append(actions);
@@ -354,7 +370,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
             if (kind === "deposit") {
               const verified = result.document || result.preview?.document;
               if (!verified) { fail("未收到通过验证的申请，请向共享方重新索取文件。"); return; }
-              openDialog("使用方 · 外部钱包签名指南", (body) => {
+              openDialog("使用方：外部钱包签名指南", (body) => {
                 body.append(p("文件的一致性已核验。请通过可信渠道确认共享方身份和收款地址，再用自己的外部钱包查看并签署 EIP-712 数据。只签名不会转账；将签名文件交回共享方后，等待其核验并给出转账指引。"), documentDetails(verified), button("下载已核验的入账申请", () => { if (retainedDocument) download(retainedDocument, "aihub-reviewed-deposit-request.json"); }, true), button("下载外部钱包签名数据", () => { if (retainedDocument) download(retainedDocument.typedData, "aihub-eip712-signing-data.json"); }), button("把钱包签名整理为交付文件", () => { if (retainedDocument) packageSignature(retainedDocument); }));
               });
               retainedDocument = verified;
@@ -369,7 +385,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     });
   }
   function showSignatureDelivery(document) {
-    openDialog("签名文件已生成 · 交回共享方", (root) => {
+    openDialog("签名文件已生成，交回共享方", (root) => {
       root.append(p("本机已核验申请与签名付款地址一致。请通过私密渠道将文件交回共享方，等待其验证并提供准确转账指引。此文件不是付款回执。"), details("签名交付信息", [["申请编号", document.invoiceId], ["核验付款地址", document.payerAddress]]), button("下载签名交付文件", () => { if (retainedDocument) download(retainedDocument, "aihub-deposit-signature.json"); }, true));
     });
     retainedDocument = document;
@@ -377,7 +393,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
   function signWithBrowserWallet(document) {
     const provider = globalThis.window?.ethereum;
     if (typeof provider?.request !== "function") { notice("此浏览器没有可用钱包，请使用外部钱包签名数据与文件交接流程。", "warn"); return; }
-    openDialog("使用方 · 浏览器钱包签名", (root) => {
+    openDialog("使用方：浏览器钱包签名", (root) => {
       root.append(p("此操作只签署归属申请，不发起转账。点击后才会请求钱包账户；请在钱包确认界面核对网络、合约、收款地址与准确金额。网络不匹配时，请自行在钱包中切换，再重新点击。"), documentDetails(document));
       const agree = check("我已核对完整申请，明确请求钱包签署这份 EIP-712 数据");
       let signing = false;
@@ -414,7 +430,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     retainedDocument = document;
   }
   function packageSignature(document) {
-    openDialog("使用方 · 整理外部钱包签名", (root) => {
+    openDialog("使用方：整理外部钱包签名", (root) => {
       root.append(p("先在自己的外部钱包中查看并签署该申请的 EIP-712 数据，再填入钱包给出的签名和公开付款地址。此页面不需要私钥、助记词或钱包备份。会核对签名确实属于此申请与付款地址。"), documentDetails(document));
       const payer = field("签名钱包的公开付款地址"); payer.input.maxLength = 42;
       const signature = field("钱包返回的 65 字节签名（0x 开头）"); signature.input.maxLength = 132;
@@ -436,17 +452,17 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     const wallet = obj(state.wallet);
     const operations = rows(wallet.intentOperations).filter((operation) => ["pending", "reserved", "unknown"].includes(operation.status || operation.state));
     creationPending = operations.length > 0;
-    for (const operation of operations) intentRows.append(el("p", `待核对的创建操作：${operation.consumerId} · ${operation.requestId} · ${operation.status || operation.state}。请核对已有申请；不会自动补建。`, "inline-warning"));
+    for (const operation of operations) intentRows.append(el("p", `待核对的创建操作：${operation.consumerId}，${operation.requestId}，${operation.status || operation.state}。请核对已有申请；不会自动补建。`, "inline-warning"));
     const existing = rows(wallet.intents);
     if (!existing.length && !operations.length) { intentRows.append(empty("还没有入账申请", "先注册所选测试网代币与收款地址，再为已授权伙伴明确创建申请。")); return; }
     for (const intent of existing) {
       const journey = rows(wallet.view?.deposits).find((row) => row.invoiceId === intent.invoiceId);
       const row = el("article", null, "workflow-row");
-      const top = el("div", null, "section-heading"); top.append(el("h3", `${intent.consumerId} · 入账申请`), pill(depositLabel(journey?.state || intent.status), ["uncertain", "unproven", "failed", "reverted"].includes(journey?.state) ? "warn" : "neutral"));
+      const top = el("div", null, "section-heading"); top.append(el("h3", `${intent.consumerId} 的入账申请`), statusText(depositLabel(journey?.state || intent.status), ["uncertain", "unproven", "failed", "reverted"].includes(journey?.state) ? "warn" : "neutral"));
       row.append(top, details("申请、地址与金额", [["申请编号", intent.invoiceId], ["网络 chainId", intent.chainId], ["资产身份", intent.assetId], ["原始金额", intent.expectedAmountRaw], ["完整收款地址", intent.recipientAddress], ["付款地址", intent.payerAddress], ["有效期", intent.expiresAt], ["更新时间", journey?.updatedAt]]), p(journeyNext(journey?.state || intent.status)));
       if (journey) {
         const timeline = el("ol", null, "wallet-timeline");
-        for (const step of rows(journey.steps)) { const item = el("li", null, `timeline-${step.state}`); item.append(el("strong", stepLabels[step.id] || "核验步骤"), pill(stepStates[step.state] || "未知"), p(step.at ? stamp(step.at) : "未记录核验时间")); if (step.detail) item.append(details("核验详情", [["证据", step.detail]])); timeline.append(item); }
+        for (const step of rows(journey.steps)) { const item = el("li", null, `timeline-${step.state}`); item.append(el("strong", stepLabels[step.id] || "核验步骤"), statusText(stepStates[step.state] || "未知"), p(step.at ? stamp(step.at) : "未记录核验时间")); if (step.detail) item.append(details("核验详情", [["证据", step.detail]])); timeline.append(item); }
         row.append(timeline);
         if (journey.keyUsable) row.append(el("p", "最近证据曾核验密钥覆盖本次入账；仍需查看当前计费状态与共享发布状态。", "soft-note"));
       }
@@ -460,7 +476,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
       row.append(actions); intentRows.append(row);
     }
     for (const journey of rows(wallet.view?.deposits).filter((row) => !row.invoiceId || !existing.some((intent) => intent.invoiceId === row.invoiceId))) {
-      const row = el("article", null, "workflow-row"); row.append(el("h3", `${journey.chainName || journey.chainId} · ${depositLabel(journey.state)}`), p(journeyNext(journey.state)), details("独立链事件证据", [["交易哈希", journey.txHash], ["原始金额", journey.amountRaw], ["账本入账", usd(journey.creditedUsd)], ["更新时间", journey.updatedAt]])); intentRows.append(row);
+      const row = el("article", null, "workflow-row"); row.append(el("h3", `${journey.chainName || journey.chainId}：${depositLabel(journey.state)}`), p(journeyNext(journey.state)), details("独立链事件证据", [["交易哈希", journey.txHash], ["原始金额", journey.amountRaw], ["账本入账", usd(journey.creditedUsd)], ["更新时间", journey.updatedAt]])); intentRows.append(row);
     }
   }
   function renderAlerts() {
@@ -469,7 +485,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
       const row = el("article", null, "workflow-row"); row.append(el("h3", alert.kind || "核验提醒"), p(journeyNext(alert.kind)), details("异常证据详情", [["网络", alert.chainId], ["伙伴", alert.consumerId], ["记录时间", alert.at], ["诊断", alert.detail]])); alertRows.append(row);
     }
     for (const anomaly of rows(state.wallet?.anomalies)) {
-      const row = el("article", null, "workflow-row"); row.append(el("h3", `审计异常 · ${anomaly.kind || anomaly.type || anomaly.id}`), details("审计证据", [["网络", anomaly.chainId], ["时间", anomaly.createdAt || anomaly.at], ["说明", anomaly.detail || anomaly.reason], ["审阅时间", anomaly.resolvedAt], ["审阅说明", anomaly.resolutionNote || anomaly.note]]));
+      const row = el("article", null, "workflow-row"); row.append(el("h3", `审计异常：${anomaly.kind || anomaly.type || anomaly.id}`), details("审计证据", [["网络", anomaly.chainId], ["时间", anomaly.createdAt || anomaly.at], ["说明", anomaly.detail || anomaly.reason], ["审阅时间", anomaly.resolvedAt], ["审阅说明", anomaly.resolutionNote || anomaly.note]]));
       if (!anomaly.resolvedAt) row.append(button("记录审阅说明", () => auditAnomaly(anomaly)));
       alertRows.append(row);
     }
@@ -493,12 +509,12 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
   const consumerSelect = select("伙伴账目", [], "请选择伙伴，不会自动选择"); accountingIntro.append(consumerSelect.label);
   consumerSelect.input.addEventListener("change", () => { closeDialog(); selectedConsumer = consumerSelect.input.value; renderAccounting(); });
   const accountContent = el("div"); accountingRoot.append(accountingIntro, accountContent);
-  const external = section("使用方 · 已导入的共享方账单（离线文件）", "这是共享方提供的未签名快照。摘要只验证内容一致性，不证明身份、付款或链上最终性；请独立核对。"), externalContent = el("div");
+  const external = section("使用方：已导入的共享方账单（离线文件）", "这是共享方提供的未签名快照。摘要只验证内容一致性，不证明身份、付款或链上最终性；请独立核对。"), externalContent = el("div");
   external.append(button("导入共享方账单", () => importFile("statement")), externalContent); accountingRoot.append(external);
   function renderConsumerOptions() {
     const value = selectedConsumer;
     consumerSelect.input.replaceChildren(option("", "请选择伙伴，不会自动选择"));
-    for (const consumer of rows(state.status.consumers)) consumerSelect.input.append(option(consumer.consumerId, `${consumer.consumerId}${consumer.revokedAt ? " · 已撤销" : consumer.paused ? " · 已暂停" : ""}`));
+    for (const consumer of rows(state.status.consumers)) consumerSelect.input.append(option(consumer.consumerId, `${consumer.consumerId}${consumer.revokedAt ? "，已撤销" : consumer.paused ? "，已暂停" : ""}`));
     selectedConsumer = rows(state.status.consumers).some((consumer) => consumer.consumerId === value) ? value : "";
     consumerSelect.input.value = selectedConsumer;
     if (value !== selectedConsumer) closeDialog();
@@ -513,7 +529,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
         for (const row of entries) {
           const amount = typeof row.amountUsd === "number" && Number.isFinite(row.amountUsd) ? `$${row.amountUsd.toFixed(9)}` : "未知";
           const tokens = obj(row.tokens);
-          root.append(details(`${stamp(row.recordedAt)} · ${row.kind === "adjustment" ? "历史调整" : "模型调用"} · ${amount}`, [
+          root.append(details(`${stamp(row.recordedAt)}，${row.kind === "adjustment" ? "历史调整" : "模型调用"}，${amount}`, [
             ["模型", row.model], ["记录费用", amount], ["精确费用（nanoUSD）", row.amountNanos],
             ["记录时间", row.recordedAt], ["价格版本", row.priceVersion], ["原账期窗口", row.windowId],
             ["价格已核验", row.priceVerified === true ? "已核验" : "未核验，记录金额不能视为最终费用"],
@@ -541,9 +557,11 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     const unsafe = typeof verifiedCap === "number" && verifiedCap <= 0;
     const label = unsafe ? "额度上限不安全" : account ? keyLabel(account.state) : "账目尚未主动核验";
     const healthy = account?.state === "usable" && account?.accounting?.state === "ok" && account?.accounting?.serving === true && typeof verifiedCap === "number" && verifiedCap > 0 && account?.readback?.fromGateway === true;
-    card.append(pill(label, healthy ? "good" : "warn"), p(`本地视图 ${stamp(state.wallet?.viewAt)} · 最近主动证据 ${stamp(state.wallet?.evidenceAt)} · 原生额度回读 ${stamp(account?.readback?.at)}`));
+    const meta = el("ul", null, "meta-list");
+    meta.append(el("li", `本地视图 ${stamp(state.wallet?.viewAt)}`), el("li", `最近主动证据 ${stamp(state.wallet?.evidenceAt)}`), el("li", `原生额度回读 ${stamp(account?.readback?.at)}`));
+    card.append(statusText(label, healthy ? "good" : "warn"), meta);
     const values = el("div", null, "wallet-account-grid");
-    for (const [name, value] of [["累计入账", account?.cumulativeCreditUsd ?? ledger.depositedUsd], ["累计消耗", account?.consumedUsd ?? ledger.consumedUsd], ["已结算消耗", account?.settledUsd], ["账本余额", account?.balanceUsd ?? ledger.balanceUsd], ["超支", account?.overdraftUsd ?? ledger.overdraftUsd], ["尚未结算", account?.unsettledUsd ?? ledger.unsettledUsd]]) { const tile = el("div"); tile.append(p(name), el("strong", usd(value))); values.append(tile); }
+    for (const [name, value] of [["累计入账", account?.cumulativeCreditUsd ?? ledger.depositedUsd], ["累计消耗", account?.consumedUsd ?? ledger.consumedUsd], ["已结算消耗", account?.settledUsd], ["账本余额", account?.balanceUsd ?? ledger.balanceUsd], ["超支", account?.overdraftUsd ?? ledger.overdraftUsd], ["尚未结算", account?.unsettledUsd ?? ledger.unsettledUsd]]) { const tile = el("div"); const amount = el("strong", usd(value)); amount.className = "amount"; tile.append(p(name), amount); values.append(tile); }
     card.append(values, details("原生额度、模型与价格窗口", [["最近核验额度上限", capLabel(verifiedCap)], ["最近核验已用", usd(account?.usedUsd)], ["最近核验剩余", usd(account?.leftUsd)], ["记录的额度上限（非当前回读）", capLabel(consumer.capUsd)], ["允许模型", rows(consumer.models).join("、")], ["价格版本", account?.priceVersion || consumer.priceVersion], ["已接受报价", consumer.acceptedQuoteHash], ["窗口结束", account?.windowEnd || consumer.reset], ["待结算窗口", account?.openSettlements ?? ledger.openSettlements], ["计费状态", account?.accounting?.state || "unknown"], ["共享发布", account?.accounting?.serving === true ? "最近证据中发布" : "未知或已撤回"], ["暂停原因", consumer.paused?.reason], ["暂停执行层级", consumer.paused?.enforcement], ["保护已执行", consumer.paused ? consumer.paused.enforced === true ? "已证实撤销或轮换旧密钥" : "未证实完全阻止，需检查网络发布" : "未暂停"], ["计费不确定性", ledger.uncertain]]));
     card.append(el("p", "401 表示访问授权未被接受；429 是 Magpie 原生限额拒绝；RPC 不可读表示链证据未知；计费保护暂停需要核对原因，不能靠重复转账或清零额度解除。", "soft-note"));
     const actions = el("div", null, "workflow-actions");
@@ -560,7 +578,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     }
     accountContent.append(card);
     const depositRows = section("此伙伴的入账过程与链记录");
-    for (const deposit of rows(state.wallet?.view?.deposits).filter((row) => row.consumerId === selectedConsumer)) depositRows.append(details(`${deposit.chainName || deposit.chainId} · ${depositLabel(deposit.state)}`, [["申请", deposit.invoiceId], ["交易哈希", deposit.txHash], ["原始金额", deposit.amountRaw], ["准确 token 数量", deposit.amountTokens], ["记录入账", usd(deposit.creditedUsd)], ["最近证据", deposit.updatedAt]]));
+    for (const deposit of rows(state.wallet?.view?.deposits).filter((row) => row.consumerId === selectedConsumer)) depositRows.append(details(`${deposit.chainName || deposit.chainId}：${depositLabel(deposit.state)}`, [["申请", deposit.invoiceId], ["交易哈希", deposit.txHash], ["原始金额", deposit.amountRaw], ["准确 token 数量", deposit.amountTokens], ["记录入账", usd(deposit.creditedUsd)], ["最近证据", deposit.updatedAt]]));
     if (depositRows.children.length === 1) depositRows.append(p("当前有界视图没有此伙伴的链记录。账本余额不能由此推断为零。"));
     accountContent.append(depositRows);
   }
@@ -586,7 +604,7 @@ export function mountWallet({ client, getState, onState, notice, setBusy, refres
     externalContent.replaceChildren();
     if (!externalStatement) { externalContent.append(empty("尚未导入共享方账单", "文件只在此页内存中展示，关闭或会话结束后清除。")); return; }
     const statement = externalStatement.statement || externalStatement;
-    externalContent.append(pill("未签名快照 · 不代表付款证明", "warn"), details("共享方账单摘要", [["共享方", statement.providerId], ["伙伴", statement.consumerId], ["生成时间", statement.generatedAt], ["完整摘要", statement.digest || externalStatement.digest], ["累计入账", usd(statement.totals?.creditedUsd)], ["消耗", usd(statement.totals?.consumedUsd)], ["余额", usd(statement.totals?.balanceUsd)], ["原生上限", capLabel(statement.key?.capUsd)], ["原生回读", statement.key?.readbackAt], ["价格版本", statement.key?.priceVersion], ["计费状态", statement.accounting?.state]]), button("清除此页账单", () => { externalStatement = null; renderExternalStatement(); }));
+    externalContent.append(statusText("未签名快照，不代表付款证明", "warn"), details("共享方账单摘要", [["共享方", statement.providerId], ["伙伴", statement.consumerId], ["生成时间", statement.generatedAt], ["完整摘要", statement.digest || externalStatement.digest], ["累计入账", usd(statement.totals?.creditedUsd)], ["消耗", usd(statement.totals?.consumedUsd)], ["余额", usd(statement.totals?.balanceUsd)], ["原生上限", capLabel(statement.key?.capUsd)], ["原生回读", statement.key?.readbackAt], ["价格版本", statement.key?.priceVersion], ["计费状态", statement.accounting?.state]]), button("清除此页账单", () => { externalStatement = null; renderExternalStatement(); }));
   }
   function render(next) {
     state = next; renderEvidence();

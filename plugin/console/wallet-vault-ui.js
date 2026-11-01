@@ -59,11 +59,17 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   };
   const details = (title, values, open = false) => {
     const node = el("details", null, "workflow-details"); node.open = open; node.append(el("summary", title));
-    for (const [label, value] of values) { const row = el("div"); row.append(el("strong", label), el("span", value ?? "未知")); node.append(row); }
+    for (const [label, value, identifier] of values) {
+      const row = el("div");
+      const shown = el("span", value ?? "未知");
+      if (identifier) shown.className = "mono";
+      row.append(el("strong", label), shown);
+      node.append(row);
+    }
     return node;
   };
   const section = (title, text) => { const node = el("section", null, "card workflow-section wallet-vault-section"); node.append(el("h2", title)); if (text) node.append(p(text)); return node; };
-  const pill = (text, tone = "neutral") => el("span", text, `pill ${tone}`);
+  const statusText = (text, tone = "neutral") => el("span", text, `status-text ${tone}`);
   const choice = (title, text, action) => { const card = el("div", null, "wallet-choice"); card.append(el("h3", title), p(text), action); return card; };
 
   const dialog = el("dialog", null, "workflow-dialog wallet-vault-dialog");
@@ -139,7 +145,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       };
     }
     secret = value; secretKind = kind; secretVisible = false;
-    dialogTitle.textContent = kind === "mnemonic" ? "恢复助记词 · 仅显示一次" : kind === "private-key" ? "私钥 · 仅显示一次" : "加密备份";
+    dialogTitle.textContent = kind === "mnemonic" ? "恢复助记词（仅显示一次）" : kind === "private-key" ? "私钥（仅显示一次）" : "加密备份";
     dialogError.hidden = true;
     const body = dialogBody;
     body.append(el("p", warning, "inline-warning"));
@@ -226,7 +232,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       serviceError = error?.status === 404 || error?.status === 400
         ? "本地钱包服务未接入或当前版本不支持；请更新 Magpie 中的 Oh My AIHub 插件后重试。"
         : "暂时无法读取本地钱包状态；没有把未知状态当作未创建。";
-      report(serviceError);
+      // The panel renders this state itself; a page-level notice would repeat it.
     } finally {
       loading = false;
       if (!disposed && token === generation) render();
@@ -400,7 +406,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   }
 
   function passwordRevealDialog(kind, authorizationId, purpose) {
-    openDialog("密码复验 · 一次性敏感导出", (body) => {
+    openDialog("密码复验：一次性敏感导出", (body) => {
       body.append(p("授权已生成，且只绑定当前会话。密码错误会消耗授权并可能锁定钱包；不会自动重试。", "inline-warning"));
       const password = field("再次输入钱包密码", "password"); password.input.maxLength = 1024;
       const submit = button("显示一次", async () => {
@@ -427,39 +433,36 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
     if (disposed) return;
     localRoot.replaceChildren();
     const heading = el("div", null, "section-heading");
-    heading.append(el("h2", "本地钱包"), pill(service === "unavailable" ? "服务未接入" : loading ? "正在读取" : wallet ? walletStatusLabel(wallet.status) : "尚未读取", service === "unavailable" || wallet?.status === "locked" ? "warn" : wallet?.status === "unlocked" ? "good" : "neutral"));
-    localRoot.append(heading, p("测试网本地钱包。密钥加密保存在本机；这里不发起付款，也不把资产余额当成提供者信用。", "muted"));
+    heading.append(el("h2", "本地钱包"), statusText(service === "unavailable" ? "服务未接入" : loading ? "正在读取" : wallet ? walletStatusLabel(wallet.status) : "尚未读取", service === "unavailable" || wallet?.status === "locked" ? "warn" : wallet?.status === "unlocked" ? "good" : "neutral"));
+    localRoot.append(heading);
     if (loading || service === "unknown") { localRoot.append(p("正在读取本地钱包状态…")); renderExternal(); return; }
     if (service === "unavailable") {
       const card = section("本地钱包服务未接入", serviceError || "当前服务没有提供钱包动作。");
-      card.append(button("重新读取状态", () => { loaded = true; service = "unknown"; void loadStatus(); }), p("在服务接入前，本页不会创建钱包、不会假装已创建，也不会提供模拟发送。", "inline-warning"));
+      card.append(button("重新读取状态", () => { loaded = true; service = "unknown"; void loadStatus(); }), p("服务接入前不会创建钱包，也不会假装已创建或模拟发送。", "inline-warning"));
       localRoot.append(card); renderExternal(); return;
     }
     if (!wallet || wallet.status === "absent") {
-      localRoot.append(section("还没有本地钱包", "选择下面一项明确开始；创建和导入都需要密码与恢复信息保护确认。"));
+      localRoot.append(section("还没有本地钱包", "创建后会一次性显示恢复助记词；也可以导入助记词、恢复加密备份或连接浏览器钱包。"));
       if (lateCreate) {
         const recovery = el("div", null, "inline-warning");
         recovery.append(p("上次创建请求已返回；请手动刷新状态确认，页面不会自动重复创建或把旧结果当已验证钱包。"));
         recovery.append(button("手动刷新钱包状态", () => { service = "unknown"; void loadStatus(); }));
         localRoot.append(recovery);
       }
-      const choices = el("div", null, "wallet-choice-grid");
-      choices.append(
-        choice("创建新钱包", "生成新的本地测试网钱包，并一次性显示恢复助记词。", button("创建钱包", () => createWalletDialog(), true)),
-        choice("连接已有钱包", "导入助记词、恢复加密备份，或连接已安装的 EIP-6963 浏览器钱包扩展。", button("选择已有钱包方式", () => connectChoiceDialog())),
-      );
+      const choices = el("div", null, "workflow-actions");
+      choices.append(button("创建钱包", () => createWalletDialog(), true), button("连接已有钱包", () => connectChoiceDialog()));
       localRoot.append(choices);
     } else {
       const view = walletAddressView(wallet);
-      const card = section("本地钱包状态", wallet.status === "unlocked" ? "钱包已解锁；地址仅在当前解锁会话内可视为已验证。" : "钱包已锁定；公开地址不代表已验证，不能用于收款或转账目标。");
+      const card = section("钱包状态", wallet.status === "unlocked" ? "地址只在这次解锁会话内可用。" : "解锁并验证后才能把地址用作收款地址。");
       const facts = el("dl", null, "facts wallet-vault-facts");
-      const fact = (label, value) => { const row = el("div"); row.append(el("dt", label), el("dd", value)); facts.append(row); };
+      const fact = (label, value, identifier = false) => { const row = el("div"); const dd = el("dd", value); if (identifier) dd.className = "mono"; row.append(el("dt", label), dd); facts.append(row); };
       fact("状态", walletStatusLabel(wallet.status));
-      fact("公开地址", view.address || "未提供");
-      fact("地址可信状态", view.label);
+      fact("公开地址", view.address || "未提供", Boolean(view.address));
+      fact("地址可用性", view.trusted ? "本次会话已验证" : "尚未验证");
       fact("解锁到期", wallet.unlockExpiresAt ? new Date(wallet.unlockExpiresAt).toLocaleString("zh-CN", { hour12: false }) : "未解锁");
       card.append(facts);
-      if (!view.trusted) card.append(p("不要把此地址当作可信收款地址。只有解锁后本机验证通过，才可在明确的收款流程中显示。", "inline-warning"));
+      if (!view.trusted) card.append(p("当前地址还不能收款。", "inline-warning"));
       const actions = el("div", null, "workflow-actions");
       if (wallet.status === "locked") actions.append(button("解锁", () => unlockDialog(), true));
       if (wallet.status === "unlocked") actions.append(button("锁定", async () => { try { await action("wallet-vault-lock", {}); closeDialog(); report("钱包已锁定；敏感导出授权已失效。", "good"); } catch { report("钱包锁定未完成；未自动重试。", "warn"); } }));
@@ -478,7 +481,7 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       choices.append(
         choice("导入助记词", "用已有钱包的恢复助记词在本机创建加密副本。", button("导入助记词", () => importWalletDialog(false), true)),
         choice("恢复加密备份", "用密码保护的 keystore 备份恢复。", button("恢复加密备份", () => importWalletDialog(true))),
-        choice("连接浏览器扩展", "使用已安装的 EIP-6963 钱包，不索取助记词。", button("查看浏览器钱包", () => { closeDialog(); externalRoot?.scrollIntoView?.({ block: "start" }); })),
+        choice("连接浏览器扩展", "使用已安装的浏览器钱包，不索取助记词。", button("查看浏览器钱包", () => { closeDialog(); externalRoot?.scrollIntoView?.({ block: "start" }); })),
       );
       body.append(choices);
     });
@@ -494,27 +497,34 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
   function renderExternal() {
     if (!externalRoot) return;
     externalRoot.replaceChildren();
-    const card = section("连接浏览器钱包（EIP-6963）", "只在用户明确选择后连接；不自动读取 window.ethereum，不索取助记词，不使用钱包提供的 SVG/data 图标。");
-    if (!discoveryStarted) { card.append(p("打开钱包页后才开始发现扩展。")); externalRoot.append(card); return; }
+    const card = section("连接浏览器钱包", "密钥留在钱包扩展里；只有你明确选择后才会请求账户。");
+    if (!discoveryStarted) { card.append(p("打开钱包页后才开始查找已安装的钱包扩展。")); externalRoot.append(card); return; }
     const entries = discovery.list();
     const legacy = discovery.legacy();
     if (!entries.length && !legacy) {
-      card.append(p("没有发现 EIP-6963 钱包。请安装/解锁扩展后刷新；本页不会回退到自动 window.ethereum。", "inline-warning"));
-      card.append(button("重新发现", () => discovery.request()));
+      card.append(p("没有找到可用的钱包扩展。安装或解锁后点“重新查找”。"));
+      card.append(button("重新查找", () => discovery.request()));
+      card.append(details("技术说明", [["发现方式", "EIP-6963 公告"], ["回退行为", "不会自动使用 window.ethereum；旧式注入钱包只在你明确选择时出现"]]));
       externalRoot.append(card); return;
     }
     const list = el("div", null, "wallet-external-list");
     for (const entry of entries) {
       const row = el("article", null, "wallet-external-row");
       const avatar = el("span", entry.initial || "?", "wallet-external-avatar"); avatar.setAttribute("aria-hidden", "true");
-      const body = el("div"); body.append(el("strong", entry.name), el("small", `${entry.rdns || "未提供来源"} · 信息未验证`));
+      const body = el("div"); body.append(el("strong", entry.name));
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", entry.rdns || "未提供来源"), el("li", "信息未验证"));
+      body.append(meta);
       const pick = button(selectedProviderId === entry.id ? "已选择" : "选择此钱包", () => { selectedProviderId = entry.id; externalState = null; renderExternal(); });
       row.append(avatar, body, pick); list.append(row);
     }
     if (legacy) {
       const row = el("article", null, "wallet-external-row");
       const avatar = el("span", legacy.initial || "旧", "wallet-external-avatar"); avatar.setAttribute("aria-hidden", "true");
-      const body = el("div"); body.append(el("strong", legacy.name), el("small", "旧式注入钱包 · 仅在你明确选择时使用，信息未验证"));
+      const body = el("div"); body.append(el("strong", legacy.name));
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", "旧式注入钱包"), el("li", "仅在你明确选择时使用"), el("li", "信息未验证"));
+      body.append(meta);
       row.append(avatar, body, button(selectedProviderId === "legacy" ? "已选择" : "显式选择旧式钱包", () => { selectedProviderId = "legacy"; externalState = null; renderExternal(); }));
       list.append(row);
     }
@@ -523,8 +533,8 @@ export function mountWalletVault({ client, getState, notice = () => {}, refreshS
       card.append(p(`已选择：${selectedProviderId === "legacy" ? "旧式注入钱包" : entries.find((entry) => entry.id === selectedProviderId)?.name || "钱包"}。点击连接前不会请求账户。`, "muted small"));
       if (externalSession) {
         const snapshot = externalState || externalSession.snapshot();
-        card.append(details("已连接外部钱包", [["账户", snapshot.account || "未返回"], ["chainId", snapshot.chainId ?? "未返回"], ["状态", snapshot.status], ["连接方式", snapshot.selection?.source === "legacy" ? "显式旧式注入" : "EIP-6963 显式选择"]], true));
-        card.append(p("外部钱包余额查询需要已接入的资产注册表；本页不伪造余额，也不发起付款。", "muted small"));
+        card.append(details("已连接外部钱包", [["账户", snapshot.account || "未返回", true], ["chainId", snapshot.chainId ?? "未返回", true], ["状态", snapshot.status], ["连接方式", snapshot.selection?.source === "legacy" ? "显式旧式注入" : "EIP-6963 显式选择"]], true));
+        card.append(p("这里只显示账户与网络；余额查询需要已接入的资产注册表，也不会发起付款。", "muted small"));
         card.append(button("断开外部钱包", () => { externalSession?.dispose(); externalSession = null; externalState = null; renderExternal(); }));
       } else {
         card.append(button("连接所选钱包", async () => {

@@ -88,7 +88,7 @@ test("verified timeline step without timestamp stays verified and missing eviden
     const signature = all(root, "li").find((node) => node.className === "timeline-done");
     expect(signature.textContent).toContain("付款方签名已验证未记录核验时间");
     expect(signature.textContent).not.toContain("尚未验证");
-    expect(r.roots["wallet-diagnostics"].textContent).toContain("最近主动核验：尚未验证");
+    expect(r.roots["wallet-diagnostics"].textContent).toContain("最近主动核验 尚未验证");
     await all(r.roots["wallet-diagnostics"], "button").find((node) => node.textContent === "注册测试代币").click();
     expect(r.dialog.textContent).toContain("1 USD = 1,000,000,000 nanoUSD");
     expect(r.calls).toHaveLength(0);
