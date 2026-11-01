@@ -2,7 +2,7 @@
 
 让一台 Magpie 共享自己的模型，也能使用朋友的 Magpie。BSC 与 Base 是两条平权的生产付款网络；日常安装、连接、授权和充值都在 **Magpie + 独立浏览器控制台**完成，无需终端、源码目录、数据目录或单独安装 Bun。
 
-> 生产付款范围、已验证资产、两条链的 fork 证据、剩余风险和用户自行小额实测步骤见 [docs/production/mainnet-payments/README.md](docs/production/mainnet-payments/README.md)。本文件底部的历史验收段落保留为历史记录；不再代表当前产品能力。
+> 本文件底部的历史验收段落保留为历史记录；不再代表当前产品能力。
 
 AI 请求始终走「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」。Magpie 负责原生模型路由、Gateway Key、用量和限额；本插件管理私有连接与授权，不增加 AI 代理或第二套计费网关。
 

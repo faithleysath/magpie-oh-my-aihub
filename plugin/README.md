@@ -39,6 +39,6 @@
 
 Ego 已完成 BSC/Base 受控本地模拟 RPC、实际 EIP-712 合成外部签名、生产观察器/账本/原生额度读回（1.0001→2.0001）、重复扫描、无签名账单交接与 RPC503未知状态；原生模型调用从429恢复200。WebKit 第二提供方完整手动流程，以及字面文本注入不执行、提供方暂停隔离/恢复已通过。本地模拟没有新的公链转账；WebKit钱包9步真实UI复测亦已通过新增0.5BSC模拟入账、最终性/重放和原生Test models200。
 
-生产付款使用 Magpie **0.1.2516** 的真实 `gateway-key limit` 成本与 token 上限；Magpie 仍是软上限。历史价格/计费基线 0.1.2038 只保留在历史报告范围。BSC/Base 的 fork 证据、剩余风险与用户自行小额实测步骤见 [生产付款说明](../docs/production/mainnet-payments/README.md)。真实浏览器钱包扩展按用户最新指令停止在本轮自动化验证；原生 WKWebView、Linux/Windows 桌面与 SSH 端到端仍未知。账单上限48KiB；未知发送的 journal 记录需要用户按已知交易哈希走恢复流程，普通界面不自动重发。
+生产付款使用 Magpie **0.1.2516** 的真实 `gateway-key limit` 成本与 token 上限；Magpie 仍是软上限。历史价格/计费基线 0.1.2038 只保留在历史报告范围。真实浏览器钱包扩展按用户最新指令停止在本轮自动化验证；原生 WKWebView、Linux/Windows 桌面与 SSH 端到端仍未知。账单上限48KiB；未知发送的 journal 记录需要用户按已知交易哈希走恢复流程，普通界面不自动重发。
 
 维护者类型检查从此目录运行 `bun run typecheck`；需要 Magpie、EasyTier 源码及平台证据时，使用[架构参考](../docs/ARCHITECTURE.md)中的精确版本和验证报告，而非依赖界面显示推断安全性。

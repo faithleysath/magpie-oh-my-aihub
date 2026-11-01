@@ -26,9 +26,6 @@ The controls that replace the blanket gate:
 - automatic recharge remains a reminder + one-click confirmation, not an
   unattended signer. This does not block manual real payments.
 
-Evidence, fork commands, real Magpie 0.1.2516 readback and user-run small-amount
-steps are in [`docs/production/mainnet-payments/README.md`](production/mainnet-payments/README.md).
-
 ---
 
 # Architecture decision record — updated 2026-10-30 (Phase 9 Web Console)
