@@ -16,6 +16,7 @@ Oh My AIHub 是 Magpie 的一个纯后端插件：让同一个 EasyTier 私有�
 | D4 | 不做应用层 E2E；传输层的加密程度交给网络：secure mode 是每对节点独立的 E2EE，普通模式是共享密码的 AES-GCM | 不在插件里重新实现一层加密 |
 | D5 | 只「加入」网络：网络名、密码、初始节点（可选）、secureMode（可选） | 不承担组网产品的复杂度；secure mode 的密钥本机自生成，不做公钥交换 |
 | D6 | 没有「共享开关」「发布开关」「发现开关」：配好网络就自动公布、自动发现 | 开关是旧产品的历史包袱 |
+| D6b | 价格能写进目录就共享，写不进就不共享：四段价签 `omai/catalog/1`，带阶梯价或高峰价签 `omai/catalog/2` | 公布价必须能被读者自己算出来；装不下就发 /2，而不是猜一个数 |
 | D7 | 只共享原生模型：非 `remote-magpie`、非 `group/…`、非 `auto/…`，且价格完整 | 不转售别人的通道，价格必须可算 |
 | D8 | 批准只给模型范围，不给额度；额度 = 充值余额；申请与打钱互相独立 | 只有一个钱来源，cap 可推导 |
 | D9 | 任何人往我的地址打钱都按 `from` 记账，不需要申请、单据或认领 | 熟人网络，付款是自愿行为 |
@@ -114,6 +115,31 @@ EasyTier 用 **no-TUN** 模式。插件用 `[[proxy_network]]` 把本机 LAN 地
 
 `sig` 覆盖除 `sig` 外的全部字段。读取方检查：`schema` 精确匹配、验签通过、`address` 与签名者一致、`models` 字段类型与长度受限（≤200 个，id ≤200 字符，价格非负有限）、`gatewayPort` 为 `null` 或 1–65535、响应 ≤64 KiB、超时 5 秒。**未知字段一律拒绝**。不共享模型时 `models: []`、`gatewayPort: null`。目录不落盘；内存缓存 30 秒，按 `address` 存，兼记最后一次可用的覆盖网地址。
 
+#### `omai/catalog/2`：阶梯价与高峰价
+
+四个数字装不下「超过 272k tokens 涨价」和「供应商高峰时段翻倍」，/2 在同样的四段价上加了两个可选字段：
+
+```json
+{
+  "id": "codex/gpt-6-astra",
+  "price": {
+    "in": 10, "out": 50, "cacheRead": 1, "cacheWrite": 12.5,
+    "tiers": [{ "above": 272000, "in": 20, "out": 75, "cacheRead": 2, "cacheWrite": 25 }],
+    "peak": { "multiplier": 2, "note": "weekdays" }
+  }
+}
+```
+
+语义（读取方必须按这个算，不是提示）：
+
+- `tiers`：按 `above` 升序，门槛唯一且为正整数，最多 10 档。请求的输入 tokens **超过**某档 `above` 时，**整笔请求**按该档计价（与供应商的长上下文计价一致）；`above` 或以下用四段基础价。
+- `peak`：`multiplier` 是高峰时段四个数字的倍数（>1，≤100）；`note` 是供应商的时段标签（Magpie 自己写的 `weekdays` / `deepseek` 之类），因为时段表本身不在文档里，读取方只能知道「最多贵几倍、按谁的时段」，不能算出某一刻的确切价。
+- 归一律：价格打成 /2 时，缺 `tiers` 就是没有阶梯，缺 `peak` 就是不分时段。
+
+**什么时候签 /2**：至少一个共享模型需要 `tiers` 或 `peak` 才签 /2；全是四段价就继续签 /1，让 0.8.0 及更早的读者照旧能读。读取方两种都收，其它 schema 一律拒。
+
+**为什么可以这样发**：计费由提供方 Magpie 按它自己的价目表完成，目录只是**签名的价格承诺**。/1 时代的规则是「写不下就不发」；/2 把阶梯和高峰写清楚之后，「公布的价 = 至少不高于实际扣的价」这个约定才能被读者自己算出来。
+
 ### `POST /request`
 
 ```json
@@ -193,6 +219,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 - EasyTier 2.6.4 的 SOCKS5 在 TOML 里绑 `127.0.0.1`；`--socks5` 会绑 `0.0.0.0`，所以只能用 TOML 的 `socks5_proxy`。
 - 没有 `listeners` 时 EasyTier 默认监听 `tcp://0.0.0.0:11010`，入网不需要额外配置监听地址。
 - **无 TUN 模式没有虚拟 IPv4**：`no_tun = true` 下 EasyTier 2.6.4 不给任何节点分配虚拟 IP（`--ipv4` 也不行），`peer list` 的 `ipv4` 字段恒为空。所以邻居的身份是 hostname，要拨的地址是它导出的 mapped CIDR（`proxy_cidrs`），不能用 ipv4 做过滤条件。
+- Magpie 的 `peak` 是「低谷价 + 高峰时段翻倍」（0.1.2289），倍率按 2 处理；`tiers` 是整笔请求按档计价。两者都原样进 `omai/catalog/2`。
 - EasyTier 2.6.4 的 secure mode：同网节点必须都开，没开的一方会被对端反复踢掉（官方文档说服务端能接旧客户端，实测不行）；`local_public_key` 必须显式给，否则报 `local public key is not set`；`peer_public_key` 写了不生效（填一个假公钥照样能连上），所以现在不做公钥 pin。
 - 复核：`git -C ~/Projects/lab/magpie-upstream show v0.1.2516:internal/gateway/tools_mcp.go`、`internal/library/plugin_tools.go`、`internal/gui/pluginpage.go`。
 

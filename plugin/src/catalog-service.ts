@@ -1,10 +1,18 @@
 // The directory document this node publishes.
 //
-// `omai/catalog/1` is a small self-signed JSON body: the node's wallet address,
-// its hostname, the two fixed ports, and the native models it shares with their
-// prices. `sig` is an EIP-191 `personal_sign` over `canonicalJson` of every
-// field except `sig`, so a reader can prove the document was written by whoever
-// owns `address` — the overlay address a peer was reached on proves nothing.
+// A self-signed JSON body: the node's wallet address, its hostname, the two
+// fixed ports, and the native models it shares with their prices. `sig` is an
+// EIP-191 `personal_sign` over `canonicalJson` of every field except `sig`, so a
+// reader can prove the document was written by whoever owns `address` — the
+// overlay address a peer was reached on proves nothing.
+//
+// Two schemas exist. `omai/catalog/1` gives a model exactly four numbers per
+// million tokens. `omai/catalog/2` adds `tiers` (long-context pricing) and `peak`
+// (a multiplier during the vendor's peak hours) to the same four numbers, and is
+// used only when at least one shared model needs them — a node that shares plain
+// prices keeps signing /1, so an older peer still reads it. A reader accepts both
+// and rejects anything it does not fully understand: a silently ignored price
+// field would make the reader compute a different bill than the one signed.
 //
 // This module only builds, signs and parses that document. The HTTP listener and
 // every route (`GET /catalog`, `POST /request`, `GET /request`) live in
@@ -16,13 +24,49 @@ import type { Wallet } from "ethers";
 import { logger } from "./log.ts";
 import { signCanonical, signerOf } from "./signing.ts";
 
-export const CATALOG_SCHEMA = "omai/catalog/1" as const;
+export const CATALOG_SCHEMA_V1 = "omai/catalog/1" as const;
+/**
+ * Prices that cannot be written as four numbers are published under
+ * `omai/catalog/2`: a price may carry `tiers` (a request above a token
+ * threshold bills at that tier's rates) and `peak` (all four numbers multiply at
+ * the vendor's peak hours). A document whose prices are all plain stays on /1,
+ * so a peer running an older build keeps reading it.
+ */
+export const CATALOG_SCHEMA_V2 = "omai/catalog/2" as const;
+export type CatalogSchema = typeof CATALOG_SCHEMA_V1 | typeof CATALOG_SCHEMA_V2;
+/** What a document with plain prices is signed as. */
+export const CATALOG_SCHEMA = CATALOG_SCHEMA_V1;
 /** The one path the directory server answers. Anything else is a 404. */
 export const CATALOG_PATH = "/catalog";
 export const CATALOG_MAX_BYTES = 64 * 1024;
 export const CATALOG_MAX_MODELS = 200;
 export const CATALOG_MAX_MODEL_ID = 200;
 export const CATALOG_MAX_HOSTNAME = 64;
+/** Magpie's own price schema accepts at most ten tiers; the directory does too. */
+export const CATALOG_MAX_TIERS = 10;
+
+/**
+ * One long-context tier. `above` is a prompt-token count: a request whose input
+ * exceeds it is billed entirely at this tier's rates, which is how the vendors
+ * this mirrors price long context.
+ */
+export interface CatalogPriceTier {
+  above: number;
+  in: number;
+  out: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
+ * The vendor bills more during its peak hours. `multiplier` is what all four
+ * numbers become then; `note` names the schedule (Magpie's own tag, such as
+ * `weekdays`) because a reader cannot know the vendor's clock from the document.
+ */
+export interface CatalogPeak {
+  multiplier: number;
+  note?: string;
+}
 
 /** USD per 1M tokens — exactly the unit Magpie's own prices use. */
 export interface CatalogPrice {
@@ -30,6 +74,9 @@ export interface CatalogPrice {
   out: number;
   cacheRead: number;
   cacheWrite: number;
+  /** ascending by `above`; the base numbers apply at or below the first one */
+  tiers?: CatalogPriceTier[];
+  peak?: CatalogPeak;
 }
 
 export interface CatalogModel {
@@ -39,7 +86,7 @@ export interface CatalogModel {
 
 /** Every signed field except `sig`. */
 export interface CatalogBody {
-  schema: typeof CATALOG_SCHEMA;
+  schema: CatalogSchema;
   address: string;
   hostname: string;
   controlPort: number;
@@ -66,26 +113,104 @@ function isHostname(value: unknown): value is string {
   );
 }
 
-export function isCatalogPrice(value: unknown): value is CatalogPrice {
+const PRICE_PARTS = ["in", "out", "cacheRead", "cacheWrite"] as const;
+const TIER_KEYS = ["above", ...PRICE_PARTS];
+const PEAK_KEYS = ["multiplier", "note"];
+const PEAK_MAX_MULTIPLIER = 100;
+const PEAK_MAX_NOTE = 32;
+
+function isUnit(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function hasExactKeys(value: Record<string, unknown>, allowed: readonly string[], required: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  if (keys.length < required.length || keys.length > allowed.length) return false;
+  for (const key of keys) if (!allowed.includes(key)) return false;
+  for (const key of required) if (!Object.hasOwn(value, key)) return false;
+  return true;
+}
+
+function isPriceParts(value: Record<string, unknown>): boolean {
+  for (const key of PRICE_PARTS) if (!isUnit(value[key])) return false;
+  return true;
+}
+
+function isTier(value: unknown): value is CatalogPriceTier {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const p = value as Record<string, unknown>;
-  const keys = Object.keys(p);
-  if (keys.length !== 4) return false;
-  for (const key of ["in", "out", "cacheRead", "cacheWrite"]) {
-    if (!Object.hasOwn(p, key)) return false;
-    const n = p[key];
-    if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return false;
+  const t = value as Record<string, unknown>;
+  if (!hasExactKeys(t, TIER_KEYS, TIER_KEYS)) return false;
+  // `above` is a token count: a whole number, and the base price already covers 0.
+  if (!Number.isInteger(t.above) || (t.above as number) <= 0) return false;
+  return isPriceParts(t);
+}
+
+/** Ascending, unique thresholds: the tier that applies is the last one below. */
+function isTierList(value: unknown): value is CatalogPriceTier[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > CATALOG_MAX_TIERS) return false;
+  let previous = 0;
+  for (const tier of value) {
+    if (!isTier(tier)) return false;
+    if (tier.above <= previous) return false;
+    previous = tier.above;
   }
   return true;
 }
 
-export function isCatalogModel(value: unknown): value is CatalogModel {
+function isPeak(value: unknown): value is CatalogPeak {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const p = value as Record<string, unknown>;
+  if (!hasExactKeys(p, PEAK_KEYS, ["multiplier"])) return false;
+  const multiplier = p.multiplier;
+  // 1x is not a peak: a price that never moves is the plain four-number form.
+  if (typeof multiplier !== "number" || !Number.isFinite(multiplier) || multiplier <= 1 || multiplier > PEAK_MAX_MULTIPLIER) {
+    return false;
+  }
+  if (p.note === undefined) return true;
+  return typeof p.note === "string" && p.note.length > 0 && p.note.length <= PEAK_MAX_NOTE;
+}
+
+/**
+ * `/1` carries exactly four numbers per model; `/2` adds the two optional
+ * shapes. Anything else is rejected, because a reader that silently ignored a
+ * field would compute a different price than the one the signer published.
+ */
+export function isCatalogPrice(value: unknown, schema: CatalogSchema = CATALOG_SCHEMA_V2): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const p = value as Record<string, unknown>;
+  if (schema === CATALOG_SCHEMA_V1) {
+    if (!hasExactKeys(p, PRICE_PARTS, PRICE_PARTS)) return false;
+    return isPriceParts(p);
+  }
+  if (!hasExactKeys(p, [...PRICE_PARTS, "tiers", "peak"], PRICE_PARTS)) return false;
+  if (!isPriceParts(p)) return false;
+  if (p.tiers !== undefined && !isTierList(p.tiers)) return false;
+  if (p.peak !== undefined && !isPeak(p.peak)) return false;
+  return true;
+}
+
+/** A deep copy, so nothing later mutates a signed document. */
+export function copyCatalogPrice(price: CatalogPrice): CatalogPrice {
+  const out: CatalogPrice = { in: price.in, out: price.out, cacheRead: price.cacheRead, cacheWrite: price.cacheWrite };
+  if (price.tiers) out.tiers = price.tiers.map((tier) => ({ ...tier }));
+  if (price.peak) out.peak = { ...price.peak };
+  return out;
+}
+
+/** `/2` exists for tiers and peaks; a document that has neither stays on `/1`. */
+export function schemaForModels(models: readonly CatalogModel[]): CatalogSchema {
+  return models.some((model) => model.price.tiers !== undefined || model.price.peak !== undefined)
+    ? CATALOG_SCHEMA_V2
+    : CATALOG_SCHEMA_V1;
+}
+
+export function isCatalogModel(value: unknown, schema: CatalogSchema = CATALOG_SCHEMA_V2): value is CatalogModel {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const m = value as Record<string, unknown>;
   if (Object.keys(m).length !== 2 || !Object.hasOwn(m, "id") || !Object.hasOwn(m, "price")) return false;
   const id = m.id;
   if (typeof id !== "string" || id.trim().length === 0 || id.length > CATALOG_MAX_MODEL_ID) return false;
-  return isCatalogPrice(m.price);
+  return isCatalogPrice(m.price, schema);
 }
 
 function isPort(value: unknown): value is number {
@@ -113,11 +238,11 @@ export function sanitizeCatalogModels(raw: readonly unknown[]): CatalogModel[] {
       logger.warn(`catalogue: dropping models after the first ${CATALOG_MAX_MODELS}`);
       break;
     }
-    if (!isCatalogModel(value)) {
-      logger.warn("catalogue: dropping a model with a missing id or an incomplete price");
+    if (!isCatalogModel(value, CATALOG_SCHEMA_V2)) {
+      logger.warn("catalogue: dropping a model with a missing id or an unpublishable price");
       continue;
     }
-    out.push({ id: value.id, price: { ...value.price } });
+    out.push({ id: value.id, price: copyCatalogPrice(value.price) });
   }
   return out;
 }
@@ -139,13 +264,14 @@ export function buildCatalogBody(input: CatalogInput): CatalogBody {
   if (input.gatewayPort !== null && !isPort(input.gatewayPort)) {
     throw new Error(`not a TCP port: ${String(input.gatewayPort)}`);
   }
+  const models = sanitizeCatalogModels(input.models);
   return {
-    schema: CATALOG_SCHEMA,
+    schema: schemaForModels(models),
     address: input.address,
     hostname: input.hostname,
     controlPort: input.controlPort,
     gatewayPort: input.gatewayPort,
-    models: sanitizeCatalogModels(input.models),
+    models,
     ts: input.ts ?? catalogTimestamp(),
   };
 }
@@ -169,7 +295,10 @@ export function parseCatalogDocument(raw: unknown): CatalogParse {
   for (const key of required) if (!Object.hasOwn(o, key)) return reject(`missing field ${key}`);
   for (const key of own) if (!required.includes(key)) return reject(`unknown field ${key}`);
 
-  if (o.schema !== CATALOG_SCHEMA) return reject(`schema is not ${CATALOG_SCHEMA}`);
+  if (o.schema !== CATALOG_SCHEMA_V1 && o.schema !== CATALOG_SCHEMA_V2) {
+    return reject(`schema is not ${CATALOG_SCHEMA_V1} or ${CATALOG_SCHEMA_V2}`);
+  }
+  const schema: CatalogSchema = o.schema;
   if (typeof o.address !== "string" || !ADDRESS_RE.test(o.address)) return reject("address is not an EVM address");
   if (typeof o.hostname !== "string" || !isHostname(o.hostname)) return reject("hostname is invalid");
   if (!isPort(o.controlPort)) return reject("controlPort is not a TCP port");
@@ -180,14 +309,14 @@ export function parseCatalogDocument(raw: unknown): CatalogParse {
   if (o.models.length > CATALOG_MAX_MODELS) return reject(`models has more than ${CATALOG_MAX_MODELS} entries`);
   const models: CatalogModel[] = [];
   for (const value of o.models) {
-    if (!isCatalogModel(value)) return reject("a model has an invalid id or price");
-    models.push({ id: value.id, price: { ...value.price } });
+    if (!isCatalogModel(value, schema)) return reject("a model has an invalid id or price");
+    models.push({ id: value.id, price: copyCatalogPrice(value.price) });
   }
   if (models.length === 0 && o.gatewayPort !== null) return reject("gatewayPort must be null when no model is shared");
   if (models.length > 0 && o.gatewayPort === null) return reject("gatewayPort is null while models are shared");
 
   const body: CatalogBody = {
-    schema: CATALOG_SCHEMA,
+    schema,
     address: o.address,
     hostname: o.hostname,
     controlPort: o.controlPort,

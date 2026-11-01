@@ -7,15 +7,15 @@ import { registerSecret } from "./log.ts";
 /**
  * A price form this plugin cannot freeze; never a zero price.
  *
- *  - `peak`: Magpie's 0.1.2289 `catalog.Price` keeps the off-peak price and
- *    doubles it at the vendor's peak hours. The plugin has no call-time
- *    multiplier, so treating this price as complete would bill every peak call
- *    at the off-peak rate.
  *  - `rate-window`: `provider.rateWindows` is applied before /v1/models answers,
  *    so the returned number is only today's window.
  *  - `tier-limit`: more tiers than Magpie's schema accepts.
+ *
+ * `peak` is no longer on this list: `omai/catalog/2` publishes it as a multiplier
+ * on top of the vendor's off-peak numbers, so a peer knows what a peak call
+ * costs instead of being billed off-peak on paper and peak in practice.
  */
-export type UnsupportedPriceReason = "peak" | "rate-window" | "tier-limit";
+export type UnsupportedPriceReason = "rate-window" | "tier-limit";
 
 /** Magpie's catalogue schema accepts at most 10 tiers; bound the check too. */
 const MAX_PRICE_TIERS = 10;
@@ -27,9 +27,6 @@ function directUnsupportedPriceReason(price: unknown): UnsupportedPriceReason | 
   // A price object carrying rate windows is not a shape /v1/models writes;
   // refuse it rather than guessing which window applies.
   if (Object.hasOwn(p, "rateWindows")) return "rate-window";
-  // An empty `peak` is what Magpie writes for a price that holds at every hour
-  // (`omitempty`), so it is accepted; any non-empty value is refused.
-  if (Object.hasOwn(p, "peak") && p.peak !== undefined && p.peak !== "") return "peak";
   return null;
 }
 
@@ -362,7 +359,9 @@ export class Magpie {
       const magpiePrice = (g as { magpie_price?: ModelPriceRecord } | null)?.magpie_price ?? null;
       const storedPrice = magpiePrice ?? settingFor(settings.modelPrices, id) ?? null;
       const unsupported = unsupportedPriceReason(storedPrice, providerRecord)
-        ?? (magpiePrice === null && knownPeakVendor(providerRecord) ? "peak" : null);
+        // A vendor that bills by the hour, read without the gateway list: the stored
+        // number is only one window, so it is refused exactly like a rate window.
+        ?? (magpiePrice === null && knownPeakVendor(providerRecord) ? "rate-window" : null);
       const anySetting =
         settingApis !== undefined || images !== null || output !== null || storedPrice !== null ||
         settingFor(settings.modelReasonless, id) !== undefined;
