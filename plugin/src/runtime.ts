@@ -292,6 +292,7 @@ async function bootOnceInner(): Promise<Runtime> {
   const catalog = new CatalogService({
     wallet,
     hostname,
+    displayName: config.displayName,
     controlPort: CONTROL_PORT,
     gatewayPort: GATEWAY_PORT,
   });

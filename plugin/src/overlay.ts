@@ -43,6 +43,8 @@ export interface OverlayStatus {
   delegate: boolean;
   /** this node's overlay address, from EasyTier's DHCP; null until it is assigned */
   virtualIp: string | null;
+  /** the name this node publishes in its directory, or null */
+  name: string | null;
   state: OverlayState;
   step: string;
   detail: string | null;
@@ -412,6 +414,7 @@ export class Overlay {
       mode: this.mode,
       delegate: this.delegate,
       virtualIp: this.overlayIp,
+      name: this.cfg.displayName,
       state: this.state,
       step: this.step,
       detail: this.detail,

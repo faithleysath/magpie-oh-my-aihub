@@ -33,7 +33,16 @@ export const CATALOG_SCHEMA_V1 = "omai/catalog/1" as const;
  * so a peer running an older build keeps reading it.
  */
 export const CATALOG_SCHEMA_V2 = "omai/catalog/2" as const;
-export type CatalogSchema = typeof CATALOG_SCHEMA_V1 | typeof CATALOG_SCHEMA_V2;
+/**
+ * `/3` adds one optional field: `name`, the name the node publishes for itself.
+ * A document carries it only when the user set one, so a node with no name keeps
+ * signing `/1` or `/2` and stays readable by every older peer.
+ */
+export const CATALOG_SCHEMA_V3 = "omai/catalog/3" as const;
+export type CatalogSchema =
+  | typeof CATALOG_SCHEMA_V1
+  | typeof CATALOG_SCHEMA_V2
+  | typeof CATALOG_SCHEMA_V3;
 /** What a document with plain prices is signed as. */
 export const CATALOG_SCHEMA = CATALOG_SCHEMA_V1;
 /** The one path the directory server answers. Anything else is a 404. */
@@ -89,6 +98,8 @@ export interface CatalogBody {
   schema: CatalogSchema;
   address: string;
   hostname: string;
+  /** only in `/3`: the name this node publishes for itself */
+  name?: string;
   controlPort: number;
   gatewayPort: number | null;
   models: CatalogModel[];
@@ -111,6 +122,17 @@ function isHostname(value: unknown): value is string {
     value.length <= CATALOG_MAX_HOSTNAME &&
     HOSTNAME_RE.test(value)
   );
+}
+
+export const CATALOG_MAX_NAME = 64;
+
+/** A published name: printable, one line, trimmed, at most 64 characters. */
+export function isCatalogName(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > CATALOG_MAX_NAME) return false;
+  // eslint-disable-next-line no-control-regex
+  return !/[\u0000-\u001f\u007f]/.test(trimmed);
 }
 
 const PRICE_PARTS = ["in", "out", "cacheRead", "cacheWrite"] as const;
@@ -253,6 +275,8 @@ export interface CatalogInput {
   controlPort: number;
   gatewayPort: number | null;
   models: readonly unknown[];
+  /** published name; only a `/3` document carries it */
+  name?: string | null;
   ts?: string;
 }
 
@@ -265,8 +289,9 @@ export function buildCatalogBody(input: CatalogInput): CatalogBody {
     throw new Error(`not a TCP port: ${String(input.gatewayPort)}`);
   }
   const models = sanitizeCatalogModels(input.models);
-  return {
-    schema: schemaForModels(models),
+  const name = isCatalogName(input.name) ? input.name.trim() : null;
+  const body: CatalogBody = {
+    schema: name ? CATALOG_SCHEMA_V3 : schemaForModels(models),
     address: input.address,
     hostname: input.hostname,
     controlPort: input.controlPort,
@@ -274,6 +299,8 @@ export function buildCatalogBody(input: CatalogInput): CatalogBody {
     models,
     ts: input.ts ?? catalogTimestamp(),
   };
+  if (name) body.name = name;
+  return body;
 }
 
 export type CatalogParse = { ok: true; doc: CatalogDocument } | { ok: false; error: string };
@@ -289,16 +316,23 @@ export function parseCatalogDocument(raw: unknown): CatalogParse {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return reject("not a JSON object");
   const o = raw as Record<string, unknown>;
 
-  const required = ["schema", "address", "hostname", "controlPort", "gatewayPort", "models", "ts", "sig"];
+  // The schema decides the exact field set: `/3` carries a name, the older ones
+  // must not, so a document cannot smuggle an extra field past an old reader.
+  if (
+    o.schema !== CATALOG_SCHEMA_V1 &&
+    o.schema !== CATALOG_SCHEMA_V2 &&
+    o.schema !== CATALOG_SCHEMA_V3
+  ) {
+    return reject(`schema is not ${CATALOG_SCHEMA_V1}, ${CATALOG_SCHEMA_V2} or ${CATALOG_SCHEMA_V3}`);
+  }
+  const schema: CatalogSchema = o.schema;
+  const base = ["schema", "address", "hostname", "controlPort", "gatewayPort", "models", "ts", "sig"];
+  const required = schema === CATALOG_SCHEMA_V3 ? [...base, "name"] : base;
   const own = Object.keys(o);
   if (own.length !== required.length) return reject("unexpected field count");
   for (const key of required) if (!Object.hasOwn(o, key)) return reject(`missing field ${key}`);
   for (const key of own) if (!required.includes(key)) return reject(`unknown field ${key}`);
-
-  if (o.schema !== CATALOG_SCHEMA_V1 && o.schema !== CATALOG_SCHEMA_V2) {
-    return reject(`schema is not ${CATALOG_SCHEMA_V1} or ${CATALOG_SCHEMA_V2}`);
-  }
-  const schema: CatalogSchema = o.schema;
+  if (schema === CATALOG_SCHEMA_V3 && !isCatalogName(o.name)) return reject("name is not a printable single line of at most 64 characters");
   if (typeof o.address !== "string" || !ADDRESS_RE.test(o.address)) return reject("address is not an EVM address");
   if (typeof o.hostname !== "string" || !isHostname(o.hostname)) return reject("hostname is invalid");
   if (!isPort(o.controlPort)) return reject("controlPort is not a TCP port");
@@ -324,6 +358,7 @@ export function parseCatalogDocument(raw: unknown): CatalogParse {
     models,
     ts: o.ts,
   };
+  if (schema === CATALOG_SCHEMA_V3) body.name = (o.name as string).trim();
   const signer = signerOf(body, o.sig);
   if (!signer) return reject("signature does not recover");
   if (signer !== o.address.toLowerCase()) return reject(`signature is from ${signer}, not ${o.address}`);
@@ -334,6 +369,8 @@ export function parseCatalogDocument(raw: unknown): CatalogParse {
 export interface CatalogServiceOptions {
   wallet: Wallet;
   hostname: string;
+  /** the name to publish for this node, or null */
+  displayName?: string | null;
   controlPort: number;
   /** the Magpie gateway port, published only while at least one model is shared */
   gatewayPort: number;
@@ -357,6 +394,7 @@ export interface CatalogServiceStatus {
 export class CatalogService {
   private wallet: Wallet;
   private hostname: string;
+  private displayName: string | null;
   private readonly controlPort: number;
   private readonly gatewayPort: number;
   private doc: CatalogDocument | null = null;
@@ -365,6 +403,7 @@ export class CatalogService {
   constructor(opts: CatalogServiceOptions) {
     this.wallet = opts.wallet;
     this.hostname = opts.hostname;
+    this.displayName = opts.displayName ?? null;
     this.controlPort = opts.controlPort;
     this.gatewayPort = opts.gatewayPort;
   }
@@ -387,6 +426,11 @@ export class CatalogService {
     this.refreshDetail = value || null;
   }
 
+  /** The name this node publishes, or null. Changes need a re-sign, not a restart. */
+  setDisplayName(name: string | null): void {
+    this.displayName = name;
+  }
+
   /** A changed node wallet changes the document's address, signature and hostname. */
   setWallet(wallet: Wallet, hostname?: string): void {
     this.wallet = wallet;
@@ -401,6 +445,7 @@ export class CatalogService {
     const body = buildCatalogBody({
       address: this.wallet.address,
       hostname: this.hostname,
+      name: this.displayName,
       controlPort: this.controlPort,
       gatewayPort: models.length > 0 ? this.gatewayPort : null,
       models,

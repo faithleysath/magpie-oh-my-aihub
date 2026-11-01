@@ -11,7 +11,8 @@ import {
   listContacts,
   saveContact,
 } from "../contacts.ts";
-import { getRuntime } from "../runtime.ts";
+import { writeConfig } from "../config.ts";
+import { getRuntime, refreshCatalog } from "../runtime.ts";
 import {
   fail,
   isAddress,
@@ -22,6 +23,41 @@ import {
   requiredString,
   type ToolDef,
 } from "./types.ts";
+
+/**
+ * Publishes `name` for this node: persisted in the config, then re-signed into the
+ * directory. `null` withdraws it and the document falls back to `/1` or `/2`.
+ */
+async function publishName(runtime: Awaited<ReturnType<typeof getRuntime>>, name: string | null): Promise<void> {
+  const next = { ...runtime.config, displayName: name };
+  try {
+    writeConfig(next);
+  } catch (error) {
+    fail("E_PATH", `cannot write state.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  runtime.config = next;
+  runtime.overlay.configure(next);
+  runtime.catalog.setDisplayName(name);
+  await refreshCatalog(runtime);
+}
+
+/**
+ * A removed alias that named this node takes its published name with it — unless
+ * another alias still points at this wallet, which then stays the published one.
+ */
+async function withdrawIfSelf(
+  runtime: Awaited<ReturnType<typeof getRuntime>>,
+  addresses: readonly string[],
+): Promise<void> {
+  const self = runtime.wallet.address.toLowerCase();
+  if (!addresses.some((address) => address === self)) return;
+  const remaining = listContacts(runtime.db).find((contact) => contact.address === self);
+  if (remaining) {
+    await publishName(runtime, remaining.alias);
+    return;
+  }
+  await publishName(runtime, null);
+}
 
 export const contactsTool: ToolDef = {
   description:
@@ -46,7 +82,7 @@ export const contactsTool: ToolDef = {
     const runtime = await getRuntime();
 
     if (action === "list") {
-      return jsonText({ contacts: listContacts(runtime.db) });
+      return jsonText({ self: runtime.wallet.address.toLowerCase(), contacts: listContacts(runtime.db) });
     }
 
     if (action === "add") {
@@ -54,10 +90,16 @@ export const contactsTool: ToolDef = {
       const address = requiredAddress(args, "address");
       const note = optionalString(args, "note", 200);
       const saved = saveContact(runtime.db, { alias, address, ...(note ? { note } : {}) });
+      // An alias that points at this node's own wallet is the name this node
+      // publishes: the user already has one place to name things, so the address
+      // book is that place. Re-signing makes it visible to peers immediately.
+      const published = address === runtime.wallet.address.toLowerCase();
+      if (published) await publishName(runtime, alias);
       return jsonText({
         state: saved.previousAddress ? "repointed" : "saved",
         ...saved.contact,
         previousAddress: saved.previousAddress,
+        ...(published ? { published: true } : {}),
       });
     }
 
@@ -74,10 +116,12 @@ export const contactsTool: ToolDef = {
       if (isAddress(target)) {
         const removed = deleteContactsByAddress(runtime.db, target);
         if (removed.length === 0) fail("E_INPUT", `no contact has the address ${target.trim().toLowerCase()}`);
+        await withdrawIfSelf(runtime, removed.map((contact) => contact.address));
         return jsonText({ state: "removed", removed });
       }
       const removed = deleteContactByAlias(runtime.db, target);
       if (!removed) fail("E_INPUT", `no contact is named ${target.trim()}`);
+      await withdrawIfSelf(runtime, [removed.address]);
       return jsonText({ state: "removed", removed: [removed] });
     }
 

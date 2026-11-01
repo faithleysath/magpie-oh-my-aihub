@@ -37,6 +37,8 @@ export interface DiscoveredPeer {
   address: string | null;
   /** the signed hostname when online, otherwise the EasyTier hostname we dialled */
   hostname: string;
+  /** the name that peer publishes for itself (catalog /3), or null */
+  name: string | null;
   online: boolean;
   models: CatalogModel[];
   ts?: string;
@@ -60,7 +62,7 @@ function shortError(error: unknown): string {
 }
 
 function offline(neighbor: OverlayNeighbor, error: string): DiscoveredPeer {
-  return { address: null, hostname: neighbor.hostname, online: false, models: [], endpoint: null, error };
+  return { address: null, hostname: neighbor.hostname, name: null, online: false, models: [], endpoint: null, error };
 }
 
 async function readPeer(neighbor: OverlayNeighbor): Promise<DiscoveredPeer> {
@@ -90,6 +92,7 @@ async function readPeer(neighbor: OverlayNeighbor): Promise<DiscoveredPeer> {
   return {
     address: parsed.doc.address,
     hostname: parsed.doc.hostname,
+    name: parsed.doc.name ?? null,
     online: true,
     models: parsed.doc.models,
     ts: parsed.doc.ts,

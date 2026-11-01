@@ -79,6 +79,14 @@ export interface HubConfig {
   share: ShareConfig;
   connections: ConnectionConfig[];
   hostname: string | null;
+  /**
+   * The name this node publishes for itself in its directory.
+   *
+   * It is whatever the user called *themselves* in the address book — an alias
+   * that points at this node's own wallet. Display only: identity is the address,
+   * and `hostname` stays the machine-like name EasyTier uses.
+   */
+  displayName: string | null;
 }
 
 export function configPath(): string {
@@ -92,11 +100,22 @@ export function defaultConfig(): HubConfig {
     share: { models: [] },
     connections: [],
     hostname: null,
+    displayName: null,
   };
 }
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** A published name: printable, trimmed, one line, at most 64 characters. */
+export function displayNameOf(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 64) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return null;
+  return trimmed;
 }
 
 const ADDRESS_RE = /^0x[0-9a-f]{40}$/;
@@ -181,6 +200,7 @@ export function normalizeConfig(raw: unknown): HubConfig {
     share: { models },
     connections: connectionsOf(o.connections),
     hostname: text(o.hostname),
+    displayName: displayNameOf(o.displayName),
   };
 }
 
@@ -227,6 +247,7 @@ export function writeConfig(cfg: HubConfig): void {
       peerHost: c.peerHost,
     })),
     hostname: cfg.hostname,
+    displayName: cfg.displayName,
   });
 }
 
