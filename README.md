@@ -22,11 +22,11 @@ Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTie
 
 Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agent 打开即可；更早的版本手工填上面的 URL。开了 MCP 路由时，agent 拿到的是 `magpie` 一个服务器（`/mcp/magpie/hub/<agent>`），工具名是 `magpie-plugin__<tool>`；关掉路由时，每个服务器单独一条，本插件是 `/mcp/magpie/tools/magpie-plugin`，工具名不带前缀。本机 agent 免 Gateway Key；别的机器上的 agent 需要 Magpie 打开 **Share on local network** 并拿到 Gateway Key。
 
-19 个工具。只本插件的地址没有前缀；全部插件地址是 `magpie-plugin_<tool>`；走 MCP 路由时是 `magpie-plugin__<tool>`：
+20 个工具。只本插件的地址没有前缀；全部插件地址是 `magpie-plugin_<tool>`；走 MCP 路由时是 `magpie-plugin__<tool>`：
 
 | 分类 | 工具 |
 | --- | --- |
-| 节点 | `status`、`wallet`、`wallet_import`、`wallet_export`、`join_network` |
+| 节点 | `status`、`wallet`、`wallet_import`、`wallet_export`、`join_network`、`network_daemon` |
 | 地址簿 | `contacts` |
 | 提供方 | `native_models`、`share_models`、`consumers`、`approve_request`、`reject_request`、`revoke_consumer` |
 | 消费方 | `discover`、`request_access`、`connect_provider`、`disconnect_provider`、`connections` |
@@ -40,7 +40,7 @@ Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agen
 - **插件不转发 AI 请求**。它不代理、不计 token、不另写请求账单；用量和限额都在 Magpie 自己的 Gateway Key 上。
 - 覆盖网地址不是身份，只是路由线索。目录和申请靠签名证明「这份模型和价格确实是这个地址公布的」，签名者必须等于文档里的 `address`。
 - **目录里的价格是签名承诺**。基线是四段价（输入/输出/缓存读/缓存写，USD / 1M tokens）；带阶梯价（超过某个 token 数整笔涨价）或高峰价（供应商高峰时段乘倍数）的模型会签 `omai/catalog/2`，把 `tiers` 和 `peak` 一起公布。全是四段价时仍签 `/1`，老客户端照旧能读。真实扣费由提供方的 Magpie 按它自己的价目表算，目录不参与计费。
-- 对外只开两个端口：`3426` 目录/申请/轮询（总是），`3425` Magpie 模型网关（**只有 TUN 模式下才开**）。no-TUN 会把对端重写成 `127.0.0.1`，Magpie 会当本机免 Key 调用，所以那时不公布 3425。Magpie 管理界面永远不映射到覆盖网。
+- 对外只开两个端口：`3426` 目录/申请/轮询（总是），`3425` Magpie 模型网关（**只有 TUN 模式下才开**）。macOS 上以普通用户运行 Magpie 时，`network_daemon install` 会装一个 root 守护进程来提供 TUN（弹一次系统管理员密码框）。no-TUN 会把对端重写成 `127.0.0.1`，Magpie 会当本机免 Key 调用，所以那时不公布 3425。Magpie 管理界面永远不映射到覆盖网。
 - Gateway Key 只通过「提供方 → 消费方」的签名轮询交付给对应地址，不落日志、不进 `status`。
 - 一个钱包就是一台节点的全部身份；两台机器用同一个私钥就是同一个账户，余额共享。
 

@@ -327,3 +327,18 @@ bun run build:page     # page/doc.md -> page/index.html，校验 19 个工具名
 3. 动代码前先读「授权与钱」和「覆盖网与协议」，两者是唯一对外契约；改它们要先改这份文档。
 4. 任何「为了安全再加一层」的想法，先看 D4/D9/D10/D13：这一版是故意不做那些层的。
 5. 每次改动一个分支、一个 PR，不做大范围重写。
+
+## 验证状态（2026-11-02 实测）
+
+| 结论 | 证据 |
+| --- | --- |
+| 两台真机跨覆盖网跑通完整业务闭环 | Mac（no-TUN）↔ 美西 VPS（TUN）：`discover` 双向可见；付款 → 入账 → 申请 → 批准 → 发 Key → 调用，`devin/swe-2` 返回 `OVERLAY-OK` |
+| TUN 下 Gateway Key 真的生效 | 覆盖网访问 `10.126.126.2:3425/v1/models` 不带 Key → **401**；同机回环 → 200 |
+| no-TUN 提供方无法计费 | 两个 no-TUN 节点跨机互访时，服务端看到的源地址是 `127.0.0.1`，Magpie 当本机免 Key，所以 no-TUN 不公布 3425 |
+| 虚拟 IP 来自 DHCP 且默认关闭 | 写 `dhcp = true` 后节点各自拿到 `10.126.126.x`；不写则全网没有虚拟 IP（实测 2.6.4 的 `DhcpConfig::default()` 是 `Enabled(false)`） |
+| 导出子网在 no-TUN 下不可用 | `mapped_cidr` + SOCKS5、`port_forward` 指向映射地址，2.6.4 与 2.7.0 都超时；这条路径已删除 |
+| 订阅推送能满足入账 | BSC 扫描游标落后 73,504 块、`getLogs` 全部 429 时，一笔 0.00003 USDC 在 44 秒内入账，日志标注 `via subscription` |
+| macOS 无特权 TUN | LaunchDaemon（`dev.omai.easytier`）以 root 运行包装脚本，插件只写配置；`status` 里 `mode=tun`、`delegate=true` |
+| 未验证 | Linux 桌面、Windows、三节点以上的路由收敛与中继回退 |
+
+验证方法可以复用：`wallet` 的 `sync` 看扫描进度，`easytier-cli peer list` 看 `cost`（p2p / relay），覆盖网直连 `http://<虚拟IP>:3425/v1/models` 看是否 401。
