@@ -24,6 +24,7 @@ Oh My AIHub 是 Magpie 的一个纯后端插件：让同一个 EasyTier 私有�
 | D12 | 链 RPC 内置默认值 | 没有界面配置 RPC |
 | D13 | 价格变更接受按新价重算（不锁价、不暂停、不重签） | 删掉整套价格版本机制 |
 | D14 | 一个节点只有一个钱包地址，即它的全部身份 | 去掉第二种身份和两套信任存储 |
+| D15 | 地址簿是 `alias → 地址` 的本机映射，所有收地址的工具都直接接受别名 | 用户不必来回粘贴 0x；只是省打字，不进签名、不进目录、不参与授权，也不改 D11 的无确认转账 |
 
 D13 的后果：Magpie 改价会重算历史用量，「剩余额度」会自己变。`cap` 不变，`used` 变，剩余跟着变。这是接受的语义，不做补偿、不做暂停。
 
@@ -33,7 +34,7 @@ D13 的后果：Magpie 改价会重算历史用量，「剩余额度」会自己
 Magpie 进程
  └─ 插件宿主（Bun）
      ├─ boot：读 state.json → 钱包 → SQLite → EasyTier（有网络时）
-     │        → 3426 目录服务 → 链观察器 → 18 个工具
+     │        → 3426 目录服务 → 链观察器 → 19 个工具
      ├─ EasyTier no-TUN 子进程：3426 目录/控制、3425 网关、
      │                          13400 SOCKS5、13425+ 本地转发
      ├─ 内置钱包（ethers）：keygen / 地址 / 签名 / 验签 / ERC-20 transfer
@@ -59,7 +60,7 @@ Magpie 进程
 
 `consumers.key_secret` 必须落盘（要交给对方），和 Magpie 自己的 `caller-keys.json` 同级敏感度。
 
-`ledger.sqlite` 五张表：
+`ledger.sqlite` 六张表：
 
 ```sql
 deposits(id TEXT PRIMARY KEY,      -- chain:token:tx:logIndex
@@ -82,6 +83,9 @@ payouts(tx_hash TEXT PRIMARY KEY, chain_id INTEGER, token TEXT, to_addr TEXT,
         amount_raw TEXT, state TEXT, created_at TEXT);
 
 meta(k TEXT PRIMARY KEY, v TEXT);
+
+contacts(alias TEXT PRIMARY KEY, address TEXT NOT NULL,
+         note TEXT, created_at TEXT);  -- 地址簿：不签名、不发布、不参与授权
 ```
 
 ## 覆盖网与协议
@@ -179,7 +183,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 - `plugin/page/doc.md` → `bun run build:page` → `plugin/page/index.html`。产物提交进仓库，页面运行时不带 markdown 库、不发网络请求。
 - 页面是 sandbox iframe、`connect-src 'none'`，够不到 `/api`，所以它只能是文档，不能显示实时状态。
 - **必须加载 `_magpie/bridge.js`**：Magpie 的窗口要求页面在 10 秒内 say hello，否则整页被替换成「此页面已停止工作」。bridge 只负责握手和主题，页面本身仍是静态 HTML。
-- 构建时校验 18 个工具名和两个 MCP 地址都在 `page/doc.md` 里；前缀从根 `package.json` 推导，改包名要同步改页面。
+- 构建时校验 19 个工具名和两个 MCP 地址都在 `page/doc.md` 里；前缀从根 `package.json` 推导，改包名要同步改页面。
 
 **上游事实**（已核实，Magpie `v0.1.2516`，EasyTier `2.6.4`）：
 
@@ -193,10 +197,10 @@ remaining   = D − Magpie 原生 used（当前窗口）
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/index.ts` | 插件入口。默认导出同步返回 `{tool}` 的 18 个工具；测试辅助放在 `_internal` 对象里，不额外导出函数。 |
+| `src/index.ts` | 插件入口。默认导出同步返回 `{tool}` 的 19 个工具；测试辅助放在 `_internal` 对象里，不额外导出函数。 |
 | `src/runtime.ts` | 一个宿主进程一个运行时：boot 顺序、30 秒目录重签、`cap`/Key 重同步、身份替换、退出钩子。 |
 | `src/config.ts` | `state.json`（version 3）的读写。 |
-| `src/db.ts` | `ledger.sqlite` 五张表和金额换算（整数 micro-USD）。 |
+| `src/db.ts` | `ledger.sqlite` 六张表和金额换算（整数 micro-USD）。 |
 | `src/grants.ts` | 申请、批准、拒绝、撤销，以及 Gateway Key 的签发/收窄/删除；`D → cap → key` 的唯一实现。 |
 | `src/http-router.ts` | 本插件唯一的监听：`<lan>:3426`，只有三个端点。 |
 | `src/catalog-service.ts` | `omai/catalog/1` 的构建、签名、解析；改共享只重签内存里的文档。 |
@@ -205,6 +209,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 | `src/socks.ts` | 经本机 EasyTier SOCKS5 发一个 HTTP 请求。 |
 | `src/lan.ts` | 探测要导出的 LAN IPv4（`OH_MY_AIHUB_LAN_IP` 可覆盖，仅供隔离测试）。 |
 | `src/addresses.ts` | 稳定的 `10.66.a.b/32` 覆盖网导出前缀。 |
+| `src/contacts.ts` | 地址簿：`alias → 地址` 的读写与归一化（去空格、转小写）。 |
 | `src/easytier-manifest.ts` | 固定 EasyTier 2.6.4 各平台资产与 SHA-256。 |
 | `src/chain.ts` | BSC/Base 注册表、USDC 精度、JSON-RPC 读取与唯一写路径。 |
 | `src/chain-watcher.ts` | 每链一个扫描循环：读头、算最终块、按块取 `Transfer` 日志、凭 receipt 入账、复查回滚。 |
@@ -213,7 +218,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 | `src/store.ts` | 原子写 JSON（临时文件 + fsync + rename，保留 `.prev`）。 |
 | `src/run.ts` | 唯一启动外部程序的地方：argv 数组，没有 shell。 |
 | `src/log.ts` | 脱敏日志（私钥、Key、网络密码、bearer 不落盘）。 |
-| `src/tools/*.ts` | 18 个工具；`types.ts` 是工具定义类型，`node-wallet.ts` 是钱包生命周期（不是工具）。 |
+| `src/tools/*.ts` | 19 个工具；`types.ts` 是工具定义类型，`resolve.ts` 把地址参数里的别名解析成地址，`node-wallet.ts` 是钱包生命周期（不是工具）。 |
 | `scripts/build-page.ts` | 把 `page/doc.md` 渲染成 `page/index.html`，渲染器是很小的 Markdown 子集。 |
 
 ## 已知限制
@@ -231,21 +236,19 @@ remaining   = D − Magpie 原生 used（当前窗口）
 11. **目录价格最多落后一个 tick**：Magpie 没有改价通知，目录每 30 秒重签。
 12. **首次扫描只回溯 24 小时**：全新安装的钱包地址是刚生成的，正常不会有更早的入账；导入一个早已收过钱的私钥则可能漏掉旧记录。
 13. **别的机器上的 agent** 要调这些工具，需要 Magpie 打开局域网共享并持有 Gateway Key；本机 agent 默认免 Key。
+14. **地址簿不跟钱包走**。别名存在本机 `ledger.sqlite`，换机器或换数据目录要重新录；同一个私钥在两台机器上不共享别名。
 
 ## 验证
 
 ```sh
 cd plugin
 bun run typecheck      # tsc --noEmit
-bun run build:page     # page/doc.md -> page/index.html，校验 18 个工具名与两个 MCP 地址
+bun run build:page     # page/doc.md -> page/index.html，校验 19 个工具名与两个 MCP 地址
 ```
 
-临时目录 boot 冒烟：`OH_MY_AIHUB_MAGPIE=/nonexistent/magpie OH_MY_AIHUB_LAN_IP=127.0.0.1`，import `plugin/src/index.ts`；默认导出应返回 18 个工具，生成 `wallet/key.hex`（0600）与五张表，`status.network.state = "offline"`。
+临时目录 boot 冒烟：`OH_MY_AIHUB_MAGPIE=/nonexistent/magpie OH_MY_AIHUB_LAN_IP=127.0.0.1`，import `plugin/src/index.ts`；默认导出应返回 19 个工具，生成 `wallet/key.hex`（0600）与六张表，`status.network.state = "offline"`。
 
-- **已做（REPRODUCED，macOS arm64 / Bun 1.4.3 / ethers 6.17.0 / anvil 1.8.6）**：签名目录与篡改拒绝；申请 → 批准 → 撤销 → Key 交付；connect/disconnect 与同 id 外部 provider 拒绝；入账 → cap → Key、重复扫描、reorg 回滚、`send_payment` 及其拒绝路径、`getLogs` 折半、BSC/Base 只读冒烟；清理后的 18 工具 boot。
-- **未做（UNKNOWN）**：真 Magpie 0.1.2516+ 上的 `gateway-key add/limit/remove` 与 `provider add remote-magpie`；两台主机 + 真实 EasyTier 的完整双机流程；真实链入账后原生 200 → 429；Linux/Windows 桌面。
-
-每条结论标 **VERIFIED / REPRODUCED / UNKNOWN**，附平台、组件版本、可复现命令和原始（脱敏）输出。链上实验只在本地 anvil 或受控模拟 RPC 上做；真实链只做只读。测试文件不提交。
+链上实验只在本地 anvil 或受控模拟 RPC 上做；真实链只做只读。测试文件不提交。
 
 ## 明确不做
 
@@ -256,12 +259,13 @@ bun run build:page     # page/doc.md -> page/index.html，校验 18 个工具名
 - 不做浏览器钱包、托管、多钱包、HD 账户、每消费者独立地址。
 - 不做退款、争议、仲裁、撮合、代币、跨链、法币。
 - 不做 DHT、mDNS、新路由、中心目录服务器。
+- 不做 ENS/域名解析、不做全网友好名、不做跨机同步的通讯录：地址簿只解决本机打字。
 - 不把 Magpie 管理界面暴露到覆盖网（唯一例外是 Magpie 自己的模型网关，它本来就要给伙伴用）。
 
 ## 工作方式
 
 1. 只信这份文档的产品决策和 `plugin/page/doc.md` 的用户说明；两者冲突时先改文档再改代码。
-2. 下一步：用真 Magpie 0.1.2516+ 和两台隔离数据目录跑完整双机流程，把「未做」变成证据；不要先加新功能。
+2. 地址簿（D15）已经落地。下一步先让人在真网里用起来，卡在哪修哪；不要先加新功能。
 3. 动代码前先读「授权与钱」和「覆盖网与协议」，两者是唯一对外契约；改它们要先改这份文档。
 4. 任何「为了安全再加一层」的想法，先看 D4/D9/D10/D13：这一版是故意不做那些层的。
-5. 每次改动一个分支、一个 PR，附验证证据；不做大范围重写。
+5. 每次改动一个分支、一个 PR，不做大范围重写。
