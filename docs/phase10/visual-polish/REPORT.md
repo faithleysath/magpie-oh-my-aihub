@@ -2,9 +2,10 @@
 
 - Branch `feature/phase10-visual-polish`, base
   `0db687ccb25d974261bd5f8694a5c04545239f14` (PR #51 final acceptance head).
-- UI head `55634de` (this round's console changes; the 48 page shots and 8 dialog
-  shots are this tree); the first round's UI head was `9859b2f`; CI-green head
-  `55634de`; this report and its hashes are the docs-only commit after it.
+- UI head `2442a87` (this round's approval-dialog rework; the 48 page shots and
+  8 dialog shots are this tree); the previous UI head was `55634de`, the first
+  round's `9859b2f`; CI-green head `2442a87`; this report and its hashes are the
+  docs-only commit after it.
 - Draft PR **#52** → `feature/phase10-final-acceptance`, **not merged**:
   <https://github.com/faithleysath/magpie-oh-my-aihub/pull/52>
 - Scope: console structure, styles, copy, their tests and evidence only. No P2P,
@@ -61,12 +62,12 @@
 | Gate | Result |
 | --- | --- |
 | `bun run typecheck` | PASS |
-| `bun run test` (plugin + console + phase-9 fixture) | **1426 pass / 0 fail** (94 files) |
+| `bun run test` (plugin + console + phase-9 fixture) | **1427 pass / 0 fail** (94 files) |
 | `bun run boot-check` | PASS (`magpie 0.1.2038` stub, api 34517, page snapshot 0600) |
 | `bun run secret-scan` | PASS |
 | `bun run scripts/pack-check.ts --selftest` | PASS (root 99 files / plugin 97, no tests/docs/secrets, static assets complete) |
-| Console behaviour tests | 224 pass / 0 fail (12 files), including the new visible-DOM dialog checks |
-| CI (PR #52) | all six checks green at `55634de`: plugin linux, plugin macos (one pre-existing RPC-timing flake, passed on rerun), windows subset, secrets working tree, secrets history, package contents |
+| Console behaviour tests | 225 pass / 0 fail (12 files), including the visible-DOM dialog checks |
+| CI (PR #52) | all six checks green at `2442a87`: plugin linux, plugin macos, windows subset, secrets working tree, secrets history, package contents |
 
 ## Real matrix
 
@@ -80,7 +81,19 @@ shows one full fingerprint and one "当前报价" block (model + price); the
 checkbox says "我核对并接受上述完整身份指纹"; 价格版本/批准代次/代次/generation
 exist only inside the collapsed "请求身份与绑定"/"选中报价的技术绑定" details.
 `dialogs.json` records `fingerprints: 1`, `priceLines: 1`, `modelChoices: 1`
-for the one-model approval fixture. `dialogs.json` records
+for the one-model approval fixture.
+
+**Default-visible approval dialog:** the compressed purpose line ("核对伙伴、
+模型、价格和额度后再批准。密钥会自动安全交付，无需发送文件。"), one full
+partner fingerprint, the model checkbox list (names only), the "当前报价" block
+(model + price, refreshed by preview), the cap field with "额度必须大于 0；0 表示
+不限制，不能用于暂停。", "我核对并接受上述完整身份指纹", "我确认批准这次请求，
+并接受当前报价、模型与额度", and the approve button.
+
+**Only behind collapsed details:** "请求身份与绑定" (partner node/name, quote
+hash, approval generation, expiry) and "选中报价的技术绑定" (selected price
+version, quote hash, model count). No 价格版本/批准代次/代次/generation/
+priceVersion appears before the user expands them. `dialogs.json` records
 the same visible-text audit for each; `fixture-payment-preview.png` +
 `fixture-payment.json` are a clearly labelled fixture render of the payment
 preview (the on-chain lab was not re-run).
