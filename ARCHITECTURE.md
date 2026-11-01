@@ -117,7 +117,7 @@ EasyTier 用 **虚拟 IP** 组网：生成的 TOML 固定写 `dhcp = true`，每
 
 没有 root 又想要 TUN 时，可以装一个 root 守护进程（`network_daemon` 工具的 `install`）：它只做一件事 —— 以 root 运行 `plugin/scripts/omai-easytier-daemon.sh`，那个脚本校验插件写的 `current.toml`（顶层键白名单），copy 到 `/var/run/omai-easytier/`（root 所有）后用副本启动 core，并在文件哈希变化时重启。所以装的时候弹一次系统管理员密码框，之后**插件全程无特权**：改写配置就等于重启。守护进程存在时 `status.mode = "tun"`、`status.delegate = true`。
 
-`listeners` 仍然是可选的 P2P 开关：不写时 EasyTier 一个端口都不开，所有流量都经已经连着的对端中继；写了（`join_network` 的 `listen: true`）才会尝试直连。
+`listeners` **默认开**（`join_network` 的 `listen` 默认 `true`，`listen: false` 才关）：开着才有被直连的可能。不开时 EasyTier 一个端口都不开，所有流量都经已经连着的对端中继。入站端口不可达也不影响功能，只是那次直连会回退成中继。
 
 三个端点都监听 `<lan>:3426`，走覆盖网明文 HTTP。
 
@@ -246,8 +246,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 - 插件工具由 Magpie 的 plugin-tools MCP server 暴露；工具超时 55 秒；本机回环免 Key，带 `Origin` 的网页请求拒绝。
 - EasyTier 2.6.4 的 `port-forward remove` 会打印成功但监听不消失，所以 `disconnect_provider` 要重启核心，其他连接短暂中断。
 - EasyTier 2.6.4 的 SOCKS5 在 TOML 里绑 `127.0.0.1`；`--socks5` 会绑 `0.0.0.0`，所以只能用 TOML 的 `socks5_proxy`。
-- 没有 `listeners` 时 EasyTier 默认监听 `tcp://0.0.0.0:11010`，入网不需要额外配置监听地址。
-- **无 TUN 模式没有虚拟 IPv4**：`no_tun = true` 下 EasyTier 2.6.4 不给任何节点分配虚拟 IP（`--ipv4` 也不行），`peer list` 的 `ipv4` 字段恒为空。所以邻居的身份是 hostname，要拨的地址是它导出的 mapped CIDR（`proxy_cidrs`），不能用 ipv4 做过滤条件。
+- **虚拟 IP 来自 DHCP，且 DHCP 默认关闭**：`DhcpConfig::default() = Enabled(false)`，不写 `dhcp = true` 时 `node.ipv4_addr` 恒为空；写了之后节点各自从 `10.126.126.0/24` 取地址，`peer list` 的 `ipv4` 才有值。
 - 不写 `listeners` 时 EasyTier 2.6.4 **一个端口都不开**（`node.listeners` 里只有内部 `ring://`），`peer list` 里对方的 `cost` 会是 `relay`；写了 `listeners` 之后要么直达（`p2p`），要么仍然回退到中继，取决于两边入站端口是否真的可达。
 - Magpie 的 `peak` 是「低谷价 + 高峰时段翻倍」（0.1.2289），倍率按 2 处理；`tiers` 是整笔请求按档计价。两者都原样进 `omai/catalog/2`。
 - **网关 `/v1/models` 才是“真会路由”的清单**：路由组 `unlists` 藏起来的副本不在选择器里，但网关照样按 `provider/model` 路由（实测用未勾选的 `deepseek/deepseek-v4-pro` 打到了 DeepSeek 上游）。所以插件取候选 id 用网关（2 ms），`magpie models` 只当网关不在回环上时的回落（它现场查所有 provider 的目录，约 10 秒）。

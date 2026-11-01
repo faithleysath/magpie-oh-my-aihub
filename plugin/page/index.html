@@ -61,7 +61,7 @@
 <ul>
 <li>「帮我加入 EasyTier 网络：名字 X，密码 Y，初始节点 Z。这个网开了 secure mode。」</li>
 <li>「把我的节点叫『美西节点』，让网络里其他人看目录时能看到这个名字。」（其实就是给<strong>自己</strong>的地址加一个地址簿条目；删掉这个别名名字就撤回）</li>
-<li>「顺便给我开监听，让别的节点能直连我，不要全走中继。」（对应 <code>listen:true</code>；开了之后要在主机防火墙放行 <code>11010</code> 的 tcp 和 udp）</li>
+<li>监听默认就是开的（<code>listen</code> 默认 <code>true</code>）；要让别人能直连你，只需在主机防火墙放行 <code>11010</code> 的 tcp 和 udp。不想开端口就说「别开监听」。</li>
 <li>「用 TUN 模式跑」（默认就是；没有 root 会自动回退到 no-TUN。服务器上还要放行 tun 设备：<code>ufw allow in on tun0</code>）</li>
 <li>「帮我装那个 root 守护进程，让 Mac 也能用 TUN」（Mac 上会弹一次系统管理员密码框；装好后再 <code>join_network</code> 一次，节点就以 TUN 运行，别再弹窗）</li>
 <li>「把节点私钥导出到 /Users/me/omai.key，不要打印私钥；换机器时告诉我怎么导入。」</li>

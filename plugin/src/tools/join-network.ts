@@ -10,7 +10,7 @@ export const joinNetworkTool: ToolDef = {
     '成功返回 {state:"online"}；仍在启动返回 {state:"starting"}，用 status 轮询；失败抛 E_NETWORK_TIMEOUT。' +
     "网络开了 secure mode 时要传 secureMode:true：那样的网络会拒掉没开的节点（peers 永远是空的）。" +
     "本机密钥自动生成并保存，不需要和别人交换任何密钥。same network 重新 join 时省略 secureMode/listen 会沿用上次的值。" +
-    "想要直连（不走种子中继）就传 listen:true，并在主机防火墙放行 11010 的 tcp 与 udp。",
+    "默认开监听（tcp+udp 11010）以便别人直连；主机防火墙要放行这两个 11010，传 listen:false 可以不开端口。",
   args: {
     type: "object",
     properties: {
@@ -35,9 +35,9 @@ export const joinNetworkTool: ToolDef = {
       listen: {
         type: "boolean",
         description:
-          "是否在本机开 EasyTier 监听（tcp+udp 11010），让别人能直连你，而不是所有流量都走种子中继。" +
-          "只在入站端口真的可达时开（有公网地址、或路由器把端口转给了你），而且要在主机防火墙上放行 11010 的 tcp 和 udp；" +
-          "开了却不可达比不开更糟：别的节点会尝试直连你然后回退到中继",
+          "是否在本机开 EasyTier 监听（tcp+udp 11010），让别人能直连你。默认 true；" +
+          "主机防火墙要放行 11010 的 tcp 与 udp（有公网地址或端口转发时才有意义）。" +
+          "入站不可达也不影响功能，只会回退到经对端中继，传 false 可以完全不开端口",
       },
     },
     required: ["networkName", "networkSecret"],
@@ -61,11 +61,15 @@ export const joinNetworkTool: ToolDef = {
         ? previous.secureMode
         : false;
     const listenExplicit = args.listen !== undefined && args.listen !== null;
+    // Listening is the default: with a virtual address every node can be dialled
+    // directly, which is what keeps the overlay from routing every packet through
+    // whoever happens to hold a connection. A host whose port is not reachable
+    // simply falls back to the relay the way it did before.
     const listen = listenExplicit
       ? optionalBoolean(args, "listen")
       : previous?.name === name
         ? previous.listen
-        : false;
+        : true;
     // TUN is the default: a device is the only mode where a peer's source address
     // survives, which is what makes the Gateway Key (and the cost limit behind it)
     // enforceable. A process without root falls back to user space on its own.
