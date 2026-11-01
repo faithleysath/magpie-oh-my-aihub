@@ -24,7 +24,8 @@ import { getRuntime, type Runtime } from "../runtime.ts";
 import { signCanonical } from "../signing.ts";
 import { socksHttpRequest } from "../socks.ts";
 import { peerEndpoint } from "./discover.ts";
-import { fail, jsonText, objectArgs, requiredAddress, type ToolDef } from "./types.ts";
+import { fail, jsonText, objectArgs, requiredString, type ToolDef } from "./types.ts";
+import { resolveTarget } from "./resolve.ts";
 
 const POLL_TIMEOUT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 12_000;
@@ -352,7 +353,7 @@ export const requestAccessTool: ToolDef = {
   args: {
     type: "object",
     properties: {
-      provider: { type: "string", description: "提供方的钱包地址（0x…），来自 discover" },
+      provider: { type: "string", description: "提供方地址：0x…（来自 discover），或地址簿里的名字" },
       models: {
         type: "array",
         items: { type: "string" },
@@ -364,7 +365,7 @@ export const requestAccessTool: ToolDef = {
   },
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
-    const provider = requiredAddress(args, "provider");
+    const provider = await resolveTarget(requiredString(args, "provider", 64), "provider");
     const models = requiredModels(args);
     const runtime = await getRuntime();
     if (!runtime.config.network) fail("E_NO_NETWORK", "join a network before requesting access");
@@ -426,14 +427,14 @@ export const connectTool: ToolDef = {
   args: {
     type: "object",
     properties: {
-      provider: { type: "string", description: "提供方的钱包地址（0x…）" },
+      provider: { type: "string", description: "提供方地址：0x…，或地址簿里的名字" },
     },
     required: ["provider"],
     additionalProperties: false,
   },
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
-    const provider = requiredAddress(args, "provider");
+    const provider = await resolveTarget(requiredString(args, "provider", 64), "provider");
     const runtime = await getRuntime();
     if (!runtime.config.network) fail("E_NO_NETWORK", "join a network before connecting to a provider");
 
@@ -550,14 +551,14 @@ export const disconnectTool: ToolDef = {
   args: {
     type: "object",
     properties: {
-      provider: { type: "string", description: "提供方的钱包地址（0x…）" },
+      provider: { type: "string", description: "提供方地址：0x…，或地址簿里的名字" },
     },
     required: ["provider"],
     additionalProperties: false,
   },
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
-    const provider = requiredAddress(args, "provider");
+    const provider = await resolveTarget(requiredString(args, "provider", 64), "provider");
     const runtime = await getRuntime();
     const connection = runtime.config.connections.find((entry) => entry.provider === provider) ?? null;
     const id = remoteProviderId(provider);

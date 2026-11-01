@@ -4,6 +4,7 @@ import { approveRequestTool, consumersTool, rejectRequestTool, revokeConsumerToo
 import { discoverTool } from "./discover.ts";
 import { joinNetworkTool } from "./join-network.ts";
 import { historyTool, sendPaymentTool } from "./money.ts";
+import { contactsTool } from "./contacts.ts";
 import { nativeModelsTool } from "./native-models.ts";
 import { shareModelsTool } from "./share-models.ts";
 import { statusTool } from "./status.ts";
@@ -12,7 +13,7 @@ import { walletImportTool } from "./wallet-import.ts";
 import { walletTool } from "./wallet.ts";
 
 /**
- * The 18 tools. Magpie prefixes each name with the plugin's short name (the
+ * The 19 tools. Magpie prefixes each name with the plugin's short name (the
  * package name without its scope: `magpie-plugin`), so these become
  * `magpie-plugin_status`, `..._wallet`, and so on.
  *
@@ -21,6 +22,8 @@ import { walletTool } from "./wallet.ts";
  * disconnect_provider, connections.
  * Money: send_payment (out and in: a consumer pays a provider with the same
  * tool) and history (local deposits plus payouts).
+ * Local convenience: contacts (the alias → address book that every tool taking a
+ * counterparty address resolves against).
  */
 export const TOOLS: Record<string, ToolDef> = {
   status: statusTool,
@@ -41,4 +44,5 @@ export const TOOLS: Record<string, ToolDef> = {
   revoke_consumer: revokeConsumerTool,
   send_payment: sendPaymentTool,
   history: historyTool,
+  contacts: contactsTool,
 };

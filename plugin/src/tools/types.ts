@@ -36,10 +36,15 @@ export function requiredString(
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
+/** Whether a string is a 20-byte EVM address in 0x form. */
+export function isAddress(value: string): boolean {
+  return ADDRESS_RE.test(value.trim());
+}
+
 /** A wallet address argument, lowercased; the one identity this product has. */
 export function requiredAddress(args: Record<string, unknown>, key: string, label = key): string {
   const value = requiredString(args, key, 64, label);
-  if (!ADDRESS_RE.test(value)) fail("E_INPUT", `${label} must be a 0x… wallet address`);
+  if (!isAddress(value)) fail("E_INPUT", `${label} must be a 0x… wallet address`);
   return value.toLowerCase();
 }
 

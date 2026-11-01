@@ -84,6 +84,15 @@ CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT
 );
+
+-- The address book: a local alias for an address, so a person need not paste
+-- hex. Never signed, never published, never consulted for authorization.
+CREATE TABLE IF NOT EXISTS contacts (
+  alias TEXT PRIMARY KEY,
+  address TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT
+);
 `;
 
 export function ledgerPath(): string {

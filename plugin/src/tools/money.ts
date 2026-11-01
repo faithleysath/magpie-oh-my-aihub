@@ -30,10 +30,10 @@ import {
   jsonText,
   objectArgs,
   optionalString,
-  requiredAddress,
   requiredString,
   type ToolDef,
 } from "./types.ts";
+import { resolveTarget } from "./resolve.ts";
 
 const DEFAULT_HISTORY_LIMIT = 50;
 const MAX_HISTORY_LIMIT = 200;
@@ -250,7 +250,10 @@ const SEND_ARGS = {
       enum: ["bsc", "base"],
       description: "bsc (56) or base (8453)",
     },
-    to: { type: "string", description: "收款地址，任意 EVM 地址（包括交易所充值地址）" },
+    to: {
+      type: "string",
+      description: "收款地址：任意 EVM 地址（包括交易所充值地址），或地址簿里的名字（contacts）",
+    },
     amount: {
       type: "string",
       description: 'USDC 数量，十进制字符串，例如 "1.25"；不接受浮点数，不接受超过该链小数位的位数',
@@ -278,7 +281,7 @@ export const sendPaymentTool: ToolDef = {
     if (asset !== undefined && asset.toLowerCase() !== "usdc") {
       fail("E_INPUT", `asset must be "usdc" — this plugin only moves USDC on ${chain.label}`);
     }
-    const to = requiredAddress(args, "to");
+    const to = await resolveTarget(requiredString(args, "to", 64), "to");
     const amount = requiredString(args, "amount", 80);
 
     const runtime = await getRuntime();
@@ -297,14 +300,17 @@ export const historyTool: ToolDef = {
   args: {
     type: "object",
     properties: {
-      address: { type: "string", description: "只看这个付款方的入账（0x… 地址）" },
+      address: { type: "string", description: "只看这个付款方的入账：0x… 地址，或地址簿里的名字" },
       limit: { type: "integer", minimum: 1, maximum: MAX_HISTORY_LIMIT, description: "默认 50，上限 200" },
     },
     additionalProperties: false,
   },
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
-    const addressFilter = args.address === undefined || args.address === null ? undefined : requiredAddress(args, "address");
+    const addressFilter =
+      args.address === undefined || args.address === null
+        ? undefined
+        : await resolveTarget(requiredString(args, "address", 64), "address");
     const rawLimit = args.limit;
     let limit: number | undefined;
     if (rawLimit !== undefined && rawLimit !== null) {

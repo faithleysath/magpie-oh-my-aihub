@@ -11,7 +11,8 @@
 import { cleanModelList } from "../grants.ts";
 import { logger } from "../log.ts";
 import { getRuntime } from "../runtime.ts";
-import { jsonText, objectArgs, optionalString, requiredAddress, type ToolDef } from "./types.ts";
+import { jsonText, objectArgs, optionalString, requiredString, type ToolDef } from "./types.ts";
+import { resolveTarget } from "./resolve.ts";
 
 export const consumersTool: ToolDef = {
   description:
@@ -32,7 +33,7 @@ export const approveRequestTool: ToolDef = {
   args: {
     type: "object",
     properties: {
-      address: { type: "string", description: "申请方的钱包地址（0x…）" },
+      address: { type: "string", description: "申请方地址：0x…，或地址簿里的名字" },
       models: {
         type: "array",
         items: { type: "string" },
@@ -44,7 +45,7 @@ export const approveRequestTool: ToolDef = {
   },
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
-    const address = requiredAddress(args, "address");
+    const address = await resolveTarget(requiredString(args, "address", 64), "address");
     const models = args.models === undefined || args.models === null ? undefined : cleanModelList(args.models);
     const runtime = await getRuntime();
     const result = await runtime.grants.approve(address, models);
@@ -64,7 +65,7 @@ export const rejectRequestTool: ToolDef = {
   args: {
     type: "object",
     properties: {
-      address: { type: "string", description: "申请方的钱包地址（0x…）" },
+      address: { type: "string", description: "申请方地址：0x…，或地址簿里的名字" },
       note: { type: "string", description: "可选的备注，只写进本地日志" },
     },
     required: ["address"],
@@ -72,7 +73,7 @@ export const rejectRequestTool: ToolDef = {
   },
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
-    const address = requiredAddress(args, "address");
+    const address = await resolveTarget(requiredString(args, "address", 64), "address");
     const note = optionalString(args, "note", 200, "note");
     const runtime = await getRuntime();
     const result = await runtime.grants.reject(address);
@@ -88,14 +89,14 @@ export const revokeConsumerTool: ToolDef = {
   args: {
     type: "object",
     properties: {
-      address: { type: "string", description: "消费者的钱包地址（0x…）" },
+      address: { type: "string", description: "消费者地址：0x…，或地址簿里的名字" },
     },
     required: ["address"],
     additionalProperties: false,
   },
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
-    const address = requiredAddress(args, "address");
+    const address = await resolveTarget(requiredString(args, "address", 64), "address");
     const runtime = await getRuntime();
     const result = await runtime.grants.revoke(address);
     if (!result.keyRemoved && !result.rotated) {
