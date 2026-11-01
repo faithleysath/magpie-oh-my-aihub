@@ -239,7 +239,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 - `plugin/page/doc.md` → `bun run build:page` → `plugin/page/index.html`。产物提交进仓库，页面运行时不带 markdown 库、不发网络请求。
 - 页面是 sandbox iframe、`connect-src 'none'`，够不到 `/api`，所以它只能是文档，不能显示实时状态。
 - **必须加载 `_magpie/bridge.js`**：Magpie 的窗口要求页面在 10 秒内 say hello，否则整页被替换成「此页面已停止工作」。bridge 只负责握手和主题，页面本身仍是静态 HTML。
-- 构建时校验 19 个工具名和两个 MCP 地址都在 `page/doc.md` 里；前缀从根 `package.json` 推导，改包名要同步改页面。
+- `page/doc.md` 渲染成静态页（`bun run build:page`）。页面是**用户手册，不是工具参考**：可以一个工具名都不提、也可以不提 MCP 地址；构建只对缺失的地址打印提示，不失败（工具表在 README）。
 
 **上游事实**（已核实，Magpie `v0.1.2516`，EasyTier `2.6.4`）：
 

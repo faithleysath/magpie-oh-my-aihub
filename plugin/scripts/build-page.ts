@@ -238,12 +238,17 @@ ${body}
 }
 
 const markdown = readFileSync(sourcePath, "utf8");
-for (const tool of REQUIRED_TOOLS) {
-  const name = `${TOOL_PREFIX}_${tool}`;
-  if (!markdown.includes(name)) throw new Error(`page/doc.md does not mention ${name}`);
+// The page is a manual, not a reference: it may name no tool and no address at
+// all (the tool table lives in README). Nothing here fails the build — a page
+// that cannot be regenerated because the prose changed is worse than a page that
+// is shorter than it used to be.
+for (const [url, label] of [
+  [REQUIRED_URL, "the all-plugins MCP address"],
+  [REQUIRED_PLUGIN_URL, "this plugin's MCP address"],
+] as const) {
+  if (markdown.includes(url)) continue;
+  console.warn(`note: page/doc.md does not mention ${label} (${url}); fine unless it should`);
 }
-if (!markdown.includes(REQUIRED_URL)) throw new Error(`page/doc.md does not mention ${REQUIRED_URL}`);
-if (!markdown.includes(REQUIRED_PLUGIN_URL)) throw new Error(`page/doc.md does not mention ${REQUIRED_PLUGIN_URL}`);
 
 const html = page(markdown);
 // Magpie's window replaces a page that never says hello with "This page
