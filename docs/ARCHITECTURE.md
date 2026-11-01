@@ -1,5 +1,9 @@
 # Architecture decision record — updated 2026-11-01 (Phase 10 production payments)
 
+> **历史文档。** 产品已改为“纯后端 + MCP 工具 + 文档页”的 Agent 原生版，当前决策以
+> [`docs/DESIGN-V2.md`](DESIGN-V2.md) 为准。本文件（含下列 33 条 Decision）只作为旧版
+> （浏览器控制台 + CLI + 存款意图/付款 journal）的证据与历史保留，不再代表当前产品。
+
 ## Phase 10 production payments — supersedes the earlier "mainnet read-only" boundary
 
 **Decision 39 — BSC 56 and Base 8453 are equal production payment networks.**
