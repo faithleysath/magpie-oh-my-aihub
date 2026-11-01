@@ -41,6 +41,8 @@ import {
 import type { DepositIntent } from "./deposits.ts";
 import type { Service } from "./service.ts";
 import type { ReceivingAddress, Wallet } from "./wallet.ts";
+import { EvmClient } from "./evm.ts";
+import { keccak256Hex } from "./keccak.ts";
 
 export const PAYMENT_LOCAL_ACTIONS = [
   "payment-obligation-preview",
@@ -50,6 +52,7 @@ export const PAYMENT_LOCAL_ACTIONS = [
   "payment-operation-unknown",
   "payment-operation-query",
   "payment-operation-pending",
+  "payment-operation-adopt",
 ] as const;
 
 export type PaymentLocalAction = (typeof PAYMENT_LOCAL_ACTIONS)[number];
@@ -196,6 +199,7 @@ function publicPending(record: PaymentOperationRecord): Record<string, unknown> 
     amountRaw: record.amountRaw,
     state: record.state,
     attempt: record.attempt,
+    reservationId: record.reservationId,
     txHash: record.txHash,
     hashes: record.hashes,
     reason: record.reason,
@@ -420,6 +424,46 @@ export class PaymentLocalService {
     return this.operationJournal;
   }
 
+  /**
+   * Independently verifies a hash the user found in their wallet before adopting
+   * it as the payment's broadcast hash. The transaction must be a successful
+   * ERC-20 transfer from the bound payer to the bound token contract, with the
+   * exact calldata, and the receipt must contain the matching Transfer log.
+   * On a product mainnet every read uses the registry quorum.
+   */
+  private async verifyConfirmedTransaction(binding: PaymentBinding, hash: string): Promise<void> {
+    if (!this.service) throw new ConsoleInputError("chain recovery needs the local Service");
+    const wallet = this.service.walletForConfiguration();
+    const network = wallet.registryView().network(binding.chainId);
+    if (!network) throw new ConsoleInputError("the payment network is not registered");
+    const quorum = network.rpcQuorum ?? 1;
+    const client = new EvmClient({ chainId: binding.chainId, endpoints: network.rpcEndpoints, now: this.now });
+    const expected = expectedOperation(binding);
+    let tx: Awaited<ReturnType<EvmClient["transaction"]>>;
+    let receipt: Awaited<ReturnType<EvmClient["receipt"]>>;
+    try {
+      tx = quorum > 1 ? await client.transactionQuorum(hash, quorum) : await client.transaction(hash);
+      receipt = quorum > 1 ? await client.receiptQuorum(hash, quorum) : await client.receipt(hash);
+    } catch (error) {
+      throw new ConsoleInputError(`the transaction could not be verified: ${String((error as Error)?.message ?? error).slice(0, 200)}`);
+    }
+    if (!tx) throw new ConsoleInputError("the chain does not know that transaction hash");
+    if (tx.from !== binding.consumerAddress.toLowerCase() || tx.to !== binding.contractAddress.toLowerCase() || tx.input !== expected.calldata.toLowerCase() || BigInt(tx.value) !== 0n) {
+      throw new ConsoleInputError("that transaction is not this payment (payer, token, recipient or amount differs)");
+    }
+    if (!receipt || receipt.status !== "0x1") throw new ConsoleInputError("the transaction did not succeed on chain");
+    const topic = keccak256Hex("Transfer(address,address,uint256)").toLowerCase();
+    const from = binding.consumerAddress.toLowerCase().slice(2).padStart(64, "0");
+    const to = binding.recipientAddress.toLowerCase().slice(2).padStart(64, "0");
+    const amount = BigInt(binding.amountRaw).toString(16).padStart(64, "0");
+    const match = receipt.logs.some((log) =>
+      log.address.toLowerCase() === binding.contractAddress.toLowerCase() &&
+      log.topics.map((t) => t.toLowerCase()).join(",") === `${topic},0x${from},0x${to}` &&
+      log.data.toLowerCase() === `0x${amount}`,
+    );
+    if (!match) throw new ConsoleInputError("the receipt does not contain the expected ERC-20 Transfer");
+  }
+
   private resolve(obligationId: string): TrustedPaymentObligation {
     const obligation = this.resolver.resolve(obligationId);
     if (!obligation) throw new ConsoleInputError("no trusted local payment obligation");
@@ -427,9 +471,6 @@ export class PaymentLocalService {
   }
 
   private assertSendable(binding: PaymentBinding): void {
-    if (binding.chainId === 56 || binding.chainId === 8453 || HARD_BLOCKED_MAINNET_CHAIN_IDS.some((id) => id === binding.chainId)) {
-      throw new ConsoleInputError("mainnet payments are disabled");
-    }
     if (!this.allowedChains.has(binding.chainId)) throw new ConsoleInputError("this payment chain is not allowed");
     if (!(binding.expiresAtMs > this.now())) throw new ConsoleInputError("the trusted payment request has expired");
     let expectedHash: string;
@@ -451,7 +492,10 @@ export class PaymentLocalService {
       evidence.assetId !== binding.assetId ||
       !sameAddress(evidence.contractAddress, binding.contractAddress) ||
       evidence.decimals !== binding.decimals ||
-      evidence.networkType !== "testnet"
+      evidence.credit !== true ||
+      (evidence.networkType !== "testnet" && evidence.networkType !== "mainnet") ||
+      (evidence.networkType === "mainnet" && evidence.issuerType === "mock") ||
+      (evidence.networkType === "mainnet" ? evidence.pricingKind !== "stablecoin-usd" : evidence.pricingKind !== "fixed-test-rate")
     ) {
       throw new ConsoleInputError("the trusted payment asset is not currently sendable");
     }
@@ -650,6 +694,18 @@ export class PaymentLocalService {
           this.assertSendable(obligation.binding);
           const expected = expectedOperation(obligation.binding);
           this.checkOperation(input.operation, expected);
+          return await this.port(obligation.binding).query(expected);
+        }
+        case "payment-operation-adopt": {
+          fields(input, ["obligationId", "reservationId", "hash"]);
+          const obligation = this.resolve(text(input.obligationId, "obligationId"));
+          this.assertSendable(obligation.binding);
+          const reservationId = text(input.reservationId, "reservationId", 64);
+          const hash = text(input.hash, "hash", 66);
+          if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) throw new ConsoleInputError("transaction hash is invalid");
+          const expected = expectedOperation(obligation.binding);
+          await this.verifyConfirmedTransaction(obligation.binding, hash);
+          await this.port(obligation.binding).recordHash({ reservationId, operation: expected, hash });
           return await this.port(obligation.binding).query(expected);
         }
         case "payment-operation-pending": {

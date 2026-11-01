@@ -23,9 +23,11 @@ export const P2P_PAYMENT_MAX_BODY_BYTES = 12 * 1024;
 export const P2P_PAYMENT_MAX_TTL_MS = 15 * 60_000;
 export const P2P_PAYMENT_CLOCK_SKEW_MS = 2 * 60_000;
 
-/** Payment simulation paths. Product networks are deliberately not selectable. */
+/** Development paths (kept as a dev tool). */
 export const PAYMENT_SIMULATION_CHAIN_IDS = Object.freeze([97, 84532] as const);
+/** Production payment paths: BSC 56 and Base 8453, peers of the dev testnets. */
 export const PAYMENT_PRODUCT_CHAIN_IDS = Object.freeze([56, 8453] as const);
+export const PAYMENT_SUPPORTED_CHAIN_IDS = Object.freeze([56, 97, 8453, 84532] as const);
 
 export const PAYMENT_STATUSES = ["waitingpayment", "confirming", "received", "actionneeded"] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
@@ -276,13 +278,15 @@ function asset(value: unknown, where: string): PaymentAsset {
   return { assetId: raw.assetId.toLowerCase(), contractAddress, decimals: raw.decimals };
 }
 
+/**
+ * The chain-id layer for the payment protocol. It accepts the two production
+ * chains and the two development chains; the registry's production policy, the
+ * verified asset and the journal still decide each payment.
+ */
 export function assertPaymentNetwork(chainId: unknown): number {
   if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId <= 0) paymentFail("invalid", "chainId is invalid");
-  if ((PAYMENT_PRODUCT_CHAIN_IDS as readonly number[]).includes(chainId)) {
-    paymentFail("network-gated", "product network payments are gated in this phase", "product-network");
-  }
-  if (!(PAYMENT_SIMULATION_CHAIN_IDS as readonly number[]).includes(chainId)) {
-    paymentFail("network-gated", "payment simulation chain is not allowed", "unsupported-network");
+  if (!(PAYMENT_SUPPORTED_CHAIN_IDS as readonly number[]).includes(chainId)) {
+    paymentFail("network-gated", "payment chain is not allowed", "unsupported-network");
   }
   return chainId;
 }

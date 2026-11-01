@@ -50,20 +50,26 @@ import {
 /** The standard BIP44 path used for the built-in EVM account. */
 export const BIP44_EVM_PATH = "m/44'/60'/0'/0/0";
 
-/** Chain ids that may never be signed or sent by this experimental wallet. */
-export const MAINNET_SIGNING_DENIED_CHAIN_IDS: readonly number[] = Object.freeze([56, 8453]);
-
 /**
- * The only chains the built-in signer may use in normal operation. This is an
- * allowlist, not a mainnet blacklist: chain 1/10/42161/... and unknown ids are
- * denied even when an injected WalletChainPolicy lies and calls them testnet.
+ * The built-in wallet signs BSC 56 and Base 8453 as production chains. The old
+ * hard mainnet denial is intentionally empty: the production controls are the
+ * registry asset tuple, the journal binding, the one-use signing permit and the
+ * explicit per-payment confirmation. Chain 1/10/42161/... remain denied.
  */
-const SIGNING_CHAIN_ALLOWLIST_INTERNAL = new Set<number>([97, 84532]);
+export const MAINNET_SIGNING_DENIED_CHAIN_IDS: readonly number[] = Object.freeze([]);
+
+/** Chain id -> the class the chain policy must report for signing. */
+const SIGNING_CHAIN_ALLOWLIST_INTERNAL = new Map<number, "mainnet" | "testnet">([
+  [56, "mainnet"],
+  [97, "testnet"],
+  [8453, "mainnet"],
+  [84532, "testnet"],
+]);
 /**
  * Public view for tests/diagnostics. Mutating this copy cannot change the
  * internal signing gate; the vault reads SIGNING_CHAIN_ALLOWLIST_INTERNAL only.
  */
-export const SIGNING_CHAIN_ALLOWLIST: ReadonlySet<number> = new Set(SIGNING_CHAIN_ALLOWLIST_INTERNAL);
+export const SIGNING_CHAIN_ALLOWLIST: ReadonlySet<number> = new Set(SIGNING_CHAIN_ALLOWLIST_INTERNAL.keys());
 
 /** 31337 is available only through the explicit isolated test option below. */
 export const ISOLATED_SIMULATION_CHAIN_ALLOWLIST: readonly number[] = Object.freeze([31337]);
@@ -111,11 +117,13 @@ export const DENY_ALL_CHAIN_POLICY: WalletChainPolicy = Object.freeze({
 });
 
 export function createStaticChainPolicy(
-  entries: Readonly<Record<number, "simulation" | "testnet">>,
+  entries: Readonly<Record<number, "simulation" | "testnet" | "mainnet">>,
 ): WalletChainPolicy {
-  const map = new Map<number, "simulation" | "testnet">();
-  const supported = new Map<number, "simulation" | "testnet">([
+  const map = new Map<number, "simulation" | "testnet" | "mainnet">();
+  const supported = new Map<number, "simulation" | "testnet" | "mainnet">([
+    [56, "mainnet"],
     [97, "testnet"],
+    [8453, "mainnet"],
     [84532, "testnet"],
     [31337, "simulation"],
   ]);
@@ -226,7 +234,7 @@ interface ResolvedVaultOptions {
   kdf: WalletKdfParams;
   chainPolicy: WalletChainPolicy;
   purposes: ReadonlyMap<string, WalletTypedDataPurpose>;
-  allowedSigningChains: ReadonlyMap<number, "testnet" | "simulation">;
+  allowedSigningChains: ReadonlyMap<number, "testnet" | "simulation" | "mainnet">;
 }
 
 export interface CreateWalletResult {
@@ -1400,9 +1408,9 @@ function resolveOptions(options: WalletVaultOptions): ResolvedVaultOptions {
 
 function buildAllowedSigningChains(
   isolatedSimulationChains: readonly number[] | undefined,
-): ReadonlyMap<number, "testnet" | "simulation"> {
-  const allowed = new Map<number, "testnet" | "simulation">();
-  for (const chainId of SIGNING_CHAIN_ALLOWLIST_INTERNAL) allowed.set(chainId, "testnet");
+): ReadonlyMap<number, "testnet" | "simulation" | "mainnet"> {
+  const allowed = new Map<number, "testnet" | "simulation" | "mainnet">();
+  for (const [chainId, kind] of SIGNING_CHAIN_ALLOWLIST_INTERNAL) allowed.set(chainId, kind);
   for (const chainId of isolatedSimulationChains ?? []) {
     if (!Number.isSafeInteger(chainId) || !ISOLATED_SIMULATION_CHAIN_ALLOWLIST.includes(chainId)) {
       fail("config-invalid", "isolated simulation chains are limited to 31337");
@@ -1416,9 +1424,6 @@ function normalizePurpose(raw: WalletTypedDataPurpose): WalletTypedDataPurpose {
   if (!raw || typeof raw !== "object") fail("config-invalid", "signing purpose must be an object");
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(raw.id)) fail("config-invalid", "invalid signing purpose id");
   if (!Number.isSafeInteger(raw.chainId) || raw.chainId < 1) fail("config-invalid", "invalid purpose chain id");
-  if (MAINNET_SIGNING_DENIED_CHAIN_IDS.includes(raw.chainId)) {
-    fail("signing-mainnet-forbidden", "a signing purpose may not target mainnet 56/8453");
-  }
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(raw.primaryType) || raw.primaryType === "EIP712Domain") {
     fail("config-invalid", "invalid primary type");
   }
@@ -1882,7 +1887,7 @@ function byteLength(value: string): number {
 function assertSignableChain(
   chainId: number,
   policy: WalletChainPolicy,
-  allowed: ReadonlyMap<number, "testnet" | "simulation">,
+  allowed: ReadonlyMap<number, "testnet" | "simulation" | "mainnet">,
 ): WalletChainClass {
   if (!Number.isSafeInteger(chainId) || chainId < 1) fail("signing-disabled", "invalid chain id");
   if (MAINNET_SIGNING_DENIED_CHAIN_IDS.includes(chainId)) {
@@ -2188,6 +2193,12 @@ export function validateAutoRechargePolicy(
     fail("auto-recharge-invalid", "auto-recharge validation needs a valid clock");
   }
   if (input.version !== 1) fail("auto-recharge-invalid", "unsupported auto-recharge policy version");
+  // No unattended executor exists for a production mainnet. The reminder +
+  // one-click flow is a separate, human-confirmed path; do not mint a standing
+  // permit for 56/8453.
+  if (input.chainId === 56 || input.chainId === 8453) {
+    fail("auto-recharge-invalid", "unattended auto-recharge is not available on a production mainnet; use the reminder and one-click confirmation");
+  }
   assertSignableChain(
     input.chainId,
     options.chainPolicy,

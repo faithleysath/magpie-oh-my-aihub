@@ -38,13 +38,14 @@ export const WALLET_VAULT_ACTIONS = [
 ] as const;
 
 /**
- * Deposit-intent signing purposes. One per allowed simulation chain because the
- * vault binds a purpose to one chain id; no mainnet purpose exists.
+ * Deposit-intent signing purposes. One per credit chain because the vault binds
+ * a purpose to one chain id. BSC 56 and Base 8453 are production peers of the
+ * two development testnets.
  */
 const DEPOSIT_MESSAGE_TYPES = Object.freeze(
   Object.fromEntries(DEPOSIT_TYPES.DepositIntent.map((field) => [field.name, field.type])),
 );
-function depositPurpose(chainId: 97 | 84532): WalletTypedDataPurpose {
+function depositPurpose(chainId: 56 | 97 | 8453 | 84532): WalletTypedDataPurpose {
   return {
     id: `deposit-intent-${chainId}`,
     chainId,
@@ -177,8 +178,8 @@ export class WalletLocalService {
       // Normal service construction is testnet-only. 31337 requires the
       // explicit isolated test constructor in the core; this adapter never
       // exposes it from UI/env/config.
-      chainPolicy: createStaticChainPolicy({ 97: "testnet", 84532: "testnet" }),
-      purposes: [depositPurpose(97), depositPurpose(84532)],
+      chainPolicy: createStaticChainPolicy({ 56: "mainnet", 97: "testnet", 8453: "mainnet", 84532: "testnet" }),
+      purposes: [depositPurpose(56), depositPurpose(97), depositPurpose(8453), depositPurpose(84532)],
     });
     // A rejected open must stay observable to status/action(), but it must not
     // become an unhandled rejection when a session-end hook touches an owner or
@@ -223,7 +224,9 @@ export class WalletLocalService {
     const vault = await this.vault;
     this.assertContext(context);
     const chainId = Number(input.typedData?.domain?.chainId);
-    if (chainId !== 97 && chainId !== 84532) throw new WalletLocalError("wallet-operation-failed", "this deposit chain is not signable");
+    if (chainId !== 56 && chainId !== 97 && chainId !== 8453 && chainId !== 84532) {
+      throw new WalletLocalError("wallet-operation-failed", "this deposit chain is not signable");
+    }
     const prepared = vault.prepareTypedData({ purpose: `deposit-intent-${chainId}`, typedData: input.typedData });
     if (prepared.digest.toLowerCase() !== input.digest.toLowerCase()) {
       throw new WalletLocalError("wallet-operation-failed", "the deposit document does not match its digest");
