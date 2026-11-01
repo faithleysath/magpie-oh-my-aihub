@@ -42,6 +42,8 @@ const time = (value) => {
   return value && Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "尚无记录";
 };
 const money = (value) => typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(4)}` : "未读取";
+/** Server prose is displayed as a sentence; a middle dot is not our separator. */
+const plain = (value) => typeof value === "string" ? value.replace(/\s*\u00b7\s*/g, "，") : "";
 
 let consoleState = null;
 let poller = null;
@@ -84,10 +86,10 @@ function notice(message = "", tone = "info") {
 }
 function connection(label, tone = "") {
   setText("connection", label);
-  $("connection").className = `pill ${tone}`;
+  $("connection").className = `session-state ${tone}`;
 }
 function updated(stale = false) {
-  setText("last-update", `${stale ? "连接中断 · " : ""}${lastUpdate ? `读取于 ${time(lastUpdate)}` : "尚未成功读取"}`);
+  setText("last-update", `${stale ? "连接中断，读取于 " : ""}${lastUpdate ? `读取于 ${time(lastUpdate)}` : "尚未成功读取"}`);
   setText("footer-state", lastUpdate ? `证据时间：${time(lastUpdate)}` : "还没有成功读取本机状态");
 }
 
@@ -193,7 +195,7 @@ function fillNetworkForm(state) {
 
 function badge(text, tone = "neutral") {
   const node = document.createElement("span");
-  node.className = `pill ${tone}`;
+  node.className = `status-text ${tone}`;
   node.textContent = text;
   return node;
 }
@@ -212,7 +214,7 @@ function renderChecks(container, checks) {
   for (const check of checks) {
     const li = document.createElement("li");
     const icon = document.createElement("span");
-    icon.className = check.ok === true ? "check-icon good" : "check-icon warn";
+    icon.className = check.ok === true ? "check-mark good" : "check-mark warn";
     icon.textContent = check.ok === true ? "✓" : "!";
     icon.setAttribute("aria-label", check.ok === true ? "通过" : "未通过");
     const content = document.createElement("div");
@@ -225,7 +227,7 @@ function renderChecks(container, checks) {
     const summary = document.createElement("summary");
     summary.textContent = "查看技术详情";
     const evidence = document.createElement("small");
-    evidence.textContent = `${check.name || "check"} · ${check.detail || "没有更多说明"}`;
+    evidence.textContent = `${check.name || "check"}：${check.detail || "没有更多说明"}`;
     technical.append(summary, evidence);
     content.append(title, detail, technical);
     li.append(icon, content);
@@ -243,14 +245,14 @@ function networkSummary(state) {
   const others = neighbors.length ? neighbors : list(et.peers).filter((peer) => peer?.hostname !== c.hostname);
   const states = { unconfigured: "尚未加入网络", starting: "正在连接", online: "已连接", degraded: "部分可用", offline: "未连接", failed: "连接失败", unknown: "尚未验证" };
   if (network.state) {
-    return [states[network.state] || "尚未验证", network.summary || `${c.networkName || "私有网络"} · ${others.length} 个其他节点`];
+    return [states[network.state] || "尚未验证", plain(network.summary) || `${c.networkName || "私有网络"}，${others.length} 个其他节点`];
   }
   const readiness = object(s.readiness).state;
   if (!state.configured) return ["尚未加入网络", "在“网络”页填写网络名称、密钥和初始节点后连接。"];
   if (!et.running) return ["未连接", "本机网络引擎没有运行，点“查看网络”看实际原因。"];
-  if (readiness === "ready") return ["已连接", `${c.networkName || "私有网络"} · ${others.length} 个其他节点`];
+  if (readiness === "ready") return ["已连接", `${c.networkName || "私有网络"}，${others.length} 个其他节点`];
   if (readiness === "blocked") return ["需要处理", list(object(s.readiness).reasons).join("；") || "安全检查没有通过，点“查看网络”。"];
-  return ["已加入，等待验证", `${c.networkName || "私有网络"} · ${others.length} 个其他节点；安全检查尚未通过。`];
+  return ["已加入，等待验证", `${c.networkName || "私有网络"}，${others.length} 个其他节点；安全检查尚未通过。`];
 }
 
 function homeNetwork(state) { return networkSummary(state); }
@@ -270,7 +272,7 @@ function homeSharing(state) {
   if (!c.sharingActive) return ["已暂停", `${object(c.shareSuspended).reason || "安全条件未满足"}；没有发布模型。`];
   return [
     `正在共享 ${shared.length || 0} 个模型`,
-    `${published ? "目录已发布" : "目录尚未发布"} · ${consumers.length} 个已授权伙伴`,
+    `${published ? "目录已发布" : "目录尚未发布"}，${consumers.length} 个已授权伙伴`,
   ];
 }
 
@@ -294,8 +296,8 @@ function homeWallet(state) {
   return {
     status: latest ? `最近入账 ${money(latest.creditedUsd)}（累计，非余额）` : "资产余额尚未查询",
     detail: latest
-      ? `最近一笔充值 ${time(latest.updatedAt)} · 观察器与 RPC 在“网络 → 诊断”`
-      : "还没有已确认的充值记录；观察器与 RPC 在“网络 → 诊断”",
+      ? `最近一笔充值 ${time(latest.updatedAt)}；观察器与 RPC 状态在网络页的诊断里。`
+      : "还没有已确认的充值记录；观察器与 RPC 状态在网络页的诊断里。",
     credit,
   };
 }
@@ -349,7 +351,7 @@ function renderHome(state) {
       title.textContent = entry.hostname;
       const note = document.createElement("small");
       note.className = "muted";
-      note.textContent = `${entry.source ? `读回来源 ${entry.source}` : "真实读回"}${entry.readAt ? ` · ${time(entry.readAt)}` : ""} · ${entry.quotaText}`;
+      note.textContent = [entry.source ? `读回来源 ${entry.source}` : "真实读回", entry.readAt ? time(entry.readAt) : null, entry.quotaText].filter(Boolean).join("，");
       group.append(title, note);
       if (entry.counted === false) {
         const warning = document.createElement("p");
@@ -421,7 +423,7 @@ function renderHome(state) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "text-button";
-    button.textContent = "去处理 →";
+    button.textContent = "处理";
     button.addEventListener("click", () => navigate(entry.goto, entry.tab));
     li.append(label, button);
     listNode.append(li);
@@ -446,11 +448,11 @@ function renderNetwork(state) {
     ? (NETWORK_STATE[networkState] || ["尚未验证", "neutral"])
     : [readiness.state === "ready" ? "检查通过" : readiness.state === "blocked" ? "需要处理" : "尚未验证", readiness.state === "ready" ? "good" : "neutral"];
   setText("network-readiness", stateLabel);
-  $("network-readiness").className = `pill ${stateTone}`;
+  $("network-readiness").className = `status-text ${stateTone}`;
   setText("network-result-detail", networkState
-    ? (network.summary || "本机网络引擎没有返回摘要。")
+    ? (plain(network.summary) || "本机网络引擎没有返回摘要。")
     : (state.configured
-      ? (et.running ? `网络引擎正在运行${et.coreVersion ? ` · EasyTier ${et.coreVersion}` : ""}；每一项都来自本机实际读取。` : "网络引擎当前没有运行；配置已保存不等于在线。")
+      ? (et.running ? `网络引擎正在运行${et.coreVersion ? `（EasyTier ${et.coreVersion}）` : ""}；每一项都来自本机实际读取。` : "网络引擎当前没有运行；配置已保存不等于在线。")
       : "还没有加入网络；填好左侧三个字段后点“连接网络”。"));
 
   // A stopped core or an old read leaves the identity and neighbours as
@@ -458,10 +460,11 @@ function renderNetwork(state) {
   const facts = networkFacts(network, et, c, time).rows;
   const factList = $("network-facts");
   factList.replaceChildren();
-  for (const [label, value] of facts) {
+  for (const [label, value, identifier] of facts) {
     const div = document.createElement("div");
     const dt = document.createElement("dt"); dt.textContent = label;
     const dd = document.createElement("dd"); dd.textContent = value; dd.setAttribute("aria-readonly", "true");
+    if (identifier) dd.className = "mono";
     div.append(dt, dd);
     factList.append(div);
   }
@@ -475,28 +478,33 @@ function renderNetwork(state) {
   for (const peer of neighbors) {
     const li = document.createElement("li");
     const self = peer.link === "self";
-    const avatar = document.createElement("span");
-    avatar.className = "peer-avatar";
-    avatar.textContent = (peer.hostname || "N").slice(0, 1).toUpperCase();
     const body = document.createElement("div");
+    body.className = "peer-body";
     const title = document.createElement("strong");
     title.textContent = `${peer.hostname || "网络节点"}${self ? "（本机）" : ""}`;
-    const bits = [
-      peer.virtualIpv4 || null,
-      peer.tunnel || null,
-      NEIGHBOR_LINK[peer.link] || NEIGHBOR_LINK.unknown,
-      peer.relayVia ? `经由 ${peer.relayVia}` : null,
-      peer.lossRatePct === null || peer.lossRatePct === undefined ? null : `丢包 ${peer.lossRatePct}%`,
-    ].filter(Boolean);
-    const detail = document.createElement("small");
-    detail.textContent = bits.join(" · ") || "未提供地址";
-    body.append(title, detail);
-    li.append(avatar, body);
     // A missing value is shown as unknown, never as zero or false. A row from
     // a stopped core or an old read is last-known, not "online".
     const status = neighborStatus(peer);
-    if (status) li.append(badge(status.text, status.tone));
-    if (typeof peer.latencyMs === "number") li.append(badge(`${peer.latencyMs} ms`, "info"));
+    if (status) title.append(" ", badge(status.text, status.tone));
+    const meta = document.createElement("ul");
+    meta.className = "meta-list";
+    const facts = [
+      peer.virtualIpv4 ? { text: peer.virtualIpv4, mono: true } : null,
+      { text: peer.tunnel || null },
+      { text: NEIGHBOR_LINK[peer.link] || NEIGHBOR_LINK.unknown },
+      peer.relayVia ? { text: `经由 ${peer.relayVia}`, mono: true } : null,
+      peer.lossRatePct === null || peer.lossRatePct === undefined ? null : { text: `丢包 ${peer.lossRatePct}%` },
+      typeof peer.latencyMs === "number" ? { text: `延迟 ${peer.latencyMs} ms` } : null,
+    ].filter((entry) => entry && entry.text);
+    if (!facts.length) facts.push({ text: "未提供地址" });
+    for (const entry of facts) {
+      const item = document.createElement("li");
+      item.textContent = entry.text;
+      if (entry.mono) item.className = "mono";
+      meta.append(item);
+    }
+    body.append(title, meta);
+    li.append(body);
     peersList.append(li);
   }
 
@@ -515,11 +523,12 @@ function renderNetwork(state) {
     const dt = document.createElement("dt"); dt.textContent = port.label || port.purpose;
     const where = port.host ? `${port.host}${port.port ? `:${port.port}` : ""}` : "未报告";
     const dd = document.createElement("dd");
-    const scope = port.reachability && port.reachability !== "unknown" ? ` · ${REACHABILITY[port.reachability] || port.reachability}` : "";
+    const scope = port.reachability && port.reachability !== "unknown" ? `（${REACHABILITY[port.reachability] || port.reachability}）` : "";
     // The word comes from the read-only projection: never upgraded to "verified" by the UI.
-    const stateWord = port.state ? ` · ${PORT_STATE[port.state] || port.state}` : "";
-    const readAt = port.verifiedAt ? ` · 读取 ${time(port.verifiedAt)}` : "";
+    const stateWord = port.state ? `，${PORT_STATE[port.state] || port.state}` : "";
+    const readAt = port.verifiedAt ? `，读取 ${time(port.verifiedAt)}` : "";
     dd.textContent = `${where}${scope}${stateWord}${readAt}`;
+    dd.className = "mono";
     dd.setAttribute("aria-readonly", "true");
     div.append(dt, dd);
     portList.append(div);
@@ -533,7 +542,7 @@ function renderNetwork(state) {
     listenerList.replaceChildren();
     const rows = Object.keys(listener).length
       ? [
-        ["状态", `${listener.state || "unknown"}${listener.verified === true ? " · 已验证" : listener.verified === false ? " · 未验证" : ""}`],
+        ["状态", `${listener.state || "unknown"}${listener.verified === true ? "，已验证" : listener.verified === false ? "，未验证" : ""}`],
         ["地址", listener.host ? `${listener.host}${listener.port ? `:${listener.port}` : ""}` : "未报告"],
         ["可达范围", listener.reachability || "未知"],
         ["说明", listener.detail || "无"],
@@ -543,6 +552,7 @@ function renderNetwork(state) {
       const div = document.createElement("div");
       const dt = document.createElement("dt"); dt.textContent = label;
       const dd = document.createElement("dd"); dd.textContent = value; dd.setAttribute("aria-readonly", "true");
+      if (label === "地址") dd.className = "mono";
       div.append(dt, dd);
       listenerList.append(div);
     }

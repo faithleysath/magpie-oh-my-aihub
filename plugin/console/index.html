@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <meta name="referrer" content="no-referrer">
-  <title>Oh My AIHub · 本机控制台</title>
+  <title>Oh My AIHub 本机控制台</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -25,7 +25,7 @@
     </aside>
     <div class="workspace">
       <header class="topbar">
-        <div class="topbar-status"><span class="pill" id="connection" role="status">正在连接</span><span class="evidence-time" id="last-update">等待首次更新</span></div>
+        <div class="topbar-status"><span class="session-state" id="connection" role="status">正在连接</span><span class="evidence-time" id="last-update">等待首次更新</span></div>
         <button type="button" id="theme" class="icon-button" aria-label="切换深色模式" title="切换深色模式">◐</button>
       </header>
       <main id="main" tabindex="-1">
@@ -60,7 +60,7 @@
                 <h2 id="home-network-title">网络连接</h2>
                 <p class="status-line" id="home-network">尚未连接</p>
                 <p class="muted" id="home-network-detail">还没有读取到网络状态。</p>
-                <button type="button" class="text-button" data-goto="network">查看网络 →</button>
+                <button type="button" class="text-button" data-goto="network">查看网络</button>
               </section>
               <section class="home-row" aria-labelledby="home-models-title">
                 <h2 id="home-models-title">可用模型</h2>
@@ -70,21 +70,21 @@
                   <summary>查看可用模型</summary>
                   <div id="home-models-list"></div>
                 </details>
-                <button type="button" class="text-button" data-goto="discovery">去发现 →</button>
+                <button type="button" class="text-button" data-goto="discovery">去发现</button>
               </section>
               <section class="home-row" aria-labelledby="home-sharing-title">
                 <h2 id="home-sharing-title">我的共享</h2>
                 <p class="status-line" id="home-sharing">未开启</p>
                 <p class="muted" id="home-sharing-detail">只共享你明确选中的本机模型。</p>
-                <button type="button" class="text-button" data-goto="sharing">查看共享 →</button>
+                <button type="button" class="text-button" data-goto="sharing">查看共享</button>
               </section>
               <section class="home-row" aria-labelledby="home-wallet-title">
                 <h2 id="home-wallet-title">钱包</h2>
                 <p class="status-line" id="home-wallet-assets">资产余额尚未查询</p>
-                <p class="muted" id="home-wallet-detail">测试环境；这里只读，不发起任何资金操作。</p>
+                <p class="muted" id="home-wallet-detail">测试网；余额需要单独查询，这里不发起资金操作。</p>
                 <h3 class="subhead">提供者信用（按伙伴）</h3>
                 <ul class="credit-list" id="home-wallet-credit"><li class="muted">尚未读取</li></ul>
-                <button type="button" class="text-button" data-goto="wallet">查看钱包 →</button>
+                <button type="button" class="text-button" data-goto="wallet">查看钱包</button>
               </section>
               <section class="home-row" aria-labelledby="home-todo-title">
                 <h2 id="home-todo-title">待办</h2>
@@ -113,24 +113,24 @@
 
           <section id="wallet-page" aria-labelledby="wallet-title" hidden>
             <div class="page-heading">
-              <div><h1 id="wallet-title">钱包</h1><p>测试网环境；本地钱包密钥加密保存在本机，不执行主网或自动付款。</p></div>
+              <div><h1 id="wallet-title">钱包</h1><p>本地钱包只加密保存在这台设备，不执行主网或自动付款。</p></div>
             </div>
             <div id="wallet-vault-panel"></div>
             <div id="wallet-network-panel"></div>
             <div id="payment-p2p-panel"></div>
             <details class="legacy-wallet-flows" id="legacy-wallet-flows">
-              <summary>高级 · 既有测试网钱包与账本（旧文件流程，不是新主路径）</summary>
+              <summary>高级：既有测试网钱包与账本（旧文件流程）</summary>
               <div id="wallet-panel"></div>
             </details>
             <details class="advanced-recovery" id="advanced-recovery">
-              <summary>高级恢复 · 账本与离线账单</summary>
+              <summary>高级恢复：账本与离线账单</summary>
               <div id="accounting-panel"></div>
             </details>
           </section>
 
           <section id="settings-panel" aria-labelledby="network-title" hidden>
             <div class="page-heading">
-              <div><h1 id="network-title">网络</h1><p>用同一个网络名称和密钥连接伙伴；配置保存不代表已经在线。</p></div>
+              <div><h1 id="network-title">网络</h1><p>用同一个网络名称和密钥连接伙伴。</p></div>
             </div>
 
             <form id="settings-form" class="card form-card" autocomplete="off" novalidate>
@@ -150,7 +150,7 @@
                 <small id="peers-help">填写一个已知节点即可加入。也可以留空，等伙伴连入或稍后补上。</small>
               </label>
               <p class="form-error" id="form-error" role="alert" hidden></p>
-              <p class="muted small">已保存的密码不会回显，也不会写入浏览器存储。网络密钥只用于加入私有网络，不是 Magpie 访问密钥。</p>
+              <p class="muted small">已保存的密码不会回显，也不会写入浏览器存储；它是网络密钥，不是 Magpie 访问密钥。</p>
               <div class="actions">
                 <button type="submit" class="button primary" id="save">连接网络</button>
                 <span class="muted small" id="network-save-hint">保存只表示配置已写入；是否在线看下方实际结果。</span>
@@ -161,7 +161,7 @@
               <div class="section-heading">
                 <h2 id="network-result-title">实际连接结果</h2>
                 <div class="actions">
-                  <span class="pill" id="network-readiness">尚未验证</span>
+                  <span class="status-text" id="network-readiness">尚未验证</span>
                   <button type="button" class="button quiet" id="network-refresh">刷新网络状态</button>
                 </div>
               </div>
@@ -171,21 +171,21 @@
               <ul class="peer-list" id="network-peers-list"></ul>
               <p class="muted" id="network-peers-empty">还没有看到其他节点。邻居状态来自本机网络引擎，只用于诊断。</p>
               <details class="diagnostics" id="network-diagnostics">
-                <summary>诊断与端口（只读）</summary>
+                <summary>诊断与端口</summary>
                 <p class="muted small">端口来自本机读取，只作诊断。地址或端口被占用不等于由本插件验证；Magpie 自己持有的监听不在这些条目里。</p>
                 <dl class="facts" id="network-ports"></dl>
                 <div class="section-heading">
                   <h3 class="subhead">安全检查</h3>
                   <button type="button" class="button secondary" id="run-checks">重新检查</button>
                 </div>
-                <h3 class="subhead">P2P 控制通道（只读）</h3>
+                <h3 class="subhead">P2P 控制通道</h3>
                 <dl class="facts" id="p2p-listener"></dl>
                 <p class="muted small" id="checks-time">尚未运行主动检查</p>
                 <ul class="check-list" id="checks-list"></ul>
               </details>
 
               <details class="diagnostics" id="wallet-diagnostics">
-                <summary>钱包与链诊断（RPC · 观察器 · 测试代币）</summary>
+                <summary>钱包与链诊断</summary>
               </details>
             </section>
 
