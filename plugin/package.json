@@ -1,6 +1,6 @@
 {
   "name": "@oh-my-aihub/magpie-plugin",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Magpie plugin: signed model catalogue, private EasyTier overlay sharing and on-chain USDC credit, driven entirely through MCP tools",
   "type": "module",
   "main": "src/index.ts",
@@ -13,6 +13,8 @@
     "typescript": "^5.9.0"
   },
   "magpie": {
+    "name": "Oh My AIHub",
+    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxZjI5MzciLz48cGF0aCBkPSJNMTQgNDBsMTAtMTYgOCAxMiA2LTggMTIgMTIiIHN0cm9rZT0iIzdkZDNmYyIgc3Ryb2tlLXdpZHRoPSI0IiBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSI0IiBmaWxsPSIjZmJiZjI0Ii8+PC9zdmc+Cg==",
     "page": {
       "title": "Oh My AIHub",
       "file": "page/index.html",

@@ -1,6 +1,6 @@
 {
   "name": "@oh-my-aihub/magpie-plugin",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Magpie 的纯后端插件：MCP 工具驱动的私有 EasyTier 组网、签名目录、申请审批与链上 USDC 额度",
   "type": "module",
   "main": "plugin/src/index.ts",
@@ -14,6 +14,8 @@
     "p2p"
   ],
   "magpie": {
+    "name": "Oh My AIHub",
+    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxZjI5MzciLz48cGF0aCBkPSJNMTQgNDBsMTAtMTYgOCAxMiA2LTggMTIgMTIiIHN0cm9rZT0iIzdkZDNmYyIgc3Ryb2tlLXdpZHRoPSI0IiBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSI0IiBmaWxsPSIjZmJiZjI0Ii8+PC9zdmc+Cg==",
     "page": {
       "title": "Oh My AIHub",
       "file": "plugin/page/index.html",
