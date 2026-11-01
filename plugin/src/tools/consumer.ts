@@ -1,5 +1,4 @@
-// The consumer side: request access, connect, disconnect, list connections
-// (DESIGN-V2 §7.3, §8.2, §8.3).
+// The consumer side: request access, connect, disconnect, list connections.
 //
 // Everything here speaks the overlay protocol directly through the local
 // EasyTier SOCKS5 listener. A request and a poll are EIP-191 signatures over
@@ -302,7 +301,7 @@ function localRemoteModels(): Map<string, string[]> {
 }
 
 /**
- * `status.consuming` (DESIGN-V2 §7.1): what we asked for and what we hold. Read
+ * `status.consuming`: what we asked for and what we hold. Read
  * from the ledger cache and state.json only — `status` must not depend on the
  * network being up.
  */
@@ -348,7 +347,7 @@ function requiredModels(args: Record<string, unknown>): string[] {
 
 export const requestAccessTool: ToolDef = {
   description:
-    "向某个提供方节点申请模型访问：按 DESIGN-V2 §8.2 用本节点钱包签名 POST /request（地址取自 discover 缓存，" +
+    "向某个提供方节点申请模型访问：用本节点钱包签名 POST /request（地址取自 discover 缓存，" +
     "没有缓存就先发现一次）。返回申请状态。对同一个节点重复申请只覆盖 requested_models，不会撤销已有授权。",
   args: {
     type: "object",
@@ -454,7 +453,7 @@ export const connectTool: ToolDef = {
     }
     if (!poll.key) {
       // state = approved and balance < $0.0001: the provider has granted the
-      // models but has not issued a key yet (DESIGN-V2 §8.3).
+      // models but has not issued a key yet.
       return jsonText({
         provider,
         state: "waiting-deposit",
@@ -607,7 +606,7 @@ export const disconnectTool: ToolDef = {
     metaDelete(runtime.db, `poll:${provider}`);
 
     // Removing the `[[port_forward]]` needs a restart: 2.6.4's remove prints
-    // success and keeps the listener (DESIGN-V2 §7.3, §10).
+    // success and keeps the listener.
     let restarted = false;
     try {
       restarted = (await deps.applyConfig(runtime.overlay, next)).restarted;

@@ -1,5 +1,4 @@
-// Applications, authorizations, revocations and Gateway Key issuance
-// (DESIGN-V2 §5, §7.2, §7.3, §9).
+// Applications, authorizations, revocations and Gateway Key issuance.
 //
 // One row per address on both sides:
 //   requests  — the last application (what was asked for, when, and its state)
@@ -11,11 +10,11 @@
 // per-request budget: there is exactly one source of money, the deposit.
 //
 // A key is issued only for `D >= $0.0001` (Magpie reads `--cost 0` as
-// unlimited). Before stage 4 there are no deposits; stage 4's watcher calls
-// `onDeposit`/`onRevert` after every bookkeeping change, and both recompute the
-// whole chain `D → cap → key` for that payer. With no money the approval stays
-// `waiting-deposit` and the poll answers `approved` with `key: null`; when the
-// balance drops to zero the key is removed (never left at an unlimited cap).
+// unlimited). The chain watcher calls `onDeposit`/`onRevert` after every
+// bookkeeping change, and both recompute the whole chain `D → cap → key` for
+// that payer. With no money the approval stays `waiting-deposit` and the poll
+// answers `approved` with `key: null`; when the balance drops to zero the key is
+// removed (never left at an unlimited cap).
 //
 // The secret is stored here because it has to be handed to the consumer. It is
 // never logged, never part of `status`, and only ever leaves through the
@@ -45,7 +44,7 @@ export type PollState = "none" | "pending" | "approved" | "revoked";
 const ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 const MODEL_LIMIT = 200;
 const MODEL_ID_LIMIT = 200;
-/** Effectively perpetual: 10 years, so `used` never resets (DESIGN-V2 §6). */
+/** Effectively perpetual: 10 years, so `used` never resets. */
 export const LIMIT_WINDOW = "3650d";
 
 export interface ConsumerDbRow {
@@ -66,7 +65,7 @@ export interface RequestDbRow {
   state: string;
 }
 
-/** `GET /request` answer, DESIGN-V2 §8.3. Never signed. */
+/** `GET /request` answer. Never signed. */
 export interface PollResponse {
   state: PollState;
   grantedModels: string[];
@@ -78,7 +77,7 @@ export interface PollResponse {
   ts: string;
 }
 
-/** `POST /request` answer, DESIGN-V2 §8.2. Never signed. */
+/** `POST /request` answer. Never signed. */
 export interface RequestAck {
   state: PollState;
   grantedModels: string[];
@@ -283,9 +282,9 @@ export class Grants {
   }
 
   /**
-   * DESIGN-V2 §8.3. `key` is present only for an approved address whose balance
+   * `key` is present only for an approved address whose balance
    * is at least $0.0001; `used` is the last value read from Magpie's limit
-   * endpoint (stage 3 never refreshes it on the read path).
+   * endpoint (the read path never refreshes it).
    */
   snapshot(address: string): PollResponse {
     const target = normalizeAddress(address);
@@ -309,7 +308,7 @@ export class Grants {
   }
 
   /**
-   * Records an application (DESIGN-V2 §8.2). An approved address only gets its
+   * Records an application. An approved address only gets its
    * `requested_models` replaced; the grant and the key are untouched. A revoked
    * address that asks again starts a fresh pending application with no grant.
    */
@@ -347,7 +346,7 @@ export class Grants {
   }
 
   /**
-   * Approves (or re-approves) a consumer (DESIGN-V2 §7.2). `models` defaults to
+   * Approves (or re-approves) a consumer. `models` defaults to
    * the pending request; either way the result is intersected with what this
    * node publishes and Magpie still prices. An empty result is `E_INPUT`, never
    * a silent empty grant.
@@ -444,7 +443,7 @@ export class Grants {
   }
 
   /**
-   * Takes the authorization back (DESIGN-V2 §7.2). The key is removed from
+   * Takes the authorization back. The key is removed from
    * Magpie; if removal fails it is rotated, which invalidates the secret the
    * consumer holds even though the key still exists. A Magpie that cannot be
    * reached at all still leaves the local state revoked — the caller is told the
@@ -508,7 +507,7 @@ export class Grants {
   }
 
   /**
-   * A deposit was credited for `payer` (DESIGN-V2 §6). The balance is already in
+   * A deposit was credited for `payer`. The balance is already in
    * the ledger; this recomputes `D → cap` and moves the Gateway Key to match. A
    * payer without an authorization is not an error: the money is visible in
    * `consumers.unclaimed`, and approving that address later issues the key.
@@ -526,7 +525,7 @@ export class Grants {
   }
 
   /**
-   * Boot-time reconciliation of every authorized consumer (DESIGN-V2 §6, §9).
+   * Boot-time reconciliation of every authorized consumer.
    *
    * The ledger row and the scan cursor are written in one transaction, but the
    * Magpie cap (and key) are written after it. A host killed between the two
@@ -740,7 +739,7 @@ export class Grants {
   }
 
   /**
-   * `consumers` / `status.sharing.consumers` (DESIGN-V2 §7.2). `usage` reads each
+   * `consumers` / `status.sharing.consumers`. `usage` reads each
    * active key's used cost from Magpie's own limit endpoint and stores it; the
    * poll path never pays that cost.
    */

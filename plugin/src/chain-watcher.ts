@@ -1,4 +1,4 @@
-// The chain watcher: one scanner loop per chain (DESIGN-V2 §6, §12 stage 4).
+// The chain watcher: one scanner loop per chain.
 //
 // What it does, exactly:
 //
@@ -47,11 +47,11 @@ import {
 } from "./db.ts";
 import { logger } from "./log.ts";
 
-/** `eth_getLogs` range per request (§12 stage 4); a hard endpoint may force less. */
+/** `eth_getLogs` range per request; a hard endpoint may force less. */
 export const CHUNK_BLOCKS = 5_000;
 /** How far back a credited row is re-checked for a reorg each pass. */
 export const REORG_WINDOW_BLOCKS = 3_000;
-/** The scan interval (§12 stage 4). */
+/** The scan interval. */
 export const SCAN_INTERVAL_MS = 15_000;
 /**
  * One pass stops after this many RPC requests, not this many blocks: a provider

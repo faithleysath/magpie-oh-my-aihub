@@ -1,10 +1,9 @@
-// The provider side: who asked, who is approved, who was revoked
-// (DESIGN-V2 §7.2).
+// The provider side: who asked, who is approved, who was revoked.
 //
 // Approving does not hand out a budget: the grant is a model list, and the money
-// is the consumer's deposit at this address. Stage 3 has no chain observer, so a
-// fresh approval is always `waiting-deposit` and no key leaves the node — that is
-// the expected behaviour, not a failure.
+// is the consumer's deposit at this address. A fresh approval with no deposit is
+// `waiting-deposit`; the chain observer issues the key when the first deposit is
+// confirmed.
 //
 // A key secret is never part of any answer here. The only place it appears is the
 // provider→consumer poll response (`GET /request`), which is where it belongs.

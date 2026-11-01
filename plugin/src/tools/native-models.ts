@@ -3,7 +3,7 @@
 //
 // Only Magpie's own native providers are candidates (never `remote-magpie`, never
 // `group/…` or `auto/…`): reselling somebody else's channel is not a feature of
-// this product (DESIGN-V2 D7). `Magpie.catalogModels()` already applies exactly
+// this product (D7). `Magpie.catalogModels()` already applies exactly
 // that filter and refuses prices Magpie itself cannot freeze (peak windows,
 // provider rate windows, tier limits); this module adds the shape check the
 // directory needs — all four price parts present, finite and non-negative.

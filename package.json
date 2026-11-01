@@ -28,8 +28,8 @@
     "plugin/page/index.html",
     "plugin/page/style.css",
     "plugin/page/icon.svg",
-    "plugin/README.md",
-    "README.md"
+    "README.md",
+    "ARCHITECTURE.md"
   ],
   "dependencies": {
     "ethers": "6.17.0"

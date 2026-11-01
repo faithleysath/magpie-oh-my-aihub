@@ -9,7 +9,7 @@ Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTie
 1. 打开 Magpie 的 **Plugins → Discover**。
 2. 如果搜不到，在列表底部用手动添加入口填：`github:faithleysath/magpie-oh-my-aihub`
 3. 打开 **Oh My AIHub** 插件页——那一页就是用户手册（这是什么、快速开始、常用说法、需要知道的、工具名）。
-4. 让 agent 调用 `magpie-plugin_join_network` 加入网络，其余按插件页走。
+4. 让 agent 用 `join_network` 加入网络，其余按插件页走。
 
 插件装好后会自动生成节点钱包，私钥在插件数据目录的 `wallet/key.hex`（`0600`）。插件不写 Magpie 选项，也不读它的管理接口。
 
@@ -45,9 +45,10 @@ Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agen
 
 | 文档 | 是什么 |
 | --- | --- |
-| `plugin/page/doc.md`（安装后的插件页） | **用户手册**。面向使用者：这是什么、怎么把工具接给 agent、首次对话、常用操作提示词、工具速查、报错怎么处理。 |
-| [docs/DESIGN-V2.md](docs/DESIGN-V2.md) | **规格**。面向维护者：产品决策、协议字段、端口与数据文件、Magpie 上游事实与出处、分阶段实施和验收口径。 |
-| [plugin/README.md](plugin/README.md) | 维护者速查：目录结构、状态文件、数据流、自检命令。 |
-| [docs/history/ARCHITECTURE-pre-v2.md](docs/history/ARCHITECTURE-pre-v2.md) | 旧实现（本机控制台 + P2P + 旧钱包/账本）的架构记录，已不再代表当前代码。 |
+| [README.md](README.md) | 安装、MCP 接线、工具列表、安全边界。 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | **架构与维护者参考**。产品决策、协议、数据文件、Magpie 集成事实、已知限制、验证状态。 |
+| [AGENTS.md](AGENTS.md) | 本地开发约定。 |
+
+插件页 `plugin/page/doc.md` 是用户手册（构建产物 `plugin/page/index.html`，也就是 Magpie 里那一页）。
 
 类型检查：`cd plugin && bun run typecheck`。文档页由 `cd plugin && bun run build:page` 从 `page/doc.md` 渲染。

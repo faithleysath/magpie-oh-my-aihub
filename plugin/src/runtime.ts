@@ -10,16 +10,16 @@
 // saved share selection and re-signed in memory whenever the selection or the
 // node wallet changes — never by restarting EasyTier.
 //
-// Stage 3 adds the ledger (`ledger.sqlite`) and the authorization store. Both
-// are opened before the overlay starts, and both are reachable from tools as
-// `runtime.db` / `runtime.grants`. The single listener on <lan>:3426 is owned by
+// The ledger (`ledger.sqlite`) and the authorization store are opened before the
+// overlay starts, and both are reachable from tools as `runtime.db` /
+// `runtime.grants`. The single listener on <lan>:3426 is owned by
 // `http-router.ts`; this module only decides when to bind it.
 //
-// Stage 4 adds the chain watcher. It runs from boot, not from `join_network`: a
-// deposit is addressed to the wallet, not to the overlay, and money must be
-// booked even while the network is down. Its address is a getter so a
-// `wallet_import` moves the watcher to the new identity, and the scan cursors are
-// dropped at that point (they refer to the old address's logs).
+// The chain watcher runs from boot, not from `join_network`: a deposit is
+// addressed to the wallet, not to the overlay, and money must be booked even
+// while the network is down. Its address is a getter so a `wallet_import` moves
+// the watcher to the new identity, and the scan cursors are dropped at that point
+// (they refer to the old address's logs).
 
 import { mkdirSync } from "node:fs";
 import type { Database } from "bun:sqlite";
@@ -57,7 +57,7 @@ const globalState = globalThis as unknown as Record<string, unknown>;
 let hooksInstalled = false;
 
 /**
- * Magpie has no price-change notification, and DESIGN-V2 D13 accepts that a new
+ * Magpie has no price-change notification, and D13 accepts that a new
  * price applies to old usage. The published document therefore has to follow the
  * live price without anyone calling a tool: one 30-second re-sign while the
  * directory is being served.

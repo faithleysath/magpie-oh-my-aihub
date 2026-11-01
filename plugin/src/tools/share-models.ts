@@ -1,6 +1,6 @@
 // share_models: choose which native models this node publishes, then re-sign the
 // directory in memory. No `publish` step and no core restart: the Forward ACL
-// already allows 3426 and 3425 for the life of the export (DESIGN-V2 §5, §7.2).
+// already allows 3426 and 3425 for the life of the export.
 
 import { writeConfig } from "../config.ts";
 import { getRuntime } from "../runtime.ts";

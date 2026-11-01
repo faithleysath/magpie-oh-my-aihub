@@ -1,5 +1,5 @@
 // Canonical JSON plus EIP-191 `personal_sign`, the one signature format every
-// overlay document uses (DESIGN-V2 §8).
+// overlay document uses.
 //
 // The signed bytes are `canonicalJson(payload)`: object keys sorted, `undefined`
 // members omitted, no whitespace, UTF-8. Every document carries a `schema` field

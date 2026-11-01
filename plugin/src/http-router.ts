@@ -1,9 +1,9 @@
-// The one HTTP listener this plugin owns: `<lan>:3426` (DESIGN-V2 §8).
+// The one HTTP listener this plugin owns: `<lan>:3426`.
 //
 // Three endpoints, nothing else:
-//   GET  /catalog    the signed directory (stage 2)
-//   POST /request    a signed application             (stage 3, §8.2)
-//   GET  /request    a signed poll                    (stage 3, §8.3)
+//   GET  /catalog    the signed directory
+//   POST /request    a signed application
+//   GET  /request    a signed poll
 //
 // Every route is plain HTTP on the overlay: EasyTier encrypts the transport and
 // the network secret is the only door. No CORS, no cookies, no admin surface, no
@@ -332,7 +332,7 @@ export class DirectoryServer {
     const sig = url.searchParams.get("sig") ?? "";
     if (!SIGNATURE_RE.test(sig)) return error(400, "sig is not 65 bytes of hex");
 
-    // The query string itself is the signed document (DESIGN-V2 §8.3).
+    // The query string itself is the signed document.
     const signer = signerOf({ schema: POLL_SCHEMA, address: rawAddress, ts }, sig);
     if (!signer) return error(403, "the signature does not recover");
     if (signer !== address) return error(403, `the signature is from ${signer}, not ${address}`);

@@ -1,4 +1,4 @@
-// Magpie community plugin entry (agent-native v2, stage 1).
+// Magpie community plugin entry.
 //
 // Magpie imports this file and awaits the default export while loading plugins,
 // then collects the returned `tool` record. Boot must therefore return

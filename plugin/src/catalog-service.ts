@@ -1,4 +1,4 @@
-// The directory document this node publishes (DESIGN-V2 §8.1).
+// The directory document this node publishes.
 //
 // `omai/catalog/1` is a small self-signed JSON body: the node's wallet address,
 // its hostname, the two fixed ports, and the native models it shares with their
@@ -96,7 +96,7 @@ function isTimestamp(value: unknown): value is string {
   return typeof value === "string" && TS_RE.test(value) && Number.isFinite(Date.parse(value));
 }
 
-/** ISO-8601 UTC, seconds precision (DESIGN-V2 §8.1 writes `…T10:00:00Z`). */
+/** ISO-8601 UTC, seconds precision. */
 export function catalogTimestamp(now: Date = new Date()): string {
   return now.toISOString().replace(/\.\d{3}Z$/, "Z");
 }

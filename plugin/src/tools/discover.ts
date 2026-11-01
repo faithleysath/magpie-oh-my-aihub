@@ -4,7 +4,7 @@
 // listener to `http://<mapped>:3426/catalog`, then parses the document strictly:
 // exact field set, type and length bounds, a valid signature, and the signer
 // equal to `address`. A peer that fails any check is reported `online:false` with
-// a short reason; it is never partially trusted (DESIGN-V2 §8).
+// a short reason; it is never partially trusted.
 //
 // The cache is memory only, 30 seconds, keyed by the address that signed a
 // document. It keeps, per peer, the overlay endpoint the catalogue arrived on
@@ -165,7 +165,7 @@ function findPeer(peers: DiscoveredPeer[], address: string): DiscoveredPeer | un
 }
 
 /**
- * Where to send a signed request for one address (DESIGN-V2 §7.3).
+ * Where to send a signed request for one address.
  *
  * The endpoint comes from the cached catalogue read; a missing peer triggers one
  * refresh, never a loop. A peer that answered `online:false` is surfaced as

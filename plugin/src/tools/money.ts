@@ -1,4 +1,4 @@
-// The money tools: `send_payment` and `history` (DESIGN-V2 §7.4).
+// The money tools: `send_payment` and `history`.
 //
 // Sending is agent-native by design (D11): no confirmation step, no target
 // allowlist, no journal. One call is one ERC-20 transfer, broadcast once. If the
@@ -7,7 +7,7 @@
 //
 // `history` is the local view: credited (and reverted) deposits plus the payouts
 // this wallet made. It is not a statement and not a reconciliation: the chain is
-// the truth, this is just what this node has seen (§6).
+// the truth, this is just what this node has seen.
 
 import type { Database } from "bun:sqlite";
 import { formatEther, type Wallet } from "ethers";
@@ -61,7 +61,7 @@ export interface SendDeps {
  * Validates the wallet's funds and sends one transfer.
  *
  * Order matters: the gas check comes first because "no BNB for fees" is the most
- * common failure and needs its own message (§14.2), and the USDC balance is
+ * common failure and needs its own message, and the USDC balance is
  * checked before signing so a doomed transaction is never broadcast.
  */
 export async function executeSendPayment(

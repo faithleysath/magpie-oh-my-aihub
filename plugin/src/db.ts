@@ -1,11 +1,10 @@
-// The plugin's SQLite ledger (DESIGN-V2 §9).
+// The plugin's SQLite ledger.
 //
 // One file, `<stateDir>/ledger.sqlite`, opened once per plugin host. WAL keeps
 // the read side (`GET /request`) from blocking an approval; the file and its
 // sidecars are 0600 because `consumers.key_secret` is a bearer credential.
 //
-// Stage 4 writes `deposits` (from the watcher) and `payouts` (from
-// `send_payment`); both tables already existed, so the schema is unchanged.
+// The chain watcher writes `deposits` and `send_payment` writes `payouts`;
 // `balanceMicro` reads credited deposits, which is the single number a cap is
 // derived from.
 //
@@ -16,9 +15,7 @@
 //
 // A chain's decimals are **not** repeated here: `chain.ts` is the single source
 // (BSC USDC has 18, Base USDC has 6), and this module only asks that registry.
-// A deposit row from a chain the registry does not know is never summed. Stage 4
-// writes `deposits` (from the watcher) and `payouts` (from `send_payment`); both
-// tables already existed, so the schema is unchanged.
+// A deposit row from a chain the registry does not know is never summed.
 
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
@@ -215,14 +212,14 @@ function sumMicro(rows: CreditRow[], toAddr: string): bigint {
 }
 
 /**
- * Σ credited deposits to `toAddr` from `fromAddr` (DESIGN-V2 §6 `D(地址)`).
+ * Σ credited deposits to `toAddr` from `fromAddr`.
  * Both BSC and Base count towards the same account; a reverted row does not.
  */
 export function balanceMicro(db: Database, toAddr: string, fromAddr: string): bigint {
   return sumMicro(creditedRows(db, toAddr, fromAddr), toAddr);
 }
 
-/** `deposits.id`: the uniqueness key of DESIGN-V2 §4, one string. */
+/** `deposits.id`: the uniqueness key, one string. */
 export function depositId(chainId: number, token: string, txHash: string, logIndex: number): string {
   return `${chainId}:${token.toLowerCase()}:${txHash.toLowerCase()}:${logIndex}`;
 }
@@ -305,7 +302,7 @@ export interface CreditedBlock {
   block_hash: string;
 }
 
-/** Credited rows worth re-checking against the canonical chain (§6 rollback). */
+/** Credited rows worth re-checking against the canonical chain (reorg rollback). */
 export function creditedBlocksSince(db: Database, toAddr: string, minBlock: number): CreditedBlock[] {
   return db
     .query(
@@ -355,7 +352,7 @@ export interface PayoutRow {
   created_at: string;
 }
 
-/** The only local record of money leaving this wallet (DESIGN-V2 §6). */
+/** The only local record of money leaving this wallet. */
 export function recordPayout(
   db: Database,
   row: { txHash: string; chainId: number; token: string; to: string; amountRaw: bigint; state: string; at: string },

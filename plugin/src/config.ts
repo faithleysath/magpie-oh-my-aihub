@@ -2,7 +2,7 @@
 //
 // It holds the network, the shared-model selection, the overlay hostname, the
 // persisted overlay export (`publish.mappedCidr`) and the consumer-side
-// connections (DESIGN-V2 §9). The format is version 3 from docs/DESIGN-V2.md §9.
+// connections. The format is version 3.
 // Older files are never deleted or rewritten in place by this module:
 // `readConfig` falls back to defaults, and `writeJsonAtomic` keeps the replaced
 // document as `state.json.prev`.

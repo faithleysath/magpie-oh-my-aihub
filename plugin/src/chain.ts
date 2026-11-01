@@ -1,5 +1,5 @@
 // The chain registry, the only JSON-RPC client, and the only write path to a
-// chain: an ERC-20 `transfer` (DESIGN-V2 §6, §7.4, §12 stage 4).
+// chain: an ERC-20 `transfer`.
 //
 // The registry is data. BSC (56) and Base (8453) are the two product chains, and
 // `registerChain` lets a self-check add a local chain (31337) without touching
@@ -10,7 +10,7 @@
 // Reading is failover over an ordered endpoint list, with the endpoint that last
 // worked remembered: one dead public RPC must not stop the watcher. Writing is a
 // single legacy transaction, signed locally and broadcast once — never retried,
-// because "maybe it went out" is a different answer from "it failed" (§7.4).
+// because "maybe it went out" is a different answer from "it failed".
 
 import { Interface, Transaction, formatUnits, id, type Wallet } from "ethers";
 import { logger } from "./log.ts";
@@ -21,7 +21,7 @@ export type FinalityPolicy =
   | { mode: "finalized" }
   /**
    * A confirmation depth. BSC's `finalized` tag equals `latest`, so the tag
-   * proves nothing about depth and 15 blocks is the substitute policy (§6).
+   * proves nothing about depth and 15 blocks is the substitute policy.
    */
   | { mode: "confirmations"; confirmations: number };
 

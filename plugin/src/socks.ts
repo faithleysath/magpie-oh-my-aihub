@@ -23,7 +23,7 @@ export interface SocksHttpOptions {
   path: string;
   timeoutMs?: number;
   maxBytes?: number;
-  /** stage 3 needs POST for `POST /request`; GET is the default */
+  /** POST is needed for `POST /request`; GET is the default */
   method?: "GET" | "POST";
   /** JSON body for a POST; ignored for GET */
   body?: string;

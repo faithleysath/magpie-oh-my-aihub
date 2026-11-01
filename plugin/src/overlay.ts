@@ -7,10 +7,9 @@
 // only ever stops the child it spawned itself; it never adopts or kills another
 // EasyTier on the machine.
 //
-// Stage 1 exported no address and published no port. Stage 2 adds
-// `[[proxy_network]]` plus the Forward ACL that allows exactly the directory
-// port and the Magpie gateway, whenever a LAN address exists. Stage 3 adds the
-// consumer side: one `[[port_forward]]` per connection (loopback ->
+// The export is `[[proxy_network]]` plus the Forward ACL that allows exactly the
+// directory port and the Magpie gateway, whenever a LAN address exists. The
+// consumer side is one `[[port_forward]]` per connection (loopback ->
 // `<peer mapped host>:<gateway>`), added live with the EasyTier CLI and restored
 // from the generated TOML after a restart.
 
@@ -66,7 +65,7 @@ export interface OverlayHooks {
 }
 
 /**
- * Fixed ports from DESIGN-V2 §9. The environment overrides exist only so an
+ * Fixed ports. The environment overrides exist only so an
  * isolated test can run beside an already-running EasyTier; production uses the
  * defaults.
  */
@@ -187,7 +186,7 @@ export function renderOverlayConfig(cfg: HubConfig, publish: OverlayPublish = { 
   // loopback: this node's own directory reads go through it.
   lines.push(`socks5_proxy = ${toml(`socks5://127.0.0.1:${SOCKS_PORT}`)}`);
 
-  // The export is what makes the directory reachable (DESIGN-V2 §5, §8). No LAN
+  // The export is what makes the directory reachable. No LAN
   // address means no export and no Forward rule: an ACL that allows ports on an
   // export that does not exist is dead config.
   const exported = Boolean(publish.lanIp && publish.mappedCidr);
@@ -197,7 +196,7 @@ export function renderOverlayConfig(cfg: HubConfig, publish: OverlayPublish = { 
     );
   }
 
-  // Consumer side (DESIGN-V2 §7.3): `[[port_forward]]` is local -> overlay, not
+  // Consumer side: `[[port_forward]]` is local -> overlay, not
   // an inbound publish. One entry per connection; a connection without a mapped
   // host has nothing to dial and is skipped rather than guessed.
   for (const connection of cfg.connections) {
@@ -401,7 +400,7 @@ export class Overlay {
   }
 
   /**
-   * DESIGN-V2 §8: 3426 carries the directory, 3425 the Magpie gateway. Both are
+   * 3426 carries the directory, 3425 the Magpie gateway. Both are
    * reachable only through an export, so a node without one publishes nothing.
    */
   publishedPorts(): number[] {
@@ -723,7 +722,7 @@ export class Overlay {
   }
 
   /**
-   * Opens the loopback listener towards a peer's gateway (DESIGN-V2 §7.3). The
+   * Opens the loopback listener towards a peer's gateway. The
    * command shape is copied from the old supervisor's `addPortForward`: adding
    * the same rule twice really creates two listeners in 2.6.4, so an identical
    * rule is left alone. Adding a forward never restarts the core.
