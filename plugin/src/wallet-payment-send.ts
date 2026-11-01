@@ -1,11 +1,12 @@
 // Built-in wallet manual send: preview, explicit confirmation, journal gate and
-// one signed ERC-20 transfer on an allowed test chain.
+// one signed ERC-20 transfer on a registered credit chain (BSC 56, Base 8453,
+// or a development testnet).
 //
-// This is the manual path only. It never runs unattended, never signs without a
-// live console session and an unlocked vault, and never handles 56/8453. The
-// journal (payment-operations) is the single send gate: reserve -> sign ->
-// markBroadcasting -> broadcast -> recordHash, and an ambiguous broadcast is
-// recorded as unknown instead of retried.
+// This is the manual path only. It never runs unattended and never signs without
+// a live console session and an unlocked vault. The journal (payment-operations)
+// is the single send gate: reserve -> sign -> markBroadcasting -> broadcast ->
+// recordHash, and an ambiguous broadcast is recorded as unknown instead of
+// retried.
 //
 // The chain transaction is an ERC-20 transfer to the exact recipient/amount of
 // the authenticated obligation. Gas, nonce and fee values are previewed from
@@ -21,7 +22,7 @@ import { expectedOperation, paymentOperationPortFor } from "./payment-local-serv
 import type { ConsoleActionContext } from "./console-server.ts";
 import { walletLocalService } from "./wallet-local-service.ts";
 import { EvmClient } from "./evm.ts";
-import { assertNoMainnetSend, isMainnetChainId } from "./mainnet-gate.ts";
+import { assertProductionCreditAsset, assertProductionCreditNetwork } from "./production-policy.ts";
 import { erc20TransferCalldataHash, PaymentOperationError } from "./payment-operations.ts";
 import { formatTokenAmount } from "./walletamount.ts";
 
@@ -131,17 +132,33 @@ export class WalletPaymentSender {
   }
 
   private client(chainId: number): EvmClient {
-    assertNoMainnetSend({ chainId, operation: "a built-in wallet payment" });
-    if (isMainnetChainId(chainId) || (chainId !== 97 && chainId !== 84532)) {
-      throw new WalletSendError("refused", `chain ${chainId} is not a sendable test chain`);
+    const network = this.wallet.registryView().network(chainId);
+    if (!network) throw new WalletSendError("refused", `chain ${chainId} is not registered`);
+    try {
+      assertProductionCreditNetwork(network);
+    } catch (error) {
+      throw new WalletSendError("refused", String((error as Error)?.message ?? error));
     }
     return this.clientFactory(chainId);
+  }
+
+  /** The registry's verified asset for this binding, or a refusal. */
+  private assetForBinding(chainId: number, assetId: string): { network: import("./networks.ts").NetworkRecord; asset: import("./networks.ts").AssetRecord } {
+    const network = this.wallet.registryView().network(chainId);
+    const asset = this.wallet.registryView().asset(assetId);
+    if (!network || !asset) throw new WalletSendError("refused", "the payment network or asset is not registered");
+    try {
+      assertProductionCreditAsset(network, asset);
+    } catch (error) {
+      throw new WalletSendError("refused", String((error as Error)?.message ?? error));
+    }
+    return { network, asset };
   }
 
   private resolve(invoiceId: string): TrustedPaymentObligation {
     const obligation = this.consumer.obligationResolver().resolve(invoiceId);
     if (!obligation) throw new WalletSendError("not-available", "the payment is not waiting for a verified send (provider acknowledgement and a valid signature are required)");
-    if (obligation.binding.chainId === 56 || obligation.binding.chainId === 8453) throw new WalletSendError("refused", "mainnet payments are disabled");
+    this.assetForBinding(obligation.binding.chainId, obligation.binding.assetId);
     if (obligation.binding.expiresAtMs <= this.now()) throw new WalletSendError("stale", "the payment request expired; request new terms");
     return obligation;
   }
@@ -172,34 +189,38 @@ export class WalletPaymentSender {
     const client = this.client(b.chainId);
     const network = this.wallet.registryView().network(b.chainId);
     if (!network) throw new WalletSendError("not-available", "the payment network is not registered");
-    let nonceHex: string, gasHex: string, nativeHex: string, tokenHex: string, block: unknown, tipHex: string | null;
+    const quorum = network.rpcQuorum ?? 1;
+    const calldata = `${SELECTOR}${b.recipientAddress.slice(2).padStart(64, "0")}${BigInt(b.amountRaw).toString(16).padStart(64, "0")}`;
+    const balanceData = `${BALANCE_OF_SELECTOR}${b.consumerAddress.slice(2).padStart(64, "0")}`;
+    let nonce: number, estimate: bigint, nativeBalance: bigint, tokenBalance: bigint, tip: bigint, baseFee: bigint | null;
     try {
-      nonceHex = await client.call<string>("eth_getTransactionCount", [b.consumerAddress, "pending"]);
-      gasHex = await client.call<string>("eth_estimateGas", [{
-        from: b.consumerAddress,
-        to: b.contractAddress,
-        value: "0x0",
-        data: `${SELECTOR}${b.recipientAddress.slice(2).padStart(64, "0")}${BigInt(b.amountRaw).toString(16).padStart(64, "0")}`,
-      }]);
-      nativeHex = await client.call<string>("eth_getBalance", [b.consumerAddress, "latest"]);
-      const data = `${BALANCE_OF_SELECTOR}${b.consumerAddress.slice(2).padStart(64, "0")}`;
-      tokenHex = await client.call<string>("eth_call", [{ to: b.contractAddress, data }, "latest"]);
-      block = await client.call<unknown>("eth_getBlockByNumber", ["latest", false]);
-      tipHex = await client.call<string>("eth_maxPriorityFeePerGas", []).catch(() => null);
+      if (quorum > 1) {
+        const head = await client.headBlockQuorum(quorum);
+        const blockTag = `0x${Number(BigInt(head.number)).toString(16)}`;
+        nonce = Number(await client.quantityQuorum("eth_getTransactionCount", [b.consumerAddress, "pending"], quorum, "identical"));
+        estimate = await client.quantityQuorum("eth_estimateGas", [{ from: b.consumerAddress, to: b.contractAddress, value: "0x0", data: calldata }], quorum, "max");
+        nativeBalance = await client.quantityQuorum("eth_getBalance", [b.consumerAddress, blockTag], quorum, "identical");
+        tokenBalance = BigInt(await client.callDataQuorum(b.contractAddress, balanceData, quorum));
+        tip = await client.quantityQuorum("eth_maxPriorityFeePerGas", [], quorum, "min").catch(() => 1_000_000_000n);
+        baseFee = blockField(head, "baseFeePerGas");
+      } else {
+        nonce = Number(quantity(await client.call<string>("eth_getTransactionCount", [b.consumerAddress, "pending"]), "eth_getTransactionCount"));
+        estimate = quantity(await client.call<string>("eth_estimateGas", [{ from: b.consumerAddress, to: b.contractAddress, value: "0x0", data: calldata }]), "eth_estimateGas");
+        nativeBalance = quantity(await client.call<string>("eth_getBalance", [b.consumerAddress, "latest"]), "eth_getBalance");
+        tokenBalance = quantity(await client.call<string>("eth_call", [{ to: b.contractAddress, data: balanceData }, "latest"]), "token balanceOf");
+        const block = await client.call<unknown>("eth_getBlockByNumber", ["latest", false]);
+        baseFee = blockField(block, "baseFeePerGas");
+        const tipHex = await client.call<string>("eth_maxPriorityFeePerGas", []).catch(() => null);
+        tip = tipHex ? quantity(tipHex, "eth_maxPriorityFeePerGas") : 1_000_000_000n;
+      }
     } catch (error) {
       throw new WalletSendError("not-available", `the chain could not be read: ${String((error as Error)?.message ?? error).slice(0, 160)}`);
     }
-    const nonce = Number(quantity(nonceHex, "eth_getTransactionCount"));
     if (!Number.isSafeInteger(nonce) || nonce < 0) throw new WalletSendError("invalid", "the account nonce is out of range");
-    const estimate = quantity(gasHex, "eth_estimateGas");
     const gasLimit = estimate + estimate / 4n + 2_000n;
-    const baseFee = blockField(block, "baseFeePerGas");
     if (baseFee === null) throw new WalletSendError("not-available", "the chain did not report a base fee; EIP-1559 preview is unavailable");
-    const tip = tipHex ? quantity(tipHex, "eth_maxPriorityFeePerGas") : 1_000_000_000n;
     const maxPriorityFeePerGas = tip > 5_000_000_000n ? 5_000_000_000n : tip;
     const maxFeePerGas = baseFee * 2n + maxPriorityFeePerGas + 1_000_000_000n;
-    const nativeBalance = quantity(nativeHex, "eth_getBalance");
-    const tokenBalance = quantity(tokenHex, "token balanceOf");
     const maxGasCost = gasLimit * maxFeePerGas;
     if (nativeBalance < maxGasCost) throw new WalletSendError("insufficient", `the wallet needs about ${maxGasCost} wei for gas; it has ${nativeBalance}`);
     if (tokenBalance < BigInt(b.amountRaw)) throw new WalletSendError("insufficient", "the wallet does not hold the exact token amount for this payment");
@@ -261,20 +282,36 @@ export class WalletPaymentSender {
     // Re-read the chain immediately before the journal gate. A changed nonce or
     // a fee above the confirmed ceiling refuses instead of silently paying more.
     const client = this.client(b.chainId);
-    const nonceHex = await client.call<string>("eth_getTransactionCount", [b.consumerAddress, "pending"]);
-    if (Number(quantity(nonceHex, "eth_getTransactionCount")) !== record.preview.nonce) {
+    const network = this.wallet.registryView().network(b.chainId);
+    if (!network) throw new WalletSendError("not-available", "the payment network is not registered");
+    const quorum = network.rpcQuorum ?? 1;
+    const balanceData = `${BALANCE_OF_SELECTOR}${b.consumerAddress.slice(2).padStart(64, "0")}`;
+    let nonceNow: number, baseFeeNow: bigint | null, nativeNow: bigint, tokenNow: bigint;
+    try {
+      if (quorum > 1) {
+        const head = await client.headBlockQuorum(quorum);
+        const blockTag = `0x${Number(BigInt(head.number)).toString(16)}`;
+        nonceNow = Number(await client.quantityQuorum("eth_getTransactionCount", [b.consumerAddress, "pending"], quorum, "identical"));
+        baseFeeNow = blockField(head, "baseFeePerGas");
+        nativeNow = await client.quantityQuorum("eth_getBalance", [b.consumerAddress, blockTag], quorum, "identical");
+        tokenNow = BigInt(await client.callDataQuorum(b.contractAddress, balanceData, quorum));
+      } else {
+        nonceNow = Number(quantity(await client.call<string>("eth_getTransactionCount", [b.consumerAddress, "pending"]), "eth_getTransactionCount"));
+        baseFeeNow = blockField(await client.call<unknown>("eth_getBlockByNumber", ["latest", false]), "baseFeePerGas");
+        nativeNow = quantity(await client.call<string>("eth_getBalance", [b.consumerAddress, "latest"]), "eth_getBalance");
+        tokenNow = quantity(await client.call<string>("eth_call", [{ to: b.contractAddress, data: balanceData }, "latest"]), "token balanceOf");
+      }
+    } catch (error) {
+      throw new WalletSendError("not-available", `the chain could not be re-read: ${String((error as Error)?.message ?? error).slice(0, 160)}`);
+    }
+    if (nonceNow !== record.preview.nonce) {
       throw new WalletSendError("nonce-changed", "the account nonce changed since the preview; preview again");
     }
-    const block = await client.call<unknown>("eth_getBlockByNumber", ["latest", false]);
-    const baseFee = blockField(block, "baseFeePerGas");
-    if (baseFee === null) throw new WalletSendError("not-available", "the chain did not report a base fee; preview again");
-    const required = baseFee * 2n + BigInt(record.preview.maxPriorityFeePerGas) + 1_000_000_000n;
+    if (baseFeeNow === null) throw new WalletSendError("not-available", "the chain did not report a base fee; preview again");
+    const required = baseFeeNow * 2n + BigInt(record.preview.maxPriorityFeePerGas) + 1_000_000_000n;
     if (required > BigInt(record.preview.maxFeePerGas)) throw new WalletSendError("fee-changed", "the required fee is above the previewed ceiling; preview again");
-    const nativeHex = await client.call<string>("eth_getBalance", [b.consumerAddress, "latest"]);
-    if (quantity(nativeHex, "eth_getBalance") < BigInt(record.preview.maxGasCostWei)) throw new WalletSendError("insufficient", "the wallet no longer has the previewed gas balance");
-    const data = `${BALANCE_OF_SELECTOR}${b.consumerAddress.slice(2).padStart(64, "0")}`;
-    const tokenHex = await client.call<string>("eth_call", [{ to: b.contractAddress, data }, "latest"]);
-    if (quantity(tokenHex, "token balanceOf") < BigInt(b.amountRaw)) throw new WalletSendError("insufficient", "the wallet no longer holds the exact token amount");
+    if (nativeNow < BigInt(record.preview.maxGasCostWei)) throw new WalletSendError("insufficient", "the wallet no longer has the previewed gas balance");
+    if (tokenNow < BigInt(b.amountRaw)) throw new WalletSendError("insufficient", "the wallet no longer holds the exact token amount");
 
     let reservation;
     try {

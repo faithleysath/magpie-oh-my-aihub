@@ -250,10 +250,13 @@ describe("visible dialogs and panels carry no implementation terms", () => {
       schema: "ohmyaihub.network-local/v1", at: "2026-11-01T00:00:00Z", available: true, configured: true, reason: null,
       product: {
         networks: [
-          { chainId: 56, displayName: "BNB Smart Chain", support: "read-only", receivable: true, nativeSymbol: "BNB", nativeDecimals: 18, blockExplorer: "https://bscscan.com" },
-          { chainId: 8453, displayName: "Base", support: "read-only", receivable: true, nativeSymbol: "ETH", nativeDecimals: 18, blockExplorer: "https://basescan.org" },
+          { chainId: 56, displayName: "BNB Smart Chain", support: "credit", receivable: true, nativeSymbol: "BNB", nativeDecimals: 18, blockExplorer: "https://bscscan.com" },
+          { chainId: 8453, displayName: "Base", support: "credit", receivable: true, nativeSymbol: "ETH", nativeDecimals: 18, blockExplorer: "https://basescan.org" },
         ],
-        assets: [{ assetId: "eip155:8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", chainId: 8453, contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", symbol: "USDC", decimals: 6, issuerType: "native-issuer", credit: false }],
+        assets: [
+          { assetId: "eip155:56:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", chainId: 56, contractAddress: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", symbol: "USDC", decimals: 18, issuerType: "bridged", credit: true },
+          { assetId: "eip155:8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", chainId: 8453, contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", symbol: "USDC", decimals: 6, issuerType: "native-issuer", credit: true },
+        ],
       },
       receiving: { providerId: "local-node", chainIds: [], updatedAt: null, available: true, errorCode: null },
       watchAddresses: [], lastBalance: null, readOnly: true, creditEligible: false, usdValue: null,
@@ -264,8 +267,9 @@ describe("visible dialogs and panels carry no implementation terms", () => {
       const text = visibleText(env.nodes.get("wallet-network-panel"));
       expect(text).toContain("BSC");
       expect(text).toContain("Base");
-      expect(text).toContain("只查询余额，不能付款或充值");
-      expect(text).toContain("不会自动增加可用额度");
+      expect(text).toContain("BSC 与 Base 生产网络");
+      expect(text).toContain("不会自动增加额度");
+      expect(text).toContain("按 1 美元面值计入额度");
       expect(text).not.toContain("链 56");
       expect(text).not.toContain("链 8453");
       expect(bannedIn(text)).toEqual([]);

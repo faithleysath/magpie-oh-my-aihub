@@ -86,7 +86,7 @@ export class ConsoleWallet {
   }
   private enabledNetwork(w:Wallet,value:unknown):number {
     const id=integer(value,"网络"),net=w.registryView().network(id);
-    if(!net?.enabled||net.networkType!=="testnet")return walletBad("请选择已启用的测试网络");
+    if(!net?.enabled||net.support!=="credit")return walletBad("请选择已启用的收款网络");
     return id;
   }
   private consumer(id: unknown) {
@@ -195,7 +195,7 @@ export class ConsoleWallet {
         case "wallet-refresh":walletFields(input,["consumerId","probeRpc"]);return {wallet:await this.refresh(input.consumerId===undefined?undefined:this.consumer(input.consumerId).consumerId,input.probeRpc===undefined?false:boolean(input.probeRpc))};
         case "wallet-network":{
           walletFields(input,["chainId","enabled","rpcEndpoints"]);const w=this.wallet(), chainId=integer(input.chainId,"网络");
-          const current=w.registryView().network(chainId);if(!current||current.networkType!=="testnet")return walletBad("只能配置已登记的测试网络");
+          const current=w.registryView().network(chainId);if(!current||current.support!=="credit")return walletBad("只能配置已登记的收款网络");
           const enabled=input.enabled===undefined?current.enabled:boolean(input.enabled);
           let endpoints=current.rpcEndpoints;
           if(input.rpcEndpoints!==undefined){if(!Array.isArray(input.rpcEndpoints)||input.rpcEndpoints.length>8||input.rpcEndpoints.some(v=>typeof v!=="string"||v.length>2048))return walletBad("RPC 地址列表无效");endpoints=(input.rpcEndpoints as string[]).map(v=>v.trim());for(const url of endpoints){try{const u=new URL(url);if(!["http:","https:"].includes(u.protocol)||u.username||u.password||u.hash)throw new Error();}catch{return walletBad("RPC 需要不含登录信息的 HTTP 或 HTTPS 地址");}}}
@@ -214,7 +214,7 @@ export class ConsoleWallet {
           const chainId=integer(input.chainId,"网络"),contractAddress=walletAddress(input.contractAddress),symbol=walletText(input.symbol,"符号",32),name=walletText(input.name,"名称",100),expectedDecimals=integer(input.expectedDecimals,"精度",0,36),nanosPerToken=walletText(input.nanosPerToken,"测试兑换率",40),pricingNote=walletText(input.pricingNote,"说明",300);
           if(!/^\d+$/.test(nanosPerToken)||BigInt(nanosPerToken)<=0n||BigInt(nanosPerToken)>BigInt(Number.MAX_SAFE_INTEGER))return walletBad("测试兑换率必须是有效正整数 nano-USD");
           if(!/^[A-Za-z0-9 ._-]{1,32}$/.test(symbol)||(!/^(Mock|Test|t)/i.test(symbol)&&!/mock|test/i.test(name)))return walletBad("代币名称或符号必须明确标记为 Mock/Test");
-          const w=this.wallet();this.enabledNetwork(w,chainId);
+          const w=this.wallet();const assetNetwork=w.registryView().network(chainId);if(!assetNetwork?.enabled||assetNetwork.networkType!=="testnet")return walletBad("测试代币只能登记在已启用的测试网络");
           let asset:Awaited<ReturnType<Wallet["registerTestAsset"]>>;
           try{asset=await w.registerTestAsset({chainId,contractAddress,symbol,name,expectedDecimals,nanosPerToken,pricingNote});}
           catch(e){if(e instanceof Error&&/reports .* decimals|did not answer decimals/.test(e.message))return walletBad("合约报告的精度与填写内容不符，未登记代币");throw e;}
@@ -261,7 +261,7 @@ export class ConsoleWallet {
         case "wallet-statement-preview":{
           walletFields(input,["document"]);const raw=boundedWalletDocument(input.document,STATEMENT_DOCUMENT_LIMIT);if(raw.statement)walletFields(raw,["statement","digest"]);const verified=verifyStatement(raw);if(!verified.ok)return walletBad("账单摘要或内容校验失败");const statement=raw.statement?raw:{statement:raw,digest:raw.digest};if(this.service.config()?.nodeId&&statement.statement.consumerId!==this.service.config()?.nodeId)return walletBad("账单属于另一消费者节点");return {statement,digestVerified:true,signed:false};
         }
-        case "wallet-scan":walletFields(input,["chainId"]);{const chainId=integer(input.chainId,"网络");const net=this.wallet().registryView().network(chainId);if(!net?.enabled||net.networkType!=="testnet")return walletBad("请选择已启用的测试网络");const scan=await this.wallet().scanNow(chainId);return {scan:scrub(scan),wallet:await this.refresh()};}
+        case "wallet-scan":walletFields(input,["chainId"]);{const chainId=integer(input.chainId,"网络");const net=this.wallet().registryView().network(chainId);if(!net?.enabled||net.support!=="credit")return walletBad("请选择已启用的收款网络");const scan=await this.wallet().scanNow(chainId);return {scan:scrub(scan),wallet:await this.refresh()};}
         case "wallet-anomaly-resolve":walletFields(input,["id","note"]);{const w=this.wallet(),id=integer(input.id,"异常编号"),note=walletText(input.note,"审计说明",500);if(!w.chainStore().anomalies().some(a=>a.id===id&&!a.resolvedAt))return walletBad("请选择未处理的异常记录");w.chainStore().resolveAnomaly(id,note);return {resolved:true,wallet:this.snapshot()};}
         case "wallet-statement":walletFields(input,["consumerId"]);{const consumerId=this.consumer(input.consumerId).consumerId;const statement=await this.service.walletStatement(consumerId);if(!statement)return walletBad("钱包账单暂不可读取");if(Buffer.byteLength(JSON.stringify(statement))>STATEMENT_DOCUMENT_LIMIT)return walletBad("账单超过 48 KiB 的浏览器交接限制，请保留完整历史记录；未导出截断账单");return {statement,wallet:this.snapshot()};}
         case "accounting-refresh":walletFields(input,["consumerId"]);{if(input.consumerId!==undefined)await this.service.checkConsoleConsumer(this.consumer(input.consumerId).consumerId);else await this.service.accountingTick();return {accounting:scrub(this.service.accountingStatus()),wallet:await this.refresh(input.consumerId as string|undefined)};}

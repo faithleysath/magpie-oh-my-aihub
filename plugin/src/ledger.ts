@@ -22,7 +22,6 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSy
 import { dirname, join, resolve } from "node:path";
 import { magpieDataDir, statePath } from "./paths.ts";
 import { costNanos, parsePriceSnapshot, type PriceSnapshot, type UsageTokens } from "./pricing.ts";
-import { assertCreditSourceNotMainnet } from "./mainnet-gate.ts";
 import { CREDIT_CHAIN_ALLOWLIST } from "./networks.ts";
 import type { ChainStore } from "./chainstore.ts";
 
@@ -139,6 +138,8 @@ export interface LedgerBalance {
   /** historical fact: all applied deposits, including unknown-provenance rows */
   depositedNanos: number;
   consumedNanos: number;
+  /** append-only chain reversals (a credited deposit whose block was removed) */
+  reversedNanos: number;
   balanceNanos: number;
   overdraftNanos: number;
   availableNanos: number;
@@ -290,6 +291,14 @@ CREATE TABLE IF NOT EXISTS deposits (
   error TEXT
 );
 CREATE INDEX IF NOT EXISTS deposits_by_consumer ON deposits(consumer_id, created_at);
+CREATE TABLE IF NOT EXISTS deposit_reversals (
+  deposit_id TEXT PRIMARY KEY,
+  consumer_id TEXT NOT NULL,
+  amount_nanos INTEGER NOT NULL CHECK (amount_nanos > 0),
+  reason TEXT NOT NULL,
+  reversed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS deposit_reversals_by_consumer ON deposit_reversals(consumer_id, reversed_at);
 CREATE TABLE IF NOT EXISTS consumption (
   id TEXT PRIMARY KEY,
   consumer_id TEXT NOT NULL,
@@ -718,9 +727,6 @@ export class Ledger {
     assetId?: string | null;
     at?: string;
   }): { deposit: LedgerDeposit; created: boolean } {
-    // A second, durable mainnet gate: no future watcher/CLI bug can book a
-    // `chain:56` or `chain:8453` credit even if it reaches the ledger directly.
-    assertCreditSourceNotMainnet(input.source);
     if (!Number.isInteger(input.amountNanos) || input.amountNanos <= 0) throw new Error("a deposit must be a positive integer amount");
     const derived = classifyDepositSource(input.source);
     if (input.fundsClass !== undefined && !isKnownFundsClass(input.fundsClass)) {
@@ -900,23 +906,58 @@ export class Ledger {
     const con = this.db
       .query("SELECT COALESCE(SUM(amount_nanos),0) AS n FROM consumption WHERE consumer_id=?")
       .get(consumerId) as { n: number };
+    const rev = this.db
+      .query("SELECT COALESCE(SUM(amount_nanos),0) AS n FROM deposit_reversals WHERE consumer_id=?")
+      .get(consumerId) as { n: number };
     const applied = this.db
       .query("SELECT id,source,funds_class,amount_nanos FROM deposits WHERE consumer_id=? AND status='applied'")
       .all(consumerId) as { id: string; source: string; funds_class: string | null; amount_nanos: number }[];
     const unreviewedNanos = applied
       .filter((r) => storedFundsClass({ source: r.source, funds_class: r.funds_class }) === "unknown")
       .reduce((sum, r) => sum + r.amount_nanos, 0);
-    const balanceNanos = dep.n - con.n;
-    const creditableAvailableNanos = Math.max(dep.n - unreviewedNanos - con.n, 0);
+    const balanceNanos = dep.n - con.n - rev.n;
+    const creditableAvailableNanos = Math.max(dep.n - unreviewedNanos - con.n - rev.n, 0);
     return {
       depositedNanos: dep.n,
       consumedNanos: con.n,
+      reversedNanos: rev.n,
       balanceNanos,
       overdraftNanos: Math.max(-balanceNanos, 0),
       availableNanos: Math.max(balanceNanos, 0),
       unreviewedNanos,
       creditableAvailableNanos,
     };
+  }
+
+  /**
+   * Records that a credited chain deposit was removed by a reorg. The deposit
+   * row and its amount are left exactly as they were (history is append-only);
+   * a reversal row reduces what the consumer can spend and may create an
+   * overdraft. Idempotent by deposit id, so a rescan cannot double-count it.
+   */
+  reverseChainDeposit(input: { depositId: string; consumerId: string; reason: string }): { reversed: boolean; amountNanos: number } {
+    if (!input.reason.trim()) throw new Error("a chain reversal needs a reason");
+    return this.tx(() => {
+      const d = this.deposit(input.depositId);
+      if (!d) throw new Error(`no deposit ${input.depositId}`);
+      if (d.consumerId !== input.consumerId) throw new Error(`deposit ${input.depositId} belongs to ${d.consumerId}, not ${input.consumerId}`);
+      if (d.status !== "applied") throw new Error(`deposit ${input.depositId} is ${d.status}; only an applied deposit can be reversed`);
+      if (d.fundsClass !== "chain") throw new Error(`deposit ${input.depositId} is a ${d.fundsClass} deposit; the chain reversal path cannot touch it`);
+      const existing = this.db.query("SELECT amount_nanos FROM deposit_reversals WHERE deposit_id=?").get(input.depositId) as { amount_nanos: number } | null;
+      if (existing) return { reversed: false, amountNanos: Number(existing.amount_nanos) };
+      const at = nowIso();
+      this.db
+        .query("INSERT INTO deposit_reversals(deposit_id,consumer_id,amount_nanos,reason,reversed_at) VALUES(?,?,?,?,?)")
+        .run(input.depositId, input.consumerId, d.amountNanos, input.reason.slice(0, 500), at);
+      this.event(input.consumerId, "chain-deposit-reversal", {
+        depositId: input.depositId,
+        amountNanos: d.amountNanos,
+        chainId: d.chainId,
+        assetId: d.assetId,
+        reason: input.reason.slice(0, 500),
+      });
+      return { reversed: true, amountNanos: d.amountNanos };
+    });
   }
 
   /** Read-only amount of one consumption row, or null when it does not exist. */

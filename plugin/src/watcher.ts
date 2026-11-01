@@ -33,6 +33,7 @@ import { matchesTransfer, isExpired, type DepositIntent } from "./deposits.ts";
 import { keccak256Hex } from "./keccak.ts";
 import { usdToNanos, type PriceParts } from "./pricing.ts";
 import type { KnownFundsClass } from "./ledger.ts";
+import { assertProductionCreditAsset } from "./production-policy.ts";
 
 /** `Transfer(address,address,uint256)` — the only event this phase watches. */
 export const TRANSFER_TOPIC = keccak256Hex("Transfer(address,address,uint256)");
@@ -155,8 +156,11 @@ export function rateForDeposit(input: {
   intent: { rateNanosPerToken?: string | null; priceVersion: string };
   asset: AssetRecord;
 }): { ok: true; nanosPerToken: string; priceVersion: string } | { ok: false; reason: string } {
-  if (!input.asset.credit || input.asset.pricing.kind !== "fixed-test-rate") {
-    return { ok: false, reason: `asset ${input.asset.assetId} is not creditable; a mainnet/read-only asset has no USD rate` };
+  if (!input.asset.credit || (input.asset.pricing.kind !== "fixed-test-rate" && input.asset.pricing.kind !== "stablecoin-usd")) {
+    return { ok: false, reason: `asset ${input.asset.assetId} is not creditable; a display-only asset has no USD rate` };
+  }
+  if (input.asset.pricing.kind === "stablecoin-usd" && input.asset.pricing.nanosPerToken !== "1000000000") {
+    return { ok: false, reason: `asset ${input.asset.assetId} carries a non-face-value stablecoin rate` };
   }
   const snapshot = input.intent.rateNanosPerToken;
   if (snapshot && snapshot !== "") {
@@ -190,8 +194,14 @@ export interface CreditSink {
   }): { created: boolean };
   /** applies the deposit to a consumer's window and Magpie cap */
   applyDeposit(input: { id: string; consumerId: string; amountNanos: number }): Promise<void>;
-  /** a credited event was reverted: freeze, never silently adjust */
+  /** a credited event was reverted: freeze and record the owed reversal, never delete */
   freezeConsumer(consumerId: string, reason: string): Promise<void>;
+  /**
+   * Append an auditable reversal so the reverted credit cannot be spent. The
+   * production sink implements it; an older test sink may omit it, in which case
+   * the watcher still freezes and records the missing reversal as an anomaly.
+   */
+  reverseDeposit?(input: { depositId: string; consumerId: string; reason: string }): Promise<void>;
   /** the balance view, for the status page */
   balance(consumerId: string): { depositedNanos: number; consumedNanos: number; balanceNanos: number };
 }
@@ -256,6 +266,7 @@ export class ChainWatcher {
   private initialLookback: number;
   private now: () => Date;
   private decimalsOf: (asset: AssetRecord) => Promise<number>;
+  private readonly quorum: number;
 
   constructor(deps: WatcherDeps) {
     this.network = deps.network;
@@ -264,13 +275,16 @@ export class ChainWatcher {
     this.ledger = deps.ledger;
     this.initialLookback = deps.initialLookback ?? 5;
     this.now = deps.now ?? (() => new Date());
+    this.quorum = Number.isInteger(deps.network.rpcQuorum) && deps.network.rpcQuorum > 0 ? deps.network.rpcQuorum : 1;
     this.client =
       deps.client ??
       new Client({ chainId: deps.network.chainId, endpoints: deps.network.rpcEndpoints });
     this.decimalsOf =
       deps.decimalsOf ??
       (async (asset: AssetRecord) => {
-        const raw = await this.client.callData(asset.contractAddress, DECIMALS_SELECTOR);
+        const raw = this.quorum > 1
+          ? await this.client.callDataQuorum(asset.contractAddress, DECIMALS_SELECTOR, this.quorum)
+          : await this.client.callData(asset.contractAddress, DECIMALS_SELECTOR);
         if (raw === "0x") throw new Error(`${asset.symbol} returned no data for decimals(); it is not an ERC-20`);
         return Number(BigInt(raw));
       });
@@ -282,10 +296,14 @@ export class ChainWatcher {
     let finalizedBlock: number | null = null;
     let lastError: string | null = null;
     try {
-      await this.client.verifyChain();
-      head = await this.client.blockNumber();
-      const fin = await this.client.maybeBlock("finalized");
-      finalizedBlock = fin ? Number(BigInt(fin.number)) : null;
+      if (this.quorum > 1) await this.client.callQuorum("eth_chainId", [], this.quorum);
+      else await this.client.verifyChain();
+      head = this.quorum > 1 ? await this.client.blockNumberQuorum(this.quorum) : await this.client.blockNumber();
+      if (this.quorum > 1) finalizedBlock = await this.client.finalizedNumberQuorum(this.quorum);
+      else {
+        const fin = await this.client.maybeBlock("finalized");
+        finalizedBlock = fin ? Number(BigInt(fin.number)) : null;
+      }
     } catch (e) {
       lastError = String((e as Error).message ?? e).slice(0, 300);
     }
@@ -334,6 +352,11 @@ export class ChainWatcher {
     return this.decimalsOf(asset);
   }
 
+  /** True when this watcher is configured for production quorum reads. */
+  get quorumSize(): number {
+    return this.quorum;
+  }
+
   /**
    * One scan step: read the range, store and attribute its logs, verify anything
    * still unverified, then move whatever is final into the ledger.
@@ -363,18 +386,27 @@ export class ChainWatcher {
       partial: false,
     };
     try {
-      await this.client.verifyChain();
+      if (this.quorum > 1) await this.client.callQuorum("eth_chainId", [], this.quorum);
+      else await this.client.verifyChain();
     } catch (e) {
       const message = String((e as Error).message ?? e);
       result.errors.push(message);
       result.partial = true;
       this.store.recordScanError(chainId, message);
+      this.store.anomaly({ chainId, kind: "rpc-quorum", detail: message.slice(0, 300), at: this.now().toISOString() });
       return result;
     }
-    const head = await this.client.blockNumber().catch((e) => {
-      result.errors.push(String((e as Error).message ?? e));
-      return null;
-    });
+    let head: number | null = null;
+    try {
+      head = this.quorum > 1 ? await this.client.blockNumberQuorum(this.quorum) : await this.client.blockNumber();
+    } catch (e) {
+      const message = String((e as Error)?.message ?? e);
+      result.errors.push(message);
+      result.partial = true;
+      this.store.recordScanError(chainId, message);
+      this.store.anomaly({ chainId, kind: "rpc-quorum", detail: message.slice(0, 300), at: this.now().toISOString() });
+      return result;
+    }
     if (head === null) {
       result.partial = true;
       this.store.recordScanError(chainId, result.errors[0] ?? "no head");
@@ -400,12 +432,15 @@ export class ChainWatcher {
     while (from <= head) {
       let logs: EvmLog[];
       try {
-        logs = await this.client.logs({ address: contracts, topics: [TRANSFER_TOPIC], fromBlock: from, toBlock: to });
+        logs = this.quorum > 1
+          ? await this.client.logsQuorum({ address: contracts, topics: [TRANSFER_TOPIC], fromBlock: from, toBlock: to }, this.quorum)
+          : await this.client.logs({ address: contracts, topics: [TRANSFER_TOPIC], fromBlock: from, toBlock: to });
       } catch (e) {
         const message = String((e as Error).message ?? e);
         result.errors.push(message);
         result.partial = true;
         this.store.recordScanError(chainId, message);
+        this.store.anomaly({ chainId, kind: "rpc-quorum", detail: message.slice(0, 300), at: this.now().toISOString() });
         break;
       }
       result.logs += logs.length;
@@ -417,7 +452,7 @@ export class ChainWatcher {
           this.store.anomaly({ chainId, kind: "bad-log", detail: r, at: this.now().toISOString() });
         }
       }
-      const endBlock = await this.client.block(to).catch(() => null);
+      const endBlock = await (this.quorum > 1 ? this.client.blockQuorum(to, this.quorum) : this.client.block(to)).catch(() => null);
       let committed: { created: ChainDepositEvent[]; duplicates: number };
       try {
         // One transaction: the page's events and the cursor together.
@@ -583,7 +618,7 @@ export class ChainWatcher {
     this.store.noteVerifyAttempt(event.id, this.now().toISOString());
     let receipt: Awaited<ReturnType<EvmClient["receipt"]>>;
     try {
-      receipt = await this.client.receipt(event.txHash);
+      receipt = this.quorum > 1 ? await this.client.receiptQuorum(event.txHash, this.quorum) : await this.client.receipt(event.txHash);
     } catch (e) {
       // A transport or provider error is never evidence that the payment is
       // invalid, so the event stays retryable and nothing is credited.
@@ -639,16 +674,17 @@ export class ChainWatcher {
     // including "no new blocks", so a receipt that was briefly unavailable for a
     // block that has already been scanned still resolves on the next tick.
     result.reverified += await this.verifyPending();
-    const head = await this.client.blockNumber().catch(() => null);
+    const head = await (this.quorum > 1 ? this.client.blockNumberQuorum(this.quorum) : this.client.blockNumber()).catch(() => null);
     if (head === null) {
       result.errors.push("the head could not be read while settling finality");
       result.partial = true;
       return;
     }
-    const finalized = await this.client.maybeBlock("finalized");
-    const finalizedBlock = finalized ? Number(BigInt(finalized.number)) : null;
+    const finalizedBlock = this.quorum > 1
+      ? await this.client.finalizedNumberQuorum(this.quorum).catch(() => null)
+      : await this.client.maybeBlock("finalized").then((b) => (b ? Number(BigInt(b.number)) : null));
     for (const event of this.store.pendingFinality(chainId)) {
-      const canonical = await this.client.maybeBlock(event.blockNumber);
+      const canonical = await (this.quorum > 1 ? this.client.blockQuorum(event.blockNumber, this.quorum).catch(() => null) : this.client.maybeBlock(event.blockNumber));
       if (!canonical) {
         this.store.setEventStatus(event.id, "uncertain", `block ${event.blockNumber} is not available`);
         continue;
@@ -671,8 +707,21 @@ export class ChainWatcher {
     // A credited event whose block is gone must freeze the consumer.
     for (const event of this.store.eventsByStatus("credited", 500)) {
       if (event.chainId !== chainId) continue;
-      const canonical = await this.client.maybeBlock(event.blockNumber);
-      if (canonical && canonical.hash.toLowerCase() === event.blockHash.toLowerCase()) continue;
+      const canonical = await (this.quorum > 1 ? this.client.blockQuorum(event.blockNumber, this.quorum).catch(() => null) : this.client.maybeBlock(event.blockNumber));
+      if (canonical === null) {
+        // An unreachable/contradictory RPC is not evidence of a reorg. Keep the
+        // credited row and retry; a wrongly frozen consumer is worse than a
+        // delayed check.
+        this.store.anomaly({
+          chainId,
+          kind: "finality-unavailable",
+          eventId: event.id,
+          detail: `block ${event.blockNumber} could not be re-read while checking a credited event; no reversal was applied this pass`,
+          at: this.now().toISOString(),
+        });
+        continue;
+      }
+      if (canonical.hash.toLowerCase() === event.blockHash.toLowerCase()) continue;
       this.store.setEventStatus(event.id, "reverted", `the block hash at ${event.blockNumber} is no longer ${event.blockHash}`);
       this.store.anomaly({
         chainId,
@@ -684,9 +733,11 @@ export class ChainWatcher {
       if (event.invoiceId) {
         const intent = this.store.intent(event.invoiceId);
         if (intent) {
-          await this.ledger
-            .freezeConsumer(intent.consumerId, `a credited deposit on chain ${chainId} was reverted (${event.txHash}:${event.logIndex})`)
-            .catch((e) => logger.error(`could not freeze ${intent.consumerId} after a reorg: ${String(e)}`));
+          await this.reverseAndFreeze({
+            consumerId: intent.consumerId,
+            event,
+            reason: `a credited deposit on chain ${chainId} was reverted (${event.txHash}:${event.logIndex})`,
+          });
         }
       }
     }
@@ -722,6 +773,17 @@ export class ChainWatcher {
       const asset = this.registry.asset(assetIdOf(event.chainId, event.tokenContract));
       if (!asset) {
         this.store.setEventStatus(event.id, "manualReview", "the event's token is no longer allowlisted");
+        continue;
+      }
+      // The production policy is re-checked at the credit bridge, not only when
+      // the registry was constructed: a mutated record or a future call site
+      // must not be able to credit a mock/unsupported asset.
+      try {
+        assertProductionCreditAsset(this.network, asset);
+      } catch (e) {
+        const reason = String((e as Error).message ?? e);
+        this.store.setEventStatus(event.id, "manualReview", reason);
+        this.store.anomaly({ chainId: event.chainId, kind: "production-policy", eventId: event.id, detail: reason, at: this.now().toISOString() });
         continue;
       }
       // C: the rate is the one the intent was issued at.
@@ -821,7 +883,9 @@ export class ChainWatcher {
   private async reconfirmChain(event: ChainDepositEvent): Promise<"ok" | "reverted" | "paused"> {
     let canonical: Awaited<ReturnType<EvmClient["maybeBlock"]>>;
     try {
-      canonical = await this.client.maybeBlock(event.blockNumber);
+      canonical = this.quorum > 1
+        ? await this.client.blockQuorum(event.blockNumber, this.quorum)
+        : await this.client.maybeBlock(event.blockNumber);
     } catch (e) {
       this.store.anomaly({
         chainId: event.chainId,
@@ -858,14 +922,16 @@ export class ChainWatcher {
         // consumer is frozen; nothing is deleted and no balance is rewritten.
         const intent = event.invoiceId ? this.store.intent(event.invoiceId) : null;
         if (intent) {
-          await this.ledger
-            .freezeConsumer(intent.consumerId, `a booked deposit on chain ${event.chainId} was reverted before it was applied (${event.txHash}:${event.logIndex})`)
-            .catch((e) => logger.error(`could not freeze ${intent.consumerId} after a reorg: ${String(e)}`));
+          await this.reverseAndFreeze({
+            consumerId: intent.consumerId,
+            event,
+            reason: `a booked deposit on chain ${event.chainId} was reverted before it was applied (${event.txHash}:${event.logIndex})`,
+          });
         }
       }
       return "reverted";
     }
-    const head = await this.client.blockNumber().catch(() => null);
+    const head = await (this.quorum > 1 ? this.client.blockNumberQuorum(this.quorum) : this.client.blockNumber()).catch(() => null);
     if (head === null) {
       this.store.anomaly({
         chainId: event.chainId,
@@ -876,12 +942,14 @@ export class ChainWatcher {
       });
       return "paused";
     }
-    const finalized = await this.client.maybeBlock("finalized");
+    const finalizedBlock = this.quorum > 1
+      ? await this.client.finalizedNumberQuorum(this.quorum).catch(() => null)
+      : await this.client.maybeBlock("finalized").then((b) => (b ? Number(BigInt(b.number)) : null));
     const verdict = finalityVerdict({
       policy: this.network.finality,
       eventBlock: event.blockNumber,
       head,
-      finalizedBlock: finalized ? Number(BigInt(finalized.number)) : null,
+      finalizedBlock,
     });
     if (!verdict.final) {
       // The policy is no longer satisfied (the chain rewound below the depth, or
@@ -890,6 +958,48 @@ export class ChainWatcher {
       return "paused";
     }
     return "ok";
+  }
+
+  /**
+   * Reverts the *spendable* effect of a credited deposit while keeping its
+   * history. The ledger writes an append-only reversal row (so the balance can
+   * become an overdraft and the consumer cannot spend the reverted money) and
+   * the account is frozen. A partial failure is logged and retried on the next
+   * scan: the event stays `reverted`, and the reversal is idempotent.
+   */
+  private async reverseAndFreeze(input: {
+    consumerId: string;
+    event: ChainDepositEvent;
+    reason: string;
+  }): Promise<void> {
+    const depositId = input.event.depositId ?? `chain:${input.event.id}`;
+    if (typeof this.ledger.reverseDeposit !== "function") {
+      this.store.anomaly({
+        chainId: input.event.chainId,
+        kind: "reorg-reversal",
+        eventId: input.event.id,
+        detail: "this ledger does not implement chain reversals; the deposit was not un-credited and the account will be frozen",
+        at: this.now().toISOString(),
+      });
+    } else {
+      try {
+        await this.ledger.reverseDeposit({ depositId, consumerId: input.consumerId, reason: input.reason });
+      } catch (e) {
+        logger.error(`could not record the chain reversal ${depositId}: ${String(e)}`);
+        this.store.anomaly({
+          chainId: input.event.chainId,
+          kind: "reorg-reversal",
+          eventId: input.event.id,
+          detail: `the reversal could not be recorded yet: ${String((e as Error)?.message ?? e).slice(0, 240)}`,
+          at: this.now().toISOString(),
+        });
+      }
+    }
+    try {
+      await this.ledger.freezeConsumer(input.consumerId, input.reason);
+    } catch (e) {
+      logger.error(`could not freeze ${input.consumerId} after a reorg: ${String(e)}`);
+    }
   }
 
   /** Every intent this watcher could still see paid, for the status view. */

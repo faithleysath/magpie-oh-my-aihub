@@ -1,0 +1,129 @@
+{
+  "schema": "ohmyaihub.production-fork-evidence/v1",
+  "at": "2026-11-01T06:21:11.912Z",
+  "platform": "darwin arm64",
+  "chainId": 8453,
+  "chainName": "Base",
+  "publicRpc": "https://mainnet.base.org",
+  "forkBlock": 53362356,
+  "endpoints": [
+    "http://127.0.0.1:38952",
+    "http://127.0.0.1:38953"
+  ],
+  "quorum": 2,
+  "quorumNote": "both endpoints are loopback views (two ports) of the same isolated Anvil fork; this exercises the quorum code path, not independent public providers",
+  "finality": {
+    "mode": "confirmations",
+    "confirmations": 1,
+    "reorgDepth": 1,
+    "rationale": "isolated Anvil fork: public finalized tag is not reproduced"
+  },
+  "usdc": {
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "decimals": 6,
+    "issuerType": "native-issuer",
+    "symbol": "USDC"
+  },
+  "whale": "0x3304E22DDaa22bCdC5fCa2269b418046aE7b566A",
+  "fundTx": "0xc31eb66db9a04edd7fbba272f1084d350b018057e97bc8e2211e05d224a3c08b",
+  "payer": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+  "payerFundedRaw": "5000000",
+  "recipient": "0x3d80C477021E3FA568e91C73bAEC8E806518D9a6",
+  "invoiceId": "inv_b57d9638-b2c9-4752-ad23-a3b629d4066f",
+  "quoteDigest": "0x86a594a34768d6b6bda45656c22642ef09242f5b1be74ebf35b85511b5e5bcba",
+  "signature": "0x92017d3c179a31daf7b96ffcffecdb2b4557314b0333fdeb63613dc408c96e26225726e0a80f546d05d6df95994c0047be8f81f2a1713a292bbd1c52052a07231b",
+  "amountRaw": "1000000",
+  "txHash": "0xbc6764af1be5f3a4b258bbed876fce1b881469cc6941b3e7c6bfccbc830716a2",
+  "receipt": {
+    "status": 1,
+    "blockNumber": 53362358,
+    "blockHash": "0x56f0274e7db8b3674461d089c3c4b51ddd54cbe4eb1da07b51c5000dd5aea507"
+  },
+  "scan": {
+    "chainId": 8453,
+    "fromBlock": 53362357,
+    "toBlock": 53362359,
+    "logs": 2,
+    "newEvents": 2,
+    "claimed": 1,
+    "unclaimed": 1,
+    "finalized": 1,
+    "credited": 1,
+    "reverified": 0,
+    "errors": [],
+    "partial": false
+  },
+  "chainEvent": {
+    "id": "8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913:0xbc6764af1be5f3a4b258bbed876fce1b881469cc6941b3e7c6bfccbc830716a2:0",
+    "chainId": 8453,
+    "tokenContract": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "txHash": "0xbc6764af1be5f3a4b258bbed876fce1b881469cc6941b3e7c6bfccbc830716a2",
+    "logIndex": 0,
+    "blockNumber": 53362358,
+    "blockHash": "0x56f0274e7db8b3674461d089c3c4b51ddd54cbe4eb1da07b51c5000dd5aea507",
+    "fromAddress": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    "toAddress": "0x3d80c477021e3fa568e91c73baec8e806518d9a6",
+    "amountRaw": "1000000",
+    "status": "credited",
+    "invoiceId": "inv_b57d9638-b2c9-4752-ad23-a3b629d4066f",
+    "depositId": "chain:8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913:0xbc6764af1be5f3a4b258bbed876fce1b881469cc6941b3e7c6bfccbc830716a2:0",
+    "confirmations": 1,
+    "firstSeenAt": "2026-11-01T06:21:11.448Z",
+    "updatedAt": "2026-11-01T06:21:11.911Z",
+    "finalizedAt": "2026-11-01T06:21:11.802Z",
+    "creditedAt": "2026-11-01T06:21:11.911Z",
+    "reason": "credited 1000000000 nanos at stablecoin-usd:8453:circle-usdc:v1",
+    "observations": 1,
+    "rateNanosPerToken": "1000000000",
+    "rateVersion": "stablecoin-usd:8453:circle-usdc:v1",
+    "creditedNanos": 1000000000,
+    "verifyAttempts": 1
+  },
+  "intent": {
+    "status": "matched",
+    "invoiceId": "inv_b57d9638-b2c9-4752-ad23-a3b629d4066f",
+    "payerAddress": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    "chainId": 8453,
+    "assetId": "eip155:8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "amountRaw": "1000000"
+  },
+  "ledger": {
+    "depositedNanos": 1010000000,
+    "consumedNanos": 0,
+    "reversedNanos": 0,
+    "balanceNanos": 1010000000,
+    "overdraftNanos": 0,
+    "availableNanos": 1010000000,
+    "unreviewedNanos": 0,
+    "creditableAvailableNanos": 1010000000
+  },
+  "consumer": {
+    "capUsd": 1.01,
+    "openingCap": 0.01,
+    "priceVersion": "5efc98cec88230c99b1afb3a65e77daf6075309fc6c2f6385e6e87d862ee6de6",
+    "models": [
+      "lab/model"
+    ]
+  },
+  "magpie": {
+    "version": "0.1.2516",
+    "gateway": "127.0.0.1:39916",
+    "gatewayKeyId": "efb1165327165784276ca525",
+    "limit": {
+      "period": "days",
+      "days": 3650,
+      "start": "2026-11-01T14:21:11.08559+08:00",
+      "reset": "2036-10-29T14:21:11.08559+08:00",
+      "calls": 0,
+      "tokens": 0,
+      "cost": 0,
+      "tokenLimit": 490408,
+      "costLimit": 1.01,
+      "tokensLeft": 490408,
+      "costLeft": 1.01,
+      "spent": false
+    }
+  },
+  "noRealFunds": "The only chain was an Anvil fork; the holder was impersonated on the fork only. No mainnet transaction was signed or broadcast.",
+  "sha256": "e580879344bd97f6f6ab20fb2e6738cf128d6a64394fd943e2dcdbe71abeccc1"
+}

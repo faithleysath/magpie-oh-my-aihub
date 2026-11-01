@@ -25,14 +25,14 @@ import { logger } from "./log.ts";
 import { statePath } from "./paths.ts";
 import { writeJsonAtomic } from "./store.ts";
 import type { NetworkRecord, NetworkRegistry } from "./networks.ts";
-import { assertNoMainnetCredit, isMainnetChainId } from "./mainnet-gate.ts";
+import { assertProductionCreditNetwork } from "./production-policy.ts";
 
 export type PaymentRequestCode =
   | "allowed"
   | "unknown-network"
   | "not-a-product-network"
   | "receiving-network-not-selected"
-  | "mainnet-credit-forbidden";
+  | "network-not-creditable";
 
 export interface PaymentRequestVerdict {
   allowed: boolean;
@@ -44,7 +44,8 @@ export type CreditCode =
   | "allowed"
   | "unknown-network"
   | "not-a-product-network"
-  | "receiving-network-not-selected";
+  | "receiving-network-not-selected"
+  | "network-not-creditable";
 
 export interface CreditVerdict {
   allowed: boolean;
@@ -200,10 +201,9 @@ export class ReceivingNetworkPolicy {
   }
 
   /**
-   * Payment-request policy. An unselected chain is refused; a selected mainnet is
-   * still refused because this build cannot promise a credit it is forbidden to
-   * make. The two codes are deliberately different so the UI can say which one
-   * applied.
+   * Payment-request policy. An unselected chain is refused; a selected chain
+   * must also pass the production credit policy (enabled, receivable, quorum,
+   * finality and a verified asset). BSC and Base are peers here.
    */
   paymentRequestVerdict(providerId: string, chainId: number): PaymentRequestVerdict {
     assertProviderId(providerId);
@@ -211,28 +211,28 @@ export class ReceivingNetworkPolicy {
     if (!net) {
       return { allowed: false, code: "unknown-network", reason: `chain ${chainId} is not registered` };
     }
-    if (!net.receivable) {
+    // A development testnet keeps its old direct flow: it is not a product
+    // receiving network (receivable=false) and has no product selection. A
+    // product mainnet must be receivable *and* explicitly selected.
+    const product = net.networkType === "mainnet" || net.receivable;
+    if (product && !net.receivable) {
       return {
         allowed: false,
         code: "not-a-product-network",
-        reason: `chain ${chainId} (${net.displayName}) is an internal test network, not a product receiving network`,
+        reason: `chain ${chainId} (${net.displayName}) is not a product receiving network`,
       };
     }
-    if (!this.isSelected(providerId, chainId)) {
+    if (product && !this.isSelected(providerId, chainId)) {
       return {
         allowed: false,
         code: "receiving-network-not-selected",
         reason: `收款网络 ${net.displayName} 未选择；请显式选择该网络后再发起付款请求`,
       };
     }
-    if (isMainnetChainId(chainId) || net.support !== "credit") {
-      return {
-        allowed: false,
-        code: "mainnet-credit-forbidden",
-        reason:
-          `${net.displayName} is read-only in this build: mainnet payment requests cannot be credited, sent or automatically recharged. ` +
-          `Nothing was requested; a transfer made by someone else on another chain is not blocked or credited by this node.`,
-      };
+    try {
+      assertProductionCreditNetwork(net);
+    } catch (error) {
+      return { allowed: false, code: "network-not-creditable", reason: String((error as Error)?.message ?? error) };
     }
     return { allowed: true, code: "allowed", reason: `${net.displayName} is selected and creditable` };
   }
@@ -245,31 +245,35 @@ export class ReceivingNetworkPolicy {
   }
 
   /**
-   * Event-credit policy. The hard mainnet gate runs first: no selection can turn
-   * a mainnet credit on. Then the chain must be a selected product network; a
-   * testnet credit event is not accepted through this policy (it keeps the
-   * existing watcher path unchanged).
+   * Event-credit policy. A selection is necessary but not sufficient: the chain
+   * must still pass the production policy, so a read-only/disabled record cannot
+   * be credited just because a stale selection names it.
    */
   creditVerdict(providerId: string, chainId: number): CreditVerdict {
     assertProviderId(providerId);
-    assertNoMainnetCredit({ chainId, operation: "event credit" });
     const net = this.registry.network(chainId);
     if (!net) return { allowed: false, code: "unknown-network", reason: `chain ${chainId} is not registered` };
-    if (!net.receivable) {
+    const product = net.networkType === "mainnet" || net.receivable;
+    if (product && !net.receivable) {
       return {
         allowed: false,
         code: "not-a-product-network",
-        reason: `chain ${chainId} (${net.displayName}) is an internal test network; use the testnet watcher path, not the product receiving selection`,
+        reason: `chain ${chainId} (${net.displayName}) is not a product receiving network`,
       };
     }
-    if (!this.isSelected(providerId, chainId)) {
+    if (product && !this.isSelected(providerId, chainId)) {
       return {
         allowed: false,
         code: "receiving-network-not-selected",
         reason: `收款网络 ${net.displayName} 未选择；该链上的事件不会被本节点授信`,
       };
     }
-    return { allowed: true, code: "allowed", reason: `${net.displayName} is selected` };
+    try {
+      assertProductionCreditNetwork(net);
+    } catch (error) {
+      return { allowed: false, code: "network-not-creditable", reason: String((error as Error)?.message ?? error) };
+    }
+    return { allowed: true, code: "allowed", reason: `${net.displayName} is selected and creditable` };
   }
 
   /** Throws unless an event on this chain may be credited. */

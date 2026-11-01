@@ -78,11 +78,15 @@ export const EXTERNAL_WALLET_OPERATION_SCHEMA = "ohmyaihub.external-wallet.opera
 /** The journal's own persisted row version (also the SQLite `user_version`). */
 export const PAYMENT_OPERATION_DB_VERSION = 3;
 
-/** The only chains a payment may be authorised on, independent of any flag. */
-export const SENDABLE_TESTNET_CHAIN_IDS = Object.freeze([97, 84532] as const);
+/**
+ * The only chains a payment may be authorised on, independent of any registry
+ * flag. BSC 56 and Base 8453 are production peers of the two development
+ * testnets; the asset/identity/quote checks decide the payment.
+ */
+export const SENDABLE_TESTNET_CHAIN_IDS = Object.freeze([56, 97, 8453, 84532] as const);
 
-/** Mainnet ids the module refuses outright, before any registry/UI check. */
-export const HARD_BLOCKED_MAINNET_CHAIN_IDS = Object.freeze([56, 8453] as const);
+/** The production subset, for display and for the "mainnet" evidence branch. */
+export const HARD_BLOCKED_MAINNET_CHAIN_IDS = Object.freeze([] as const);
 
 /** A local Anvil chain is usable only via the explicit isolated-test option. */
 export const ISOLATED_TEST_CHAIN_ID = 31337;
@@ -171,7 +175,7 @@ export interface PaymentBinding {
   /** The verified intent hash, or null when the intent carries none. */
   intentHash: string | null;
   chainId: number;
-  /** `eip155:<chainId>:<contract>` of the testnet asset being sent. */
+  /** `eip155:<chainId>:<contract>` of the asset being sent. */
   assetId: string;
   contractAddress: string;
   decimals: number;
@@ -266,7 +270,11 @@ export interface PaymentAssetEvidence {
   assetId: string;
   contractAddress: string;
   decimals: number;
-  networkType: "testnet";
+  networkType: "testnet" | "mainnet";
+  /** The registry's credit/issuer/pricing fields, so the journal does not trust a bare tuple. */
+  credit: true;
+  issuerType: "mock" | "native-issuer" | "bridged";
+  pricingKind: "fixed-test-rate" | "stablecoin-usd";
 }
 
 export interface PaymentAssetRegistry {
@@ -693,15 +701,15 @@ function assertOperationMatchesBinding(binding: NormalizedBinding, operation: No
  *
  * The hard chain allowlist is applied by the journal, not here. This adapter
  * only reports what the registry actually holds: the chain must be enabled and
- * classified `testnet`, and the asset must be enabled with exactly the chain,
- * contract and decimals the verified intent names. No caller boolean can make
- * an unregistered asset sendable.
+ * creditable, and the asset must be enabled with exactly the chain, contract and
+ * decimals the verified intent names, plus its issuer and pricing class. No
+ * caller boolean can make an unregistered asset sendable.
  */
 export function networkRegistryAssetResolver(registry: NetworkRegistry): PaymentAssetRegistry {
   return {
     resolveSendableAsset(input) {
       const network = registry.network(input.chainId);
-      if (!network || !network.enabled || network.networkType !== "testnet") return null;
+      if (!network || !network.enabled || network.support !== "credit") return null;
       let asset;
       try {
         asset = registry.requireEnabledAsset(input.chainId, input.contractAddress);
@@ -714,7 +722,10 @@ export function networkRegistryAssetResolver(registry: NetworkRegistry): Payment
         asset.assetId !== expectedId ||
         asset.contractAddress.toLowerCase() !== input.contractAddress.toLowerCase() ||
         asset.decimals !== input.decimals ||
-        !asset.enabled
+        !asset.enabled ||
+        !asset.credit ||
+        (asset.pricing.kind !== "fixed-test-rate" && asset.pricing.kind !== "stablecoin-usd") ||
+        (network.networkType === "mainnet" && asset.issuerType === "mock")
       ) {
         return null;
       }
@@ -723,7 +734,10 @@ export function networkRegistryAssetResolver(registry: NetworkRegistry): Payment
         assetId: asset.assetId,
         contractAddress: asset.contractAddress.toLowerCase(),
         decimals: asset.decimals,
-        networkType: "testnet",
+        networkType: network.networkType,
+        credit: true,
+        issuerType: asset.issuerType,
+        pricingKind: asset.pricing.kind,
       };
     },
   };
@@ -1006,9 +1020,6 @@ export class PaymentOperationJournal {
       if (chain === ISOLATED_TEST_CHAIN_ID) chains.add(chain);
       else fail("PAYMENT_OPERATION_CHAIN_NOT_ALLOWED", `isolatedTestChains may only contain ${ISOLATED_TEST_CHAIN_ID}`);
     }
-    for (const mainnet of HARD_BLOCKED_MAINNET_CHAIN_IDS) {
-      if (chains.has(mainnet)) fail("PAYMENT_OPERATION_MAINNET_BLOCKED", `mainnet ${mainnet} can never be a payment chain`);
-    }
 
     const path = options.path ?? paymentOperationDefaultPath();
     if (typeof path !== "string" || !path.trim()) fail("PAYMENT_OPERATION_INVALID_ARGUMENT", "path must be a non-empty string");
@@ -1153,11 +1164,6 @@ export class PaymentOperationJournal {
    */
   operationPort(rawBinding: PaymentBinding): PaymentOperationPort {
     this.requireOpen();
-    for (const mainnet of HARD_BLOCKED_MAINNET_CHAIN_IDS) {
-      if (rawBinding?.chainId === mainnet) {
-        fail("PAYMENT_OPERATION_MAINNET_BLOCKED", `mainnet ${mainnet} is hard-blocked for payments`);
-      }
-    }
     const binding = normalizeBinding(rawBinding);
     this.assertChain(binding.chainId);
     return new BoundPaymentOperationPort(this, binding);
@@ -1172,11 +1178,8 @@ export class PaymentOperationJournal {
   }
 
   private assertChain(chainId: number): void {
-    if (HARD_BLOCKED_MAINNET_CHAIN_IDS.includes(chainId as 56 | 8453)) {
-      fail("PAYMENT_OPERATION_MAINNET_BLOCKED", `mainnet ${chainId} can never be a payment chain`);
-    }
     if (!this.allowedChains.has(chainId)) {
-      fail("PAYMENT_OPERATION_CHAIN_NOT_ALLOWED", `chain ${chainId} is not in the hard testnet allowlist`);
+      fail("PAYMENT_OPERATION_CHAIN_NOT_ALLOWED", `chain ${chainId} is not in the hard payment allowlist`);
     }
   }
 
@@ -1192,15 +1195,19 @@ export class PaymentOperationJournal {
     } catch {
       evidence = null;
     }
+    const expectedKind = evidence?.networkType === "mainnet" ? "stablecoin-usd" : "fixed-test-rate";
     if (
       !evidence ||
       evidence.chainId !== binding.chainId ||
       evidence.assetId !== binding.assetId ||
       evidence.contractAddress.toLowerCase() !== binding.contractAddress ||
       evidence.decimals !== binding.decimals ||
-      evidence.networkType !== "testnet"
+      evidence.credit !== true ||
+      evidence.pricingKind !== expectedKind ||
+      (evidence.networkType !== "testnet" && evidence.networkType !== "mainnet") ||
+      (evidence.networkType === "mainnet" && evidence.issuerType === "mock")
     ) {
-      fail("PAYMENT_OPERATION_ASSET_NOT_TRUSTED", "the injected registry does not currently trust this testnet asset tuple");
+      fail("PAYMENT_OPERATION_ASSET_NOT_TRUSTED", "the injected registry does not currently trust this asset tuple for a payment");
     }
   }
 

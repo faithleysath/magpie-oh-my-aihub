@@ -16,6 +16,7 @@ const RECIPIENT = "0x" + "3".repeat(40);
 const ASSET_97 = `eip155:97:${CONTRACT.toLowerCase()}`;
 const ASSET_84532 = `eip155:84532:${CONTRACT_18.toLowerCase()}`;
 const ASSET_56 = `eip155:56:${CONTRACT.toLowerCase()}`;
+const ASSET_8453 = `eip155:8453:${CONTRACT.toLowerCase()}`;
 const NOW = 1_800_000_000_000; // fixed wall clock for previews/documents
 const NOW_SEC = Math.floor(NOW / 1000);
 const HASH = "0x" + "a".repeat(64);
@@ -26,12 +27,14 @@ const registryFixture = () => ({
   networks: [
     { chainId: 97, displayName: "BSC Testnet", family: "evm", networkType: "testnet", enabled: true, support: "credit", receivable: true, nativeSymbol: "tBNB" },
     { chainId: 84532, displayName: "Base Sepolia", family: "evm", networkType: "testnet", enabled: true, support: "credit", receivable: true, nativeSymbol: "ETH" },
-    { chainId: 56, displayName: "BNB Smart Chain", family: "evm", networkType: "mainnet", enabled: false, support: "read-only", receivable: false, nativeSymbol: "BNB" },
+    { chainId: 56, displayName: "BNB Smart Chain", family: "evm", networkType: "mainnet", enabled: true, support: "credit", receivable: true, nativeSymbol: "BNB", rpcEndpoints: ["https://bsc.example"], blockExplorer: "https://bscscan.example" },
+    { chainId: 8453, displayName: "Base", family: "evm", networkType: "mainnet", enabled: true, support: "credit", receivable: true, nativeSymbol: "ETH", rpcEndpoints: ["https://base.example"], blockExplorer: "https://basescan.example" },
   ],
   assets: [
     { assetId: ASSET_97, chainId: 97, contractAddress: CONTRACT, symbol: "tMOCK6", decimals: 6, issuerType: "mock", testnetOnly: true, enabled: true, credit: true, pricing: { kind: "fixed-test-rate" } },
     { assetId: ASSET_84532, chainId: 84532, contractAddress: CONTRACT_18, symbol: "tMOCK18", decimals: 18, issuerType: "mock", testnetOnly: true, enabled: true, credit: true, pricing: { kind: "fixed-test-rate" } },
-    { assetId: ASSET_56, chainId: 56, contractAddress: CONTRACT, symbol: "MAIN", decimals: 6, issuerType: "native-issuer", testnetOnly: false, enabled: false, credit: false, pricing: { kind: "not-creditable" } },
+    { assetId: ASSET_56, chainId: 56, contractAddress: CONTRACT, symbol: "USDC", decimals: 18, issuerType: "bridged", testnetOnly: false, enabled: true, credit: true, pricing: { kind: "stablecoin-usd" } },
+    { assetId: ASSET_8453, chainId: 8453, contractAddress: CONTRACT, symbol: "USDC", decimals: 6, issuerType: "native-issuer", testnetOnly: false, enabled: true, credit: true, pricing: { kind: "stablecoin-usd" } },
     { assetId: "eip155:97:0x" + "9".repeat(40), chainId: 97, contractAddress: "0x" + "9".repeat(40), symbol: "tBAD", decimals: 99, issuerType: "mock", testnetOnly: true, enabled: true, credit: true, pricing: { kind: "fixed-test-rate" } },
     { assetId: "eip155:97:0x" + "8".repeat(40), chainId: 97, contractAddress: "0x" + "8".repeat(40), symbol: "tMYSTERY", decimals: 6, issuerType: "mystery", testnetOnly: true, enabled: true, credit: true, pricing: { kind: "fixed-test-rate" } },
     { assetId: "eip155:97:0x" + "7".repeat(40), chainId: 97, contractAddress: "0x" + "7".repeat(40), symbol: "tOFF", decimals: 6, issuerType: "mock", testnetOnly: true, enabled: false, credit: true, pricing: { kind: "fixed-test-rate" } },
@@ -208,7 +211,7 @@ function memoryOperationPort() {
   return api;
 }
 
-function sessionFixture({ provider = defaultProvider(), registry = registryFixture(), allowMainnetRead = false, allowedChainIds, timeouts = {}, now = () => NOW, info = walletInfo("Test Wallet"), operationPort = null } = {}) {
+function sessionFixture({ provider = defaultProvider(), registry = registryFixture(), allowMainnetRead = false, allowedChainIds = [56, 97, 8453, 84532], timeouts = {}, now = () => NOW, info = walletInfo("Test Wallet"), operationPort = null } = {}) {
   const wallet = { info, provider: provider.provider };
   const { discovery } = discoveryFixture({ wallets: [wallet] });
   const selection = discovery.list()[0];
@@ -253,7 +256,6 @@ describe("exact amounts and EIP-712 browser port", () => {
     expect(validateDepositDocument(valid, { now: NOW }).digest).toBe(valid.digest);
     const cases = [
       [{ ...valid, extra: true }, WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT],
-      [{ ...valid, chainId: 56 }, WALLET_ERROR.MAINNET_BLOCKED],
       [{ ...valid, chainId: 1 }, WALLET_ERROR.UNKNOWN_CHAIN],
       [{ ...valid, amount: { ...valid.amount, tokens: "1.000002" } }, WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT],
       [{ ...valid, amount: { ...valid.amount, raw: "0" } }, WALLET_ERROR.INVALID_AMOUNT],
@@ -267,6 +269,8 @@ describe("exact amounts and EIP-712 browser port", () => {
       try { validateDepositDocument(document, { now: NOW }); throw new Error("accepted invalid document"); }
       catch (error) { expect(error.code).toBe(code); }
     }
+    const mainnet = depositDocument({ chainId: 56, contractAddress: CONTRACT, decimals: 18, assetId: ASSET_56 });
+    expect(validateDepositDocument(mainnet, { now: NOW }).chainId).toBe(56);
     expect(validateDepositDocument(valid, { now: NOW, expectedIntentHash: valid.digest }).digest).toBe(valid.digest);
     expect(() => validateDepositDocument(valid, { now: NOW, expectedIntentHash: HASH })).toThrow();
   });
@@ -466,7 +470,7 @@ describe("explicit EIP-1193 connection and events", () => {
     expect(second.session.snapshot().chainId).toBe(97);
 
     const mainnet = await connectedFixture();
-    await expectCode(mainnet.session.requestSwitchChain(56, { userInitiated: true }), WALLET_ERROR.MAINNET_BLOCKED);
+    await expectCode(mainnet.session.requestSwitchChain(56, { userInitiated: true }), WALLET_ERROR.CHAIN_MISMATCH);
     expect(mainnet.session.snapshot().chainId).toBe(97);
   });
 });
@@ -566,14 +570,16 @@ describe("EIP-712 signing: exact document, local recovery and invalidation", () 
     expect(noRegistry.provider.provider.calls.some((call) => call.method === "eth_signTypedData_v4")).toBe(false);
   });
 
-  test("mainnet and malformed documents are refused before signing", async () => {
-    const { session, provider } = await connectedFixture();
-    const mainnet = depositDocument({ chainId: 56, contractAddress: CONTRACT });
-    await expectCode(session.signDeposit(mainnet, { userInitiated: true }), WALLET_ERROR.MAINNET_BLOCKED);
+  test("a mainnet document signs with the same checks; malformed documents are refused", async () => {
+    const { session, provider } = await connectedFixture({ provider: defaultProvider({ eth_chainId: async () => "0x38" }) });
+    const mainnet = depositDocument({ chainId: 56, contractAddress: CONTRACT, decimals: 18, assetId: ASSET_56 });
+    const signed = await session.signDeposit(mainnet, { userInitiated: true });
+    expect(signed.chainId).toBe(56);
     const digestBad = depositDocument();
     digestBad.typedData = { ...digestBad.typedData, message: { ...digestBad.typedData.message, recipient: "0x" + "4".repeat(40) } };
+    const beforeBad = provider.provider.calls.filter((call) => call.method === "eth_signTypedData_v4").length;
     await expectCode(session.signDeposit(digestBad, { userInitiated: true }), WALLET_ERROR.INVALID_DEPOSIT_DOCUMENT);
-    expect(provider.provider.calls.some((call) => call.method === "eth_signTypedData_v4")).toBe(false);
+    expect(provider.provider.calls.filter((call) => call.method === "eth_signTypedData_v4")).toHaveLength(beforeBad);
   });
 });
 
@@ -735,33 +741,33 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     expect(nativePoor.provider.calls.some((call) => call.method === "eth_sendTransaction")).toBe(false);
   });
 
-  test("mainnet 56/8453 previews, signatures and sends are refused before any broadcast", async () => {
+  test("mainnet 56/8453 previews and signatures use the same explicit confirmation; nothing is sent before it", async () => {
     for (const chain of [56, 8453]) {
       const provider = defaultProvider({ eth_chainId: async () => "0x" + chain.toString(16) });
-      const registry = registryFixture();
-      if (chain === 8453) registry.networks.push({ chainId: 8453, displayName: "Base", family: "evm", networkType: "mainnet", enabled: false, support: "read-only", receivable: false, nativeSymbol: "ETH" });
-      const { session } = await connectedFixture({ provider, registry });
+      const { session } = await connectedFixture({ provider });
+      const assetId = chain === 56 ? ASSET_56 : ASSET_8453;
+      const decimals = chain === 56 ? 18 : 6;
       provider.provider.calls.length = 0;
-      await expectCode(session.prepareTransfer({ userInitiated: true, ...transfer }), WALLET_ERROR.MAINNET_BLOCKED);
-      expect(provider.provider.calls.some((call) => ["eth_call", "eth_estimateGas", "eth_sendTransaction"].includes(call.method))).toBe(false);
-      const document = depositDocument({ chainId: chain, contractAddress: CONTRACT });
-      await expectCode(session.signDeposit(document, { userInitiated: true }), WALLET_ERROR.MAINNET_BLOCKED);
-      expect(provider.provider.calls.some((call) => call.method === "eth_signTypedData_v4")).toBe(false);
+      const preview = await session.prepareTransfer({ userInitiated: true, assetId, amountRaw: "1", recipientAddress: RECIPIENT });
+      expect(preview.chainId).toBe(chain);
+      expect(preview.canSend).toBe(true);
+      expect(provider.provider.calls.some((call) => call.method === "eth_sendTransaction")).toBe(false);
+      const document = depositDocument({ chainId: chain, contractAddress: CONTRACT, decimals, assetId });
+      const signed = await session.signDeposit(document, { userInitiated: true });
+      expect(signed.chainId).toBe(chain);
+      expect(provider.provider.calls.some((call) => call.method === "eth_sendTransaction")).toBe(false);
     }
   });
 
-  test("mainnet read-only is opt-in and still cannot send", async () => {
+  test("mainnet balances are credit-eligible and still read-only", async () => {
     const provider = defaultProvider({ eth_chainId: async () => "0x38" });
-    const { session } = await connectedFixture({ provider, allowMainnetRead: true });
+    const { session } = await connectedFixture({ provider });
     provider.provider.calls.length = 0;
-    const balances = await session.readBalances();
+    const balances = await session.readBalances({ assetId: ASSET_56 });
     expect(balances.native.formatted).toBe("1");
     expect(balances.readOnly).toBe(true);
-    expect(balances.creditEligible).toBe(false);
-    expect(balances.usdValue).toBeNull();
-    expect(provider.provider.calls.map((call) => call.method)).toEqual(["eth_accounts", "eth_chainId", "eth_getBalance"]);
-    await expectCode(session.prepareTransfer({ userInitiated: true, ...transfer }), WALLET_ERROR.MAINNET_BLOCKED);
-    expect(provider.provider.calls.some((call) => call.method === "eth_sendTransaction")).toBe(false);
+    expect(balances.creditEligible).toBe(true);
+    expect(new Set(provider.provider.calls.map((call) => call.method))).toEqual(new Set(["eth_accounts", "eth_chainId", "eth_call", "eth_getBalance"]));
   });
 
   test("unknown chain/token/decimals/issuer/disabled assets are refused", async () => {
@@ -783,10 +789,11 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
       const provider = defaultProvider({ eth_chainId: async () => "0x" + chain.toString(16) });
       const { session } = await connectedFixture({ provider, registry });
       provider.provider.calls.length = 0;
-      await expectCode(session.prepareTransfer({ userInitiated: true, ...transfer }), WALLET_ERROR.MAINNET_BLOCKED);
+      const assetId = chain === 56 ? ASSET_56 : ASSET_8453;
+      await expectCode(session.prepareTransfer({ userInitiated: true, assetId, amountRaw: "1", recipientAddress: RECIPIENT }), WALLET_ERROR.UNKNOWN_ISSUER);
       expect(provider.provider.calls.some((call) => ["eth_call", "eth_estimateGas", "eth_sendTransaction"].includes(call.method))).toBe(false);
-      const document = depositDocument({ chainId: chain, contractAddress: CONTRACT });
-      await expectCode(session.signDeposit(document, { userInitiated: true, allowUnregisteredAsset: true }), WALLET_ERROR.MAINNET_BLOCKED);
+      const document = depositDocument({ chainId: chain, contractAddress: CONTRACT, decimals: chain === 56 ? 18 : 6 });
+      await expectCode(session.signDeposit(document, { userInitiated: true }), WALLET_ERROR.UNKNOWN_ISSUER);
       expect(provider.provider.calls.some((call) => call.method === "eth_signTypedData_v4")).toBe(false);
     }
   });
@@ -805,9 +812,7 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     await expectCode(session.signDeposit(document, { userInitiated: true }), WALLET_ERROR.UNKNOWN_CHAIN);
     await expectCode(session.requestSwitchChain(1, { userInitiated: true }), WALLET_ERROR.UNKNOWN_CHAIN);
     expect(provider.provider.calls.some((call) => ["eth_sendTransaction", "eth_signTypedData_v4", "wallet_switchEthereumChain"].includes(call.method))).toBe(false);
-    const balances = await session.readBalances({ assetId: chain1Asset });
-    expect(balances.readOnly).toBe(true);
-    expect(balances.creditEligible).toBe(false);
+    await expectCode(session.readBalances({ assetId: chain1Asset }), WALLET_ERROR.UNKNOWN_CHAIN);
     expect(provider.provider.calls.some((call) => call.method === "wallet_switchEthereumChain")).toBe(false);
   });
 
@@ -967,7 +972,7 @@ describe("testnet ERC-20 preview, explicit send and receipts", () => {
     const balances = await session.readBalances({ assetId: ASSET_97 });
     expect(balances.native).toMatchObject({ symbol: "tBNB", decimals: 18, formatted: "1" });
     expect(balances.token).toMatchObject({ symbol: "tMOCK6", decimals: 6, formatted: "2" });
-    expect(balances.readOnly).toBe(false);
+    expect(balances.readOnly).toBe(true);
     expect(balances.creditEligible).toBe(true);
     expect(balances.usdValue).toBeNull();
     await expectCode(session.readBalances({ assetId: "eip155:97:" + "6".repeat(40) }), WALLET_ERROR.UNKNOWN_TOKEN);
@@ -982,7 +987,7 @@ describe("API surface and no persistence", () => {
     const { session } = sessionFixture();
     expect(Object.keys(session).sort()).toEqual([
       "confirmTransfer", "connect", "dispose", "getReceipt", "isCurrent", "prepareTransfer",
-      "readBalances", "refresh", "requestSwitchChain", "signDeposit", "snapshot", "subscribe",
+      "readBalances", "refresh", "requestAddChain", "requestSwitchChain", "signDeposit", "signTypedData", "snapshot", "subscribe",
     ]);
     expect(typeof session.request).toBe("undefined");
     const source = readFileSync(new URL("./external-wallet.js", import.meta.url), "utf8");
@@ -990,9 +995,9 @@ describe("API surface and no persistence", () => {
     expect(methods).toEqual([
       "eth_accounts", "eth_call", "eth_chainId", "eth_estimateGas", "eth_gasPrice",
       "eth_getBalance", "eth_getTransactionReceipt", "eth_requestAccounts", "eth_sendTransaction",
-      "eth_signTypedData_v4", "wallet_switchEthereumChain",
+      "eth_signTypedData_v4", "wallet_addEthereumChain", "wallet_switchEthereumChain",
     ]);
-    for (const forbidden of ["eth_signTransaction", "eth_sendRawTransaction", "wallet_addEthereumChain", "wallet_watchAsset", "wallet_requestPermissions"]) {
+    for (const forbidden of ["eth_signTransaction", "eth_sendRawTransaction", "wallet_watchAsset", "wallet_requestPermissions"]) {
       expect(source.includes(forbidden)).toBe(false);
     }
     expect(/\beth_sign\b/.test(source)).toBe(false);
@@ -1006,7 +1011,8 @@ describe("API surface and no persistence", () => {
     expect(isMainnetChainId(56)).toBe(true);
     expect(isMainnetChainId(8453)).toBe(true);
     expect(isMainnetChainId(97)).toBe(false);
-    expect(() => assertNoMainnetSend(56)).toThrow();
+    expect(() => assertNoMainnetSend(1)).toThrow();
+    expect(() => assertNoMainnetSend(56)).not.toThrow();
     expect(() => assertNoMainnetSend(97)).not.toThrow();
   });
 

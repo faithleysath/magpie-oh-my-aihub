@@ -541,6 +541,7 @@ function networkRecord(wallet: WalletStatus, chainId: number): NetworkRecord {
     chainId: n.chainId,
     displayName: n.displayName,
     family: "evm",
+    rpcQuorum: 1,
     networkType: n.networkType as NetworkRecord["networkType"],
     support: "credit",
     receivable: false,

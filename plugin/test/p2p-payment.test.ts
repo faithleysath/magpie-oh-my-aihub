@@ -375,18 +375,29 @@ describe("P2P payment terms and signature", () => {
 });
 
 describe("P2P payment safety gates and status", () => {
-  test("mainnet/product and unknown networks are blocked before a request/terms", async () => {
+  test("production chains are selectable at the protocol layer; a provider without the asset refuses the terms", async () => {
     const f = fixture();
-    for (const chainId of [56, 8453, 1, 31337]) {
+    // The two development testnets and the two production chains pass the
+    // protocol chain-id layer. Unknown chains are still refused before a row.
+    for (const chainId of [1, 31337]) {
       await expectCode(
         () => f.consumerCoordinator.requestPayment({ selection: selection({ chainId, asset: { assetId: assetIdOf(chainId, CONTRACT), contractAddress: CONTRACT, decimals: 6 } }) }),
         "network-gated",
       );
     }
+    for (const chainId of [56, 8453]) {
+      const requested = await f.consumerCoordinator.requestPayment({
+        selection: selection({ chainId, asset: { assetId: assetIdOf(chainId, CONTRACT), contractAddress: CONTRACT, decimals: 6 } }),
+      });
+      expect(requested.code).toBe("queued");
+    }
     expect(f.store.selection("no-such-request")).toBeNull();
+    // This fixture's provider allowlist is testnet-only, so it must reject the
+    // production asset it has not registered; the chain id itself is no longer
+    // the refusal reason.
     await expectCode(
-      () => f.provider.createTerms({ selection: selection({ chainId: 56 }), consumer: CONSUMER, requestId: randomUUID(), idempotency: "mainnet" }),
-      "network-gated",
+      () => f.provider.createTerms({ selection: selection({ chainId: 56, asset: { assetId: assetIdOf(56, CONTRACT), contractAddress: CONTRACT, decimals: 6 } }), consumer: CONSUMER, requestId: randomUUID(), idempotency: "mainnet" }),
+      "authority",
     );
   });
 

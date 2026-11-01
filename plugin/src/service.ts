@@ -864,6 +864,10 @@ export class Service {
         const rec = this.provisioner.find(consumerId);
         if (rec) await this.provisioner.pauseForChain(consumerId, reason);
       },
+      reverseDeposit: async (input) => {
+        if (!ledger) throw new Error("a chain reversal needs the durable ledger");
+        ledger.reverseChainDeposit(input);
+      },
       balance: (consumerId) => {
         if (!ledger) return { depositedNanos: 0, consumedNanos: 0, balanceNanos: 0 };
         const b = ledger.balance(consumerId);
@@ -5071,7 +5075,7 @@ export class Service {
     const et = this.supervisor.snapshot();
     const cfg = this.state.config;
     return {
-      plugin: { version: "0.5.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
+      plugin: { version: "0.6.0", pid: process.pid, dataDir: process.cwd(), startedAt: this.startedAt, stateVersion: this.state.version },
       magpie: { version: this.deps.magpieVersion, gateway: gatewayBaseURL() },
       config: {
         role: cfg ? (cfg.sharingEnabled ? "provider" : "consumer") : null,

@@ -180,10 +180,38 @@ describe("P2P payment UI actions", () => {
       expect(signCheck).toBeDefined();
       signCheck.checked = true;
       await signCheck.emit("change");
-      await find(ui.root, "button", "签署 1.5").click();
+      await find(ui.root, "button", "用本机钱包签署 1.5").click();
       await flush();
       expect(ui.calls[0].name).toBe("payment-p2p-sign");
       expect(ui.calls[0].input).toEqual({ invoiceId: "inv_22222222-2222-4222-8222-222222222222" });
+    } finally { ui.restore(); }
+  });
+
+  test("recovery lists a pending row only when opened and adopts a verified hash", async () => {
+    const hash = "0x" + "a".repeat(64);
+    const ui = mount({
+      actions: {
+        "payment-operation-pending": () => [{ invoice: "inv_22222222-2222-4222-8222-222222222222", state: "unknown", reservationId: "res-1", chainId: 84532, txHash: null, hashes: [], reason: "TIMEOUT" }],
+        "payment-operation-adopt": (input) => ({ state: "broadcast", hash: input.hash }),
+      },
+    });
+    try {
+      await flush();
+      expect(ui.calls).toEqual([]);
+      const recovery = all(ui.root, "details").find((node) => node.textContent.includes("付款恢复"));
+      expect(recovery).toBeDefined();
+      recovery.open = true;
+      await recovery.emit("toggle");
+      await flush();
+      expect(ui.calls.some((call) => call.name === "payment-operation-pending")).toBe(true);
+      expect(ui.root.textContent).toContain("res-1");
+      const input = all(ui.root, "input").find((node) => (node.placeholder || "").includes("已知交易哈希"));
+      expect(input).toBeDefined();
+      input.value = hash;
+      await find(ui.root, "button", "按已知哈希恢复").click();
+      await flush();
+      const adopt = ui.calls.find((call) => call.name === "payment-operation-adopt");
+      expect(adopt.input).toEqual({ obligationId: "inv_22222222-2222-4222-8222-222222222222", reservationId: "res-1", hash });
     } finally { ui.restore(); }
   });
 

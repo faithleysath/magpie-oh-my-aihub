@@ -40,6 +40,7 @@ import { fromHex, keccak256Hex, toHex } from "./keccak.ts";
 import { recoverAddress } from "./secp256k1.ts";
 import { typedDataDigest, type TypedData, type TypedTypes } from "./eip712.ts";
 import { assetIdOf, type AssetRecord, type NetworkRecord } from "./networks.ts";
+import { assertProductionCreditAsset } from "./production-policy.ts";
 
 export type IntentStatus = "requested" | "signed" | "matched" | "expired" | "cancelled" | "void";
 
@@ -183,8 +184,13 @@ export function buildIntent(input: BuildIntentInput): DepositIntent {
   if (network.chainId !== request.chainId) throw new Error("the network does not match the requested chain");
   if (asset.assetId !== request.assetId) throw new Error("the asset does not belong to the requested chain");
   if (asset.chainId !== network.chainId) throw new Error("the asset is registered on another chain");
-  if (!asset.credit || asset.pricing.kind !== "fixed-test-rate" || asset.testnetOnly !== true) {
-    throw new Error(`asset ${asset.assetId} is not a creditable test asset; a mainnet/read-only asset cannot back a deposit intent`);
+  if (!asset.credit || (asset.pricing.kind !== "fixed-test-rate" && asset.pricing.kind !== "stablecoin-usd")) {
+    throw new Error(`asset ${asset.assetId} is not a creditable asset; a display-only asset cannot back a deposit intent`);
+  }
+  try {
+    assertProductionCreditAsset(network, asset, { requireReceivable: false });
+  } catch (error) {
+    throw new Error(`asset ${asset.assetId} cannot back a deposit intent: ${String((error as Error)?.message ?? error)}`);
   }
   if (!/^0x[0-9a-fA-F]{40}$/.test(request.recipientAddress)) throw new Error("a deposit needs a provider receiving address");
   if (request.recipientAddress.toLowerCase() === "0x0000000000000000000000000000000000000000") {

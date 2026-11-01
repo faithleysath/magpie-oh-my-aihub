@@ -9,6 +9,7 @@ import {
   isAssetId,
   loadRegistry,
   NetworkRegistry,
+  productRegistry,
   simulationRegistry,
   NETWORK_REGISTRY_VERSION,
   RESERVED_MAINNETS,
@@ -67,8 +68,7 @@ describe("registry membership", () => {
   });
 
   test("the two chains are independent: disabling one leaves the other enabled", () => {
-    const path = tmp();
-    const r = loadRegistry(path);
+    const r = defaultRegistry();
     r.setNetworkEnabled(97, false);
     expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([84532]);
     expect(r.network(97)!.enabled).toBe(false);
@@ -87,26 +87,31 @@ describe("registry membership", () => {
     expect(again.network(97)!.enabled).toBe(true);
   });
 
-  test("mainnet records exist but can never be enabled in this phase", () => {
+  test("the two production mainnets are enabled credit peers", () => {
     expect(RESERVED_MAINNETS.map((n) => n.chainId)).toEqual([56, 8453]);
-    for (const n of RESERVED_MAINNETS) expect(n.enabled).toBe(false);
-    const r = new NetworkRegistry({ version: NETWORK_REGISTRY_VERSION, networks: [...DEFAULT_NETWORKS, ...RESERVED_MAINNETS], assets: [] });
-    expect(() => r.setNetworkEnabled(56, true)).toThrow(/mainnet/);
-    expect(() => r.setNetworkEnabled(8453, true)).toThrow(/mainnet/);
-    // They are not in the enabled set and requireEnabledNetwork refuses them.
-    expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([97, 84532]);
-    expect(() => r.requireEnabledNetwork(56)).toThrow(/mainnet|disabled/);
+    for (const n of RESERVED_MAINNETS) {
+      expect(n.enabled).toBe(true);
+      expect(n.support).toBe("credit");
+      expect(n.receivable).toBe(true);
+    }
+    const r = productRegistry();
+    expect(r.enabledNetworks().map((n) => n.chainId)).toEqual([97, 84532, 56, 8453]);
+    expect(r.requireEnabledNetwork(56).chainId).toBe(56);
+    expect(r.requireCreditableNetwork(8453).chainId).toBe(8453);
   });
 
-  test("a registry document with an enabled mainnet is refused outright", () => {
+  test("a mainnet document is accepted only with a real quorum and verified assets", () => {
     expect(
       () =>
         new NetworkRegistry({
           version: NETWORK_REGISTRY_VERSION,
-          networks: [{ ...RESERVED_MAINNETS[0]!, enabled: true, rpcEndpoints: ["https://bsc-dataseed.binance.org"] }],
+          networks: [{ ...RESERVED_MAINNETS[0]!, rpcEndpoints: ["https://bsc-dataseed.bnbdchain.org"] }],
           assets: [],
         }),
-    ).toThrow(/mainnet/);
+    ).toThrow(/distinct RPC host/);
+    const withoutAssets = new NetworkRegistry({ version: NETWORK_REGISTRY_VERSION, networks: [RESERVED_MAINNETS[0]!], assets: [] });
+    expect(withoutAssets.enabledNetworks().map((n) => n.chainId)).toEqual([56]);
+    expect(withoutAssets.allAssets()).toEqual([]);
   });
 
   test("a third EVM chain is added by data alone only through the explicit local-simulation constructor", () => {

@@ -1,0 +1,20 @@
+{
+  "schema": "ohmyaihub.production-fork-manifest/v1",
+  "at": "2026-11-01T06:21:12.224Z",
+  "results": [
+    {
+      "chainId": 56,
+      "txHash": "0xadd5dd36dbdd27bcce0d184fdeb81e8cfef839bf51632cd4e6e9109d1943fbc1",
+      "capUsd": 1.01,
+      "ledgerBalance": 1010000000,
+      "sha256": "72b95ce57e44758ef3d234c1c3f494e8f6b4841f730ccb296ae9e7e889256c54"
+    },
+    {
+      "chainId": 8453,
+      "txHash": "0xbc6764af1be5f3a4b258bbed876fce1b881469cc6941b3e7c6bfccbc830716a2",
+      "capUsd": 1.01,
+      "ledgerBalance": 1010000000,
+      "sha256": "e580879344bd97f6f6ab20fb2e6738cf128d6a64394fd943e2dcdbe71abeccc1"
+    }
+  ]
+}

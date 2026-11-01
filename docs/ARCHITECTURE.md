@@ -1,3 +1,36 @@
+# Architecture decision record — updated 2026-11-01 (Phase 10 production payments)
+
+## Phase 10 production payments — supersedes the earlier "mainnet read-only" boundary
+
+**Decision 39 — BSC 56 and Base 8453 are equal production payment networks.**
+The earlier Phase 10 C1 decision (read-only mainnet, no send/credit) is history. The
+current product has two credit networks with verified assets, real finality,
+multi-RPC quorum, the same ledger/provisioner bridge and a normal consumer/provider
+UI. The development testnets (97, 84532) remain as tools, not as the product scope.
+
+The controls that replace the blanket gate:
+
+- the registry identifies an asset by `(chainId, contract, decimals, symbol/issuer)`;
+  Base native Circle USDC and BSC Binance-Peg bridged USDC are different assets;
+- a product mainnet must have at least two distinct RPC hosts (`rpcQuorum >= 2`) and
+  a real finality policy; the watcher uses the quorum for block/receipt/log/call
+  agreement and pauses on disagreement;
+- finality is per chain: BSC's measured `finalized` tag (1 block behind on
+  2026-11-01) and Base's inherited L1 `finalized` tag (~600 blocks / ~20 min);
+- a post-credit reorg writes an append-only reversal, freezes the key and blocks
+  reactivation until the overdraft is covered;
+- the journal remains the single send gate; unknown broadcasts are not retried and
+  can be adopted only with an independently verified receipt/Transfer;
+- Magpie's budget is a soft cap. The plugin adds a token limit and a one-call
+  reserve, and states the residual overshoot rather than claiming a hard cap;
+- automatic recharge remains a reminder + one-click confirmation, not an
+  unattended signer. This does not block manual real payments.
+
+Evidence, fork commands, real Magpie 0.1.2516 readback and user-run small-amount
+steps are in [`docs/production/mainnet-payments/README.md`](production/mainnet-payments/README.md).
+
+---
+
 # Architecture decision record — updated 2026-10-30 (Phase 9 Web Console)
 
 ## Phase 9 authoritative interface decisions

@@ -35,11 +35,10 @@
       <p class="muted">只有确认由原生 Magpie 桌面启动时才自动打开；终端、SSH、无桌面环境不自动打开、不循环重试。关闭浏览器标签不会关闭节点。</p>
       <div class="actions"><button type="button" id="save" disabled>保存偏好</button><span id="saved" role="status" class="muted"></span></div>
     </section>
-    <details><summary>测试网与外部教程</summary>
-      <p>只有测试网：mock 测试代币不是 USDC、不值钱。本项目不买、不卖、不兑换、不跨链桥接任何代币。</p>
-      <ul><li><a href="https://www.bnbchain.org/en/blog/moving-from-a-centralized-exchange-to-bnb-chain" target="_blank" rel="noopener noreferrer external">BNB Chain 官方教程</a></li>
-      <li><a href="https://docs.peer.xyz/guides/zh/alipay-buy" target="_blank" rel="noopener noreferrer external">Peer 中文购买教程</a></li></ul>
-      <p class="muted">上述主网教程不适用于测试网代币。第三方独立运营，与本项目没有合作、代理或背书关系，内容与服务由第三方负责，适用范围取决于当地法律。</p>
+    <details><summary>生产网络与开发工具</summary>
+      <p>生产付款在 BSC 与 Base 上进行，只使用注册表中核验过的 USDC（BSC 为 Binance-Peg 桥接版本，Base 为 Circle 原生版本）。付款在独立控制台逐笔预览并确认，不会自动转账。</p>
+      <p>BSC Testnet 与 Base Sepolia 保留为开发工具，mock 测试代币不是 USDC、不值钱。本项目不买、不卖、不兑换、不跨链桥接任何代币，也不发行代币。</p>
+      <p class="muted">链上资产由发行方/桥接方与其合约决定；本插件不托管资金，也不代表任何第三方。</p>
     </details>
   </main>
   <script src="_magpie/bridge.js"></script>

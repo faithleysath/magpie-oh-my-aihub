@@ -51,7 +51,7 @@ const VECTOR_24_ADDRESS = "0xF278cF59F82eDcf871d630F28EcC8056f25C1cdb";
 const PAYEE = "0x1111111111111111111111111111111111111111";
 const VERIFYING_CONTRACT = "0x2222222222222222222222222222222222222222";
 
-const TEST_POLICY = createStaticChainPolicy({ 31337: "simulation", 97: "testnet", 84532: "testnet" });
+const TEST_POLICY = createStaticChainPolicy({ 31337: "simulation", 56: "mainnet", 97: "testnet", 8453: "mainnet", 84532: "testnet" });
 
 const PAYMENT_PURPOSE: WalletTypedDataPurpose = {
   id: "aihub-payment",
@@ -953,17 +953,28 @@ describe("EIP-712 preview and scoped signing", () => {
     expect(permit.remainingUses).toBe(0);
   });
 
-  test("mainnet domains are preview-only and can never be prepared/signed", async () => {
-    const { vault } = await openVault();
+  test("mainnet domains are explicitly signable when a mainnet policy and a matching purpose exist", async () => {
+    const paymentPurpose = (chainId: number): WalletTypedDataPurpose => ({
+      id: `payment-${chainId}`,
+      chainId,
+      primaryType: "Payment",
+      domainName: "Oh My AIHub",
+      domainVersion: "1",
+      verifyingContracts: [VERIFYING_CONTRACT],
+      messageTypes: { invoiceId: "bytes32", payee: "address", amount: "uint256", nonce: "uint64" },
+    });
+    const { vault } = await openVault({ purposes: [PAYMENT_PURPOSE, paymentPurpose(56), paymentPurpose(8453)] });
     for (const chainId of [56, 8453]) {
       const mainnet = paymentTypedData({ chainId });
       const preview = vault.previewTypedData(mainnet);
       expect(preview.chainId).toBe(chainId);
+      // Preview is deliberately preview-only for every chain; preparing with the
+      // matching purpose is what makes the document signable.
       expect(preview.signable).toBe(false);
       expect(preview.digest).toMatch(/^0x[0-9a-f]{64}$/);
-      expect(() => vault.prepareTypedData({ purpose: PAYMENT_PURPOSE.id, typedData: mainnet })).toThrow(
-        expect.objectContaining({ code: "signing-mainnet-forbidden" }),
-      );
+      const prepared = vault.prepareTypedData({ purpose: `payment-${chainId}`, typedData: mainnet });
+      expect(prepared.signable).toBe(true);
+      expect(prepared.digest).toBe(preview.digest);
     }
   });
 
@@ -1085,14 +1096,14 @@ describe("simulated/testnet payment signing", () => {
     expect(parsed.from).toBe(VECTOR_12_ADDRESS);
   });
 
-  test("the 56/8453 hard deny survives a permissive chain policy", async () => {
+  test("a policy that mislabels 56/8453 as testnet cannot sign them", async () => {
     const permissive = { classify: () => "testnet" as const };
     const { vault } = await openVault({ chainPolicy: permissive });
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await vault.unlock(PASSWORD);
     for (const chainId of [56, 8453]) {
       expect(() => vault.preparePayment(paymentInput({ chainId }))).toThrow(
-        expect.objectContaining({ code: "signing-mainnet-forbidden" }),
+        expect.objectContaining({ code: "signing-disabled" }),
       );
     }
   });
@@ -1118,14 +1129,13 @@ describe("simulated/testnet payment signing", () => {
     // particular BSC endpoint accepts type 2 is a separate, unperformed test.
   });
 
-  test("mainnet 56/8453 payment preparation is hard-denied before any signature", async () => {
+  test("mainnet 56/8453 payment preparation is allowed; unknown chains are refused", async () => {
     const { vault } = await openVault();
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await vault.unlock(PASSWORD);
     for (const chainId of [56, 8453]) {
-      expect(() => vault.preparePayment(paymentInput({ chainId }))).toThrow(
-        expect.objectContaining({ code: "signing-mainnet-forbidden" }),
-      );
+      const prepared = vault.preparePayment(paymentInput({ chainId }));
+      expect(prepared.chainId).toBe(chainId);
     }
     for (const chainId of [1, 10]) {
       expect(() => vault.preparePayment(paymentInput({ chainId }))).toThrow(
@@ -1309,9 +1319,12 @@ describe("F0 signing-chain allowlist", () => {
         vault.prepareTypedData({ purpose: `p${chainId}`, typedData: simpleDoc(chainId) }),
       ).toThrow(expect.objectContaining({ code: "signing-disabled" }));
     }
+    // A "wide" policy that calls everything testnet is still refused for the
+    // production chains, because the vault's internal allowlist classifies them
+    // as mainnet. Only an explicit mainnet policy can sign them.
     for (const chainId of [56, 8453]) {
       expect(() => vault.preparePayment(paymentInput({ chainId }))).toThrow(
-        expect.objectContaining({ code: "signing-mainnet-forbidden" }),
+        expect.objectContaining({ code: "signing-disabled" }),
       );
     }
   });
@@ -1520,7 +1533,7 @@ describe("built-in ERC-20 payment signing", () => {
     expect(parsed.nonce).toBe(7);
   });
 
-  test("refuses a zero amount, zero addresses, a mainnet chain and native value on the token path", async () => {
+  test("refuses a zero amount, zero addresses, an unknown chain and bad decimals on the token path; BSC/Base are allowed", async () => {
     const { vault } = await openVault();
     await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
     await vault.unlock(PASSWORD);
@@ -1528,9 +1541,11 @@ describe("built-in ERC-20 payment signing", () => {
     expect(() => vault.prepareErc20Payment(tokenInput({ recipient: "0x" + "0".repeat(40) }) as never)).toThrow(WalletVaultError);
     expect(() => vault.prepareErc20Payment(tokenInput({ tokenAddress: "0x" + "0".repeat(40) }) as never)).toThrow(WalletVaultError);
     expect(() => vault.prepareErc20Payment(tokenInput({ amountRaw: "1".repeat(90) }) as never)).toThrow(WalletVaultError);
-    expect(() => vault.prepareErc20Payment(tokenInput({ chainId: 56 }) as never)).toThrow(WalletVaultError);
-    expect(() => vault.prepareErc20Payment(tokenInput({ chainId: 8453 }) as never)).toThrow(WalletVaultError);
+    expect(() => vault.prepareErc20Payment(tokenInput({ chainId: 1 }) as never)).toThrow(WalletVaultError);
     expect(() => vault.prepareErc20Payment(tokenInput({ decimals: 37 }) as never)).toThrow(WalletVaultError);
+    for (const chainId of [56, 8453]) {
+      expect(vault.prepareErc20Payment(tokenInput({ chainId }) as never).chainId).toBe(chainId);
+    }
   });
 
   test("a permit is bound to the exact token calldata, so a later swap cannot be signed", async () => {

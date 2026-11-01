@@ -114,18 +114,18 @@ describe("network-local product projection", () => {
     expect(state.configured).toBe(true);
     expect(state.product.networks.map((n) => n.chainId)).toEqual([56, 8453]);
     expect(state.product.networks.map((n) => n.nativeSymbol)).toEqual(["BNB", "ETH"]);
-    expect(state.product.networks.every((n) => n.support === "read-only" && n.receivable)).toBe(true);
-    expect(state.product.assets).toEqual([
-      expect.objectContaining({ assetId: BASE_USDC, chainId: 8453, symbol: "USDC", decimals: 6, issuerType: "native-issuer", credit: false, pricingKind: "not-creditable" }),
-    ]);
+    expect(state.product.networks.every((n) => n.support === "credit" && n.receivable)).toBe(true);
+    expect(state.product.assets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: BASE_USDC, chainId: 8453, symbol: "USDC", decimals: 6, issuerType: "native-issuer", credit: true, pricingKind: "stablecoin-usd" }),
+      expect.objectContaining({ chainId: 56, symbol: "USDC", decimals: 18, issuerType: "bridged", credit: true, pricingKind: "stablecoin-usd" }),
+    ]));
     expect(state.receiving.chainIds).toEqual([]);
     expect(state.readOnly).toBe(true);
-    expect(state.creditEligible).toBe(false);
+    expect(state.creditEligible).toBe(true);
     expect(state.usdValue).toBeNull();
     const text = JSON.stringify(state);
     expect(text).not.toContain("mainnet.base.org");
     expect(text).not.toContain("bsc-dataseed");
-    expect(text).not.toContain("creditEligible\":true");
     wallet.close();
   });
 
@@ -178,28 +178,29 @@ describe("network-local product projection", () => {
     wallet.close();
   });
 
-  test("product projection and refresh are exactly 56/8453 even if a local registry adds read-only 999", async () => {
+  test("product projection and refresh are exactly 56/8453 even if a local registry adds a simulation chain", async () => {
     const dir = temp();
     const doc = productRegistry().document();
     doc.networks.push({
-      chainId: 999,
-      displayName: "Local read-only",
+      chainId: 31337,
+      displayName: "Local simulation",
       family: "evm",
-      networkType: "mainnet",
-      support: "read-only",
+      networkType: "testnet",
+      support: "credit",
       receivable: true,
+      rpcQuorum: 1,
       rpcEndpoints: ["https://local.invalid/rpc"],
       blockExplorer: "https://local.invalid",
       nativeSymbol: "ETH",
       nativeDecimals: 18,
-      enabled: false,
-      finality: { mode: "read-only", confirmations: 0, reorgDepth: 0, rationale: "local adapter test" },
+      enabled: true,
+      finality: { mode: "confirmations", confirmations: 1, reorgDepth: 1, rationale: "local adapter test" },
       scanIntervalSec: 2,
       maxBlockRange: 1000,
       notes: null,
-      evidence: { source: "test", url: "https://local.invalid/docs", checkedAt: "2026-10-31", note: "test" },
+      evidence: null,
     });
-    const registry = new NetworkRegistry(doc);
+    const registry = new NetworkRegistry(doc, undefined, { simulationChainIds: [31337] });
     const wallet = new Wallet({
       credit: { depositIntent: () => ({ created: true }), applyDeposit: async () => {}, freezeConsumer: async () => {}, balance: () => ({ depositedNanos: 0, consumedNanos: 0, balanceNanos: 0 }) },
       registry,
@@ -210,15 +211,15 @@ describe("network-local product projection", () => {
     const service = { config: () => ({ nodeId: "local-node" }), walletForConfiguration: () => wallet } as unknown as Service;
     expect(consoleNetworkState(service).product.networks.map((n) => n.chainId)).toEqual([56, 8453]);
     await act(service, "network-local-watch-address", { address: ADDRESS });
-    await expect(act(service, "network-local-balance-refresh", { chainId: 999, address: ADDRESS, addressSource: "watch" })).rejects.toBeInstanceOf(ConsoleInputError);
-    await expect(act(service, "network-local-receiving-set", { chainId: 999, selected: true })).rejects.toBeInstanceOf(ConsoleInputError);
-    await expect(act(service, "network-local-receiving-set", { chainId: 999, selected: false })).rejects.toBeInstanceOf(ConsoleInputError);
+    await expect(act(service, "network-local-balance-refresh", { chainId: 31337, address: ADDRESS, addressSource: "watch" })).rejects.toBeInstanceOf(ConsoleInputError);
+    await expect(act(service, "network-local-receiving-set", { chainId: 31337, selected: true })).rejects.toBeInstanceOf(ConsoleInputError);
+    await expect(act(service, "network-local-receiving-set", { chainId: 31337, selected: false })).rejects.toBeInstanceOf(ConsoleInputError);
     wallet.close();
 
     // A pre-existing non-product selection is readable but explicitly unavailable;
     // state must not silently filter it into a fake empty user selection or rewrite it.
     const seededPath = join(dir, "seeded-receiving.json");
-    const seeded = JSON.stringify({ version: 1, providers: { "local-node": { chainIds: [999], updatedAt: "2026-10-31T00:00:00Z" } } });
+    const seeded = JSON.stringify({ version: 1, providers: { "local-node": { chainIds: [31337], updatedAt: "2026-10-31T00:00:00Z" } } });
     writeFileSync(seededPath, seeded);
     const seededWallet = new Wallet({
       credit: { depositIntent: () => ({ created: true }), applyDeposit: async () => {}, freezeConsumer: async () => {}, balance: () => ({ depositedNanos: 0, consumedNanos: 0, balanceNanos: 0 }) },
@@ -229,17 +230,17 @@ describe("network-local product projection", () => {
     });
     const seededService = { config: () => ({ nodeId: "local-node" }), walletForConfiguration: () => seededWallet } as unknown as Service;
     const seededState = consoleNetworkState(seededService);
-    expect(seededState.receiving).toMatchObject({ chainIds: [999], available: false, errorCode: "receiving_selection_not_product" });
-    await expect(act(seededService, "network-local-receiving-set", { chainId: 999, selected: false })).rejects.toBeInstanceOf(ConsoleInputError);
+    expect(seededState.receiving).toMatchObject({ chainIds: [31337], available: false, errorCode: "receiving_selection_not_product" });
+    await expect(act(seededService, "network-local-receiving-set", { chainId: 31337, selected: false })).rejects.toBeInstanceOf(ConsoleInputError);
     expect(readFileSync(seededPath, "utf8")).toBe(seeded);
     seededWallet.close();
   });
 
-  test("unselected chain remains refused for payment requests and selected mainnet is still credit-forbidden", async () => {
+  test("unselected chain is refused; a selected production chain is creditable", async () => {
     const { service, wallet } = fixture();
     expect(wallet.paymentRequestVerdict("local-node", 56)).toMatchObject({ allowed: false, code: "receiving-network-not-selected" });
     await act(service, "network-local-receiving-set", { chainId: 56, selected: true });
-    expect(wallet.paymentRequestVerdict("local-node", 56)).toMatchObject({ allowed: false, code: "mainnet-credit-forbidden" });
+    expect(wallet.paymentRequestVerdict("local-node", 56)).toMatchObject({ allowed: true, code: "allowed" });
     expect(wallet.paymentRequestVerdict("local-node", 8453)).toMatchObject({ allowed: false, code: "receiving-network-not-selected" });
     expect(wallet.runningChains()).toEqual([]);
     wallet.close();
@@ -252,12 +253,12 @@ describe("network-local product projection", () => {
     await act(service, "network-local-watch-address", { address: ADDRESS });
     expect(rpc.calls).toBe(0);
     const refreshed = await act(service, "network-local-balance-refresh", { chainId: 8453, address: ADDRESS, assetId: BASE_USDC, addressSource: "watch" }) as { balance: any };
-    expect(refreshed.balance).toMatchObject({ state: "ok", chainId: 8453, readOnly: true, creditEligible: false, usdValue: null, balanceRaw: "1234567", decimals: 6 });
+    expect(refreshed.balance).toMatchObject({ state: "ok", chainId: 8453, readOnly: true, creditEligible: true, usdValue: "1.234567", balanceRaw: "1234567", decimals: 6 });
     expect(refreshed.balance.asset).toMatchObject({ assetId: BASE_USDC, symbol: "USDC" });
     expect(new Set(rpc.methods)).toEqual(new Set(["eth_chainId", "eth_blockNumber", "eth_call"]));
     const callsAfterRefresh = rpc.calls;
     const polled = consoleNetworkState(service);
-    expect(polled.lastBalance).toMatchObject({ state: "ok", balanceRaw: "1234567", creditEligible: false, usdValue: null });
+    expect(polled.lastBalance).toMatchObject({ state: "ok", balanceRaw: "1234567", creditEligible: true, usdValue: "1.234567" });
     expect(rpc.calls).toBe(callsAfterRefresh);
 
     rpc.fail = true;
@@ -279,7 +280,7 @@ describe("network-local product projection", () => {
     expect(bnb.balance).toMatchObject({ state: "ok", chainId: 56, asset: null, nativeSymbol: "BNB", balanceRaw: "42", decimals: 18, creditEligible: false, usdValue: null });
     rpc.reportedChainId = 8453;
     const usdc = await act(service, "network-local-balance-refresh", { chainId: 8453, address: ADDRESS, assetId: BASE_USDC, addressSource: "watch" }) as { balance: any };
-    expect(usdc.balance).toMatchObject({ state: "ok", chainId: 8453, asset: expect.objectContaining({ assetId: BASE_USDC, symbol: "USDC" }), creditEligible: false, usdValue: null });
+    expect(usdc.balance).toMatchObject({ state: "ok", chainId: 8453, asset: expect.objectContaining({ assetId: BASE_USDC, symbol: "USDC" }), creditEligible: true, usdValue: "1.234567" });
     wallet.close();
   });
 
@@ -315,7 +316,7 @@ describe("network-local product projection", () => {
   test("unsupported assets and wrong-chain RPC evidence are refused/unknown, never numeric", async () => {
     const { service, wallet, rpc } = fixture();
     await act(service, "network-local-watch-address", { address: ADDRESS });
-    await expect(act(service, "network-local-balance-refresh", { chainId: 56, address: ADDRESS, assetId: "eip155:56:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", addressSource: "watch" })).rejects.toBeInstanceOf(ConsoleInputError);
+    await expect(act(service, "network-local-balance-refresh", { chainId: 56, address: ADDRESS, assetId: "eip155:56:0x" + "1".repeat(40), addressSource: "watch" })).rejects.toBeInstanceOf(ConsoleInputError);
     await expect(act(service, "network-local-balance-refresh", { chainId: 8453, address: ADDRESS, assetId: BASE_USDC, addressSource: "watch", store: {} })).rejects.toBeInstanceOf(ConsoleInputError);
     rpc.reportedChainId = 56;
     const wrong = await act(service, "network-local-balance-refresh", { chainId: 8453, address: ADDRESS, assetId: BASE_USDC, addressSource: "watch" }) as { balance: any };
@@ -350,7 +351,7 @@ describe("network-local console auth boundary", () => {
     expect(noUuid.status).toBe(400);
     const ok = await h.handle(request(h, "/ui/api/action/network-local-state", { method: "POST", body: {}, cookie: session.cookie, csrf: session.csrf }));
     expect(ok.status).toBe(200);
-    expect((await ok.json() as { result: unknown }).result).toMatchObject({ schema: "ohmyaihub.network-local/v1", creditEligible: false, usdValue: null });
+    expect((await ok.json() as { result: unknown }).result).toMatchObject({ schema: "ohmyaihub.network-local/v1", creditEligible: true, usdValue: null });
     wallet.close();
   });
 });

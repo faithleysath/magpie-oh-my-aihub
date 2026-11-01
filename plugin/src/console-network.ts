@@ -60,8 +60,8 @@ export interface NetworkLocalBalanceOk {
   blockNumber: number;
   addressSource: "watch";
   readOnly: true;
-  creditEligible: false;
-  usdValue: null;
+  creditEligible: boolean;
+  usdValue: string | null;
   observedAt: string;
   expiresAt: string;
   fresh: boolean;
@@ -107,7 +107,7 @@ export interface NetworkLocalState {
   watchAddresses: string[];
   lastBalance: NetworkLocalBalance | null;
   readOnly: true;
-  creditEligible: false;
+  creditEligible: boolean;
   usdValue: null;
 }
 
@@ -139,21 +139,21 @@ function walletAddress(value: unknown): string {
 function productNetworks(wallet: Wallet): NetworkRecord[] {
   return wallet
     .productNetworks()
-    .filter((n) => (PRODUCT_CHAIN_IDS as readonly number[]).includes(n.chainId) && n.networkType === "mainnet" && n.support === "read-only");
+    .filter((n) => (PRODUCT_CHAIN_IDS as readonly number[]).includes(n.chainId) && n.networkType === "mainnet" && n.support === "credit" && n.enabled);
 }
 
 function productNetwork(wallet: Wallet, chainId: number): NetworkRecord {
   const network = productNetworks(wallet).find((n) => n.chainId === chainId);
-  if (!network) refuse(`chain ${chainId} is not an exact product read-only network`);
+  if (!network) refuse(`chain ${chainId} is not an exact product credit network`);
   return network;
 }
 
 function approvedAsset(wallet: Wallet, chainId: number, assetId: string): AssetRecord {
   const asset = wallet.registryView().asset(assetId);
-  if (!asset || !asset.enabled || asset.chainId !== chainId || asset.credit || asset.testnetOnly) {
-    refuse(`asset ${assetId} is not an approved read-only asset on chain ${chainId}`);
+  if (!asset || !asset.enabled || asset.chainId !== chainId || !asset.credit || asset.testnetOnly) {
+    refuse(`asset ${assetId} is not an approved credit asset on chain ${chainId}`);
   }
-  if (wallet.registryView().network(chainId)?.support !== "read-only") refuse(`chain ${chainId} is not read-only`);
+  if (wallet.registryView().network(chainId)?.support !== "credit") refuse(`chain ${chainId} is not a credit network`);
   return asset;
 }
 
@@ -241,7 +241,7 @@ class NetworkLocalAdapter {
           wallet
             .registryView()
             .assetsForChain(n.chainId)
-            .filter((a) => a.enabled && !a.credit && !a.testnetOnly)
+            .filter((a) => a.enabled && a.credit && (a.pricing.kind === "stablecoin-usd" || a.pricing.kind === "fixed-test-rate"))
             .map((a) => ({
               assetId: a.assetId,
               chainId: a.chainId,
@@ -256,6 +256,7 @@ class NetworkLocalAdapter {
         ),
       },
       receiving,
+      creditEligible: true,
       lastBalance: this.lastBalance ? this.withFreshness(this.lastBalance) : null,
     };
   }
@@ -282,8 +283,8 @@ class NetworkLocalAdapter {
       blockNumber: balance.blockNumber,
       addressSource: "watch",
       readOnly: true,
-      creditEligible: false,
-      usdValue: null,
+      creditEligible: balance.creditEligible,
+      usdValue: balance.usdValue,
       observedAt: balance.observedAt,
       expiresAt: new Date(Date.parse(balance.observedAt) + BALANCE_TTL_MS).toISOString(),
       fresh: true,

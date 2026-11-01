@@ -41,6 +41,7 @@ interface FakeKey {
   reset: number;
   window: string;
   calls: number;
+  tokenCap?: number;
 }
 
 class FakeMagpie {
@@ -67,13 +68,17 @@ class FakeMagpie {
     this.keys.get(id)!.models = [...models];
   }
   async setCostLimit(id: string, window: string, usd: number) {
+    await this.setLimit(id, window, { costUsd: usd });
+  }
+  async setLimit(id: string, window: string, limit: { costUsd?: number; tokens?: number }) {
     const k = this.keys.get(id)!;
     if (k.window !== window) {
       k.start = Date.now();
       k.reset = k.start + 3650 * 86_400_000;
       k.window = window;
     }
-    k.cap = usd;
+    if (limit.costUsd !== undefined) k.cap = limit.costUsd;
+    if (limit.tokens !== undefined) k.tokenCap = limit.tokens;
   }
   async limitStatus(secret: string) {
     const k = [...this.keys.values()].find((x) => x.secret === secret);
@@ -87,13 +92,24 @@ class FakeMagpie {
         days: 3650,
         start: new Date(k.start).toISOString(),
         reset: new Date(k.reset).toISOString(),
+        tokens: this.tokensUsed(k),
+        tokenLimit: k.tokenCap ?? 0,
         costLimit: k.cap,
         cost: used,
         costLeft: Math.max(k.cap - used, 0),
         calls: k.calls,
-        spent: used >= k.cap,
+        spent: used >= k.cap || (k.tokenCap !== undefined && this.tokensUsed(k) >= k.tokenCap),
       },
     } as never;
+  }
+  tokensUsed(k: FakeKey): number {
+    let tokens = 0;
+    for (const r of this.rows) {
+      if (r.callerKeyId !== k.id) continue;
+      if (Date.parse(r.t) < k.start) continue;
+      tokens += r.in + r.out;
+    }
+    return tokens;
   }
   used(k: FakeKey): number {
     let nanos = 0;
@@ -116,6 +132,7 @@ class FakeMagpie {
     const k = this.keys.get(keyId)!;
     const estimate = costNanos(BASE, { input, output, cacheRead: 0, cacheWrite: 0 }) / 1_000_000_000;
     if (k.cap > 0 && this.used(k) + estimate > k.cap) return { status: 429 };
+    if (k.tokenCap !== undefined && this.tokensUsed(k) + input + output > k.tokenCap) return { status: 429 };
     const row = { callerKeyId: keyId, t: new Date().toISOString(), in: input, out: output };
     this.rows.push(row);
     appendFileSync(this.log, JSON.stringify({ ...row, provider: "lab", model: "lab-model", cache_read: 0, cache_write: 0, status: 200 }) + "\n");
@@ -192,6 +209,7 @@ function sink(): CreditSink {
       ledger.setPaused(consumerId, `chain-reorg: ${reason}`);
       await provisioner.pauseForChain(consumerId, reason);
     },
+    reverseDeposit: async (input) => { ledger.reverseChainDeposit(input); },
     balance: (consumerId) => {
       const b = ledger.balance(consumerId);
       return { depositedNanos: b.depositedNanos, consumedNanos: b.consumedNanos, balanceNanos: b.balanceNanos };
@@ -220,6 +238,12 @@ function fakeChain(opts: { chainId: number; contract: string; height?: number })
     logIndex: string;
   }[] = [];
   let finalized = head;
+  const reorgAt = (block: number) => {
+    const b = blocks[block];
+    if (!b) throw new Error(`no block ${block}`);
+    b.hash = `0x${keccak256(`${opts.chainId}:reorg:${block}:${Math.random()}`).reduce((s, x) => s + x.toString(16).padStart(2, "0"), "")}`;
+    finalized = Math.min(finalized, block - 1);
+  };
   const addTransfer = (from: string, to: string, amount: bigint) => {
     head += 1;
     logs.push({
@@ -267,7 +291,7 @@ function fakeChain(opts: { chainId: number; contract: string; height?: number })
         return reply(null);
     }
   }) as unknown as typeof fetch;
-  return { addTransfer, fetchImpl, mine: (n = 1) => (head += n), finalize: (n: number) => (finalized = n) };
+  return { addTransfer, fetchImpl, reorgAt, mine: (n = 1) => (head += n), finalize: (n: number) => (finalized = n) };
 }
 
 function walletFor(chain: ReturnType<typeof fakeChain>, chainId: number, contract: string) {
@@ -297,7 +321,7 @@ function walletFor(chain: ReturnType<typeof fakeChain>, chainId: number, contrac
     initialLookback: 400,
     makeWatcher: () => watcher,
   });
-  return { registry, asset, network, store, watcher, wallet, credit };
+  return { registry, asset, network, store, watcher, wallet, credit, reorgAt: chain.reorgAt };
 }
 
 describe("chain deposit → ledger → Gateway Key", () => {
@@ -342,11 +366,11 @@ describe("chain deposit → ledger → Gateway Key", () => {
     expect(before.status).toBe(200);
     // Spend past the cap with real-sized calls: 500k in + 500k out costs $1.50,
     // so the second one cannot fit in what is left of $2.0001 and Magpie 429s.
-    const first = fake.call(rec.keyId!, 500_000, 500_000);
+    const first = fake.call(rec.keyId!, 400_000, 400_000);
     expect(first.status).toBe(200);
-    expect(fake.used(fake.keys.get(rec.keyId!)!)).toBeCloseTo(1.5012, 6);
-    // $2.0001 - $1.5012 = $0.4989 left, and the next call needs $1.50.
-    expect(fake.call(rec.keyId!, 500_000, 500_000).status).toBe(429);
+    expect(fake.used(fake.keys.get(rec.keyId!)!)).toBeCloseTo(1.2012, 6);
+    // $2.0001 - $1.2012 = $0.7989 left, and the next 400k/400k call needs $1.20.
+    expect(fake.call(rec.keyId!, 400_000, 400_000).status).toBe(429);
     // A call that does fit is still admitted.
     expect(fake.call(rec.keyId!, 10, 10).status).toBe(200);
 
@@ -418,7 +442,7 @@ describe("chain deposit → ledger → Gateway Key", () => {
     ctx.store.close();
   });
 
-  test("a reverted credit freezes the consumer and does not adjust the balance", async () => {
+  test("a post-credit reorg records an append-only reversal and freezes the consumer", async () => {
     await provisioner.ensure("dave", { models: [MODEL], capUsd: 0.0001 });
     const chain = fakeChain({ chainId: 97, contract: CONTRACT });
     const ctx = walletFor(chain, 97, CONTRACT);
@@ -432,12 +456,20 @@ describe("chain deposit → ledger → Gateway Key", () => {
     const event = ctx.store.eventsForChain(97)[0]!;
     expect(event.status).toBe("credited");
 
-    // The chain reorganises: the credited block is replaced.
-    ctx.store.setEventStatus(event.id, "reverted", "test: the block hash moved");
-    await sink().freezeConsumer("dave", "test: a credited deposit was reverted");
-    expect(ledger.balance("dave").depositedNanos).toBe(deposited); // not adjusted
+    // The chain reorganises: the credited block's hash changes and the watcher
+    // itself detects it on the next scan.
+    chain.reorgAt(Number(BigInt(event.blockNumber)));
+    await ctx.watcher.scan();
+    const reverted = ctx.store.eventsForChain(97).find((e) => e.id === event.id)!;
+    expect(reverted.status).toBe("reverted");
+    expect(ledger.balance("dave").depositedNanos).toBe(deposited); // history is not rewritten
+    expect(ledger.balance("dave").reversedNanos).toBe(usdToNanos(1));
+    expect(ledger.balance("dave").balanceNanos).toBe(deposited - usdToNanos(1));
     expect(ledger.account("dave")!.status).toBe("paused");
     expect(provisioner.find("dave")!.paused).not.toBeNull();
+    // A rescan cannot double-reverse.
+    await ctx.watcher.scan();
+    expect(ledger.balance("dave").reversedNanos).toBe(usdToNanos(1));
     ctx.store.close();
   });
 

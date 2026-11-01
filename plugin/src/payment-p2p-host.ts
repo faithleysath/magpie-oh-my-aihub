@@ -27,18 +27,20 @@ import {
   type PaymentPeerAuthority,
 } from "./p2p-payment.ts";
 import type { PaymentAsset, PaymentPeer, PaymentSelection, P2pAuthenticatedPaymentContext, P2pPaymentMessagePort, PaymentSigner } from "./p2p-payment-protocol.ts";
-import { PAYMENT_PRODUCT_CHAIN_IDS, PAYMENT_SIMULATION_CHAIN_IDS, paymentFail } from "./p2p-payment-protocol.ts";
+import { PAYMENT_SUPPORTED_CHAIN_IDS, paymentFail } from "./p2p-payment-protocol.ts";
 import { setPaymentObligationResolver, type TrustedObligationResolver } from "./payment-local-service.ts";
 import { WalletPaymentSender, WalletSendError, type WalletSendPreview } from "./wallet-payment-send.ts";
+import { verifyIntentSignature } from "./deposits.ts";
 import { walletLocalService } from "./wallet-local-service.ts";
 import { ConsoleInputError } from "./console-server.ts";
 import type { ConsoleActionContext } from "./console-server.ts";
-import { isMainnetChainId } from "./mainnet-gate.ts";
+import { assertProductionCreditAsset } from "./production-policy.ts";
 
 export const PAYMENT_P2P_ACTIONS = [
   "payment-p2p-state",
   "payment-p2p-request",
   "payment-p2p-sign",
+  "payment-p2p-sign-external",
   "payment-p2p-resume",
   "payment-local-send-preview",
   "payment-local-send",
@@ -47,8 +49,7 @@ export const PAYMENT_P2P_ACTIONS = [
 ] as const;
 export type PaymentP2pAction = (typeof PAYMENT_P2P_ACTIONS)[number];
 
-const SIMULATION_CHAINS = new Set<number>(PAYMENT_SIMULATION_CHAIN_IDS);
-const PRODUCT_CHAINS = new Set<number>(PAYMENT_PRODUCT_CHAIN_IDS);
+const SUPPORTED_CHAINS = new Set<number>(PAYMENT_SUPPORTED_CHAIN_IDS);
 const NODE = /^[A-Za-z0-9._:-]{1,128}$/;
 const FINGERPRINT = /^[0-9a-f]{64}$/;
 
@@ -116,10 +117,9 @@ function validateAutoPolicy(raw: unknown): PaymentAutoPolicy {
   const o = raw as Record<string, unknown>;
   const enabled = o.enabled === true;
   const chainId = o.chainId === null ? null : Number(o.chainId);
-  if (chainId !== null && (!Number.isSafeInteger(chainId) || !SIMULATION_CHAINS.has(chainId))) {
-    reject("automatic recharge can only name a simulation chain (97/84532)");
+  if (chainId !== null && (!Number.isSafeInteger(chainId) || !SUPPORTED_CHAINS.has(chainId))) {
+    reject("the reminder policy can only name a supported payment chain (56/97/8453/84532)");
   }
-  if (chainId !== null && (PRODUCT_CHAINS.has(chainId) || isMainnetChainId(chainId))) reject("mainnet automatic recharge is closed", "mainnet-blocked");
   const providerNodeId = o.providerNodeId === null ? null : text(o.providerNodeId, "providerNodeId", 128);
   if (providerNodeId !== null && !NODE.test(providerNodeId)) reject("providerNodeId is invalid");
   const providerFingerprint = o.providerFingerprint === null ? null : text(o.providerFingerprint, "providerFingerprint", 64);
@@ -226,6 +226,11 @@ export interface PaymentP2pState {
   };
   auto: PaymentAutoPolicy;
   reminder: { active: boolean; reason: string | null; providerNodeId: string | null; costLeftUsd: number | null } | null;
+  /** Public registry projection for the browser wallet's chain/asset checks. */
+  registry: {
+    networks: Array<{ chainId: number; displayName: string; networkType: string; enabled: boolean; support: string; receivable: boolean; rpcEndpoints: string[]; nativeSymbol: string; nativeDecimals: number; blockExplorer: string }>;
+    assets: Array<{ assetId: string; chainId: number; contractAddress: string; symbol: string; decimals: number; issuerType: string; testnetOnly: boolean; enabled: boolean; credit: boolean; pricingKind: string }>;
+  };
   readOnly: true;
 }
 
@@ -272,10 +277,10 @@ export class PaymentP2pHost {
     const node: PaymentPeer = { nodeId: cfg.nodeId, fingerprint: fingerprint.toLowerCase() };
     const wallet = service.requireWallet();
     const registry = wallet.registryView();
-    const networks: number[] = [...PAYMENT_SIMULATION_CHAIN_IDS];
+    const networks: number[] = [...PAYMENT_SUPPORTED_CHAIN_IDS];
     const assets: PaymentAsset[] = registry
       .enabledAssets()
-      .filter((a) => networks.includes(a.chainId) && a.enabled && a.credit && a.pricing.kind === "fixed-test-rate" && a.testnetOnly)
+      .filter((a) => networks.includes(a.chainId) && a.enabled && a.credit && (a.pricing.kind === "fixed-test-rate" || a.pricing.kind === "stablecoin-usd"))
       .map((a) => ({ assetId: a.assetId, contractAddress: a.contractAddress.toLowerCase(), decimals: a.decimals }));
     const allowedNetworks = networks.filter((chain) => assets.some((a) => a.assetId.startsWith(`eip155:${chain}:`)));
     const store = new P2pPaymentStore(statePath("p2p-payment.sqlite"));
@@ -284,7 +289,7 @@ export class PaymentP2pHost {
     // after the host started must be usable without a host restart.
     const allowedNow = () => {
       const current = wallet.registryView().enabledAssets()
-        .filter((a) => networks.includes(a.chainId) && a.enabled && a.credit && a.pricing.kind === "fixed-test-rate" && a.testnetOnly)
+        .filter((a) => networks.includes(a.chainId) && a.enabled && a.credit && (a.pricing.kind === "fixed-test-rate" || a.pricing.kind === "stablecoin-usd"))
         .map((a) => ({ assetId: a.assetId, contractAddress: a.contractAddress.toLowerCase(), decimals: a.decimals }));
       return { networks: [...new Set(current.map((a) => Number(a.assetId.split(":")[1])))].filter((n) => Number.isSafeInteger(n)), assets: current };
     };
@@ -397,23 +402,37 @@ export class PaymentP2pHost {
   }
 
   private assetFor(chainId: number, assetId: string): PaymentAsset {
-    if (!SIMULATION_CHAINS.has(chainId) || isMainnetChainId(chainId) || PRODUCT_CHAINS.has(chainId)) {
-      reject("payments are limited to the 97/84532 simulation chains", "network-gated");
+    if (!SUPPORTED_CHAINS.has(chainId)) {
+      reject("payments are limited to the supported production and development chains", "network-gated");
     }
     const asset = this.wallet.registryView().asset(assetId);
-    if (!asset || asset.chainId !== chainId || !asset.enabled || !asset.credit || asset.pricing.kind !== "fixed-test-rate") {
-      reject("the selected asset is not a registered creditable test asset", "asset-not-found");
+    if (
+      !asset ||
+      asset.chainId !== chainId ||
+      !asset.enabled ||
+      !asset.credit ||
+      (asset.pricing.kind !== "fixed-test-rate" && asset.pricing.kind !== "stablecoin-usd")
+    ) {
+      reject("the selected asset is not a registered creditable asset", "asset-not-found");
+    }
+    const network = this.wallet.registryView().network(chainId);
+    if (!network) reject("the payment network is not registered", "network-gated");
+    try {
+      assertProductionCreditAsset(network, asset);
+    } catch (error) {
+      reject(String((error as Error)?.message ?? error), "network-gated");
     }
     return { assetId: asset.assetId, contractAddress: asset.contractAddress.toLowerCase(), decimals: asset.decimals };
   }
 
   async state(): Promise<PaymentP2pState> {
     const cfg = this.service.config();
-    const assets = this.wallet.registryView().enabledAssets()
-      .filter((a) => SIMULATION_CHAINS.has(a.chainId) && a.enabled && a.credit && a.pricing.kind === "fixed-test-rate" && a.testnetOnly)
+    const registry = this.wallet.registryView();
+    const assets = registry.enabledAssets()
+      .filter((a) => SUPPORTED_CHAINS.has(a.chainId) && a.enabled && a.credit && (a.pricing.kind === "fixed-test-rate" || a.pricing.kind === "stablecoin-usd"))
       .map((a) => ({ chainId: a.chainId, assetId: a.assetId, contractAddress: a.contractAddress, decimals: a.decimals, symbol: a.symbol }));
     const receiving = this.wallet.receivingAddresses()
-      .filter((r: ReceivingAddress) => SIMULATION_CHAINS.has(r.chainId))
+      .filter((r: ReceivingAddress) => SUPPORTED_CHAINS.has(r.chainId))
       .map((r) => ({ chainId: r.chainId, address: r.address }));
     const remotes = controlRemotes().remotes.map((r) => ({
       providerNodeId: r.providerNodeId, providerFingerprint: r.providerFingerprint,
@@ -446,6 +465,32 @@ export class PaymentP2pHost {
       consumer: { remotes, obligations, pending },
       auto,
       reminder: this.reminder(auto),
+      registry: {
+        networks: registry.networks().map((n) => ({
+          chainId: n.chainId,
+          displayName: n.displayName,
+          networkType: n.networkType,
+          enabled: n.enabled,
+          support: n.support,
+          receivable: n.receivable,
+          rpcEndpoints: [...n.rpcEndpoints],
+          nativeSymbol: n.nativeSymbol,
+          nativeDecimals: n.nativeDecimals,
+          blockExplorer: n.blockExplorer,
+        })),
+        assets: registry.allAssets().map((a) => ({
+          assetId: a.assetId,
+          chainId: a.chainId,
+          contractAddress: a.contractAddress,
+          symbol: a.symbol,
+          decimals: a.decimals,
+          issuerType: a.issuerType,
+          testnetOnly: a.testnetOnly,
+          enabled: a.enabled,
+          credit: a.credit,
+          pricingKind: a.pricing.kind,
+        })),
+      },
       readOnly: true,
     };
   }
@@ -499,6 +544,47 @@ export class PaymentP2pHost {
       async sign({ typedData, digest }) {
         const signed = await walletLocalService(service).signDepositIntent({ typedData, digest }, context);
         return { signature: signed.signature, payerAddress: signed.address };
+      },
+    };
+    const result = await this.coordinator.sign(obligation.requestId, signer);
+    return Object.freeze(result);
+  }
+
+  /**
+   * Records a signature produced by the user's browser wallet. The signature
+   * must recover to the claimed payer and verify against the exact stored
+   * terms; the provider's normal signature frame path then runs. The server
+   * never trusts a browser-supplied "verified" flag.
+   */
+  async signExternal(input: Record<string, unknown>) {
+    onlyFields(input, ["invoiceId", "signature", "payerAddress"]);
+    const invoiceId = text(input.invoiceId, "invoiceId", 128);
+    const signature = text(input.signature, "signature", 140);
+    if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) reject("the wallet signature is not 65 bytes", "signature");
+    const payerAddress = text(input.payerAddress, "payerAddress", 42).toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(payerAddress)) reject("the payer address is invalid", "signature");
+    const obligation = this.store.obligationByInvoice(invoiceId);
+    if (!obligation) reject("no local payment for that invoice", "not-found");
+    if (obligation.signature) {
+      const sent = await this.coordinator.resume({ invoiceId });
+      return Object.freeze({ status: sent.status, code: sent.code, detail: sent.detail ?? null });
+    }
+    if (obligation.expiresAtMs <= Date.now()) reject("payment terms expired", "expired");
+    const registry = this.wallet.registryView();
+    const network = registry.network(obligation.terms.chainId);
+    const asset = registry.asset(obligation.terms.asset.assetId);
+    if (!network || !asset) reject("the payment network or asset is no longer registered", "not-found");
+    const checked = verifyIntentSignature({
+      intent: obligation.terms.intent,
+      network,
+      asset,
+      signature,
+      expectedPayer: payerAddress,
+    });
+    if (!checked.ok) reject(checked.reason ?? "the signature does not match the payment terms", "signature");
+    const signer: PaymentSigner = {
+      async sign() {
+        return { signature, payerAddress };
       },
     };
     const result = await this.coordinator.sign(obligation.requestId, signer);
@@ -610,6 +696,8 @@ function publicObligation(o: StoredObligation): Record<string, unknown> {
     recipientAddress: o.terms.recipientAddress,
     status: o.status,
     peerStatus: o.peerStatus,
+    typedData: o.terms.typedData,
+    digest: o.digest,
     signed: o.signature !== null,
     payerAddress: o.payerAddress,
     expiresAt: o.terms.expiresAt,
@@ -658,6 +746,9 @@ export async function paymentP2pAction(
       case "payment-p2p-sign":
         if (!context) reject("an authenticated console session is required", "session");
         return await host.sign(input, context);
+      case "payment-p2p-sign-external":
+        if (!context) reject("an authenticated console session is required", "session");
+        return await host.signExternal(input);
       case "payment-p2p-resume":
         return await host.resume(input);
       case "payment-local-send-preview":

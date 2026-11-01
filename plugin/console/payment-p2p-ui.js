@@ -1,3 +1,5 @@
+import { createExternalWallet, createWalletDiscovery, typedDataDigest } from "./external-wallet.js";
+
 /* P2P payment UI: zero-file recharge over the authenticated B channel.
  *
  * The page only renders server-owned state and calls fixed console actions. It
@@ -139,6 +141,174 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   requestForm.append(requestProvider.wrap, requestChain.wrap, requestAsset.wrap, requestAmount.wrap, requestRow, requestError);
   consumerBox.append(requestForm);
 
+  // ---- payment wallet selection (built-in or a real EIP-6963 wallet) ----
+  let walletMode = "builtin";
+  let discovery = null;
+  let discoveryStarted = false;
+  let selectedWalletId = null;
+  let externalSession = null;
+  let externalState = null;
+  let externalError = "";
+  let externalNeedsChain = null;
+  let externalPaymentContext = null;
+
+  const walletBox = el("section", null, "wallet-payment-group wallet-mode");
+  walletBox.append(el("h3", "付款方式"));
+  walletBox.append(p("默认使用本机内置钱包。也可以显式选择已安装的浏览器钱包；账户、网络和每一笔签名都由钱包扩展确认。", "muted small"));
+  const walletModeRow = el("div", null, "wallet-payment-actions");
+  const builtinModeButton = button("本机内置钱包", () => setWalletMode("builtin"));
+  const externalModeButton = button("浏览器钱包", () => setWalletMode("external"));
+  walletModeRow.append(builtinModeButton, externalModeButton);
+  const externalRoot = el("div", null, "wallet-external-root");
+  walletBox.append(walletModeRow, externalRoot);
+  consumerBox.append(walletBox);
+
+  function ensureDiscovery() {
+    if (discovery) return discovery;
+    discovery = createWalletDiscovery({ target: globalThis.window, now: Date.now });
+    discovery.subscribe(() => { if (!unmounted) renderWalletBox(); });
+    return discovery;
+  }
+
+  function externalRegistry() {
+    const reg = state?.registry;
+    return reg && Array.isArray(reg.networks) && Array.isArray(reg.assets) ? reg : { networks: [], assets: [] };
+  }
+
+  function setWalletMode(next) {
+    walletMode = next;
+    if (next === "external" && !discoveryStarted) {
+      try { ensureDiscovery().start(); discoveryStarted = true; } catch { externalError = "浏览器钱包发现不可用；未连接任何钱包。"; }
+    }
+    renderWalletBox();
+  }
+
+  function connectExternal(selectionId) {
+    if (!discovery) return;
+    externalError = "";
+    const session = createExternalWallet({
+      discovery,
+      selectionId,
+      registry: () => externalRegistry(),
+      allowedChainIds: [56, 97, 8453, 84532],
+      now: Date.now,
+      operationPort: {
+        reserve: (operation) => client.action("payment-operation-reserve", {
+          obligationId: externalPaymentContext?.obligationId,
+          previewRef: externalPaymentContext?.previewRef,
+          operation,
+        }),
+        markBroadcasting: ({ reservationId, operation }) => client.action("payment-operation-mark", {
+          obligationId: externalPaymentContext?.obligationId,
+          previewRef: externalPaymentContext?.previewRef,
+          reservationId,
+          operation,
+        }),
+        recordHash: ({ reservationId, operation, hash }) => client.action("payment-operation-hash", {
+          obligationId: externalPaymentContext?.obligationId,
+          previewRef: externalPaymentContext?.previewRef,
+          reservationId,
+          operation,
+          hash,
+        }),
+        recordUnknown: ({ reservationId, operation, reason }) => client.action("payment-operation-unknown", {
+          obligationId: externalPaymentContext?.obligationId,
+          previewRef: externalPaymentContext?.previewRef,
+          reservationId,
+          operation,
+          reason,
+        }),
+        query: (operation) => client.action("payment-operation-query", {
+          obligationId: externalPaymentContext?.obligationId,
+          operation,
+        }),
+      },
+    });
+    externalSession = session;
+    session.subscribe((next) => { externalState = next; if (!unmounted) renderWalletBox(); });
+    return session.connect({ userInitiated: true }).then(() => {
+      externalState = session.snapshot();
+      renderWalletBox();
+    }).catch((error) => {
+      externalError = String(error?.message || error || "钱包连接未完成");
+      renderWalletBox();
+    });
+  }
+
+  function switchExternalChain(chainId, add = false) {
+    if (!externalSession) { externalError = "请先连接浏览器钱包"; renderWalletBox(); return; }
+    externalError = "";
+    const action = add ? externalSession.requestAddChain(chainId, { userInitiated: true }) : externalSession.requestSwitchChain(chainId, { userInitiated: true });
+    void action.then(() => {
+      externalNeedsChain = null;
+      externalState = externalSession.snapshot();
+      renderWalletBox();
+    }).catch((error) => {
+      externalNeedsChain = chainId;
+      externalError = String(error?.message || error || "网络切换未完成");
+      renderWalletBox();
+    });
+  }
+
+  function renderWalletBox() {
+    if (unmounted) return;
+    builtinModeButton.className = `button ${walletMode === "builtin" ? "primary" : "secondary"}`;
+    externalModeButton.className = `button ${walletMode === "external" ? "primary" : "secondary"}`;
+    externalRoot.replaceChildren();
+    if (walletMode === "builtin") {
+      externalRoot.append(p("使用本机加密钱包。付款前会要求解锁并在预览中逐笔确认；私钥不会离开本机。", "muted small"));
+      return;
+    }
+    if (!discoveryStarted) {
+      try { ensureDiscovery().start(); discoveryStarted = true; } catch { externalError = "浏览器钱包发现不可用；未连接任何钱包。"; }
+    }
+    if (!discovery) { externalRoot.append(p("正在查找浏览器钱包…")); return; }
+    const entries = discovery.list();
+    const legacy = discovery.legacy();
+    if (!entries.length && !legacy) {
+      externalRoot.append(p("没有找到可用的钱包扩展。请安装或解锁 MetaMask / Rabby 后点“重新查找”。", "inline-warning"));
+      externalRoot.append(button("重新查找", () => discovery.request()));
+      return;
+    }
+    const list = el("div", null, "wallet-external-list");
+    for (const entry of entries) {
+      const row = el("article", null, "wallet-external-row");
+      const body = el("div");
+      body.append(el("strong", entry.name), el("div", entry.rdns || "未提供来源", "muted small"));
+      row.append(body, button(selectedWalletId === entry.id ? "已选择" : "选择", () => {
+        selectedWalletId = entry.id;
+        externalSession?.dispose(); externalSession = null; externalState = null;
+        renderWalletBox();
+      }));
+      list.append(row);
+    }
+    if (legacy && !entries.length) {
+      const row = el("article", null, "wallet-external-row");
+      row.append(el("div", null, "旧式注入钱包"), button(selectedWalletId === "legacy" ? "已选择" : "显式选择", () => {
+        selectedWalletId = "legacy"; externalSession?.dispose(); externalSession = null; externalState = null; renderWalletBox();
+      }));
+      list.append(row);
+    }
+    externalRoot.append(list);
+    if (selectedWalletId && !externalSession) {
+      externalRoot.append(button("连接所选钱包", () => { void connectExternal(selectedWalletId); }, true));
+    }
+    if (externalState) {
+      const facts = el("dl", null, "facts");
+      for (const [label, value] of [["钱包", externalState.selection?.name || "已选择"], ["账户", externalState.account || "未返回"], ["网络", chainName(externalState.chainId)]]) {
+        const row = el("div"); row.append(el("dt", label), el("dd", value)); facts.append(row);
+      }
+      externalRoot.append(facts);
+      const switchRow = el("div", null, "wallet-payment-actions");
+      for (const chainId of [56, 8453]) switchRow.append(button(chainName(chainId), () => switchExternalChain(chainId)));
+      if (externalNeedsChain && externalNeedsChain !== externalState.chainId) switchRow.append(button(`添加 ${chainName(externalNeedsChain)} 并切换`, () => switchExternalChain(externalNeedsChain, true), true));
+      switchRow.append(button("断开钱包", () => { externalSession?.dispose(); externalSession = null; externalState = null; externalError = ""; renderWalletBox(); }));
+      externalRoot.append(switchRow);
+    }
+    if (externalError) externalRoot.append(p(externalError, "inline-warning"));
+    externalRoot.append(p("浏览器钱包只用于你明确选择的网络；本页不会自动切链、自动签名或自动发送。", "muted small"));
+  }
+
   const signBox = el("div", null, "wallet-payment-confirm");
   const signCheck = el("input");
   signCheck.type = "checkbox";
@@ -163,8 +333,70 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   providerBox.append(el("h3", "提供方：我的收款与发票"), providerRequests);
   consumerBox.append(el("h3", "我的充值"), obligations);
 
+  const recoveryBox = el("details", null, "workflow-details wallet-payment-recovery");
+  recoveryBox.append(el("summary", "付款恢复（结果不明的发送）"));
+  recoveryBox.append(p("只在这里处理已经产生 journal 记录、但钱包没有返回明确结果的那一笔。不要重复发送；先用钱包或区块浏览器找到已知交易哈希，再让服务核对链上收款人、金额和代币。", "muted small"));
+  const recoveryList = el("div");
+  const recoveryReload = button("刷新待恢复记录", () => void loadPending());
+  recoveryBox.append(recoveryList, recoveryReload);
+  recoveryBox.addEventListener("toggle", () => { if (recoveryBox.open) void loadPending(); });
+  consumerBox.append(recoveryBox);
+
+  let pendingJournal = [];
+
+  async function loadPending() {
+    if (unmounted) return;
+    try {
+      const rows = await act("payment-operation-pending", {});
+      pendingJournal = Array.isArray(rows) ? rows : [];
+      renderRecovery();
+    } catch {
+      pendingJournal = [];
+      renderRecovery();
+    }
+  }
+
+  function renderRecovery() {
+    if (unmounted) return;
+    recoveryList.replaceChildren();
+    if (!pendingJournal.length) {
+      recoveryList.append(p("没有待恢复的发送记录。", "muted small"));
+      return;
+    }
+    for (const row of pendingJournal) {
+      const card = el("article", null, "wallet-payment-recovery-row");
+      card.append(el("strong", `${row.invoice}，状态 ${row.state}`));
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", chainName(row.chainId)), el("li", `保留编号 ${row.reservationId}`));
+      if (row.txHash) meta.append(el("li", `已知哈希 ${row.txHash}`));
+      if (Array.isArray(row.hashes) && row.hashes.length) meta.append(el("li", `全部哈希 ${row.hashes.join(", ")}`));
+      if (row.reason) meta.append(el("li", `原因 ${row.reason}`));
+      card.append(meta);
+      if (row.state === "unknown" || row.state === "broadcasting") {
+        const input = el("input");
+        input.type = "text";
+        input.placeholder = "0x 开头的已知交易哈希";
+        input.autocomplete = "off";
+        const adopt = button("按已知哈希恢复", async () => {
+          const hash = input.value.trim();
+          if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) { try { notice("交易哈希格式不正确", "warn"); } catch { /* advisory */ } return; }
+          try {
+            await act("payment-operation-adopt", { obligationId: row.invoice, reservationId: row.reservationId, hash });
+            try { notice("已按链上回执恢复这笔发送；仍需等待提供方观察最终性", "good"); } catch { /* advisory */ }
+            await loadPending();
+            await refreshState();
+          } catch (error) {
+            try { notice(String(error?.message || error), "warn"); } catch { /* advisory */ }
+          }
+        });
+        card.append(input, adopt);
+      }
+      recoveryList.append(card);
+    }
+  }
+
   autoBox.append(el("summary", "自动充值提醒（可选）"));
-  autoBox.append(p("开启后只在伙伴剩余额度低于触发值时提醒；真正付款仍要上面的预览和确认。主网充值不开放。"));
+  autoBox.append(p("开启后只在伙伴剩余额度低于触发值时提醒；真正付款仍要上面的预览和确认。BSC 与 Base 都不会自动签名或自动转账。"));
   const autoEnabled = el("input");
   autoEnabled.type = "checkbox";
   const autoLabel = el("label", null, "workflow-check");
@@ -191,6 +423,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   let unmounted = false;
   let busy = false;
   let signature = null;
+  let pendingLoaded = false;
 
   function showError(node, message) {
     node.textContent = message || "";
@@ -262,11 +495,12 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     signBox.hidden = false;
     signCheck.checked = false;
     signButton.disabled = true;
-    signButton.textContent = `签署 ${formatRawAmount(obligation.amountRaw, obligation.decimals)}`;
+    signButton.textContent = `${walletMode === "external" ? "用浏览器钱包签署" : "用本机钱包签署"} ${formatRawAmount(obligation.amountRaw, obligation.decimals)}`;
   }
 
   async function signInvoice() {
     if (busy || !pendingSignInvoice) return;
+    if (walletMode === "external") return signExternalInvoice();
     busy = true;
     signButton.disabled = true;
     try {
@@ -281,6 +515,38 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       signButton.disabled = false;
     } finally {
       busy = false;
+    }
+  }
+
+  async function signExternalInvoice() {
+    const invoiceId = pendingSignInvoice;
+    const obligation = (state?.consumer?.obligations || []).find((o) => o.invoiceId === invoiceId);
+    if (!obligation) return showError(requestError, "找不到这笔付款条件；请刷新状态");
+    if (!externalSession || !externalState?.account) return showError(requestError, "请先连接浏览器钱包");
+    if (externalState.chainId !== obligation.chainId) return showError(requestError, `请先把钱包切换到 ${chainName(obligation.chainId)}`);
+    if (!obligation.typedData || !obligation.digest) return showError(requestError, "这笔付款条件没有可签名的 EIP-712 数据；请让提供方重新发送");
+    let digest;
+    try { digest = typedDataDigest(obligation.typedData); } catch { return showError(requestError, "付款条件的 EIP-712 数据无效"); }
+    if (String(digest).toLowerCase() !== String(obligation.digest).toLowerCase()) return showError(requestError, "付款条件摘要与服务核对值不一致；已拒绝签名");
+    busy = true;
+    signButton.disabled = true;
+    try {
+      const signed = await externalSession.signTypedData(obligation.typedData, {
+        userInitiated: true,
+        expectedDigest: obligation.digest,
+        expectedChainId: obligation.chainId,
+      });
+      await act("payment-p2p-sign-external", { invoiceId, signature: signed.signature, payerAddress: signed.payerAddress });
+      try { notice("付款条件已用浏览器钱包签名；等待提供方确认后再付款", "good"); } catch { /* advisory */ }
+      pendingSignInvoice = null;
+      signature = null;
+      signBox.hidden = true;
+      await refreshState();
+    } catch (error) {
+      showError(requestError, String(error?.message || error));
+    } finally {
+      busy = false;
+      signButton.disabled = false;
     }
   }
 
@@ -300,11 +566,90 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
 
   async function previewPayment(obligation) {
     if (busy) return;
+    if (walletMode === "external") return previewExternalPayment(obligation);
     busy = true;
     showError(requestError, "");
     try {
       const preview = await act("payment-local-send-preview", { invoiceId: obligation.invoiceId });
       renderPreview(obligation, preview);
+    } catch (error) {
+      try { notice(String(error?.message || error), "warn"); } catch { /* advisory */ }
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function previewExternalPayment(obligation) {
+    if (!externalSession || !externalState?.account) { try { notice("请先连接浏览器钱包", "warn"); } catch { /* advisory */ } return; }
+    if (externalState.chainId !== obligation.chainId) { try { notice(`请先把钱包切换到 ${chainName(obligation.chainId)}`, "warn"); } catch { /* advisory */ } return; }
+    busy = true;
+    try {
+      const server = await act("payment-obligation-preview", { obligationId: obligation.invoiceId });
+      externalPaymentContext = { obligationId: obligation.invoiceId, previewRef: server.previewRef };
+      const preview = await externalSession.prepareTransfer({
+        userInitiated: true,
+        assetId: obligation.assetId,
+        recipientAddress: obligation.recipientAddress,
+        amountRaw: obligation.amountRaw,
+        intentHash: obligation.digest || null,
+      });
+      renderExternalPreview(obligation, preview, server.previewRef);
+    } catch (error) {
+      try { notice(String(error?.message || error), "warn"); } catch { /* advisory */ }
+    } finally {
+      busy = false;
+    }
+  }
+
+  function renderExternalPreview(obligation, preview, previewRef) {
+    previewBox.replaceChildren();
+    previewBox.hidden = false;
+    previewBox.append(el("h4", "浏览器钱包付款预览"));
+    const facts = el("dl", null, "facts wallet-payment-facts");
+    for (const [label, value, mono] of [
+      ["网络", chainName(preview.chainId), false],
+      ["资产", `${preview.symbol}（${preview.contractAddress}）`, true],
+      ["金额", preview.amountTokens, true],
+      ["收款地址", preview.recipientAddress, true],
+      ["付款地址", preview.account, true],
+      ["Gas 上限/价格", `${preview.gasLimitRaw} × ${preview.gasPriceRaw} wei`, true],
+      ["最坏 Gas 花费", `${preview.estimatedFeeNative} ${preview.nativeSymbol}`, true],
+      ["代币余额", `${preview.tokenBalance} ${preview.symbol}`, true],
+      ["预览有效期", preview.expiresAt, false],
+    ]) {
+      const row = el("div");
+      const dd = el("dd", value); if (mono) dd.className = "mono";
+      row.append(el("dt", label), dd); facts.append(row);
+    }
+    previewBox.append(facts);
+    if (preview.blockers?.length) previewBox.append(p(`钱包预览阻塞：${preview.blockers.join("；")}`, "inline-warning"));
+    const confirm = el("input"); confirm.type = "checkbox";
+    const label = el("label", null, "workflow-check");
+    label.append(confirm, el("span", "我已核对以上网络、资产、收款地址和金额；只发送这一笔。"));
+    const send = button("确认并从浏览器钱包付款", () => void sendExternalPayment(obligation, preview, previewRef), true);
+    send.disabled = preview.blockers?.length > 0;
+    confirm.addEventListener("change", () => { send.disabled = !confirm.checked || preview.blockers?.length > 0; });
+    const actions = el("div", null, "wallet-payment-actions");
+    actions.append(send, button("关闭预览", () => { previewBox.hidden = true; previewBox.replaceChildren(); }));
+    previewBox.append(label, actions);
+    previewBox.scrollIntoView?.({ block: "nearest" });
+  }
+
+  async function sendExternalPayment(obligation, preview, previewRef) {
+    if (busy) return;
+    externalPaymentContext = { obligationId: obligation.invoiceId, previewRef };
+    busy = true;
+    try {
+      const result = await externalSession.confirmTransfer(preview, { userInitiated: true, acknowledged: true, previewId: preview.previewId });
+      if (result?.broadcast === true) {
+        try { notice(`已广播 ${result.hash}；广播不等于到账，等待提供方观察链上最终性`, "good"); } catch { /* advisory */ }
+      } else {
+        try { notice("钱包没有广播这笔转账", "warn"); } catch { /* advisory */ }
+      }
+      previewBox.hidden = true;
+      previewBox.replaceChildren();
+      await loadPending();
+      await refreshState();
     } catch (error) {
       try { notice(String(error?.message || error), "warn"); } catch { /* advisory */ }
     } finally {
@@ -379,6 +724,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       }
       previewBox.hidden = true;
       previewBox.replaceChildren();
+      await loadPending();
       await refreshState();
     } catch (error) {
       try { notice(String(error?.message || error), "warn"); } catch { /* advisory */ }
@@ -507,8 +853,10 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     renderProviderRequests(state);
     renderObligations(state);
     renderAuto(state);
+    renderWalletBox();
   }
 
+  renderWalletBox();
   requestChain.select.addEventListener("change", () => setOptions(requestAsset.select, assetChoices(state, requestChain.select.value), "选择资产"));
   autoChain.select.addEventListener("change", () => setOptions(autoAsset.select, assetChoices(state, autoChain.select.value), "选择资产"));
 
@@ -521,6 +869,11 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       signCheck.checked = false;
       previewBox.replaceChildren();
       previewBox.hidden = true;
+      externalSession?.dispose();
+      externalSession = null;
+      discovery?.stop?.();
+      discovery = null;
+      discoveryStarted = false;
     },
     snapshot() { return { state, pendingSignInvoice, hasSignature: signature !== null }; },
   };

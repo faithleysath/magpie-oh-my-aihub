@@ -1,5 +1,8 @@
 # 首次使用：从 Magpie 安装到第一个共享模型
 
+> 当前生产付款已在 BSC 56 与 Base 8453 开放，操作、资产核验、风险和用户自行小额实测步骤见 [生产付款说明](production/mainnet-payments/README.md)。本文的“测试网钱包/文件流程”保留为开发工具与历史说明；普通产品不再以测试网为范围。
+
+
 这份指南使用 Magpie 的图形界面和 Oh My AIHub 浏览器控制台。正常安装、配置、申请、审批和连接都不需要终端、Bun 命令、源码目录或 Magpie 数据路径。
 
 当前已在两份全新隔离的 **Magpie 0.1.2171** 环境与 **EasyTier 2.6.4** 上实测安装/更新、控制台入口、配对、真实网络和双方文件授权流程；Magpie 原生 **Test models** 已观察到 200 与额度用尽后的 429，上游是受控模拟模型。Ego 已通过 BSC/Base 受控本地模拟 RPC 与合成外部签名的生产钱包/账本/原生额度流程；WebKit 第二提供方完整手动流程及暂停隔离/恢复也已通过。WebKit钱包9步真实UI复测也通过新增0.5BSC模拟入账、最终性/重放及原生Test models200，见[记录](validation/phase9-browser/webkit-wallet.json)。真实扩展钱包、原生 WKWebView、Linux/Windows 桌面与 SSH 端到端仍未知；完整范围见[共享报告](validation/phase9-stage2.md)、[钱包报告](validation/phase9-wallet.md)和[安全报告](validation/phase9-security.md)。

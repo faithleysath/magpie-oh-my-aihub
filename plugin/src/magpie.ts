@@ -457,10 +457,29 @@ export class Magpie {
   }
 
   async setCostLimit(id: string, window: string, usd: number): Promise<void> {
-    if (!(usd >= 0.0001)) throw new Error(`refusing a cost limit below $0.0001 (${usd})`);
+    await this.setLimit(id, window, { costUsd: usd });
+  }
+
+  /**
+   * Sets the key's cost and/or token limit in one CLI call. The token limit is a
+   * second, price-independent bound: Magpie admits a request while both the cost
+   * and token reservations have room, so a concurrent workload cannot spend an
+   * unbounded multiple of the prepaid balance even if a call costs more than its
+   * reservation.
+   */
+  async setLimit(id: string, window: string, limit: { costUsd?: number; tokens?: number }): Promise<void> {
     if (!/^(day|week|month|\d+d|\d+h)$/.test(window)) throw new Error(`bad limit window ${window}`);
-    const text = usd.toFixed(4);
-    await this.serial(() => runOk([this.bin, "gateway-key", "limit", id, window, "--cost", text], { timeoutMs: 30_000 }));
+    if (limit.costUsd === undefined && limit.tokens === undefined) throw new Error("a limit needs a cost or a token cap");
+    const args = [this.bin, "gateway-key", "limit", id, window];
+    if (limit.costUsd !== undefined) {
+      if (!(limit.costUsd >= 0.0001)) throw new Error(`refusing a cost limit below $0.0001 (${limit.costUsd})`);
+      args.push("--cost", limit.costUsd.toFixed(4));
+    }
+    if (limit.tokens !== undefined) {
+      if (!Number.isSafeInteger(limit.tokens) || limit.tokens <= 0) throw new Error(`refusing a token limit of ${String(limit.tokens)}`);
+      args.push("--tokens", String(limit.tokens));
+    }
+    await this.serial(() => runOk(args, { timeoutMs: 30_000 }));
   }
 
   async setQuotasOff(id: string): Promise<void> {

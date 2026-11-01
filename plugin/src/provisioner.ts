@@ -5,10 +5,11 @@ import { logger, registerSecret } from "./log.ts";
 import type { Magpie, LimitStatus } from "./magpie.ts";
 import { readJsonWithBackup, writeJsonAtomic } from "./store.ts";
 import { Ledger, assetIdChainId, assertCreditChainAllowed, classifyChainSource, classifyDepositSource, isKnownFundsClass, usageLogPath, type KnownFundsClass, type LedgerWindow } from "./ledger.ts";
-import { assertCreditSourceNotMainnet } from "./mainnet-gate.ts";
 import {
   GRID_NANOS,
   floorGrid,
+  maxCallReserveNanos,
+  maxNanosPerToken,
   nanosToUsd,
   priceSnapshot,
   usdToNanos,
@@ -468,6 +469,16 @@ export class Provisioner {
    */
   private async reactivateLedger(rec: ConsumerRecord): Promise<void> {
     if (!this.ledger) return;
+    // A reorg reversal may leave an overdraft. Do not open a new window that
+    // could spend new credit while the old, reverted credit is still owed: the
+    // debt must be covered by a later deposit first.
+    const balance = this.ledger.balance(rec.consumerId);
+    if (balance.balanceNanos < 0) {
+      throw new Error(
+        `cannot reactivate ${rec.consumerId}: a chain reorg left an overdraft of $${nanosToUsd(balance.overdraftNanos).toFixed(6)}; ` +
+          `record a covering deposit before reissuing the key`,
+      );
+    }
     const snap =
       (await this.snapshotFor(rec.models).catch(() => null)) ?? {
         version: "unpriced",
@@ -989,7 +1000,11 @@ export class Provisioner {
     const ledger = this.ledger!;
     const balance = ledger.balance(rec.consumerId);
     const used = usdToNanos(status.limit?.cost ?? 0);
-    const target = floorGrid(used + balance.balanceNanos);
+    const snap = await this.snapshotFor(rec.models);
+    const guard = snap
+      ? this.capGuard(snap, used, status.limit?.tokens ?? 0, balance.balanceNanos)
+      : { capNanos: floorGrid(used + balance.balanceNanos), tokens: null, reserveNanos: 0 };
+    const target = guard.capNanos;
     const current = usdToNanos(status.limit?.costLimit ?? 0);
     if (balance.balanceNanos < 0) {
       return {
@@ -1005,7 +1020,11 @@ export class Provisioner {
     }
     if (target >= current) return {};
     try {
-      await this.magpie.setCostLimit(rec.keyId, rec.window, target / 1_000_000_000);
+      if (guard.tokens !== null && typeof this.magpie.setLimit === "function") {
+        await this.magpie.setLimit(rec.keyId, rec.window, { costUsd: target / 1_000_000_000, tokens: guard.tokens });
+      } else {
+        await this.magpie.setCostLimit(rec.keyId, rec.window, target / 1_000_000_000);
+      }
       const after = await this.magpie.limitStatus(rec.secret);
       if (Math.abs((after.limit?.costLimit ?? 0) - target / 1_000_000_000) > 1e-9) {
         return { reason: "drift", detail: `could not tighten the cap to ${nanosToUsd(target)}` };
@@ -1371,11 +1390,38 @@ export class Provisioner {
   }
 
   /**
+   * The prepaid guard written beside the cost cap.
+   *
+   * `cap` is still `native used + the ledger balance`, because Magpie's cost
+   * decision is a soft cap. The second bound is a token limit: the balance is
+   * divided by the most expensive per-token price in the bound snapshot, so the
+   * key cannot consume an unbounded *number* of tokens even if a call costs more
+   * than its reservation. A one-call reserve (max output + a slice of context) is
+   * held back from the token budget; that is a deliberate, stated reserve, not a
+   * claim that Magpie is a hard cap.
+   */
+  private capGuard(
+    snap: PriceSnapshot,
+    usedNanos: number,
+    usedTokens: number,
+    balanceAfterNanos: number,
+  ): { capNanos: number; tokens: number | null; reserveNanos: number } {
+    const capNanos = floorGrid(usedNanos + balanceAfterNanos);
+    const reserveNanos = maxCallReserveNanos(snap) ?? 0;
+    const perToken = maxNanosPerToken(snap);
+    if (perToken === null || perToken <= 0) return { capNanos, tokens: null, reserveNanos };
+    const spendable = Math.max(0, balanceAfterNanos - reserveNanos);
+    const extraTokens = Math.floor(spendable / perToken);
+    const tokens = extraTokens > 0 ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.trunc(usedTokens)) + extraTokens) : null;
+    return { capNanos, tokens, reserveNanos };
+  }
+
+  /**
    * Writes the cap to Magpie only. The local record is committed by the caller
    * after the read-back, so a failed verification never leaves this file saying
    * a cap that Magpie may not hold.
    */
-  private async setCap(rec: ConsumerRecord, capUsd: number, expected?: { depositId: string; fundsClass: KnownFundsClass }): Promise<number> {
+  private async setCap(rec: ConsumerRecord, capUsd: number, expected?: { depositId: string; fundsClass: KnownFundsClass }, tokens?: number): Promise<number> {
     const cap = assertCap(capUsd);
     if (expected) {
       const pending = rec.pending;
@@ -1397,7 +1443,11 @@ export class Provisioner {
         }
       }
     }
-    await this.magpie.setCostLimit(rec.keyId, rec.window, cap);
+    if (tokens !== undefined && typeof this.magpie.setLimit === "function") {
+      await this.magpie.setLimit(rec.keyId, rec.window, { costUsd: cap, tokens });
+    } else {
+      await this.magpie.setCostLimit(rec.keyId, rec.window, cap);
+    }
     return cap;
   }
 
@@ -1405,7 +1455,7 @@ export class Provisioner {
    * Reads the key's own numbers back from the gateway and checks that the cap is
    * the one written. Throws when the key is not actually held.
    */
-  async verify(rec: ConsumerRecord, expectedCap: number = rec.capUsd): Promise<LimitStatus> {
+  async verify(rec: ConsumerRecord, expectedCap: number = rec.capUsd, expectedTokens?: number): Promise<LimitStatus> {
     const status = await this.magpie.limitStatus(rec.secret);
     const lim = status.limit;
     if (!status.limited || !lim) {
@@ -1414,6 +1464,9 @@ export class Provisioner {
     const cap = lim.costLimit ?? 0;
     if (Math.abs(cap - expectedCap) > 1e-9) {
       throw new Error(`key ${rec.keyName}: read back costLimit ${cap}, wrote ${expectedCap}`);
+    }
+    if (expectedTokens !== undefined && typeof lim.tokenLimit === "number" && lim.tokenLimit !== expectedTokens) {
+      throw new Error(`key ${rec.keyName}: read back tokenLimit ${lim.tokenLimit}, wrote ${expectedTokens}`);
     }
     rec.lastCheck = {
       at: new Date().toISOString(),
@@ -1627,21 +1680,22 @@ export class Provisioner {
     const amountNanos = usdToNanos(amount);
     ledger.depositIntent({ id, consumerId: rec.consumerId, amountNanos, source: "simulated" });
     const balanceAfter = ledger.balance(rec.consumerId).balanceNanos + amountNanos;
-    const capNanos = floorGrid(usedNanos + balanceAfter);
-    if (capNanos < GRID_NANOS) {
+    const guard = this.capGuard(snap, usedNanos, status.limit?.tokens ?? 0, balanceAfter);
+    if (guard.capNanos < GRID_NANOS) {
       ledger.markDepositFailed(id, "credit is below Magpie's $0.0001 enforceable minimum");
       throw new Error("top-up refused: the resulting credit is below $0.0001 and cannot be enforced; add more");
     }
-    if (capNanos / 1_000_000_000 > MAX_CAP_USD) {
+    if (guard.capNanos / 1_000_000_000 > MAX_CAP_USD) {
       ledger.markDepositFailed(id, "resulting cap above the maximum");
       throw new Error(`a cost cap above $${MAX_CAP_USD} is refused`);
     }
+    const capNanos = guard.capNanos;
     const capUsd = assertCap(capNanos / 1_000_000_000);
     rec.pending = { capUsd, depositId: id, usd: amount, fundsClass: "simulated", chainId: null, assetId: null, source: "simulated" };
     this.persist();
     try {
-      await this.setCap(rec, capUsd, { depositId: id, fundsClass: "simulated" });
-      const after = await this.verify(rec, capUsd);
+      await this.setCap(rec, capUsd, { depositId: id, fundsClass: "simulated" }, guard.tokens ?? undefined);
+      const after = await this.verify(rec, capUsd, guard.tokens ?? undefined);
       ledger.markDepositApplied(id, window.id, capNanos);
       rec.capUsd = capUsd;
       rec.creditedUsd = roundCap(rec.creditedUsd + amount);
@@ -1703,7 +1757,6 @@ export class Provisioner {
       if (!booked.assetId || assetIdChainId(booked.assetId) !== bookedChainId) {
         throw new Error(`chain deposit ${input.id} has no asset id on chain ${bookedChainId}; refusing actual money movement`);
       }
-      assertCreditSourceNotMainnet(booked.source);
       if (booked.consumerId !== input.consumerId) throw new Error(`deposit ${input.id} belongs to ${booked.consumerId}`);
       if (booked.amountNanos !== input.amountNanos) {
         throw new Error(`deposit ${input.id} was booked at ${booked.amountNanos} nanos, not ${input.amountNanos}`);
@@ -1720,7 +1773,7 @@ export class Provisioner {
           rec.deposits.push({ id: input.id, usd: nanosToUsd(input.amountNanos), at: new Date().toISOString() });
         }
         this.persist();
-        logger.info(`chain deposit ${input.id} of ${nanosToUsd(input.amountNanos)} test USD booked for paused ${rec.consumerId}; reissue to use it`);
+        logger.info(`chain deposit ${input.id} of ${nanosToUsd(input.amountNanos)} USD credit booked for paused ${rec.consumerId}; reissue to use it`);
         return view(rec, null, this.ledger);
       }
 
@@ -1743,15 +1796,16 @@ export class Provisioner {
       // second deposit arriving before the first is applied would compute a cap
       // that leaves the newer credit unenforced.
       const balanceAfter = ledger.balance(rec.consumerId).balanceNanos + input.amountNanos;
-      const capNanos = floorGrid(usedNanos + balanceAfter);
-      if (capNanos < GRID_NANOS) {
+      const guard = this.capGuard(snap, usedNanos, status.limit?.tokens ?? 0, balanceAfter);
+      if (guard.capNanos < GRID_NANOS) {
         ledger.markDepositFailed(input.id, "credit is below Magpie's $0.0001 enforceable minimum");
         throw new Error("the resulting credit is below $0.0001 and cannot be enforced; add more");
       }
-      if (capNanos / 1_000_000_000 > MAX_CAP_USD) {
+      if (guard.capNanos / 1_000_000_000 > MAX_CAP_USD) {
         ledger.markDepositFailed(input.id, "resulting cap above the maximum");
         throw new Error(`a cost cap above $${MAX_CAP_USD} is refused`);
       }
+      const capNanos = guard.capNanos;
       const capUsd = assertCap(capNanos / 1_000_000_000);
       rec.pending = {
         capUsd,
@@ -1764,8 +1818,8 @@ export class Provisioner {
       };
       this.persist();
       try {
-        await this.setCap(rec, capUsd, { depositId: input.id, fundsClass: "chain" });
-        const after = await this.verify(rec, capUsd);
+        await this.setCap(rec, capUsd, { depositId: input.id, fundsClass: "chain" }, guard.tokens ?? undefined);
+        const after = await this.verify(rec, capUsd, guard.tokens ?? undefined);
         ledger.markDepositApplied(input.id, window.id, capNanos);
         rec.capUsd = capUsd;
         rec.creditedUsd = roundCap(rec.creditedUsd + nanosToUsd(input.amountNanos));
@@ -1775,7 +1829,7 @@ export class Provisioner {
         rec.pending = null;
         rec.priceVersion = window.priceVersion;
         this.persist();
-        logger.info(`chain deposit ${input.id} of ${nanosToUsd(input.amountNanos)} test USD for ${rec.consumerId}: cap ${capUsd}, used ${after.limit?.cost}`);
+        logger.info(`chain deposit ${input.id} of ${nanosToUsd(input.amountNanos)} USD credit for ${rec.consumerId}: cap ${capUsd}, used ${after.limit?.cost}`);
         return view(rec, after, this.ledger);
       } catch (e) {
         logger.error(`chain deposit ${input.id} for ${rec.consumerId} is pending: ${String(e)}`);

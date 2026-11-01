@@ -66,7 +66,7 @@ function configuredState(): any {
     at: new Date().toISOString(),
     configured: true,
     status: {
-      plugin: { version: "0.5.0", startedAt: "2026-10-31T01:00:00.000Z", stateVersion: 3 },
+      plugin: { version: "0.6.0", startedAt: "2026-10-31T01:00:00.000Z", stateVersion: 3 },
       magpie: { version: "0.1.2289" },
       config: {
         networkName: "studio-ai", hostname: "ohmyaihub-7f3c", virtualIpv4: "10.126.126.1",
