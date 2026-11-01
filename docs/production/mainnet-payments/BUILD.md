@@ -23,7 +23,7 @@ shasum -a 256 dist/oh-my-aihub-magpie-plugin-0.6.0.tgz
 - Name: `@oh-my-aihub/magpie-plugin`
 - Version: `0.6.0`
 - File: `dist/oh-my-aihub-magpie-plugin-0.6.0.tgz`
-- SHA-256: `1dc2c7dd2a18822f1857d4146a20b1c419ad5e596c5d2b3588b29e8de720e461`
+- SHA-256: `d421712f9d6676d0e9d208d5316b273ebf9dfe2751bf7a334b17331dd1b54c94`
 - Size: 679 KiB packed / 2.7 MiB unpacked
 - Files: 100 (source, console, page, bin, docs inside plugin; no tests, no node_modules)
 
