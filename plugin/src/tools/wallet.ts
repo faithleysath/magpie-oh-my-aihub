@@ -11,6 +11,10 @@ export const walletTool: ToolDef = {
   args: NO_ARGS,
   async execute() {
     const runtime = await getRuntime();
-    return jsonText(await walletBalances(runtime.wallet.address));
+    const balances = await walletBalances(runtime.wallet.address);
+    // Where each chain's scanner is: a deposit that is on chain but not credited
+    // is almost always a cursor that has not reached the block yet, and this is
+    // the one place a user would look for it.
+    return jsonText({ ...balances, sync: runtime.watcher.sync() });
   },
 };

@@ -45,6 +45,7 @@ import {
   setScanCursor,
   type NewDeposit,
 } from "./db.ts";
+import { LogTail, wsUrlFor, type LogTailStatus } from "./chain-ws.ts";
 import { logger } from "./log.ts";
 
 /** `eth_getLogs` range per request; a hard endpoint may force less. */
@@ -150,6 +151,16 @@ export class Watcher {
    * chunk instead of a bisect per chunk.
    */
   private readonly logSpan = new Map<number, number>();
+  /**
+   * Blocks a subscription told us about. They are recorded out of band — the
+   * cursor still moves only contiguously — so a deposit is credited within a pass
+   * of its block becoming final instead of waiting for a sweep to reach it.
+   */
+  private readonly hints = new Map<number, Set<number>>();
+  /** One live log subscription per chain, when the provider offers one. */
+  private readonly tails = new Map<number, LogTail>();
+  /** Last head seen per chain, for `sync()` and for the hints' finality gate. */
+  private readonly heads = new Map<number, number>();
 
   constructor(private readonly opts: WatcherOptions) {}
 
@@ -186,6 +197,7 @@ export class Watcher {
     if (this.timer || this.stopped) return;
     this.timer = setInterval(() => void this.tick(), this.opts.intervalMs ?? SCAN_INTERVAL_MS);
     this.timer.unref?.();
+    this.startTails();
     void this.tick();
   }
 
@@ -193,6 +205,78 @@ export class Watcher {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    for (const tail of this.tails.values()) tail.stop();
+    this.tails.clear();
+  }
+
+  /**
+   * Opens one subscription per chain. The endpoint is derived from the chain's
+   * HTTP endpoint (`https://` → `wss://`), so nothing has to be configured; a
+   * provider that does not speak `eth_subscribe` simply never connects and the
+   * sweep carries on alone.
+   */
+  private startTails(): void {
+    for (const chain of this.chains()) {
+      if (this.tails.has(chain.chainId)) continue;
+      const http = chain.rpcUrls[0];
+      if (!http) continue;
+      const url = wsUrlFor(http);
+      if (!url) continue;
+      let self: string;
+      try {
+        self = this.self();
+      } catch {
+        continue;
+      }
+      const tail = new LogTail({
+        url,
+        address: chain.usdc,
+        toTopic: addressTopic(self),
+        onBlock: (block) => this.hint(chain.chainId, block),
+      });
+      this.tails.set(chain.chainId, tail);
+      tail.start();
+    }
+  }
+
+  /** Remembers a block a subscription reported; the pass sorts them out. */
+  private hint(chainId: number, block: number): void {
+    let set = this.hints.get(chainId);
+    if (!set) {
+      set = new Set<number>();
+      this.hints.set(chainId, set);
+    }
+    set.add(block);
+    // A burst on a busy token can outrun the pass; keep the newest handful.
+    if (set.size > 256) {
+      const drop = [...set].sort((a, b) => a - b).slice(0, set.size - 256);
+      for (const block of drop) set.delete(block);
+    }
+  }
+
+  /** What each chain's scanner is doing, for `wallet` and for support. */
+  sync(): {
+    chain: string;
+    chainId: number;
+    head: number | null;
+    cursor: number | null;
+    behind: number | null;
+    hints: number;
+    tail: LogTailStatus | null;
+  }[] {
+    return this.chains().map((chain) => {
+      const head = this.heads.get(chain.chainId) ?? null;
+      const cursor = scanCursor(this.db, chain.chainId);
+      return {
+        chain: chain.key,
+        chainId: chain.chainId,
+        head,
+        cursor,
+        behind: head !== null && cursor !== null ? Math.max(0, head - cursor) : null,
+        hints: this.hints.get(chain.chainId)?.size ?? 0,
+        tail: this.tails.get(chain.chainId)?.status() ?? null,
+      };
+    });
   }
 
   private async tick(): Promise<void> {
@@ -251,6 +335,7 @@ export class Watcher {
   async passChain(chain: ChainRecord, self = this.self()): Promise<ChainPassResult> {
     const client = this.client(chain);
     const head = await client.head();
+    this.heads.set(chain.chainId, head);
     const result: ChainPassResult = {
       chain: chain.key,
       chainId: chain.chainId,
@@ -350,6 +435,8 @@ export class Watcher {
       return result;
     }
 
+    await this.recordHints(chain, client, finalBlock, self, payers, result);
+
     if (from <= finalBlock) {
       result.detail = `${result.detail ? `${result.detail}; ` : ""}more blocks pending (next pass continues)`;
     }
@@ -374,6 +461,71 @@ export class Watcher {
       // chain that needs it: guessing `latest` here would credit unfinal blocks.
       logger.warn(`watcher: ${chain.label} has no finalized block (${shortError(error)})`);
       return null;
+    }
+  }
+
+  /**
+   * Credits the blocks a subscription reported, without moving the cursor.
+   *
+   * The cursor may only advance contiguously, so a hinted block is recorded on
+   * its own: what the sweep will later find there is the same row, and the unique
+   * key makes the second visit free. Only blocks at or below `finalBlock` are
+   * touched — a subscription reports at the head, and crediting there would be
+   * crediting something that can still be reorged away.
+   */
+  private async recordHints(
+    chain: ChainRecord,
+    client: RpcClient,
+    finalBlock: number,
+    self: string,
+    payers: Set<string>,
+    result: ChainPassResult,
+  ): Promise<void> {
+    const hinted = this.hints.get(chain.chainId);
+    if (!hinted || hinted.size === 0) return;
+    const blocks = [...hinted].filter((block) => block <= finalBlock).sort((a, b) => a - b).slice(0, 32);
+    if (blocks.length === 0) return;
+
+    for (const block of blocks) {
+      try {
+        const logs = await client.getLogs({
+          address: chain.usdc,
+          fromBlock: block,
+          toBlock: block,
+          topics: [TRANSFER_TOPIC, null, self],
+        });
+        hinted.delete(block);
+        const fresh: NewDeposit[] = [];
+        for (const log of logs) {
+          const row = this.candidate(chain, log, self);
+          if (!row) continue;
+          await this.verifyReceipt(client, chain, log, row);
+          row.seenAt = this.now();
+          fresh.push(row);
+        }
+        if (fresh.length === 0) continue;
+        const db = this.db;
+        const inserted = db.transaction(() => {
+          let count = 0;
+          for (const row of fresh) {
+            const isNew = insertCreditedDeposit(db, row);
+            const revived = isNew ? false : recreditDeposit(db, row);
+            if (!isNew && !revived) continue;
+            count += 1;
+            payers.add(row.from);
+            logger.info(
+              `watcher: ${chain.label} ${revived ? "re-credited" : "credited"} ${row.amountRaw.toString()} raw ` +
+                `from ${row.from} in ${row.txHash}#${row.logIndex} (block ${row.blockNumber}, via subscription)`,
+            );
+          }
+          return count;
+        })();
+        result.credited += inserted;
+      } catch (error) {
+        // Left in the set: the next pass tries again, and the sweep covers it
+        // anyway once the cursor gets there.
+        logger.debug(`watcher: ${chain.label} hinted block ${block} failed (${shortError(error)})`);
+      }
     }
   }
 

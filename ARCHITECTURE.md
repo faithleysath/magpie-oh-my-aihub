@@ -60,6 +60,15 @@ Magpie 进程
 | `easytier/secure-key.json` | 本节点的 X25519 密钥对（只在 secure mode 下生成）。换了它就不是同一个节点 | `0600` |
 | `plugin.log` | 脱敏日志（私钥、Gateway Key、网络密码不落盘） | `0600` |
 
+## 链的发现方式
+
+两层，缺一不可：
+
+1. **订阅（实时）**：为每条链开一个 `eth_subscribe("logs")`，只订阅本地址的 USDC `Transfer`。推送到的块号进一个「提示集合」，pass 结束时对这些**已成最终态**的块单独 `eth_getLogs(block..block)` 并直接入账 —— 不推进游标，所以扫描区间仍然连续，重复扫描由唯一键去重。实测 BSC 25 秒收到 112 条、Base 1317 条。
+2. **扫描（兜底与回填）**：保留原来的 15 秒轮询 + `eth_getLogs` 分片，负责首次回填、断线期间的空档、以及不支持订阅的端点。游标只连续前进。
+
+订阅只是加速器：`wss://` 由链的 HTTP 端点推导（`https://` → `wss://`），连不上就静默退回纯扫描。`wallet` 返回的 `sync` 里有每条链的 `head / cursor / behind / hints / tail` —— **「钱到了额度不涨」先看 `behind`**。
+
 `consumers.key_secret` 必须落盘（要交给对方），和 Magpie 自己的 `caller-keys.json` 同级敏感度。
 
 `ledger.sqlite` 六张表：
