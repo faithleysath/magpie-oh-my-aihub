@@ -13,58 +13,186 @@
   <a class="skip" href="#main">跳到主要内容</a>
   <div class="app-shell">
     <aside class="sidebar">
-      <a class="brand" href="/" aria-label="Oh My AIHub 首页"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><span>Oh My AIHub<small>私有 AI，共享可能</small></span></a>
-      <p class="nav-label">工作空间</p>
+      <a class="brand" href="/" aria-label="Oh My AIHub 首页"><span class="brand-mark" aria-hidden="true">◎</span><span class="brand-name">Oh My AIHub</span></a>
       <nav aria-label="主导航">
-        <button class="nav-item active" id="nav-overview" type="button" aria-current="page" disabled><span aria-hidden="true">◈</span>总览</button>
-        <button class="nav-item" id="nav-discovery" type="button" disabled><span aria-hidden="true">⌕</span>发现模型</button>
-        <button class="nav-item" id="nav-sharing" type="button" disabled><span aria-hidden="true">↗</span>我的共享</button>
-        <button class="nav-item" id="nav-connections" type="button" disabled><span aria-hidden="true">↙</span>我的连接</button>
-        <button class="nav-item" id="nav-wallet" type="button" disabled><span aria-hidden="true">◇</span>测试网钱包</button>
-        <button class="nav-item" id="nav-accounting" type="button" disabled><span aria-hidden="true">▤</span>用量与账单</button>
-        <button class="nav-item" id="nav-settings" type="button" disabled><span aria-hidden="true">⚙</span>网络与设置</button>
+        <button class="nav-item" id="nav-home" type="button" aria-current="page" disabled>首页</button>
+        <button class="nav-item" id="nav-discovery" type="button" disabled>发现</button>
+        <button class="nav-item" id="nav-sharing" type="button" disabled>我的共享</button>
+        <button class="nav-item" id="nav-wallet" type="button" disabled>钱包</button>
+        <button class="nav-item" id="nav-network" type="button" disabled>网络</button>
       </nav>
-      <div class="sidebar-bottom"><span class="local-dot" aria-hidden="true"></span><div>只在这台设备运行<small>本机连接 · 私有会话</small></div></div>
+      <div class="sidebar-bottom"><span class="local-dot" aria-hidden="true"></span><span>只在这台设备运行</span></div>
     </aside>
     <div class="workspace">
       <header class="topbar">
-        <div class="breadcrumb">工作空间 <span>/</span> <strong id="breadcrumb">总览</strong></div>
-        <div class="topbar-actions"><span class="pill" id="connection" role="status">正在连接</span><button type="button" id="theme" class="icon-button" aria-label="切换深色模式" title="切换深色模式">◐</button><button type="button" id="logout" class="text-button" hidden>退出会话</button></div>
+        <div class="topbar-status"><span class="pill" id="connection" role="status">正在连接</span><span class="evidence-time" id="last-update">等待首次更新</span></div>
+        <button type="button" id="theme" class="icon-button" aria-label="切换深色模式" title="切换深色模式">◐</button>
       </header>
       <main id="main" tabindex="-1">
         <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
         <section id="session-panel" class="session-panel card">
-          <span class="eyebrow">LOCAL CONSOLE</span><h1 id="session-title">正在连接你的工作空间</h1><p id="session-detail">正在验证本机会话，网络密码不会出现在页面地址中。</p><button class="button secondary" id="retry" type="button" hidden>重新连接本机服务</button>
-          <div id="pairing-entry" class="pairing-entry" hidden><p>想使用此浏览器，或已通过安全转发连接？可在 Magpie 中核对并批准配对。</p><button class="button primary" id="pair-browser" type="button">配对此浏览器</button></div>
-          <div id="pairing-pending" class="pairing-panel" hidden><h2>回到 Magpie，核对这 8 位数字</h2><p>打开 Oh My AIHub 插件页面并刷新，确认请求的配对码与下方完全一致，再点击批准。</p><output id="pairing-code" class="pairing-code" aria-label="浏览器配对码"></output><p id="pairing-countdown" class="muted" role="status"></p><p id="pairing-progress" class="muted" role="status">等待你在 Magpie 中批准…</p><button class="text-button" id="pairing-cancel" type="button">取消此次配对</button></div>
-          <div class="session-art" aria-hidden="true"><span></span><span></span><span></span></div>
+          <h1 id="session-title">正在连接你的工作空间</h1>
+          <p id="session-detail">正在验证本机会话，网络密码不会出现在页面地址中。</p>
+          <button class="button secondary" id="retry" type="button" hidden>重新连接本机服务</button>
+          <div id="pairing-entry" class="pairing-entry" hidden>
+            <p>想使用此浏览器，或已通过安全转发连接？可在 Magpie 中核对并批准配对。</p>
+            <button class="button primary" id="pair-browser" type="button">配对此浏览器</button>
+          </div>
+          <div id="pairing-pending" class="pairing-panel" hidden>
+            <h2>回到 Magpie，核对这 8 位数字</h2>
+            <p>打开 Oh My AIHub 插件页面并刷新，确认请求的配对码与下方完全一致，再点击批准。</p>
+            <output id="pairing-code" class="pairing-code" aria-label="浏览器配对码"></output>
+            <p id="pairing-countdown" class="muted" role="status"></p>
+            <p id="pairing-progress" class="muted" role="status">等待你在 Magpie 中批准…</p>
+            <button class="text-button" id="pairing-cancel" type="button">取消此次配对</button>
+          </div>
         </section>
+
         <div id="private-content" hidden>
-          <section id="overview" hidden>
-            <div class="page-heading"><div><p class="eyebrow">YOUR PRIVATE AI NETWORK</p><h1>一切，尽在你的掌握</h1><p>连接可信的伙伴，让 AI 能力在私有网络中流动。</p></div><button type="button" class="button secondary" id="refresh">刷新状态 <span aria-hidden="true">↻</span></button></div>
-            <div class="overview-hero card"><div><span class="pill" id="readiness">等待检查</span><h2 id="network-title">你的私有网络</h2><p id="network-detail">配置完成后，这里会显示真实连接状态。</p><div class="capability-tags" id="capabilities"></div></div><div class="network-art" aria-hidden="true"><i></i><i></i><b>AI</b><i></i><i></i></div></div>
-            <div class="stats-grid"><article class="card stat"><p>网络引擎</p><strong id="engine-status">等待状态</strong><small id="engine-detail">EasyTier · no-TUN</small></article><article class="card stat"><p>在线节点</p><strong id="peer-count">—</strong><small>来自网络引擎的当前连接</small></article><article class="card stat"><p>共享状态</p><strong id="share-status">未启用</strong><small id="share-detail">只共享你允许的能力</small></article><article class="card stat"><p>使用状态</p><strong id="consume-status">未启用</strong><small id="consume-detail">远程服务保持独立</small></article></div>
-            <div class="content-grid"><section class="card section-card"><div class="section-heading"><h2>安全与就绪检查</h2><button type="button" class="text-button" id="run-checks">运行检查</button></div><p class="muted" id="checks-time">尚未运行主动检查</p><div id="safety-summary"></div><ul class="check-list" id="checks-list"></ul></section><section class="card section-card"><div class="section-heading"><h2>网络节点</h2><span class="mini-label">LIVE</span></div><ul class="peer-list" id="peers-list"></ul><div class="empty-state" id="peers-empty"><span aria-hidden="true">⌘</span><h3>等待伙伴加入</h3><p>使用相同网络名称和密码的节点，连接成功后会显示在这里。</p><button type="button" class="text-button" id="edit-network">检查网络设置 →</button></div></section></div>
-            <div class="quiet-note"><span aria-hidden="true">◇</span> Magpie 负责模型调用与原生计费，AIHub 只管理私有连接。真实资产未开放。</div>
+
+          <section id="overview" aria-labelledby="home-title" hidden>
+            <div class="page-heading">
+              <div><h1 id="home-title">首页</h1><p>这台设备上的私有 AI 网络。</p></div>
+            </div>
+            <div class="card home-list">
+              <section class="home-row" aria-labelledby="home-network-title">
+                <h2 id="home-network-title">网络连接</h2>
+                <p class="status-line" id="home-network">尚未连接</p>
+                <p class="muted" id="home-network-detail">还没有读取到网络状态。</p>
+                <button type="button" class="text-button" data-goto="network">查看网络 →</button>
+              </section>
+              <section class="home-row" aria-labelledby="home-models-title">
+                <h2 id="home-models-title">可用模型</h2>
+                <p class="status-line" id="home-models">尚未确认</p>
+                <p class="muted" id="home-models-detail">只计算已经授权的伙伴服务；本机可分享数量在“我的共享”。</p>
+                <details class="workflow-details" id="home-models-evidence" hidden>
+                  <summary>查看可用模型</summary>
+                  <div id="home-models-list"></div>
+                </details>
+                <button type="button" class="text-button" data-goto="discovery">去发现 →</button>
+              </section>
+              <section class="home-row" aria-labelledby="home-sharing-title">
+                <h2 id="home-sharing-title">我的共享</h2>
+                <p class="status-line" id="home-sharing">未开启</p>
+                <p class="muted" id="home-sharing-detail">只共享你明确选中的本机模型。</p>
+                <button type="button" class="text-button" data-goto="sharing">查看共享 →</button>
+              </section>
+              <section class="home-row" aria-labelledby="home-wallet-title">
+                <h2 id="home-wallet-title">钱包</h2>
+                <p class="status-line" id="home-wallet-assets">资产余额尚未查询</p>
+                <p class="muted" id="home-wallet-detail">测试环境；这里只读，不发起任何资金操作。</p>
+                <h3 class="subhead">提供者信用（按伙伴）</h3>
+                <ul class="credit-list" id="home-wallet-credit"><li class="muted">尚未读取</li></ul>
+                <button type="button" class="text-button" data-goto="wallet">查看钱包 →</button>
+              </section>
+              <section class="home-row" aria-labelledby="home-todo-title">
+                <h2 id="home-todo-title">待办</h2>
+                <ul class="todo-list" id="home-todos"></ul>
+              </section>
+            </div>
           </section>
-          <section id="discovery-panel" hidden></section>
-          <section id="sharing-panel" hidden></section>
-          <section id="connections-panel" hidden></section>
-          <section id="wallet-panel" hidden></section>
-          <section id="accounting-panel" hidden></section>
-          <section id="settings-panel" hidden>
-            <div class="page-heading"><div><p class="eyebrow" id="wizard-eyebrow">LET’S GET CONNECTED</p><h1 id="wizard-title">欢迎来到你的 AI 工作空间</h1><p id="wizard-subtitle">几个简单步骤，建立属于你的私有 AI 网络。</p></div><span class="pill">本机配置</span></div>
-            <ol class="stepper" id="stepper" aria-label="首次设置进度"><li data-step="0"><span>1</span>检查环境</li><li data-step="1"><span>2</span>选择能力</li><li data-step="2"><span>3</span>连接网络</li><li data-step="3"><span>4</span>安全状态</li></ol>
-            <form id="settings-form" class="card wizard-card" autocomplete="off">
-              <section id="environment-step" class="wizard-section"><div class="step-heading"><span class="step-icon" aria-hidden="true">✦</span><div><h2>从这台设备开始</h2><p>先确认本机服务，再选择你想如何使用 AIHub。</p></div></div><dl class="environment-grid"><div><dt>Magpie</dt><dd id="environment-magpie">正在读取</dd></div><div><dt>AIHub 插件</dt><dd id="environment-plugin">正在读取</dd></div><div><dt>网络引擎</dt><dd id="environment-engine">配置后启动</dd></div><div><dt>连接范围</dt><dd>仅本机 · 127.0.0.1</dd></div></dl><div class="soft-note">无需管理员权限，也不会创建系统虚拟网卡。Magpie 管理界面始终留在本机。</div></section>
-              <section id="roles-step" class="wizard-section" hidden><div class="step-heading"><span class="step-icon" aria-hidden="true">◈</span><div><h2>你的设备，可以有两种能力</h2><p>独立选择，也可以同时开启。之后随时可以调整。</p></div></div><div class="role-grid"><label class="role-card"><input type="checkbox" name="sharingEnabled" id="sharing"><span class="role-symbol" aria-hidden="true">↗</span><strong>共享我的 AI</strong><span>让私有网络中的伙伴使用本机 Magpie。具体模型和访问权限由后续配置决定。</span><small>你的能力，你来掌控</small></label><label class="role-card"><input type="checkbox" name="consumingEnabled" id="consuming"><span class="role-symbol" aria-hidden="true">↙</span><strong>使用伙伴的 AI</strong><span>通过本机 Magpie 使用远程能力。开启此项不会自动添加服务商。</span><small>连接伙伴，扩展可能</small></label></div><p class="muted">也可以暂时都不开启，只连接私有网络。</p></section>
-              <section id="network-step" class="wizard-section" hidden><div class="step-heading"><span class="step-icon" aria-hidden="true">⌘</span><div><h2>进入同一个私有网络</h2><p>与伙伴使用相同的网络名称和密码，通过一个已知节点建立连接。</p></div></div><div class="form-grid"><label class="field">网络名称<input id="network-name" name="networkName" type="text" minlength="2" maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,62}" required placeholder="例如 studio-ai"><small>2–63 位英文字母、数字、点、横线或下划线。</small></label><label class="field">网络密码<input id="network-secret" name="networkSecret" type="password" minlength="8" maxlength="1024" autocomplete="new-password" data-1p-ignore data-bwignore placeholder="至少 8 位字符"><small id="secret-help">只用于加入私有网络，不是 Magpie 访问密钥。</small></label><label class="field full-width">连接节点 <span class="optional">可选</span><textarea id="network-peers" name="peers" rows="3" maxlength="8192" placeholder="tcp://节点地址:11010"></textarea><small>每行一个节点地址。若不填写节点，请开启下方的接受网络连接，让伙伴能连接这台设备。</small></label></div><details class="advanced-network" id="advanced-network"><summary>高级网络设置</summary><p class="muted">同一台设备运行多个实例时，可为每个实例指定不同端口。未改动的值会保留。</p><label class="accept-connections"><input id="accept-incoming" type="checkbox">接受其他网络节点连接</label><div class="form-grid"><label class="field full-width">网络监听地址<input id="network-listen" name="listenAddr" type="text" maxlength="128" placeholder="例如 192.168.1.20:11010" disabled><small>填写本机可达的 IPv4 地址和端口，只监听加密网络连接。留空或关闭上方选项会停止监听；不会开放 Magpie 管理界面。</small></label><label class="field">本机管理端口<input id="network-rpc-port" name="rpcPort" type="number" min="1" max="65535" step="1" placeholder="自动分配"><small>始终只监听本机地址。</small></label><label class="field">目录发布端口<input id="network-catalog-port" name="catalogPort" type="number" min="1" max="65535" step="1" placeholder="使用已有配置"><small>仅在目录发布开启时使用。</small></label><label class="field">目录查询端口<input id="network-socks-port" name="catalogSocksPort" type="number" min="1" max="65535" step="1" placeholder="使用已有配置"><small>只在本机提供目录查询连接。</small></label></div></details><div class="soft-note">安全模式始终开启。保存会重新连接网络，正在使用的远程请求可能中断。未改动的高级配置会保留。</div></section>
-              <section id="safety-step" class="wizard-section" hidden><div class="step-heading"><span class="step-icon" aria-hidden="true">◇</span><div><h2>配置已保存，来确认连接状态</h2><p>保存成功不等于网络就绪；下面只显示实际检查结果。</p></div></div><div id="wizard-safety"></div><ul class="check-list" id="wizard-checks"></ul><button type="button" class="button secondary" id="wizard-run-checks">运行安全检查</button></section>
-              <p id="form-error" class="form-error" role="alert" hidden></p><div class="wizard-footer"><span class="muted" id="step-caption">第 1 步，共 4 步</span><div class="button-row"><button type="button" class="button secondary" id="wizard-back" hidden>上一步</button><button type="button" class="button primary" id="wizard-next">继续选择能力 <span aria-hidden="true">→</span></button><button type="submit" class="button primary" id="save" hidden>保存并连接网络 <span aria-hidden="true">→</span></button><button type="button" class="button primary" id="wizard-done" hidden>进入工作空间 <span aria-hidden="true">→</span></button></div></div>
+
+          <section id="discovery-page" aria-labelledby="discovery-title" hidden>
+            <div class="page-heading">
+              <div><h1 id="discovery-title">发现</h1><p>查看伙伴公开的模型与价格，管理已连接的伙伴服务。</p></div>
+            </div>
+            <div class="tabs" role="tablist" aria-label="发现内容">
+              <button type="button" class="tab" id="tab-catalog" role="tab" aria-selected="true" aria-controls="discovery-panel">伙伴目录</button>
+              <button type="button" class="tab" id="tab-connections" role="tab" aria-selected="false" aria-controls="connections-panel">我的连接</button>
+            </div>
+            <div id="discovery-panel" role="tabpanel" aria-labelledby="tab-catalog"></div>
+            <div id="connections-panel" role="tabpanel" aria-labelledby="tab-connections" hidden></div>
+          </section>
+
+          <section id="sharing-panel" aria-labelledby="sharing-title" hidden>
+            <div class="page-heading">
+              <div><h1 id="sharing-title">我的共享</h1><p>分享本机 Magpie 模型，并逐一审批伙伴的访问申请。</p></div>
+            </div>
+          </section>
+
+          <section id="wallet-page" aria-labelledby="wallet-title" hidden>
+            <div class="page-heading">
+              <div><h1 id="wallet-title">钱包</h1><p>测试网环境；本应用不持有私钥，不执行转账。</p></div>
+            </div>
+            <div id="wallet-panel"></div>
+            <details class="advanced-recovery" id="advanced-recovery">
+              <summary>高级恢复 · 账本与离线账单</summary>
+              <div id="accounting-panel"></div>
+            </details>
+          </section>
+
+          <section id="settings-panel" aria-labelledby="network-title" hidden>
+            <div class="page-heading">
+              <div><h1 id="network-title">网络</h1><p>用同一个网络名称和密钥连接伙伴；配置保存不代表已经在线。</p></div>
+            </div>
+
+            <form id="settings-form" class="card form-card" autocomplete="off" novalidate>
+              <div class="field-row">
+                <label class="field">
+                  <span>网络名称</span>
+                  <input id="network-name" name="networkName" type="text" minlength="2" maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{1,62}" required placeholder="例如 studio-ai" autocapitalize="off" spellcheck="false">
+                </label>
+                <label class="field">
+                  <span>网络密钥</span>
+                  <input id="network-secret" name="networkSecret" type="password" minlength="8" maxlength="1024" autocomplete="new-password" data-1p-ignore data-bwignore placeholder="至少 8 位字符">
+                </label>
+              </div>
+              <label class="field">
+                <span>初始节点</span>
+                <input id="network-peers" name="initialNode" type="text" maxlength="256" placeholder="例如 tcp://203.0.113.10:11010" autocapitalize="off" spellcheck="false">
+                <small id="peers-help">填写一个已知节点即可加入。也可以留空，等伙伴连入或稍后补上。</small>
+              </label>
+              <p class="form-error" id="form-error" role="alert" hidden></p>
+              <p class="muted small">已保存的密码不会回显，也不会写入浏览器存储。网络密钥只用于加入私有网络，不是 Magpie 访问密钥。</p>
+              <div class="actions">
+                <button type="submit" class="button primary" id="save">连接网络</button>
+                <span class="muted small" id="network-save-hint">保存只表示配置已写入；是否在线看下方实际结果。</span>
+              </div>
             </form>
-            <p class="setup-footnote">本应用不会回显已保存的密码，也不会把密码写入浏览器存储。</p>
+
+            <section class="card" aria-labelledby="network-result-title">
+              <div class="section-heading">
+                <h2 id="network-result-title">实际连接结果</h2>
+                <div class="actions">
+                  <span class="pill" id="network-readiness">尚未验证</span>
+                  <button type="button" class="button quiet" id="network-refresh">刷新网络状态</button>
+                </div>
+              </div>
+              <p class="muted" id="network-result-detail">首次准备网络引擎可能需要几分钟；这里只显示本机真实读取到的状态。</p>
+              <dl class="facts" id="network-facts"></dl>
+              <h3 class="subhead">节点</h3>
+              <ul class="peer-list" id="network-peers-list"></ul>
+              <p class="muted" id="network-peers-empty">还没有看到其他节点。邻居状态来自本机网络引擎，只用于诊断。</p>
+              <details class="diagnostics" id="network-diagnostics">
+                <summary>诊断与端口（只读）</summary>
+                <p class="muted small">端口来自本机读取，只作诊断。地址或端口被占用不等于由本插件验证；Magpie 自己持有的监听不在这些条目里。</p>
+                <dl class="facts" id="network-ports"></dl>
+                <div class="section-heading">
+                  <h3 class="subhead">安全检查</h3>
+                  <button type="button" class="button secondary" id="run-checks">重新检查</button>
+                </div>
+                <h3 class="subhead">P2P 控制通道（只读）</h3>
+                <dl class="facts" id="p2p-listener"></dl>
+                <p class="muted small" id="checks-time">尚未运行主动检查</p>
+                <ul class="check-list" id="checks-list"></ul>
+              </details>
+
+              <details class="diagnostics" id="wallet-diagnostics">
+                <summary>钱包与链诊断（RPC · 观察器 · 测试代币）</summary>
+              </details>
+            </section>
+
+            <section class="card" aria-labelledby="network-session-title">
+              <div class="section-heading"><h2 id="network-session-title">会话</h2></div>
+              <p class="muted small">这个浏览器只在本机连接；退出后需要从 Magpie 重新打开控制台。外观切换在右上角。</p>
+              <div class="actions">
+                <button type="button" class="button quiet" id="logout" hidden>退出本机会话</button>
+              </div>
+            </section>
           </section>
-          <footer class="page-footer"><span>Oh My AIHub <span class="footer-separator">·</span> 本机控制台</span><span id="last-update">等待首次更新</span></footer>
+
+          <footer class="page-footer"><span id="footer-state">本机控制台</span></footer>
         </div>
       </main>
     </div>

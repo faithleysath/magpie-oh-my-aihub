@@ -24,6 +24,9 @@ import type { WalletViewInput } from "../../src/walletview.ts";
 import type { KeyReadback } from "../../src/walletview.ts";
 import type { LedgerDepositLike } from "../../src/walletview.ts";
 
+/** One fixture clock for every production class that accepts `now`. */
+export const labNow = (lab: Lab) => () => new Date(lab.clock.at);
+
 export const RECIPIENT = "0x3d80c477021e3fa568e91c73baec8e806518d9a6";
 export const PROVIDER_ID = "provider-a";
 export const CONTRACT_97 = "0x5fbdb2315678afecb367f032d93f642f64180aa3";
@@ -45,6 +48,8 @@ export interface Lab {
   chains: Map<number, FakeChain>;
   assets: Map<number, AssetRecord>;
   clock: { at: Date };
+  /** The same fixture clock in epoch milliseconds (browser adapters take `now`). */
+  nowMs(): number;
   advance(ms: number): void;
   chainFor(chainId: number): FakeChain;
   assetFor(chainId: number): AssetRecord;
@@ -163,6 +168,7 @@ export function createLab(opts: { initialLookback?: number } = {}): Lab {
     chains,
     assets,
     clock,
+    nowMs: () => clock.at.getTime(),
     advance(ms) {
       clock.at = new Date(clock.at.getTime() + ms);
     },

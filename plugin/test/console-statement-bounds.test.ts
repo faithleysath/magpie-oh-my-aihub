@@ -20,7 +20,7 @@ async function fixture(count:number) {
     consoleWalletModule:()=>lab.wallet,walletForConfiguration:()=>lab.wallet,
     accountingStatus:()=>({uncertain:false,lastCheckAt:null,serving:false,uncertainReason:null}),
     walletStatement:async()=>statement} as unknown as Service;
-  return {adapter:new ConsoleWallet(service,join(lab.dir,"operations.json")),statement,consumerNode(){nodeId="alice";}};
+  return {adapter:new ConsoleWallet(service,join(lab.dir,"operations.json"),lab.nowMs),statement,consumerNode(){nodeId="alice";}};
 }
 describe("private statement export/import share one bound",()=>{
   test("a valid statement above 32 KiB round-trips through the named consumer import",async()=>{

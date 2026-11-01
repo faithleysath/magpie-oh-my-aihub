@@ -1,0 +1,107 @@
+name: windows
+
+# Windows coverage is deliberately narrower than the Linux/macOS job in
+# plugin.yml. It runs a curated, loopback-only subset and reports the platform
+# gaps; it never claims full Windows support. See
+# docs/validation/windows/COVERAGE.md.
+
+on:
+  pull_request:
+    paths:
+      - "plugin/**"
+      - "package.json"
+      - ".github/workflows/windows.yml"
+  push:
+    branches: [main]
+    paths:
+      - "plugin/**"
+      - "package.json"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-subset:
+    name: windows subset (bun 1.4.3, loopback only)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: plugin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+
+      - name: Frozen install
+        run: bun install --frozen-lockfile
+
+      - name: Confirm this is a real Windows runner
+        shell: pwsh
+        run: |
+          bun -e 'if (process.platform !== "win32") { console.error(`not win32: ${process.platform}`); process.exit(1); } console.log(`runtime ${process.platform}-${process.arch}, Bun ${Bun.version}`)'
+
+      - name: TypeScript (all sources, tests and scripts)
+        run: bun run typecheck
+
+      - name: Platform capability report (known gaps, not a GO)
+        run: bun run scripts/platform-report.ts
+
+      - name: Curated cross-platform tests (no production network)
+        shell: pwsh
+        run: |
+          # Public, exported, loopback-only tests. This is a subset, not "bun run test":
+          # EasyTier process/listener ownership, real Magpie and POSIX file modes are
+          # not exercised here (see windows-platform-report.md).
+          $files = @(
+            "test/acl.test.ts",
+            "test/networks.test.ts",
+            "test/pricing.test.ts",
+            "test/state.test.ts",
+            "test/paths.test.ts",
+            "test/keccak-eip712.test.ts",
+            "test/deposits.test.ts",
+            "test/ledger.test.ts",
+            "test/wallet-view.test.ts",
+            "test/catalog.test.ts",
+            "test/catalog-service.test.ts",
+            # test/provisioner.test.ts is intentionally not in this platform
+            # subset: on the Windows runner it hangs before executing a single
+            # test (no output, 15 s per-test timeout cannot interrupt it). It is
+            # unchanged by this branch and runs on Linux/macOS; tracked as a
+            # Windows gap in docs/validation/windows/COVERAGE.md, not silently
+            # treated as a pass.
+            "test/provisioner-ledger.test.ts",
+            "test/chain-credit.test.ts",
+            "test/watcher.test.ts",
+            "test/console-api.test.ts",
+            "test/console-security.test.ts",
+            "test/console-launch.test.ts",
+            "test/platform-runtime.test.ts",
+            "console/providers.test.js",
+            "console/session.test.js",
+            "console/wallet.test.js"
+          )
+          # The runner asserts a real summary from bun's console output:
+          # >=380 executed, 0 failures, and only the four reviewed POSIX-only
+          # skips (Bun 1.4.3 on win32 does not emit the JUnit file).
+          bun run scripts/run-windows-subset.ts -- $files
+
+      - name: Upload Windows evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-subset-${{ github.sha }}
+          path: |
+            plugin/windows-test-summary.md
+            plugin/windows-platform-report.md
+          if-no-files-found: warn
+          retention-days: 30

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConsoleInputError, createConsoleHandler, startConsoleServer } from "../src/console-server.ts";
+import { ConsoleInputError, createConsoleHandler, startConsoleServer, startConsoleServerWithFallback } from "../src/console-server.ts";
 import type { ConsoleHandler, ConsoleServerOptions } from "../src/console-server.ts";
 import { createHandler as createCliHandler } from "../src/server.ts";
 import { registerSecret } from "../src/log.ts";
@@ -703,6 +703,28 @@ describe("body bounds and real loopback listener", () => {
     await client.logout();
     expect((await h.handle(request(h, "/ui/api/state", { headers: { cookie } }))).status).toBe(401);
     client.dispose();
+  });
+
+  test("a saved console port that is now taken falls back to an OS-assigned port", async () => {
+    const blocker = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("taken") });
+    try {
+      const { server, fallback } = startConsoleServerWithFallback({
+        assetsDir,
+        port: blocker.port,
+        state: async () => ({ configured: false }),
+        action: async () => ({}),
+        allowedActions: ["configure"],
+      });
+      try {
+        expect(fallback).toBe(true);
+        expect(server.port).not.toBe(blocker.port);
+        expect((await fetch(server.origin)).status).toBe(200);
+      } finally {
+        server.stop();
+      }
+    } finally {
+      blocker.stop(true);
+    }
   });
 
   test("real server binds127, serves static and cookie state, no CLI route or bearer access", async () => {

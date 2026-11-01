@@ -91,8 +91,8 @@ export function planWalletIntent(input: {
     blockers: pending.length ? ["已有未完成的充值请求，请继续或取消原请求"] : [] };
 }
 
-export function externalSignatureDocument(raw:unknown, signature:unknown, payerAddress:unknown, localConsumerId:string|null) {
-  const {document}=previewDepositDocument(raw,localConsumerId);
+export function externalSignatureDocument(raw:unknown, signature:unknown, payerAddress:unknown, localConsumerId:string|null, now:Date=new Date()) {
+  const {document}=previewDepositDocument(raw,localConsumerId,now);
   const parsed=parseWalletSignature({signature,payerAddress},document.invoiceId);
   const recovered=recoverAddress(fromHex(document.digest),parsed.signature);
   if(!recovered||recovered.toLowerCase()!==parsed.payerAddress.toLowerCase())return walletBad("外部签名与请求或付款钱包不匹配");

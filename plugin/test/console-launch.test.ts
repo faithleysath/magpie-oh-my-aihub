@@ -102,7 +102,10 @@ test("root GitHub package identity must resolve main to this exact entry", () =>
 }));
 
 describe("single owner browser launch journal", () => {
-  test("browser pairing survives official approval restart through real handler + launcher, never revives old session or opens browser", () => isolated(async (dir) => {
+  // Windows cannot open a directory for fsync, so the durable pairing journal
+  // fails closed with 503 (see scripts/platform-report.ts). The product path is
+  // a known gap, not a pass; the rest of this file still runs on win32.
+  test.skipIf(process.platform === "win32")("browser pairing survives official approval restart through real handler + launcher, never revives old session or opens browser", () => isolated(async (dir) => {
     const pairingFile = join(dir, "pairing.json");
     const serverOptions = { pairingFile, state: async () => ({ configured: false }), action: async () => ({}), allowedActions: [] };
     const make = () => createConsoleHandler(serverOptions, 34567, { now: () => stamp });

@@ -1,0 +1,35 @@
+{
+ "platform": {
+  "os": "Darwin",
+  "release": "25.6.0",
+  "arch": "arm64"
+ },
+ "magpieVersion": "0.1.2289",
+ "magpieBinarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
+ "magpieSourceSha": "5c637f17b25dad63c490b1edf242c11a83b1b059",
+ "easytier": "2.6.4",
+ "easytierCommit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+ "hostBun": "1.4.4",
+ "labRepoHead": "7f65c03009bcd70a9d2002884a6b460faeb549d5",
+ "networkName": "(redacted in report)",
+ "nodes": {
+  "provider": {
+   "lan": "192.168.43.86",
+   "gateway": 28982,
+   "catalog": 54924,
+   "socks": 48025,
+   "listen": 54952,
+   "fixtureModel": "provider/provider-model",
+   "fixturePrice": "1000,1000,0,0"
+  },
+  "consumer": {
+   "lan": "192.168.43.86",
+   "gateway": 43523,
+   "catalog": 54923,
+   "socks": 43657,
+   "listen": 24595,
+   "fixtureModel": "consumer/consumer-model",
+   "fixturePrice": "1000,1000,0,0"
+  }
+ }
+}

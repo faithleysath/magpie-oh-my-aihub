@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { expectBlocked, isTestServerAllowed, registerTestServer, unregisterTestServer } from "./support/network-guard.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Service, type SupervisorLike } from "../src/service.ts";
 import type { EasytierConfig, ForwardSpec, Peer, PortForward, RouteRow, SupervisorState } from "../src/easytier.ts";
 import type { ProviderRecord } from "../src/magpie.ts";
-import { getProviderKey } from "../src/state.ts";
+import { FORWARD_PORT_FROM, FORWARD_PORT_TO, getProviderKey } from "../src/state.ts";
+import { fakePortOwnership } from "./support/fake-ports.ts";
 
 // A unit test for the multi-provider service: a fake Magpie (providers +
 // Gateway Keys), a fake EasyTier supervisor that behaves like 2.6.4 (a forward
@@ -186,14 +188,15 @@ class FakeSupervisor implements SupervisorLike {
 /** A loopback stand-in for a remote Magpie's keyed gateway. */
 class FakeGateway {
   server: ReturnType<typeof Bun.serve>;
+  /** The address the OS actually bound; nothing here guesses a port number. */
+  readonly port: number;
   constructor(
-    readonly port: number,
     readonly name: string,
     readonly keys: Set<string>,
   ) {
     this.server = Bun.serve({
       hostname: "127.0.0.1",
-      port,
+      port: 0,
       fetch: (req) => {
         const auth = req.headers.get("authorization") ?? "";
         const key = auth.replace(/^Bearer\s+/i, "");
@@ -201,8 +204,12 @@ class FakeGateway {
         return Response.json({ object: "list", data: [{ id: `${this.name}-model`, object: "model" }] });
       },
     });
+    this.port = this.server.port!;
   }
+  private stopped = false;
   stop() {
+    if (this.stopped) return;
+    this.stopped = true;
     this.server.stop(true);
   }
 }
@@ -211,26 +218,39 @@ let services: Service[] = [];
 let gateways: FakeGateway[] = [];
 let magpie: FakeMagpie;
 let sup: FakeSupervisor;
-let nextPort = 13525;
 /** This node's own gateway: it refuses every unkeyed call, like a real one. */
 let localGateway: ReturnType<typeof Bun.serve> | null = null;
-const LOCAL_GATEWAY_PORT = 13650;
+/** Port of the server above, fixed for the duration of one test. */
+let localGatewayPort = 0;
+// Captured when the module loads so `afterAll` can put the process back exactly
+// as this file found it, even when a test throws.
+const originalMagpieAddr = process.env.MAGPIE_ADDR;
+const originalCwd = process.cwd();
+/** Origins registered with `registerTestServer`, for the afterAll fallback. */
+const explicitOrigins = new Set<string>();
 
-beforeEach(() => {
-  const dir = mkdtempSync(join(tmpdir(), "ohmyaihub-service-"));
-  process.chdir(dir);
-  for (const s of services.splice(0)) void s.stop();
+async function closeOpenResources(): Promise<void> {
+  // Service.stop() is asynchronous: the next test must not start while the
+  // previous supervisor is still shutting down.
+  await Promise.all(services.splice(0).map((s) => s.stop()));
   for (const g of gateways.splice(0)) g.stop();
   localGateway?.stop(true);
+  localGateway = null;
+}
+
+beforeEach(async () => {
+  await closeOpenResources();
+  const dir = mkdtempSync(join(tmpdir(), "ohmyaihub-service-"));
+  process.chdir(dir);
   localGateway = Bun.serve({
     hostname: "127.0.0.1",
-    port: LOCAL_GATEWAY_PORT,
+    port: 0,
     fetch: () => new Response("no key", { status: 401 }),
   });
-  process.env.MAGPIE_ADDR = `127.0.0.1:${LOCAL_GATEWAY_PORT}`;
+  localGatewayPort = localGateway.port!;
+  process.env.MAGPIE_ADDR = `127.0.0.1:${localGatewayPort}`;
   magpie = new FakeMagpie();
   sup = new FakeSupervisor();
-  nextPort = 13525;
 });
 
 async function service(opts: { sharing?: boolean; consuming?: boolean; fresh?: boolean } = {}): Promise<Service> {
@@ -238,8 +258,14 @@ async function service(opts: { sharing?: boolean; consuming?: boolean; fresh?: b
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
+    ports: { ownership: fakePortOwnership() },
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 400,
+    // This suite exercises shares/providers, not the chain module: an injected
+    // null wallet keeps `configure()` from opening watchers, and the key limit
+    // read-back is not part of it (the wallet suites inject their own).
+    wallet: null,
+    probes: { remoteLimit: async () => null },
   });
   services.push(s);
   await s.configure({
@@ -256,21 +282,32 @@ async function service(opts: { sharing?: boolean; consuming?: boolean; fresh?: b
  * test needs the plugin to choose its own new port (retargeting) and still have
  * that port answer like a keyed gateway.
  */
-async function serviceSim(portKeys: Map<number, string>, opts: { sharing?: boolean; consuming?: boolean } = {}): Promise<Service> {
+function isForwardPort(port: number): boolean {
+  return port >= FORWARD_PORT_FROM && port <= FORWARD_PORT_TO;
+}
+
+async function serviceSim(
+  portKeys: Map<number, string>,
+  opts: { sharing?: boolean; consuming?: boolean; anyForwardKey?: string } = {},
+): Promise<Service> {
   const sim = new Service({
     magpie: magpie as never,
     magpieVersion: "magpie 0.1.2038",
     supervisor: sup,
+    ports: { ownership: fakePortOwnership() },
     lanIp: () => "127.0.0.1",
     probeTimeoutMs: 400,
+    wallet: null,
     probes: {
+      remoteLimit: async () => null,
       statusWith: async (_host, port, want, bearer) => {
-        if (port === LOCAL_GATEWAY_PORT) return want === 401;
-        const key = portKeys.get(port);
+        if (port === localGatewayPort) return want === 401;
+        const key = portKeys.get(port) ?? (isForwardPort(port) ? opts.anyForwardKey : undefined);
         if (!key) return false;
         return want === (bearer === key ? 200 : 401);
       },
-      remoteModelIds: async (port) => (portKeys.has(port) ? ["sim-model"] : null),
+      remoteModelIds: async (port) =>
+        portKeys.has(port) || (isForwardPort(port) && opts.anyForwardKey !== undefined) ? ["sim-model"] : null,
     },
   });
   services.push(sim);
@@ -284,9 +321,8 @@ async function serviceSim(portKeys: Map<number, string>, opts: { sharing?: boole
 }
 
 function gateway(name: string, keys: string[]): FakeGateway {
-  const g = new FakeGateway(nextPort, name, new Set(keys));
+  const g = new FakeGateway(name, new Set(keys));
   gateways.push(g);
-  nextPort += 1;
   return g;
 }
 
@@ -316,9 +352,8 @@ describe("several remote providers", () => {
   });
 
   test("re-adding without a local port keeps the same listener", async () => {
-    const portKeys = new Map<number, string>();
-    for (let port = 13425; port < 13440; port++) portKeys.set(port, "sk-test-provider-b-0001");
-    const s = await serviceSim(portKeys);
+    // Any port the product's allocator picks answers with this key.
+    const s = await serviceSim(new Map(), { anyForwardKey: "sk-test-provider-b-0001" });
     sup.route("10.66.1.2", "ohmyaihub-b0000001");
     const first = await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425 });
     const starts = sup.starts;
@@ -422,12 +457,27 @@ describe("several remote providers", () => {
     await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: b.port });
     await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: c.port });
 
+    // The provider is down on purpose: re-declare its own (now closed) port so
+    // the reconcile probe may reach the OS and observe a refused connection,
+    // instead of the hermetic guard blocking a port no test declares. The
+    // explicit registration is undone afterwards: `server.stop()` only removes
+    // the automatic one.
+    const closedOrigin = `http://127.0.0.1:${b.port}`;
     b.stop();
-    const after = await s.reconcileProviders({ verifyModels: true });
-    expect(after.find((p) => p.id === "peer-b")!.status).toBe("degraded");
-    expect(after.find((p) => p.id === "peer-c")!.status).toBe("connected");
-    // a degraded provider is not unregistered: Magpie would just fail its calls
-    expect(magpie.providers_().map((p) => p.id).sort()).toEqual(["peer-b", "peer-c"]);
+    registerTestServer(closedOrigin);
+    explicitOrigins.add(closedOrigin);
+    try {
+      const after = await s.reconcileProviders({ verifyModels: true });
+      expect(after.find((p) => p.id === "peer-b")!.status).toBe("degraded");
+      expect(after.find((p) => p.id === "peer-c")!.status).toBe("connected");
+      // a degraded provider is not unregistered: Magpie would just fail its calls
+      expect(magpie.providers_().map((p) => p.id).sort()).toEqual(["peer-b", "peer-c"]);
+    } finally {
+      unregisterTestServer(closedOrigin);
+      explicitOrigins.delete(closedOrigin);
+      expect(isTestServerAllowed(closedOrigin)).toBe(false);
+      expect(await expectBlocked(() => fetch(closedOrigin))).toBe(true);
+    }
   });
 
   test("a mapped address taken over by another overlay name is unregistered, then restored", async () => {
@@ -467,7 +517,7 @@ describe("several remote providers", () => {
     expect(providers.map((p) => p.id).sort()).toEqual(["peer-b", "peer-c"]);
     expect(providers.every((p) => p.status === "connected")).toBe(true);
     expect(magpie.providers_().map((p) => p.id).sort()).toEqual(["peer-b", "peer-c"]);
-    expect(sup.forwards.map((f) => f.bindAddr).sort()).toEqual([`127.0.0.1:${b.port}`, `127.0.0.1:${c.port}`]);
+    expect(sup.forwards.map((f) => f.bindAddr).sort()).toEqual([`127.0.0.1:${b.port}`, `127.0.0.1:${c.port}`].sort());
   });
 
   test("the key of one provider is not handed to another", async () => {
@@ -511,11 +561,12 @@ describe("several remote providers", () => {
   });
 
   test("an update that only changes the destination picks a fresh port and verifies it first", async () => {
-    const portKeys = new Map<number, string>();
-    const oldPort = 13525;
-    portKeys.set(oldPort, "sk-test-provider-b-0001");
-    for (let port = 13425; port < 13440; port++) portKeys.set(port, "sk-test-provider-b-0001");
-    const s = await serviceSim(portKeys);
+    // The old listener is a real OS-assigned server, not a guessed number.
+    const old = gateway("old-b", ["sk-test-provider-b-0001"]);
+    const oldPort = old.port;
+    const s = await serviceSim(new Map([[oldPort, "sk-test-provider-b-0001"]]), {
+      anyForwardKey: "sk-test-provider-b-0001",
+    });
     sup.route("10.66.1.2", "ohmyaihub-b0000001");
     sup.route("10.66.1.9", "ohmyaihub-b0000009");
     const first = await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: oldPort });
@@ -524,8 +575,8 @@ describe("several remote providers", () => {
     const updated = await s.updateProvider("peer-b", { mappedCidr: "10.66.1.9/32" });
     expect(updated.mappedCidr).toBe("10.66.1.9/32");
     expect(updated.localPort).not.toBe(oldPort);
-    expect(updated.localPort).toBeGreaterThanOrEqual(13425);
-    expect(updated.localPort).toBeLessThan(13440);
+    expect(updated.localPort).toBeGreaterThanOrEqual(FORWARD_PORT_FROM);
+    expect(updated.localPort).toBeLessThanOrEqual(FORWARD_PORT_TO);
     expect(updated.status).toBe("connected");
     // the new target was proven through the new port before the old one retired
     expect(sup.forwards.map((f) => f.bindAddr).sort()).toEqual([`127.0.0.1:${updated.localPort}`]);
@@ -549,16 +600,19 @@ describe("several remote providers", () => {
   });
 
   test("a retarget whose new path never answers keeps the old connection and records the failed listener", async () => {
-    const portKeys = new Map<number, string>();
-    const oldPort = 13525;
-    portKeys.set(oldPort, "sk-test-provider-b-0001");
-    portKeys.set(13527, "sk-test-provider-c-0001");
+    const old = gateway("old-b", ["sk-test-provider-b-0001"]);
+    const other = gateway("old-c", ["sk-test-provider-c-0001"]);
+    const oldPort = old.port, otherPort = other.port;
+    const portKeys = new Map<number, string>([
+      [oldPort, "sk-test-provider-b-0001"],
+      [otherPort, "sk-test-provider-c-0001"],
+    ]);
     // No fresh port answers: the update fails at the first ingress probe.
     const s = await serviceSim(portKeys, { sharing: false, consuming: true });
     sup.route("10.66.1.2", "ohmyaihub-b0000001");
     sup.route("10.66.1.9", "ohmyaihub-b0000009");
     await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: oldPort });
-    await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: 13527 });
+    await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: otherPort });
 
     await expect(s.updateProvider("peer-b", { mappedCidr: "10.66.1.9/32" })).rejects.toThrow(/did not answer 401/);
     const rec = s.providers().find((p) => p.id === "peer-b")!;
@@ -570,24 +624,29 @@ describe("several remote providers", () => {
     expect(s.providers().find((p) => p.id === "peer-c")!.status).toBe("connected");
     const orphans = (s as unknown as { state: { orphanForwards: { localPort: number }[] } }).state.orphanForwards;
     expect(orphans).toHaveLength(1);
-    expect(orphans[0].localPort).toBeGreaterThanOrEqual(13425);
+    expect(orphans[0].localPort).toBeGreaterThanOrEqual(FORWARD_PORT_FROM);
+    expect(orphans[0].localPort).toBeLessThanOrEqual(FORWARD_PORT_TO);
     expect(orphans[0].localPort).not.toBe(oldPort);
   });
 
   test("a failed retarget keeps the old provider working and restores its registration", async () => {
-    const portKeys = new Map<number, string>();
-    const oldPort = 13525;
-    portKeys.set(oldPort, "sk-test-provider-b-0001");
-    portKeys.set(13527, "sk-test-provider-c-0001");
+    const old = gateway("old-b", ["sk-test-provider-b-0001"]);
+    const other = gateway("old-c", ["sk-test-provider-c-0001"]);
+    const oldPort = old.port, otherPort = other.port;
     // Every fresh port answers the key probes but serves no model, so the
     // failure happens after the new registration was written.
-    for (let port = 13425; port < 13440; port++) portKeys.set(port, "sk-test-provider-b-0001");
-    const s = await serviceSim(portKeys, { sharing: false, consuming: true });
+    const s = await serviceSim(
+      new Map<number, string>([
+        [oldPort, "sk-test-provider-b-0001"],
+        [otherPort, "sk-test-provider-c-0001"],
+      ]),
+      { sharing: false, consuming: true, anyForwardKey: "sk-test-provider-b-0001" },
+    );
     sup.route("10.66.1.2", "ohmyaihub-b0000001");
     sup.route("10.66.1.9", "ohmyaihub-b0000009");
     await s.addProvider({ id: "peer-b", mappedCidr: "10.66.1.2/32", key: "sk-test-provider-b-0001", providerPort: 3425, localPort: oldPort });
-    const other = await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: 13527 });
-    void other;
+    const otherProvider = await s.addProvider({ id: "peer-c", mappedCidr: "10.66.1.3/32", key: "sk-test-provider-c-0001", providerPort: 3425, localPort: otherPort });
+    void otherProvider;
 
     // Make the new target answer the key but serve no model, after the
     // registration step; then the update must roll back.
@@ -654,6 +713,8 @@ describe("the two capabilities are independent", () => {
     expect(magpie.nativeProviderIds().has("alpha")).toBe(true);
     expect(magpie.providers_().map((p) => p.id)).toEqual(["my-own-vendor"]);
 
+    // Re-enabling sharing needs an exact selection, not the wildcard default.
+    await s.setShareModels(["alpha/native-model"]);
     await s.setSharing(true);
     expect(sup.cfg!.proxyCidr).toBe("127.0.0.1/32");
     expect(s.config()!.mappedCidr).toBe(mapped);
@@ -855,7 +916,7 @@ describe("the share guard reacts to changes made outside the plugin", () => {
 
     magpie.native.delete("alpha");
     magpie.providers.set("alpha", { id: "alpha", preset: "remote-magpie", chat: "http://127.0.0.1:1/v1", key: "sk-test-foreign" });
-    const restarted = new Service({ magpie: magpie as never, magpieVersion: "magpie 0.1.2038", supervisor: sup, lanIp: () => "127.0.0.1", probeTimeoutMs: 400 });
+    const restarted = new Service({ magpie: magpie as never, magpieVersion: "magpie 0.1.2038", supervisor: sup, lanIp: () => "127.0.0.1", probeTimeoutMs: 400, ports: { ownership: fakePortOwnership() }, wallet: null, probes: { remoteLimit: async () => null } });
     services.push(restarted);
     await restarted.start();
     await restarted.stop();
@@ -978,4 +1039,27 @@ describe("secrets stay out of the status", () => {
     expect(text).not.toContain("service-lab-secret");
     expect(status.providers[0].keyRef).toContain("provider-keys.json#");
   });
+});
+
+describe("resource ownership", () => {
+  test("closeOpenResources waits for an asynchronous stop", async () => {
+    let stopped = false;
+    services.push({ stop: async () => { await Bun.sleep(20); stopped = true; } } as unknown as Service);
+    await closeOpenResources();
+    expect(stopped).toBe(true);
+  });
+});
+
+// Ownership: whatever a failing last test left open is closed with the file,
+// and the process environment and cwd are restored even when cleanup throws.
+afterAll(async () => {
+  try {
+    await closeOpenResources();
+  } finally {
+    for (const origin of explicitOrigins) unregisterTestServer(origin);
+    explicitOrigins.clear();
+    if (originalMagpieAddr === undefined) delete process.env.MAGPIE_ADDR;
+    else process.env.MAGPIE_ADDR = originalMagpieAddr;
+    process.chdir(originalCwd);
+  }
 });

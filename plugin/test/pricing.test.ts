@@ -6,6 +6,7 @@ import {
   normalizePrice,
   priceSnapshot,
   priceVersionOf,
+  unsupportedPriceReason,
   usdToNanos,
   GRID_NANOS,
 } from "../src/pricing.ts";
@@ -21,6 +22,16 @@ describe("price validation", () => {
     expect(normalizePrice({ ...p, cache_write: -1 })).toBeNull();
     expect(normalizePrice({ ...p, tiers: [] })).toBeNull();
     expect(normalizePrice({ ...p, tiers: [{ above: 0, ...p }] })).toBeNull();
+  });
+
+  test("a peak or rate-window price is refused instead of being treated as static", () => {
+    expect(normalizePrice({ ...p, peak: "deepseek" })).toBeNull();
+    expect(normalizePrice({ ...p, peak: "weekdays" })).toBeNull();
+    expect(normalizePrice({ ...p, peak: 1 as never })).toBeNull();
+    expect(normalizePrice({ ...p, peak: "" })).toEqual(p);
+    expect(unsupportedPriceReason(p, { rateWindows: [{ start: "09:00", end: "12:00", rate: 2 }] })).toBe("rate-window");
+    expect(unsupportedPriceReason(p, { rateWindows: [] })).toBeNull();
+    expect(catalogPriceVersion([{ id: "a/m", pricing: { ...p, peak: "deepseek", unit: "USD per 1M tokens", source: "magpie-gateway" } }])).toBeNull();
   });
 
   test("the price version changes with any part, and not with key order", () => {

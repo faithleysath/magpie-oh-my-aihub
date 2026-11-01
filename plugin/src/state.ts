@@ -22,8 +22,9 @@ import { stateDir, statePath } from "./paths.ts";
 import { backupFile, readJsonWithBackup, writeJsonAtomic } from "./store.ts";
 import { logger, registerSecret } from "./log.ts";
 import { randomMappedCidr } from "./addresses.ts";
+import { emptyPortLedger, normalizePortLedger, type PortLedger } from "./ports.ts";
 
-export const STATE_VERSION = 3;
+export const STATE_VERSION = 4;
 
 /** The overlay's forward-port range; one port per remote provider. */
 export const FORWARD_PORT_FROM = 13425;
@@ -101,9 +102,174 @@ export interface PluginConfig {
   secureIdentity: SecureIdentity | null;
   share: SharePolicy;
   catalog: CatalogConfig;
+  /**
+   * Reserved for the Phase 10 B control listener: every joined node may receive
+   * structured requests, not only a node that shares models. The A-service branch
+   * owns the port mechanism; the B service owns the listener itself. Leaving it
+   * true changes nothing until that service exists.
+   */
+  controlEnabled: boolean;
+  /** the control listener's port; null until it is allocated (never user-entered) */
+  controlPort: number | null;
 }
 
 export type ConnectionStatus = "connected" | "degraded" | "disabled" | "identity-mismatch";
+
+/** How long a real model read-back can be trusted without a fresh read. */
+export const MODELS_EVIDENCE_TTL_MS = 5 * 60_000;
+
+/**
+ * Real evidence of what one Remote Magpie served for this provider's Gateway
+ * Key. This is deliberately separate from the sharing authorization list: only
+ * a successful read-back with the current key/identity makes models "callable".
+ */
+export interface ProviderModelsEvidence {
+  status: "current" | "stale" | "unknown";
+  source: "connect-readback" | "provider-models" | "reconcile";
+  readAt: string | null;
+  expiresAt: string | null;
+  models: string[];
+  modelCount: number | null;
+  callable: "yes" | "no" | "unknown";
+  identity: { hostname: string | null; virtualIpv4: string | null; fingerprint: string | null } | null;
+  /** monotonic per provider; increases only on a successful real read */
+  generation: number;
+  keyRef: string;
+  keyGeneration: number;
+  error: string | null;
+}
+
+export function unknownModelsEvidence(keyRef: string, keyGeneration = 1): ProviderModelsEvidence {
+  return {
+    status: "unknown",
+    source: "connect-readback",
+    readAt: null,
+    expiresAt: null,
+    models: [],
+    modelCount: null,
+    callable: "unknown",
+    identity: null,
+    generation: 0,
+    keyRef,
+    keyGeneration,
+    error: null,
+  };
+}
+
+function identityMatches(
+  a: ProviderModelsEvidence["identity"],
+  b: ProviderConnection["fingerprint"],
+  acceptedA: string | null,
+  acceptedB: string | null,
+): boolean {
+  if (a === null && b === null) return true;
+  if (!a || !b) return false;
+  if (acceptedA && acceptedB && acceptedA !== acceptedB) return false;
+  return (a.hostname ?? "") === (b.hostname ?? "") && (a.virtualIpv4 ?? "") === (b.virtualIpv4 ?? "");
+}
+
+function normalizeModelsEvidence(
+  raw: ProviderModelsEvidence | null | undefined,
+  keyRef: string,
+  keyGeneration: number,
+): ProviderModelsEvidence | null {
+  if (!raw || typeof raw !== "object") return null;
+  const status = raw.status === "current" || raw.status === "stale" ? raw.status : "unknown";
+  const source =
+    raw.source === "provider-models" || raw.source === "reconcile" ? raw.source : "connect-readback";
+  const callable = raw.callable === "yes" || raw.callable === "no" ? raw.callable : "unknown";
+  return {
+    status,
+    source,
+    readAt: typeof raw.readAt === "string" ? raw.readAt : null,
+    expiresAt: typeof raw.expiresAt === "string" ? raw.expiresAt : null,
+    models: Array.isArray(raw.models) ? raw.models.map(String) : [],
+    modelCount: Number.isInteger(raw.modelCount) ? raw.modelCount : null,
+    callable,
+    identity:
+      raw.identity && typeof raw.identity === "object"
+        ? {
+            hostname: typeof raw.identity.hostname === "string" ? raw.identity.hostname : null,
+            virtualIpv4: typeof raw.identity.virtualIpv4 === "string" ? raw.identity.virtualIpv4 : null,
+            fingerprint: typeof raw.identity.fingerprint === "string" ? raw.identity.fingerprint : null,
+          }
+        : null,
+    generation: Number.isInteger(raw.generation) && raw.generation >= 0 ? raw.generation : 0,
+    keyRef: typeof raw.keyRef === "string" && raw.keyRef ? raw.keyRef : keyRef,
+    keyGeneration: Number.isInteger(raw.keyGeneration) && raw.keyGeneration > 0 ? raw.keyGeneration : keyGeneration,
+    error: typeof raw.error === "string" ? raw.error : null,
+  };
+}
+
+/**
+ * Projects stored evidence to the console. It never probes; a later poll only
+ * decides whether the stored proof is still valid.
+ */
+export function projectModelsEvidence(p: ProviderConnection, now = Date.now()): ProviderModelsEvidence {
+  const stored = p.modelsEvidence ?? null;
+  const keyGeneration = Number.isInteger(p.keyGeneration) && (p.keyGeneration ?? 0) > 0 ? p.keyGeneration! : 1;
+  if (!stored) return unknownModelsEvidence(p.keyRef, keyGeneration);
+  const currentKey = stored.keyGeneration === keyGeneration;
+  const currentIdentity = identityMatches(stored.identity, p.fingerprint, stored.identity?.fingerprint ?? null, p.acceptedFingerprint ?? null);
+  const currentKeyRef = stored.keyRef === p.keyRef;
+  const readAtMs = stored.readAt ? Date.parse(stored.readAt) : Number.NaN;
+  const expiresMs = stored.expiresAt ? Date.parse(stored.expiresAt) : Number.NaN;
+  const invalidReadAt = !Number.isFinite(readAtMs);
+  const futureReadAt = Number.isFinite(readAtMs) && readAtMs > now + 60_000;
+  const invalidExpiry = !Number.isFinite(expiresMs) || (Number.isFinite(readAtMs) && expiresMs < readAtMs);
+  const ttlTooLong =
+    Number.isFinite(readAtMs) && Number.isFinite(expiresMs) && expiresMs - readAtMs > MODELS_EVIDENCE_TTL_MS;
+  const expired = Number.isFinite(expiresMs) && now > expiresMs;
+  const notServing = p.status !== "connected";
+  const status: ProviderModelsEvidence["status"] =
+    !currentKeyRef
+      ? "unknown"
+      : stored.status === "unknown" ||
+          !currentKey ||
+          !currentIdentity ||
+          invalidReadAt ||
+          futureReadAt ||
+          invalidExpiry ||
+          ttlTooLong ||
+          expired ||
+          notServing
+        ? "stale"
+        : stored.status;
+  const current = status === "current";
+  const callable: ProviderModelsEvidence["callable"] = current
+    ? stored.models.length > 0
+      ? "yes"
+      : "no"
+    : stored.callable === "no" && stored.error !== null
+      ? "no"
+      : "unknown";
+  return {
+    ...stored,
+    status,
+    modelCount: current ? stored.models.length : null,
+    callable,
+    error:
+      status === "stale" && stored.error === null
+        ? expired
+          ? "the model read-back expired; read it again"
+          : futureReadAt
+            ? "the model read-back time is in the future; read it again"
+            : invalidReadAt || invalidExpiry
+              ? "the model read-back timestamps are invalid; read it again"
+              : !currentKey
+                ? "the Gateway Key changed; read the models again"
+                : !currentIdentity
+                  ? "the provider identity changed; read the models again"
+                  : ttlTooLong
+                    ? "the model read-back TTL is longer than allowed; read it again"
+                    : "the provider is not serving"
+        : !currentKeyRef
+          ? "the model read-back belongs to a different key reference; read it again"
+          : ttlTooLong
+            ? "the model read-back TTL is longer than allowed; read it again"
+            : stored.error,
+  };
+}
 
 /** What the overlay said about the peer that owned a mapped prefix. */
 export interface PeerFingerprint {
@@ -142,6 +308,21 @@ export interface ProviderConnection {
   /** reference into the key store, never the key itself */
   keyRef: string;
   fingerprint: PeerFingerprint | null;
+  /** models verified at connect time; [] = none recorded (never an authorization claim) */
+  models: string[];
+  /**
+   * A forward move that was persisted before the core/Magpie were touched. It
+   * lets a crash between the restart/registration and the state commit recover
+   * the plugin's own URL without mistaking an edited entry for ours. Cleared on
+   * success or rollback.
+   */
+  forwardPending?: { from: number; to: number; at: string } | null;
+  /** increments when the stored Gateway Key changes */
+  keyGeneration?: number;
+  /** the exact catalogue fingerprint the operator accepted, when there was one */
+  acceptedFingerprint?: string | null;
+  /** the latest real read-back, never the authorization allow list */
+  modelsEvidence?: ProviderModelsEvidence | null;
   status: ConnectionStatus;
   detail: string | null;
   limit: ProviderLimitView | null;
@@ -154,6 +335,9 @@ export interface OrphanForward {
   localPort: number;
   dstAddr: string;
   since: string;
+  /** observed owner evidence; no secret */
+  pids?: number[];
+  detail?: string | null;
 }
 
 export interface ShareSuspension {
@@ -174,6 +358,8 @@ export interface PluginState {
    * (`config.sharingEnabled`) is kept; the export is not.
    */
   shareSuspended: ShareSuspension | null;
+  /** automatic port claims: what was migrated and when each port was last proven */
+  ports: PortLedger;
 }
 
 /** The shape phase 3 wrote; read only, never written. */
@@ -195,6 +381,8 @@ interface LegacyConfig {
   secureIdentity?: SecureIdentity | null;
   share?: SharePolicy;
   catalog?: Partial<CatalogConfig>;
+  controlEnabled?: boolean;
+  controlPort?: number | null;
   sharingEnabled?: boolean;
   consumingEnabled?: boolean;
 }
@@ -216,6 +404,7 @@ interface LegacyState {
   providerWiring?: LegacyWiring | null;
   orphanForwards?: OrphanForward[];
   shareSuspended?: ShareSuspension | null;
+  ports?: unknown;
 }
 
 const KEY_STORE = "provider-keys.json";
@@ -315,16 +504,24 @@ function normalizeConfig(raw: LegacyConfig, wiring: LegacyWiring | null): Plugin
     publishedPorts: Array.isArray(raw.publishedPorts) ? raw.publishedPorts.map(Number).filter(Number.isFinite) : [],
     secureMode: raw.secureMode ?? true,
     secureIdentity: raw.secureIdentity ?? null,
-    share: normalizeShare(raw.share),
+    share: normalizeShare(raw.share, sharingEnabled),
     // A phase-4 document has no catalogue yet: both switches stay off, so an
     // upgrade never starts a listener or publishes anything by itself.
     catalog: normalizeCatalogConfig(raw.catalog),
+    // Default on: receiving a structured request is the normal state for a
+    // joined node. There is no listener until the B service is installed.
+    controlEnabled: raw.controlEnabled ?? true,
+    controlPort: portIn(raw.controlPort, 0) || null,
   };
 }
 
-function normalizeShare(share: SharePolicy | undefined): SharePolicy {
-  const models = Array.isArray(share?.models) ? share.models.map(String).filter(Boolean) : ["*"];
-  return { models: models.length ? models : ["*"] };
+function normalizeShare(share: SharePolicy | undefined, sharingEnabled: boolean): SharePolicy {
+  const models = Array.isArray(share?.models) ? share.models.map(String).filter(Boolean) : [];
+  // A legacy document that shared before the allow list existed keeps the old
+  // "everything" meaning; a new node starts with nothing selected, so no future
+  // model is shared without an explicit choice.
+  if (!models.length && sharingEnabled) return { models: ["*"] };
+  return { models };
 }
 
 function portIn(value: unknown, fallback: number): number {
@@ -425,6 +622,26 @@ export function loadState(): LoadedState {
         localPort: Number(p.localPort ?? 0),
         keyRef: p.keyRef ?? providerKeyRef(p.id),
         fingerprint: p.fingerprint ?? null,
+        models: Array.isArray(p.models) ? p.models.map(String) : [],
+        forwardPending:
+          p.forwardPending &&
+          Number.isInteger(p.forwardPending.from) &&
+          Number.isInteger(p.forwardPending.to) &&
+          typeof p.forwardPending.at === "string"
+            ? { from: p.forwardPending.from, to: p.forwardPending.to, at: p.forwardPending.at }
+            : null,
+        keyGeneration:
+          Number.isInteger((p as ProviderConnection).keyGeneration) && ((p as ProviderConnection).keyGeneration ?? 0) > 0
+            ? (p as ProviderConnection).keyGeneration!
+            : 1,
+        acceptedFingerprint: typeof p.acceptedFingerprint === "string" ? p.acceptedFingerprint : null,
+        modelsEvidence: normalizeModelsEvidence(
+          p.modelsEvidence,
+          p.keyRef ?? providerKeyRef(p.id),
+          Number.isInteger((p as ProviderConnection).keyGeneration) && ((p as ProviderConnection).keyGeneration ?? 0) > 0
+            ? (p as ProviderConnection).keyGeneration!
+            : 1,
+        ),
         status: p.status ?? "degraded",
         detail: p.detail ?? null,
         limit: p.limit ?? null,
@@ -447,6 +664,11 @@ export function loadState(): LoadedState {
       localPort: Number(wiring.localPort ?? 0),
       keyRef: providerKeyRef(wiring.id),
       fingerprint: null,
+      models: [],
+      forwardPending: null,
+      keyGeneration: 1,
+      acceptedFingerprint: null,
+      modelsEvidence: null,
       status: "degraded",
       detail: "migrated from the phase-3 provider wiring; not verified since",
       limit: null,
@@ -464,6 +686,7 @@ export function loadState(): LoadedState {
     providers,
     orphanForwards: Array.isArray(value.orphanForwards) ? value.orphanForwards : [],
     shareSuspended: value.shareSuspended ?? null,
+    ports: normalizePortLedger((value as LegacyState & { ports?: unknown }).ports),
   };
 
   const migratedFrom = legacy ? (typeof value.version === "number" ? value.version : 1) : null;
@@ -482,7 +705,15 @@ export function loadState(): LoadedState {
 }
 
 export function emptyState(): PluginState {
-  return { version: STATE_VERSION, config: null, consumers: [], providers: [], orphanForwards: [], shareSuspended: null };
+  return {
+    version: STATE_VERSION,
+    config: null,
+    consumers: [],
+    providers: [],
+    orphanForwards: [],
+    shareSuspended: null,
+    ports: emptyPortLedger(),
+  };
 }
 
 export function saveState(state: PluginState): void {
@@ -501,6 +732,11 @@ export interface ProviderView {
   status: ConnectionStatus;
   detail: string | null;
   fingerprint: PeerFingerprint | null;
+  /** models verified at connect time; [] = none recorded, not "authorized to nothing" */
+  models: string[];
+  keyGeneration: number;
+  /** projected, poll-safe model evidence; only status==="current" is callable */
+  modelsEvidence: ProviderModelsEvidence;
   /** the provider's own native limit numbers, read through its keyed forward */
   limit: ProviderLimitView | null;
   createdAt: string;
@@ -508,7 +744,7 @@ export interface ProviderView {
   lastConnectedAt: string | null;
 }
 
-export function providerView(p: ProviderConnection): ProviderView {
+export function providerView(p: ProviderConnection, now = Date.now()): ProviderView {
   return {
     id: p.id,
     remoteMagpieId: p.remoteMagpieId,
@@ -520,6 +756,9 @@ export function providerView(p: ProviderConnection): ProviderView {
     status: p.status,
     detail: p.detail,
     fingerprint: p.fingerprint,
+    models: Array.isArray(p.models) ? [...p.models] : [],
+    keyGeneration: Number.isInteger(p.keyGeneration) && (p.keyGeneration ?? 0) > 0 ? p.keyGeneration! : 1,
+    modelsEvidence: projectModelsEvidence(p, now),
     limit: p.limit ?? null,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,

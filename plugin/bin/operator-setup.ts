@@ -5,7 +5,7 @@
 // fields the operator named, so a partial change cannot clear peers or the
 // listen address. The service owns the apply/rollback transaction.
 
-import { OperatorApi, boolFlag, defaultWizardIO, fail, line, listFlag, parseArgs, preflight, printJson, printPreflight, readSecretFile, type ParsedArgs, type WizardIO } from "./operator-lib.ts";
+import { OperatorApi, boolFlag, defaultWizardIO, fail, line, listFlag, parseArgs, preflight, printJson, printPreflight, readSecretFile, type ParsedArgs, type PreflightOptions, type WizardIO } from "./operator-lib.ts";
 import type { Service } from "../src/service.ts";
 
 const USAGE = `usage:
@@ -20,7 +20,12 @@ const USAGE = `usage:
   ohmyaihub preflight [--live-checks] [--json]
   ohmyaihub doctor [--json]`;
 
-export async function runSetup(argv: string[], dataDir: string, io: WizardIO = defaultWizardIO()): Promise<number> {
+export interface SetupDeps {
+  /** forwarded to `preflight()`; tests inject a controlled gateway probe */
+  preflight?: Partial<Pick<PreflightOptions, "lan" | "fetchImpl">>;
+}
+
+export async function runSetup(argv: string[], dataDir: string, io: WizardIO = defaultWizardIO(), deps: SetupDeps = {}): Promise<number> {
   const args = parseArgs(argv);
   if (args.has("help")) {
     line(USAGE);
@@ -30,7 +35,11 @@ export async function runSetup(argv: string[], dataDir: string, io: WizardIO = d
   const resume = args.has("resume");
   const reconfigure = args.has("reconfigure");
   if (checkOnly || resume) {
-    return resumeOrCheck(dataDir, args, { checkOnly });
+    // `--check`/`resume` take the same preflight, so they must take the same
+    // injected transport and LAN override: dropping them made
+    // OH_MY_AIHUB_PREFLIGHT_LAN=none (and a test's stub fetch) apply only to a
+    // full setup, while these four commands still probed the real LAN gateway.
+    return resumeOrCheck(dataDir, args, { checkOnly, deps });
   }
 
   const pf = await preflight({
@@ -38,6 +47,7 @@ export async function runSetup(argv: string[], dataDir: string, io: WizardIO = d
     magpieBin: args.one("magpie-bin"),
     gatewayPort: args.one("gateway-port") ? Number(args.one("gateway-port")) : undefined,
     timeoutMs: args.one("timeout-ms") ? Number(args.one("timeout-ms")) : undefined,
+    ...deps.preflight,
   });
   if (args.has("json")) printJson(pf);
   else printPreflight(pf);
@@ -146,13 +156,14 @@ export async function runSetup(argv: string[], dataDir: string, io: WizardIO = d
 }
 
 /** `resume` and `setup --check`: never submit a configuration. */
-async function resumeOrCheck(dataDir: string, args: ParsedArgs, opts: { checkOnly: boolean }): Promise<number> {
+async function resumeOrCheck(dataDir: string, args: ParsedArgs, opts: { checkOnly: boolean; deps: SetupDeps }): Promise<number> {
   const pf = await preflight({
     dataDir,
     magpieBin: args.one("magpie-bin"),
     gatewayPort: args.one("gateway-port") ? Number(args.one("gateway-port")) : undefined,
     liveChecks: args.has("live-checks"),
     timeoutMs: args.one("timeout-ms") ? Number(args.one("timeout-ms")) : undefined,
+    ...opts.deps.preflight,
   });
   if (args.has("json")) printJson(pf);
   else printPreflight(pf);

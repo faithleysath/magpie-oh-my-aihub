@@ -1,0 +1,28 @@
+[
+ {
+  "status": 200,
+  "body": {
+   "id": "phase9-provider-1",
+   "model": "provider-model",
+   "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 7,
+    "total_tokens": 12
+   }
+  }
+ },
+ {
+  "status": 429,
+  "body": {
+   "type": "rate_limit_error",
+   "message": "Remote magpie: magpie gateway key \"<key-name>\" has used $0.06 of its $0.05 estimated cost for this 3650-day cycle; it resets at 2036-10-28 16:37 CST"
+  }
+ },
+ {
+  "status": 401,
+  "body": {
+   "type": "authentication_error",
+   "message": "Remote magpie: the API key ending in <suffix> is not an enabled magpie gateway key: it is disabled, removed or mistyped"
+  }
+ }
+]

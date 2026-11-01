@@ -64,7 +64,7 @@ export class ConsoleWallet {
   private walletUnavailable = false;
   private evidenceAt: string | null = null;
   private viewAt: string | null = null;
-  constructor(private service: Service, private file = statePath("console-wallet-operations.json")) {}
+  constructor(private service: Service, private file = statePath("console-wallet-operations.json"), private now: () => number = Date.now) {}
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.queue.then(fn, fn); this.queue = next.catch(() => {}); return next;
   }
@@ -112,7 +112,8 @@ export class ConsoleWallet {
     if (!recipientAddress) return walletBad("此网络尚未配置收款地址");
     return planWalletIntent({consumer,providerId,network,asset,recipientAddress,
       amount: input.amount as string,ttlSec:integer(input.ttlSec,"有效期",60,604800),
-      pending:w.chainStore().openIntentsFor(consumer.consumerId)});
+      // The same clock the fixture and the view use: an open intent's expiry must not be judged by a second clock.
+      pending:w.chainStore().openIntentsFor(consumer.consumerId,new Date(this.now()))});
   }
   private invoice(input: Record<string,unknown>): {w:Wallet;intent:DepositIntent} {
     const c = this.consumer(input.consumerId), w=this.wallet();
@@ -126,7 +127,7 @@ export class ConsoleWallet {
     return walletIntentDocument(intent,net,asset);
   }
   private transfer(w:Wallet,intent:DepositIntent) {
-    if (intent.status !== "signed" || !intent.payerAddress || Date.parse(intent.expiresAt)<=Date.now()) return null;
+    if (intent.status !== "signed" || !intent.payerAddress || Date.parse(intent.expiresAt)<=this.now()) return null;
     const asset=w.registryView().asset(intent.assetId);
     if (!asset) return walletBad("测试代币记录不可读取");
     return {schema:"ohmyaihub.transfer-instructions/v1" as const,invoiceId:intent.invoiceId,consumerId:intent.consumerId,providerId:intent.providerId,
@@ -149,9 +150,9 @@ export class ConsoleWallet {
     const status=w.statusLocal({consumerIds:consumers.map(c=>c.consumerId)});
     // Never reuse a gateway measurement across a new key/cap/pause or indefinitely.
     const readbacks:Record<string,KeyReadback>={};
-    for(const c of consumers){const r=this.readbacks[c.consumerId]; if(r && this.readbackBindings[c.consumerId]===this.binding(c) && !c.paused && !c.revokedAt && Math.abs(c.capUsd-r.capUsd)<1e-9 && Date.now()-Date.parse(r.at)<=60_000) readbacks[c.consumerId]=r;}
+    for(const c of consumers){const r=this.readbacks[c.consumerId]; if(r && this.readbackBindings[c.consumerId]===this.binding(c) && !c.paused && !c.revokedAt && Math.abs(c.capUsd-r.capUsd)<1e-9 && this.now()-Date.parse(r.at)<=60_000) readbacks[c.consumerId]=r;}
     const a=this.service.accountingStatus();
-    const input:WalletViewInput={wallet:status,consumers,readbacks,
+    const input:WalletViewInput={wallet:status,consumers,readbacks,now:new Date(this.now()),
       // Bounded UI history; authoritative accounting totals already live on ConsumerView.
       deposits:Object.fromEntries(consumers.map(c=>[c.consumerId,this.service.ledger?.depositsFor(c.consumerId,100)??[]])),
       accounting:{state:a.uncertain?"uncertain":a.lastCheckAt?"ok":"unknown",reason:a.uncertainReason,serving:a.serving}};
@@ -182,9 +183,9 @@ export class ConsoleWallet {
         const binding=this.binding(c), measured=e.readbacks[c.consumerId];
         if(measured&&before[c.consumerId]===binding){this.readbacks[c.consumerId]=measured;this.readbackBindings[c.consumerId]=binding;}
       }
-      this.evidenceAt=new Date().toISOString();
+      this.evidenceAt=new Date(this.now()).toISOString();
     }
-    this.viewAt=new Date().toISOString();
+    this.viewAt=new Date(this.now()).toISOString();
     return this.snapshot();
   }
   async action(name:string,input:Record<string,unknown>):Promise<any> {
@@ -233,7 +234,7 @@ export class ConsoleWallet {
           const preview=this.plan(input);if(preview.previewHash!==input.previewHash)return walletBad("请求信息已变化，请重新预览并确认");
           if(preview.blockers.length)return walletBad(preview.blockers[0]!);if(consumer.paused&&input.ackPaused!==true)return walletBad("消费者已暂停，请明确确认充值不会自动恢复授权");
           if(operations.length>=500)return walletBad("请求操作记录已满，请审计后再继续");
-          const record:IntentOperation={requestId,inputHash,consumerId:consumer.consumerId,state:"reserved",invoiceId:null,at:new Date().toISOString()};operations.push(record);this.save(operations);
+          const record:IntentOperation={requestId,inputHash,consumerId:consumer.consumerId,state:"reserved",invoiceId:null,at:new Date(this.now()).toISOString()};operations.push(record);this.save(operations);
           const result=w.requestIntent({providerId:preview.providerId,consumerId:consumer.consumerId,chainId:preview.chainId,assetId:preview.assetId,amountRaw:preview.amountRaw,ttlSec:preview.ttlSec});
           record.state="created";record.invoiceId=result.intent.invoiceId;this.save(operations);
           return {document:this.document(w,result.intent),transfer:null,wallet:this.snapshot()};
@@ -245,18 +246,18 @@ export class ConsoleWallet {
             const network=w.registryView().network(intent.chainId),asset=w.registryView().asset(intent.assetId);
             if(!network||!asset||intent.payerAddress.toLowerCase()!==signature.payerAddress.toLowerCase())return walletBad("请求已绑定另一签名钱包");
             const checked=verifyIntentSignature({intent,network,asset,signature:signature.signature,expectedPayer:intent.payerAddress});
-            if(!checked.ok||Date.parse(intent.expiresAt)<=Date.now())return walletBad("签名与此充值请求或付款钱包不匹配");
+            if(!checked.ok||Date.parse(intent.expiresAt)<=this.now())return walletBad("签名与此充值请求或付款钱包不匹配");
             return {transfer:this.transfer(w,intent),wallet:this.snapshot()};
           }
-          if(intent.status!=="requested"||Date.parse(intent.expiresAt)<=Date.now())return walletBad("请求已失效或无法再次签名");
+          if(intent.status!=="requested"||Date.parse(intent.expiresAt)<=this.now())return walletBad("请求已失效或无法再次签名");
           // Cryptographic refusal occurs before setPayer. Only this known domain error is safe to report.
           let signed:ReturnType<Wallet["signIntent"]>;
           try{signed=w.signIntent({invoiceId:intent.invoiceId,...signature});}catch(e){if(e instanceof Error&&/^(signature refused|this signature|payerAddress)/.test(e.message))return walletBad("签名与此充值请求或付款钱包不匹配");throw e;}
           return {transfer:this.transfer(w,signed.intent),wallet:this.snapshot()};
         }
         case "wallet-intent-cancel":walletFields(input,["consumerId","invoiceId","reason"]);{const {w,intent}=this.invoice(input);if(intent.status==="matched")return walletBad("已匹配转账的请求不能取消");w.cancelIntent(intent.invoiceId,walletText(input.reason,"取消原因",300));return {wallet:this.snapshot()};}
-        case "deposit-document-preview":walletFields(input,["document"]);return previewDepositDocument(input.document,this.service.config()?.nodeId??null);
-        case "deposit-signature-document":walletFields(input,["document","signature","payerAddress"]);return externalSignatureDocument(input.document,input.signature,input.payerAddress,this.service.config()?.nodeId??null);
+        case "deposit-document-preview":walletFields(input,["document"]);return previewDepositDocument(input.document,this.service.config()?.nodeId??null,new Date(this.now()));
+        case "deposit-signature-document":walletFields(input,["document","signature","payerAddress"]);return externalSignatureDocument(input.document,input.signature,input.payerAddress,this.service.config()?.nodeId??null,new Date(this.now()));
         case "wallet-statement-preview":{
           walletFields(input,["document"]);const raw=boundedWalletDocument(input.document,STATEMENT_DOCUMENT_LIMIT);if(raw.statement)walletFields(raw,["statement","digest"]);const verified=verifyStatement(raw);if(!verified.ok)return walletBad("账单摘要或内容校验失败");const statement=raw.statement?raw:{statement:raw,digest:raw.digest};if(this.service.config()?.nodeId&&statement.statement.consumerId!==this.service.config()?.nodeId)return walletBad("账单属于另一消费者节点");return {statement,digestVerified:true,signed:false};
         }

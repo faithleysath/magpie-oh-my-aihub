@@ -661,6 +661,18 @@ export class Ledger {
     };
   }
 
+  /** Read-only amount of one consumption row, or null when it does not exist. */
+  consumptionAmount(id: string): number | null {
+    const row = this.db.query("SELECT amount_nanos FROM consumption WHERE id = ?").get(id) as { amount_nanos: number } | null;
+    return row ? Number(row.amount_nanos) : null;
+  }
+
+  /** Read-only count of consumption rows in a window (including adjustments). */
+  windowConsumptionCount(windowId: string): number {
+    const row = this.db.query("SELECT COUNT(*) AS n FROM consumption WHERE window_id = ?").get(windowId) as { n: number };
+    return Number(row.n);
+  }
+
   /** The models a window was issued for, from its frozen price document. */
   windowModels(window: LedgerWindow): string[] {
     try {

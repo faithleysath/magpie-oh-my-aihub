@@ -1,0 +1,4 @@
+# Every `bun test` run installs the hermetic network guard: a test may reach only
+# servers it started (or explicitly registered). See test/support/network-guard.ts.
+[test]
+preload = ["./test/support/network-guard.ts"]

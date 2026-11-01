@@ -130,6 +130,15 @@ describe("actual service and provisioner approval",()=>{
     await expect(svc.approveConnectionRequest(r,[LAB_MODEL],1)).rejects.toThrow(/current published quote/);
     expect(magpie.keys.size).toBe(0);
   });
+  test("a tier-level peak in the current quote refuses approval before creating a key",async()=>{
+    const {svc,magpie}=realService();
+    const tier={above:1000,input:1,output:2,cacheRead:0,cacheWrite:0,peak:"deepseek"};
+    const ctx=context();
+    ctx.quote.models=ctx.quote.models.map(m=>({...m,pricing:{...m.pricing,tiers:[tier]}})) as never;
+    svc.requestApprovalContext=()=>ctx;
+    await expect(svc.approveConnectionRequest(validateConnectionRequest(request()),[LAB_MODEL],1)).rejects.toThrow(/price version/);
+    expect(magpie.keys.size).toBe(0);
+  });
   test("unpriced model share and widening consumer scope are refused",async()=>{
     const {svc}=realService();await svc.approveConnectionRequest(validateConnectionRequest(request()),[LAB_MODEL],1);
     await expect(svc.setConsumerModels("alice",["lab/other"])).rejects.toThrow(/narrow/);
