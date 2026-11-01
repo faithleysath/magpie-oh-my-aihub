@@ -22,25 +22,64 @@ RPC=${3:?rpc address}
 
 STATE=/var/run/omai-easytier
 mkdir -p "$STATE"
-chmod 700 "$STATE"
+chmod 755 "$STATE"
+if [ -f "$STATE/daemon.log" ]; then chmod 644 "$STATE/daemon.log"; fi
+if [ -f "$STATE/core.log" ]; then chmod 600 "$STATE/core.log"; fi
 
-# Keys the plugin generates. Anything else at top level is refused, so a
-# hand-edited or hostile config cannot turn this into a general-purpose root VPN.
-ALLOWED='^(instance_name|instance_id|hostname|dhcp|ipv4|peer|listeners|mapped_listeners|socks5_proxy|network_identity|flags|secure_mode|acl|port_forward)[[:space:]]*='
-
-log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$STATE/daemon.log"; }
-
-validate() {
-  # Comments and blank lines are fine; table headers are fine; everything else
-  # must be an allowed key.
-  awk -v allowed="$ALLOWED" '
-    /^[[:space:]]*(#|$)/ { next }
-    /^[[:space:]]*\[/     { next }
-    $0 !~ allowed         { print "refused key: " $0; bad = 1 }
-    END                   { exit bad ? 1 : 0 }
-  ' "$1"
+# Only the prologue of the document (everything before the first table) is checked
+# against an allowlist, and every table name is checked as well. Inside a table the
+# keys belong to that table, which the name already bounds. Between the two, a
+# config cannot grow into a request for root to open a VPN portal, export a subnet
+# or exit-node traffic on someone's behalf.
+#
+# sh rather than awk on purpose: bracket-heavy regexes in awk differ between
+# implementations, and a validator that silently accepts everything is worse than
+# no validator.
+allowed_key() {
+  case "$1" in
+    instance_name|instance_id|hostname|dhcp|ipv4|peer|listeners|mapped_listeners|socks5_proxy) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
+allowed_table() {
+  case "$1" in
+    network_identity|flags|secure_mode|acl.acl_v1|acl.acl_v1.chains|acl.acl_v1.chains.rules|port_forward) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Diagnostics land in a directory this user can read: a daemon that exits instead of
+# starting must be explainable without a second password prompt. The core's own log
+# stays root-only — EasyTier prints its config, secret included, at start-up.
+log() {
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$STATE/daemon.log"
+}
+
+validate() {
+  bad=0
+  intable=0
+  while IFS= read -r line; do
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    case "$line" in
+      '['*)
+        intable=1
+        name=$(printf '%s' "$line" | sed -e 's/^\[\[//' -e 's/^\[//' -e 's/\]\]$//' -e 's/\]$//')
+        allowed_table "$name" || { printf 'refused table: %s\n' "$line"; bad=1; }
+        ;;
+      *)
+        [ "$intable" = 1 ] && continue
+        key=$(printf '%s' "$line" | sed -e 's/[[:space:]]*=.*$//' -e 's/[[:space:]]*$//')
+        allowed_key "$key" || { printf 'refused key: %s\n' "$line"; bad=1; }
+        ;;
+    esac
+  done < "$1"
+  [ "$bad" = 0 ]
+}
+
+log "argv: $*"
 PID=""
 HASH=""
 cleanup() {

@@ -149,10 +149,17 @@ install -m 0755 -o root -g wheel '${src}' '${DAEMON_WRAPPER}'
 install -m 0644 -o root -g wheel '${plistTmp}' '${DAEMON_PLIST}'
 mkdir -p '${DAEMON_STATE_DIR}'
 chmod 700 '${DAEMON_STATE_DIR}'
+# launchd answers EIO when a previous job of the same label is still going away,
+# so replacing a running daemon needs a retry rather than a single attempt.
 launchctl bootout system/${DAEMON_LABEL} 2>/dev/null || true
-launchctl bootstrap system '${DAEMON_PLIST}'
-launchctl enable system/${DAEMON_LABEL}
-launchctl kickstart -k system/${DAEMON_LABEL}
+i=0
+while [ "$i" -lt 10 ]; do
+  if launchctl bootstrap system '${DAEMON_PLIST}' 2>/dev/null; then break; fi
+  i=$((i + 1))
+  sleep 1
+done
+launchctl enable system/${DAEMON_LABEL} || true
+launchctl kickstart -k system/${DAEMON_LABEL} || true
 `;
   await runAsRoot(body, "install-daemon");
 }
