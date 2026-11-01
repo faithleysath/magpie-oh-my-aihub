@@ -7,14 +7,16 @@
 // only ever stops the child it spawned itself; it never adopts or kills another
 // EasyTier on the machine.
 //
-// Stage 1 exports no address and publishes no port: the generated TOML has no
-// inbound export at all. Stage 2 adds `[[proxy_network]]` plus the Forward ACL
-// when the 3426 service actually exists.
+// Stage 1 exported no address and published no port. Stage 2 adds
+// `[[proxy_network]]` plus the Forward ACL that allows exactly the directory
+// port and the Magpie gateway, whenever a LAN address exists.
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomMappedCidr } from "./addresses.ts";
 import type { HubConfig } from "./config.ts";
 import { EASYTIER_VERSION, assetFor, assetUrl } from "./easytier-manifest.ts";
+import { detectLanIPv4 } from "./lan.ts";
 import { logger, registerSecret } from "./log.ts";
 import { statePath } from "./paths.ts";
 import { run } from "./run.ts";
@@ -37,6 +39,27 @@ export interface OverlayStatus {
   hostname: string | null;
   peers: OverlayPeer[];
   publishedPorts: number[];
+}
+
+/** What the generated TOML exports. Both values are needed to write the export. */
+export interface OverlayPublish {
+  lanIp: string | null;
+  mappedCidr: string | null;
+}
+
+/** One peer as EasyTier's own peer/route tables describe it (routing clues only). */
+export interface OverlayNeighbor {
+  hostname: string;
+  ipv4: string;
+  /** the mapped address this peer exports, or null when it exports nothing */
+  mappedHost: string | null;
+}
+
+export interface OverlayHooks {
+  /** the persisted config changed (a mapped CIDR was allocated for the first time) */
+  onConfigChange?: (cfg: HubConfig) => void;
+  /** the core answered for the first time since this start */
+  onOnline?: () => void;
 }
 
 /**
@@ -83,6 +106,17 @@ function shortError(error: unknown): string {
   return raw.replace(/\s+/g, " ").trim().slice(0, 300) || "unknown error";
 }
 
+/** `real/32->mapped/32` (or a bare mapped prefix) → the mapped IPv4 to dial. */
+function mappedHostOf(proxyCidrs: string): string | null {
+  for (const raw of proxyCidrs.split(",").map((item) => item.trim())) {
+    if (!raw) continue;
+    const dialled = raw.includes("->") ? raw.split("->")[1]!.trim() : raw;
+    const host = dialled.replace(/\/\d+$/, "");
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
+  }
+  return null;
+}
+
 function toml(value: string): string {
   // JSON string escaping is valid TOML basic-string escaping.
   return JSON.stringify(value);
@@ -98,7 +132,7 @@ function peerUris(initialNode: string | null): string[] {
 }
 
 /** Renders the exact TOML this plugin starts. Exported for tests. */
-export function renderOverlayConfig(cfg: HubConfig): string {
+export function renderOverlayConfig(cfg: HubConfig, publish: OverlayPublish = { lanIp: null, mappedCidr: null }): string {
   const network = cfg.network;
   if (!network) throw new Error("E_NO_NETWORK: join a network before starting EasyTier");
   const hostname = cfg.hostname;
@@ -118,9 +152,15 @@ export function renderOverlayConfig(cfg: HubConfig): string {
   // loopback: this node's own directory reads go through it.
   lines.push(`socks5_proxy = ${toml(`socks5://127.0.0.1:${SOCKS_PORT}`)}`);
 
-  // Stage 1 does not export this node's LAN address or publish any port.
-  // Stage 2 adds `[[proxy_network]]` and the Forward ACL together with the
-  // 3426 service; nothing here should occupy 3425 or 3426 in the meantime.
+  // The export is what makes the directory reachable (DESIGN-V2 §5, §8). No LAN
+  // address means no export and no Forward rule: an ACL that allows ports on an
+  // export that does not exist is dead config.
+  const exported = Boolean(publish.lanIp && publish.mappedCidr);
+  if (exported) {
+    lines.push(
+      `proxy_network = [{ cidr = ${toml(`${publish.lanIp}/32`)}, mapped_cidr = ${toml(publish.mappedCidr!)} }]`,
+    );
+  }
 
   lines.push("");
   lines.push("[network_identity]");
@@ -129,6 +169,37 @@ export function renderOverlayConfig(cfg: HubConfig): string {
   lines.push("");
   lines.push("[flags]");
   lines.push("no_tun = true");
+  lines.push("");
+  lines.push("[acl.acl_v1]");
+  if (exported) {
+    // Forward is the subnet-proxy path a consumer reaches: exactly the two
+    // fixed ports. 3426 carries the directory, 3425 the Magpie gateway; sharing
+    // another model never touches this file.
+    lines.push("# Forward: the subnet-proxy path a consumer reaches; exactly the published ports.");
+    lines.push("[[acl.acl_v1.chains]]");
+    lines.push('name = "Forward"');
+    lines.push("chain_type = 3");
+    lines.push("enabled = true");
+    lines.push("default_action = 2");
+    for (const port of [CONTROL_PORT, GATEWAY_PORT]) {
+      lines.push("[[acl.acl_v1.chains.rules]]");
+      lines.push(`name = ${toml(`allow-${port}`)}`);
+      lines.push("priority = 1000");
+      lines.push("enabled = true");
+      lines.push("protocol = 1");
+      lines.push(`ports = [${toml(String(port))}]`);
+      lines.push("action = 1");
+      lines.push("stateful = true");
+    }
+  }
+  lines.push("# Inbound: nothing addressed to this node's own virtual IP is delivered.");
+  lines.push("# Never add a rule here for a Magpie port: in no-TUN that is the 127.0.0.1");
+  lines.push("# rewrite, which Magpie treats as a local, unauthenticated caller.");
+  lines.push("[[acl.acl_v1.chains]]");
+  lines.push('name = "Inbound"');
+  lines.push("chain_type = 1");
+  lines.push("enabled = true");
+  lines.push("default_action = 2");
   lines.push("");
   return lines.join("\n");
 }
@@ -228,11 +299,14 @@ function sleep(ms: number): Promise<void> {
 
 export class Overlay {
   private cfg: HubConfig;
+  private readonly hooks: OverlayHooks;
   private state: OverlayState = "offline";
   private step = "offline";
   private detail: string | null = null;
   private overlayIp: string | null = null;
   private peers: OverlayPeer[] = [];
+  private lanIp: string | null = null;
+  private lanDetail: string | null = null;
   private bin: { core: string; cli: string } | null = null;
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private desired = false;
@@ -244,13 +318,19 @@ export class Overlay {
   private refreshing = false;
   private stopped: Promise<void> | null = null;
 
-  constructor(cfg: HubConfig) {
+  constructor(cfg: HubConfig, hooks: OverlayHooks = {}) {
     this.cfg = cfg;
+    this.hooks = hooks;
   }
 
   /** Updates the non-running view (e.g. a wallet change while offline). */
   configure(cfg: HubConfig): void {
     this.cfg = cfg;
+  }
+
+  /** The LAN address this core exports, or null when the probe found none. */
+  lanAddress(): string | null {
+    return this.lanIp;
   }
 
   status(): OverlayStatus {
@@ -267,12 +347,17 @@ export class Overlay {
     };
   }
 
+  /** True when the generated TOML exports this node's LAN address. */
+  private exportActive(): boolean {
+    return Boolean(this.cfg.network && this.lanIp && this.cfg.publish.mappedCidr);
+  }
+
   /**
-   * Stage 1 publishes nothing. CONTROL_PORT and GATEWAY_PORT stay allocated for
-   * stage 2, when the directory service and the optional gateway export exist.
+   * DESIGN-V2 §8: 3426 carries the directory, 3425 the Magpie gateway. Both are
+   * reachable only through an export, so a node without one publishes nothing.
    */
-  private publishedPorts(): number[] {
-    return [];
+  publishedPorts(): number[] {
+    return this.exportActive() ? [CONTROL_PORT, GATEWAY_PORT] : [];
   }
 
   /**
@@ -283,6 +368,10 @@ export class Overlay {
   beginStart(cfg: HubConfig): void {
     this.cfg = cfg;
     if (cfg.network?.secret) registerSecret(cfg.network.secret);
+    // The LAN address is probed once per start; `join_network` starts again, and
+    // that is the deliberate way to re-read it.
+    this.probeLan();
+    this.ensureMappedCidr();
     this.desired = true;
     const generation = ++this.generation;
     this.state = "starting";
@@ -336,6 +425,32 @@ export class Overlay {
     logger.error(`EasyTier: ${this.detail}`);
   }
 
+  private probeLan(): void {
+    try {
+      this.lanIp = detectLanIPv4();
+      this.lanDetail = null;
+    } catch (error) {
+      this.lanIp = null;
+      this.lanDetail = shortError(error);
+      logger.warn(`LAN probe: ${this.lanDetail}`);
+    }
+  }
+
+  /**
+   * The export address is allocated once and persisted: a consumer's saved route
+   * must keep pointing at this node across restarts. The write is delegated to
+   * the runtime, which owns state.json.
+   */
+  private ensureMappedCidr(): void {
+    if (!this.cfg.network || this.cfg.publish.mappedCidr) return;
+    this.cfg.publish = { mappedCidr: randomMappedCidr() };
+    try {
+      this.hooks.onConfigChange?.(this.cfg);
+    } catch (error) {
+      logger.error(`cannot persist the mapped CIDR: ${shortError(error)}`);
+    }
+  }
+
   private clearRestartTimer(): void {
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -354,7 +469,10 @@ export class Overlay {
     if (generation !== this.generation || !this.desired) return;
 
     const configPath = currentTomlPath();
-    const text = renderOverlayConfig(this.cfg);
+    const text = renderOverlayConfig(this.cfg, {
+      lanIp: this.lanIp,
+      mappedCidr: this.cfg.publish.mappedCidr,
+    });
     mkdirSync(join(statePath("easytier")), { recursive: true, mode: 0o700 });
     writeFileSync(configPath, text, { mode: 0o600 });
     if (process.platform !== "win32") chmodSync(configPath, 0o600);
@@ -442,6 +560,7 @@ export class Overlay {
     if (this.refreshing || !this.proc || this.proc.exitCode !== null) return;
     this.refreshing = true;
     try {
+      const wasOnline = this.state === "online";
       const node = await this.cli(["-o", "json", "node"], 4_000);
       if (node.code !== 0) throw new Error(node.stderr || node.stdout || `exit ${node.code}`);
       const info = JSON.parse(node.stdout || "{}") as Record<string, unknown>;
@@ -456,7 +575,14 @@ export class Overlay {
       }
       this.state = "online";
       this.step = "online";
-      this.detail = this.overlayIp ? `overlay ${this.overlayIp}` : "core is running";
+      this.detail = this.onlineDetail();
+      if (!wasOnline) {
+        try {
+          this.hooks.onOnline?.();
+        } catch (error) {
+          logger.warn(`overlay online hook failed: ${shortError(error)}`);
+        }
+      }
 
       try {
         const list = await this.cli(["-o", "json", "peer", "list"], 4_000);
@@ -480,6 +606,66 @@ export class Overlay {
       if (this.state === "online") this.detail = `refresh failed: ${shortError(error)}`;
     } finally {
       this.refreshing = false;
+    }
+  }
+
+  private onlineDetail(): string {
+    const parts = [this.overlayIp ? `overlay ${this.overlayIp}` : "core is running"];
+    if (this.exportActive()) {
+      parts.push(
+        `exporting ${this.lanIp}/32 as ${this.cfg.publish.mappedCidr} (ports ${this.publishedPorts().join(", ")})`,
+      );
+    } else if (!this.lanIp) {
+      parts.push(this.lanDetail ?? "no exportable LAN address (没有可导出的 LAN 地址)");
+    }
+    return parts.join("; ");
+  }
+
+  /**
+   * The peers EasyTier currently routes to, with the mapped address each one
+   * exports. Identity is not implied: an overlay address only says where to dial,
+   * the signed directory says who answers.
+   */
+  async neighbors(): Promise<OverlayNeighbor[]> {
+    if (!this.proc || this.proc.exitCode !== null) {
+      throw new Error("E_PEER_OFFLINE: EasyTier is not running");
+    }
+    try {
+      const [peerResult, routeResult] = await Promise.all([
+        this.cli(["-o", "json", "peer", "list"], 6_000),
+        this.cli(["-o", "json", "route"], 6_000),
+      ]);
+      if (peerResult.code !== 0) {
+        throw new Error(`peer list failed: ${peerResult.stderr || peerResult.stdout || `exit ${peerResult.code}`}`);
+      }
+      if (routeResult.code !== 0) {
+        throw new Error(`route list failed: ${routeResult.stderr || routeResult.stdout || `exit ${routeResult.code}`}`);
+      }
+      const peerRows = JSON.parse(peerResult.stdout || "[]") as Record<string, unknown>[];
+      const routeRows = JSON.parse(routeResult.stdout || "[]") as Record<string, unknown>[];
+      if (!Array.isArray(peerRows) || !Array.isArray(routeRows)) throw new Error("unexpected tables from easytier-cli");
+
+      const routesByHost = new Map<string, string>();
+      for (const row of routeRows) {
+        const hostname = String(row.hostname ?? "");
+        const proxy = String(row.proxy_cidrs ?? "");
+        if (hostname && proxy) routesByHost.set(hostname, proxy);
+      }
+
+      const out: OverlayNeighbor[] = [];
+      for (const row of peerRows) {
+        const hostname = String(row.hostname ?? "");
+        const ipv4 = String(row.ipv4 ?? "").replace(/\/\d+$/, "");
+        if (String(row.cost ?? "") === "Local") continue;
+        if (this.cfg.hostname && hostname === this.cfg.hostname) continue;
+        if (!ipv4) continue;
+        out.push({ hostname: hostname || ipv4, ipv4, mappedHost: mappedHostOf(routesByHost.get(hostname) ?? "") });
+      }
+      return out;
+    } catch (error) {
+      const message = shortError(error);
+      if (/^E_[A-Z_]+:/.test(message)) throw error;
+      throw new Error(`E_PEER_OFFLINE: ${message}`);
     }
   }
 

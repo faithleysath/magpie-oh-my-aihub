@@ -1,7 +1,7 @@
 // The plugin's single configuration document.
 //
-// Stage 1 only needs the network, the shared-model selection (filled in by a
-// later stage) and the overlay hostname. The format is version 3 from
+// It holds the network, the shared-model selection, the overlay hostname and the
+// persisted overlay export (`publish.mappedCidr`). The format is version 3 from
 // docs/DESIGN-V2.md §9. Older files are never deleted or rewritten in place by
 // this module: `readConfig` falls back to defaults, and `writeJsonAtomic` keeps
 // the replaced document as `state.json.prev`.
@@ -22,10 +22,19 @@ export interface ShareConfig {
   models: string[];
 }
 
+/**
+ * The overlay export. `mappedCidr` is allocated once (`10.66.a.b/32`) and never
+ * changes, so a consumer's saved route keeps pointing at this node.
+ */
+export interface PublishConfig {
+  mappedCidr: string | null;
+}
+
 export interface HubConfig {
   version: typeof CONFIG_VERSION;
   network: NetworkConfig | null;
   share: ShareConfig;
+  publish: PublishConfig;
   hostname: string | null;
 }
 
@@ -34,11 +43,33 @@ export function configPath(): string {
 }
 
 export function defaultConfig(): HubConfig {
-  return { version: CONFIG_VERSION, network: null, share: { models: [] }, hostname: null };
+  return {
+    version: CONFIG_VERSION,
+    network: null,
+    share: { models: [] },
+    publish: { mappedCidr: null },
+    hostname: null,
+  };
 }
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The persisted export must be the fixed `10.66.a.b/32` shape. Anything else (a
+ * hand edit, a migrated file) is dropped so the next start allocates a fresh
+ * one instead of exporting an unrelated subnet.
+ */
+function mappedCidrOf(publish: unknown): string | null {
+  if (!publish || typeof publish !== "object" || Array.isArray(publish)) return null;
+  const value = (publish as Record<string, unknown>).mappedCidr;
+  if (typeof value !== "string") return null;
+  const m = /^10\.66\.(\d{1,3})\.(\d{1,3})\/32$/.exec(value.trim());
+  if (!m) return null;
+  const [, a, b] = m;
+  if (Number(a) < 1 || Number(a) > 254 || Number(b) < 1 || Number(b) > 254) return null;
+  return `10.66.${a}.${b}/32`;
 }
 
 /**
@@ -71,7 +102,13 @@ export function normalizeConfig(raw: unknown): HubConfig {
     }
   }
 
-  return { version: CONFIG_VERSION, network, share: { models }, hostname: text(o.hostname) };
+  return {
+    version: CONFIG_VERSION,
+    network,
+    share: { models },
+    publish: { mappedCidr: mappedCidrOf(o.publish) },
+    hostname: text(o.hostname),
+  };
 }
 
 export function readConfig(): HubConfig {
@@ -104,6 +141,7 @@ export function writeConfig(cfg: HubConfig): void {
       ? { name: cfg.network.name, secret: cfg.network.secret, initialNode: cfg.network.initialNode }
       : null,
     share: { models: [...cfg.share.models] },
+    publish: { mappedCidr: cfg.publish.mappedCidr },
     hostname: cfg.hostname,
   });
 }

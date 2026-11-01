@@ -91,7 +91,7 @@ D13 的后果要写清楚：Magpie 改价会重算历史用量，所以「剩余
 **入网**
 1. 用户让 agent 调用 `join_network {networkName, networkSecret, initialNode?}`。
 2. 插件写配置、启 EasyTier no-TUN 核心、加入覆盖网。
-3. 插件用 `[[proxy_network]]` 把自己 LAN 地址映射成一个稳定的覆盖网地址（`10.66.a.b/32`，首次分配后持久化），并用 Forward ACL 只放行 **3426**（目录 + 申请 + 轮询）；共享了模型时再放行 **3425**（Magpie 网关）。
+3. 插件用 `[[proxy_network]]` 把自己 LAN 地址映射成一个稳定的覆盖网地址（`10.66.a.b/32`，首次分配后持久化），并用 Forward ACL 固定放行 **3426**（目录 + 申请 + 轮询）和 **3425**（Magpie 网关）；改共享模型不重启核心，只改目录内容。
 4. 之后不再需要任何用户动作。
 
 **共享（提供方）**
@@ -211,7 +211,7 @@ MCP 地址：
 | `reject_request` | `address`, `note?` | `{address, state:"revoked"}` |
 | `revoke_consumer` | `address` | `{address, state:"revoked", keyRemoved}` |
 
-`share_models`：只接受第 D7 条允许的模型；空数组 = 不共享。立刻重签目录，不重启核心。
+`share_models`：只接受第 D7 条允许的模型；空数组 = 不共享。立刻重签目录，不重启核心（ACL 已经固定放行 3426/3425）。
 
 `approve_request`：`models` 省略时用申请里的模型，只保留共享范围内有效的部分；结果为空则报 `E_INPUT`。余额 > 0 → 签发/更新 Key（cap = D）；余额 = 0 → 只记录批准。
 
@@ -504,7 +504,7 @@ scripts/build-page.ts
 |---|---|---|---|
 | 0 | `docs/agent-native` | 重写 `ARCHITECTURE.md` 为约 8 条决策；旧文档加历史横幅；`AGENTS.md` 指针改到本文档 | 文档自洽，无代码改动 |
 | 1 | `feat/skeleton` | 新 `index.ts`、`config.ts`、`wallet.ts`、`tools/{status,wallet,wallet-import,wallet-export,join-network}`、文档页（含预渲染脚本） | 真 Magpie 0.1.2516+ 里，agent 通过 MCP 看到这 5 个工具，能生成钱包、拿到地址、加入网络并在 `status` 看到 online；Magpie 里能打开文档页，里面的工具名与实际一致 |
-| 2 | `feat/catalog` | 探测 LAN 地址 + 分配/持久化 `mappedCidr` + `proxy_network` 与 ACL 放行 3426、3426 目录服务、签名、SOCKS5 读取、`share_models`/`native_models`/`discover` | 两台隔离 Magpie 互见模型与价格；篡改任一字段被拒 |
+| 2 | `feat/catalog` | 探测 LAN 地址 + 分配/持久化 `mappedCidr` + `proxy_network` 与 ACL 固定放行 3426/3425、3426 目录服务、签名、SOCKS5 读取、`share_models`/`native_models`/`discover` | 两台隔离 Magpie 互见模型与价格；篡改任一字段被拒 |
 | 3 | `feat/authorization` | `request`/`poll` 端点、审批、Key 签发、`connect_provider`、`revoke_consumer` | 双机：申请 → 批准（余额 0 时等待）→ 入账后拿到 Key → 原生 Remote Magpie 出现模型 → 撤销后 401 |
 | 4 | `feat/credit` | 链观察器、按 `from` 记账、`cap = D`、`send_payment`、回滚 | 本地链实验：入账→cap→原生 200；用尽→429；回滚→cap 下降；出金到任意地址成功 |
 | 5 | `feat/cleanup` | 删除旧模块与旧文档，重命名包/仓库（可选，为了短工具名） | `bun run typecheck` 通过；无死代码；`plugin-tools.json` 只剩本插件工具 |

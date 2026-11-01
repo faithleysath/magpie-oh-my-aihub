@@ -9,7 +9,8 @@ const SECTIONS = ["network", "wallet", "sharing", "consuming"] as const;
 export const statusTool: ToolDef = {
   description:
     "节点状态快照。network: 网络/覆盖网地址/邻居/公布端口；wallet: 地址与 BSC/Base 余额；" +
-    "sharing/consuming: 本阶段为空结构。不传 section 返回全部。",
+    "sharing: 节点地址、已公布的模型与目录时间戳、消费者；consuming: 申请与连接（后续阶段）。" +
+    "不传 section 返回全部。",
   args: {
     type: "object",
     properties: {
@@ -29,14 +30,23 @@ export const statusTool: ToolDef = {
     }
 
     const runtime = await getRuntime();
+    const catalog = runtime.catalog.status();
     const network = runtime.overlay.status();
+    // A directory that cannot bind is not a network state of its own, but it must
+    // be visible somewhere: `detail` is the field an agent already reads.
+    if (catalog.detail) {
+      network.detail = network.detail ? `${network.detail}; directory: ${catalog.detail}` : `directory: ${catalog.detail}`;
+    }
     const wallet = async () => walletBalances(runtime.wallet.address);
-    const sharing = () => ({
-      address: runtime.wallet.address,
-      models: [] as { id: string; price: unknown }[],
-      catalogTs: null as string | null,
-      consumers: [] as unknown[],
-    });
+    const sharing = () => {
+      const doc = runtime.catalog.current;
+      return {
+        address: runtime.wallet.address,
+        models: doc?.models ?? [],
+        catalogTs: doc?.ts ?? null,
+        consumers: [] as unknown[],
+      };
+    };
     const consuming = () => ({ requests: [] as unknown[], connections: [] as unknown[] });
 
     if (section === "network") return jsonText(network);
