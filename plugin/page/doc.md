@@ -76,7 +76,7 @@ agent 拿到的工具名取决于 **MCP 路由**：
 - 「删掉地址簿里的张三。」
 - 「给张三充 5 USDC（Base）。」——直接说名字就行，agent 会先把名字换成地址再转。
 
-名字只有本机认识：不进签名、不进目录，对方看不到，也不是转账白名单。同名重写会立刻改指向，返回里的 `previousAddress` 是它换掉的旧地址。
+名字只存在你这台机器上，换机器要重新录。
 
 ### 共享
 
@@ -120,7 +120,7 @@ agent 报 `E_` 开头的错误时，把错误原文贴回去，让它按上面�
 - **私钥**：不会通过工具返回；`wallet_export` 只给地址和路径。导出后，能读本机文件的 agent 仍然能读到它。
 - **网络**：密码是唯一入网门；覆盖网里是明文 HTTP。地址不是身份，目录和申请靠签名。
 - **转账和断开**：`send_payment` 没有二次确认、没有白名单；断开连接会重启 EasyTier，其他连接短暂中断。
-- **地址簿**：只是本机的名字→地址表，存在 `ledger.sqlite`。它不参与签名、不进目录、不参与授权，也不挡转账——改了指向下一次调用就生效。
+- **地址簿**：名字只存在你这台机器上，换机器或换数据目录要重新录。同一个名字再存一次就是换地址，下一次转账就直接按新地址发。
 - **额度**：价格改了，剩余额度会跟着变。429 是额度用完，充值即恢复；401 是被撤销，要提供方重新批准。
 - **身份**：同一个钱包 = 同一个账户；两台机器用同一个私钥，余额共享。
 
@@ -129,7 +129,7 @@ agent 报 `E_` 开头的错误时，把错误原文贴回去，让它按上面�
 需要查工具名时看这里。工具名取决于接入方式：路由关闭时是 `status`，路由开启时是 `magpie-plugin__status`，手工加全部插件地址时是 `magpie-plugin_status`。
 
 - 节点：`magpie-plugin_status`、`magpie-plugin_wallet`、`magpie-plugin_wallet_import`、`magpie-plugin_wallet_export`、`magpie-plugin_join_network`
-- 地址簿：`magpie-plugin_contacts`（`action` 为 `list` / `add` / `remove`，三个动作一个工具）
+- 地址簿：`magpie-plugin_contacts`
 - 共享：`magpie-plugin_native_models`、`magpie-plugin_share_models`
 - 发现与申请：`magpie-plugin_discover`、`magpie-plugin_request_access`、`magpie-plugin_connect_provider`、`magpie-plugin_disconnect_provider`、`magpie-plugin_connections`
 - 审批：`magpie-plugin_consumers`、`magpie-plugin_approve_request`、`magpie-plugin_reject_request`、`magpie-plugin_revoke_consumer`
