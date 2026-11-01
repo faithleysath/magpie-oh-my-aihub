@@ -222,7 +222,8 @@ describe("P2P payment UI actions", () => {
   test("the reminder is labelled manual and no automatic signature button exists", () => {
     const ui = mount();
     try {
-      expect(ui.root.textContent).toContain("FULL AUTO 未实现");
+      expect(ui.root.textContent).toContain("自动充值提醒（可选）");
+      expect(ui.root.textContent).toContain("开启后只在伙伴剩余额度低于触发值时提醒");
       expect(ui.root.textContent).toContain("余额不足提醒");
       expect(ui.root.textContent).toContain("系统不会自动签名");
       expect(find(ui.root, "button", "自动充值")).toBeUndefined();

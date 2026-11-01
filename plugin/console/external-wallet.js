@@ -34,7 +34,7 @@ export function isMainnetChainId(chainId) {
 
 /** Hard refusal shared by every send/sign path; chainId is authoritative. */
 export function assertNoMainnetSend(chainId) {
-  if (isMainnetChainId(chainId)) throw fail(WALLET_ERROR.MAINNET_BLOCKED, "主网发送/授信在本模块和服务层均被阻断");
+  if (isMainnetChainId(chainId)) throw fail(WALLET_ERROR.MAINNET_BLOCKED, "主网发送和自动入账在本模块与服务层均被阻断");
 }
 export const DEPOSIT_DOMAIN_NAME = "Oh My AI Hub";
 export const DEPOSIT_DOMAIN_VERSION = "1";
@@ -779,7 +779,7 @@ function assertSendableNetwork(network, allowedChainIds) {
   if (network.networkType !== "testnet") throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "只允许测试网");
   if (!allowedChainIds.has(network.chainId)) throw fail(WALLET_ERROR.UNKNOWN_CHAIN, "该测试网不在允许列表");
   if (!network.enabled) throw fail(WALLET_ERROR.CHAIN_DISABLED, `chainId ${network.chainId} 未启用`);
-  if (network.support !== "credit") throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该网络只读，不能发送/授信");
+  if (network.support !== "credit") throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该网络只读，不能付款或增加可用额度");
   if (!network.receivable) throw fail(WALLET_ERROR.NETWORK_NOT_CREDITABLE, "该网络未开启收款");
 }
 
@@ -788,8 +788,8 @@ function assertSendableAsset(asset, network) {
   if (!asset.enabled) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币未启用");
   if (!asset.testnetOnly) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "只允许 testnetOnly 代币");
   if (asset.issuerType !== "mock") throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "当前只允许已登记的 mock 测试代币");
-  if (!asset.credit) throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "该代币不可授信/入账");
-  if (asset.pricingKind !== "fixed-test-rate") throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "该代币没有可授信的固定测试价格");
+  if (!asset.credit) throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "该代币不能用于付款或增加可用额度");
+  if (asset.pricingKind !== "fixed-test-rate") throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "该代币没有可用于付款的固定测试价格");
 }
 
 /** A signature is not credit, but it still needs a credit-capable testnet record. */
@@ -810,8 +810,8 @@ function assertDepositAssetKnown(registry, checked) {
   if (!asset.enabled) throw fail(WALLET_ERROR.UNKNOWN_TOKEN, "代币未启用");
   if (!asset.testnetOnly) throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "代币不是测试网专用");
   if (asset.issuerType !== "mock") throw fail(WALLET_ERROR.UNKNOWN_ISSUER, "代币发行方类型不被当前签名策略接受");
-  if (!asset.credit) throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "代币不可授信/入账");
-  if (asset.pricingKind !== "fixed-test-rate") throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "代币没有可授信的固定测试价格");
+  if (!asset.credit) throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "代币不能用于付款或增加可用额度");
+  if (asset.pricingKind !== "fixed-test-rate") throw fail(WALLET_ERROR.ASSET_NOT_CREDITABLE, "代币没有可用于付款的固定测试价格");
   if (asset.decimals !== checked.asset.decimals) throw fail(WALLET_ERROR.UNKNOWN_DECIMALS, "代币精度与本地登记不一致");
 }
 

@@ -20,7 +20,7 @@ describe("network facts never claim a stopped core is live", () => {
     const row = values(facts);
     expect(facts.stale).toBe(true);
     expect(row["虚拟地址"]).toBe("10.126.126.1（最后已知）");
-    expect(row["网络引擎"]).toBe("EasyTier 2.6.4 · 已停止（最后已知版本）");
+    expect(row["网络引擎"]).toBe("EasyTier 2.6.4，已停止（最后已知版本）");
     expect(row["本机节点名"]).toBe("node-1（最后已知）");
     expect(row["状态证据"]).toContain("最后已知，非实时");
     expect(row["状态证据"]).toContain("600 秒前");
@@ -48,16 +48,16 @@ describe("network facts never claim a stopped core is live", () => {
     );
     const row = values(facts);
     expect(row["虚拟地址"]).toBe("10.126.126.1");
-    expect(row["网络引擎"]).toBe("EasyTier 2.6.4 · no-TUN");
+    expect(row["网络引擎"]).toBe("EasyTier 2.6.4，no-TUN");
     expect(row["状态证据"]).not.toContain("最后已知");
   });
 });
 
 describe("neighbour markers never upgrade a stale row to online", () => {
   test("stale wins over online, unknown has no marker", () => {
-    expect(neighborStatus({ stale: true, online: true })).toEqual({ text: "最后已知", tone: "warn" });
+    expect(neighborStatus({ stale: true, online: true })).toEqual({ text: "最后已知", tone: "neutral" });
     expect(neighborStatus({ stale: false, online: true })).toEqual({ text: "在线", tone: "good" });
-    expect(neighborStatus({ stale: false, online: false })).toEqual({ text: "离线", tone: "warn" });
+    expect(neighborStatus({ stale: false, online: false })).toEqual({ text: "离线", tone: "bad" });
     expect(neighborStatus({ stale: false, online: null })).toBeNull();
     expect(neighborStatus({})).toBeNull();
   });

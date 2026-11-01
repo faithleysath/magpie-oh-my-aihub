@@ -11,7 +11,7 @@ export function capLabel(value) {
 }
 export function priceText(pricing) {
   if (!pricing || ![pricing.input, pricing.output, pricing.cacheRead, pricing.cacheWrite].every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) return "价格不完整，不能授权";
-  return `输入 $${pricing.input} / 输出 $${pricing.output} · 每百万 token${items(pricing.tiers).length ? " · 有阶梯价格，查看详情" : ""}`;
+  return `输入 $${pricing.input}，输出 $${pricing.output}，每百万 token${items(pricing.tiers).length ? "；有阶梯价格，查看详情" : ""}`;
 }
 export function validCap(value) {
   const amount = Number(value);
@@ -106,7 +106,7 @@ function quotaEvidence(provider) {
   if (limit.spent === true) return { state: "spent", text: "额度已用尽（原生 429）" };
   if (left && left <= 0) return { state: "spent", text: "额度已用尽（原生 429）" };
   if (!knownCap) return { state: "unknown", text: "额度待确认（未读取原生限额）" };
-  return { state: "ok", text: `额度上限 ${capLabel(limit.costLimit)} · 已用 ${money(limit.cost)} · 剩余 ${money(limit.costLeft)}` };
+  return { state: "ok", text: `额度上限 ${capLabel(limit.costLimit)}，已用 ${money(limit.cost)}，剩余 ${money(limit.costLeft)}` };
 }
 
 export function modelEvidenceSummary(providers, now = Date.now()) {
@@ -169,7 +169,7 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
       count,
       providers: usable.length,
       label: `${count} 个当前可见模型`,
-      detail: `${usable.length} 个伙伴服务 · 最近真实读回；推理额度与 429 另计，不代表可调用${quotaNote}${pausedNote}`,
+      detail: `${usable.length} 个伙伴服务，最近真实读回；推理额度与 429 另计，不代表可调用${quotaNote}${pausedNote}`,
       entries: [...usable.map((row) => entry(row, true)), ...inactive.map((row) => entry(row, false))],
     };
   }
@@ -193,8 +193,8 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
       entries: [],
       label: stale ? "模型清单已过期" : "授权未通过",
       detail: stale
-        ? "到「发现 → 我的连接」重新读取可用模型；过期清单不算可用。"
-        : "最近一次读回被拒绝（401/撤销）；到「发现 → 我的连接」核验密钥与额度，不会用 0 代替。",
+        ? "到发现的“我的连接”重新读取可用模型；过期清单不算可用。"
+        : "最近一次读回被拒绝（401/撤销）；到发现的“我的连接”核验密钥与额度，不会用 0 代替。",
     };
   }
   const stale = rows.some((row) => row.evidence.status === "stale" || row.freshness === "expired");
@@ -205,16 +205,17 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
     entries: [],
     label: stale ? "模型清单已过期" : "尚未确认",
     detail: stale
-      ? "到「发现 → 我的连接」重新读取可用模型；过期清单不算可用。"
-      : "到「发现 → 我的连接」读取可用模型；读取前不会计入可用数。",
+      ? "到发现的“我的连接”重新读取可用模型；过期清单不算可用。"
+      : "到发现的“我的连接”读取可用模型；读取前不会计入可用数。",
   };
 }
 // Zero-file P2P states (B assembly contract, draft). Labels only; no secrets.
 const P2P_INBOUND_LABELS = {
   requested: "待核对", "awaiting-trust": "需要核对身份", "waiting-tofu": "需要核对身份",
   "awaiting-approval": "待批准", pending: "待批准", approved: "已批准", acked: "已交付",
-  connected: "已连接", rejected: "已拒绝", expired: "已过期", revoked: "已撤销",
-  "action-needed": "需要处理",
+  delivering: "正在交付", delivered: "已交付", uncertain: "交付结果未知",
+  connected: "已连接", rejected: "已拒绝", declined: "已拒绝", expired: "已过期",
+  revoked: "已撤销", "operator-revoked": "已撤销", "action-needed": "需要处理",
 };
 const P2P_OUTBOUND_LABELS = {
   requested: "等待批准", "awaiting-trust": "等待对方核对身份", "awaiting-approval": "等待批准",
@@ -222,7 +223,7 @@ const P2P_OUTBOUND_LABELS = {
   "action-needed": "需要处理", rejected: "已拒绝", expired: "已过期", revoked: "已撤销",
 };
 const P2P_DELIVERY_LABELS = { none: "未交付", queued: "排队中", delivering: "正在交付", delivered: "已交付", uncertain: "结果未知", revoked: "已撤销" };
-const P2P_CONNECTION_LABELS = { connected: "已连接", registering: "正在注册", "action-needed": "需要处理", disconnected: "已离线", revoked: "已撤销" };
+const P2P_CONNECTION_LABELS = { ready: "已就绪", connected: "已连接", registering: "正在注册", "action-needed": "需要处理", disconnected: "已离线", revoked: "已撤销" };
 const P2P_TOFU_LABELS = { accepted: "身份已核对", pending: "首次连接，需要核对身份", changed: "身份已变化，必须重新核对" };
 
 export function mountProviders({ client, getState, onState, notice, setBusy, refreshState }) {
@@ -262,8 +263,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   const details = (title, entries) => {
     const node = el("details", null, "workflow-details");
     node.append(el("summary", title));
-    for (const [label, value] of entries) {
-      const line = el("div"); line.append(el("strong", label), el("span", value ?? "未提供")); node.append(line);
+    for (const [label, value, identifier] of entries) {
+      const line = el("div");
+      const shown = el("span", value ?? "未提供");
+      if (identifier && !/^(未知|未提供|未报告|未验证|无)$/.test(String(value ?? "未知"))) shown.className = "mono";
+      line.append(el("strong", label), shown);
+      node.append(line);
     }
     return node;
   };
@@ -280,12 +285,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     for (const [index, tier] of items(pricing?.tiers).entries()) {
       const name = `阶梯 ${index + 1}`;
       entries.push(
-        [`${name} · 门槛`, typeof tier.above === "number" && Number.isFinite(tier.above) ? `超过 ${tier.above} token` : "未提供"],
-        [`${name} · 输入`, priceValue(tier.input)],
-        [`${name} · 输出`, priceValue(tier.output)],
-        [`${name} · 缓存读取`, priceValue(tier.cacheRead)],
-        [`${name} · 缓存写入`, priceValue(tier.cacheWrite)],
-        [`${name} · 一小时缓存写入`, priceValue(tier.cacheWrite1h)],
+        [`${name}门槛`, typeof tier.above === "number" && Number.isFinite(tier.above) ? `超过 ${tier.above} token` : "未提供"],
+        [`${name}输入`, priceValue(tier.input)],
+        [`${name}输出`, priceValue(tier.output)],
+        [`${name}缓存读取`, priceValue(tier.cacheRead)],
+        [`${name}缓存写入`, priceValue(tier.cacheWrite)],
+        [`${name}一小时缓存写入`, priceValue(tier.cacheWrite1h)],
       );
     }
     entries.push(
@@ -297,7 +302,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     );
     return details("价格与能力详情", entries);
   }
-  const badge = (text, tone = "neutral") => el("span", text, `pill ${tone}`);
+  const badge = (text, tone = "neutral") => el("span", text, `status-text ${tone}`);
   const roots = Object.fromEntries(["discovery", "sharing", "connections"].map((name) => [name, document.getElementById(name + "-panel")]));
   let state = null;
   let working = false;
@@ -436,9 +441,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
             ? `${items(peer.quote.models).length} 个模型`
             : "目录未读取";
       const networkFact = peer.online === true ? "网络在线" : peer.online === false ? "网络离线" : "在线状态未确认";
-      card.append(top, paragraph(`${catalogFact} · ${networkFact} · ${peer.quote?.node?.contact || "未提供联系方式"}`));
+      card.append(top);
+      const meta = el("ul", null, "meta-list");
+      for (const text of [catalogFact, networkFact, peer.quote?.node?.contact || "未提供联系方式"]) meta.append(el("li", text));
+      card.append(meta);
       const acceptance = peerAcceptance(peer);
-      card.append(details("查看完整身份与报价", [["身份指纹", acceptance.fingerprint], ["报价指纹", acceptance.quoteHash], ["报价版本", peer.quote?.publication?.version], ["更新时间", peer.quote?.publication?.updatedAt], ["身份说明", "自签名 TOFU，仅证明同一密钥签名，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
+      card.append(details("查看完整身份与报价", [["身份指纹", acceptance.fingerprint, true], ["报价指纹", acceptance.quoteHash, true], ["报价版本", peer.quote?.publication?.version, true], ["更新时间", peer.quote?.publication?.updatedAt], ["身份说明", "自签名 TOFU，仅证明同一密钥签名，不代表现实身份。"], ["价格锁定", "否（priceLocked: false）"]]));
       card.append(paragraph(peerNextStep(peer.status, peer, presenceEntry)));
       if (peer.detail) card.append(details("查看目录技术详情", [["原始诊断", peer.detail]]));
       const models = el("div", null, "discovery-models");
@@ -477,9 +485,9 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         else if (!providesModels) actions.append(paragraph("此伙伴可请求，但不提供模型；无文件申请需要伙伴先分享模型。"));
         else if (needsIdentity) actions.append(paragraph("首次连接或身份已变化：可以先核对完整指纹，服务确认后再发送申请。"));
         if (presenceEntry) {
-          actions.append(details("控制通道与能力（只读）", [
-            ["控制端点", presenceEntry.endpoint?.host ? `${presenceEntry.endpoint.host}${presenceEntry.endpoint.controlPort ? `:${presenceEntry.endpoint.controlPort}` : ""}` : "未报告"],
-            ["覆盖网地址", presenceEntry.endpoint?.mappedCidr || "未报告"],
+          actions.append(details("控制通道与能力", [
+            ["控制端点", presenceEntry.endpoint?.host ? `${presenceEntry.endpoint.host}${presenceEntry.endpoint.controlPort ? `:${presenceEntry.endpoint.controlPort}` : ""}` : "未报告", true],
+            ["覆盖网地址", presenceEntry.endpoint?.mappedCidr || "未报告", true],
             ["共享状态", presenceEntry.capability?.sharing || "未报告"],
             ["提供模型", presenceEntry.capability?.providesModels === true ? "是" : presenceEntry.capability?.providesModels === false ? "否" : "未报告"],
             ["presence 到期", presenceEntry.expiresAt ? when(presenceEntry.expiresAt) : "未报告"],
@@ -507,9 +515,9 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
           });
           actions.append(trust, paragraph(`完整指纹：${presenceEntry.fingerprint}`));
         }
-        actions.append(details("控制通道与能力（只读）", [
-          ["控制端点", presenceEntry.endpoint?.host ? `${presenceEntry.endpoint.host}${presenceEntry.endpoint.controlPort ? `:${presenceEntry.endpoint.controlPort}` : ""}` : "未报告"],
-          ["覆盖网地址", presenceEntry.endpoint?.mappedCidr || "未报告"],
+        actions.append(details("控制通道与能力", [
+          ["控制端点", presenceEntry.endpoint?.host ? `${presenceEntry.endpoint.host}${presenceEntry.endpoint.controlPort ? `:${presenceEntry.endpoint.controlPort}` : ""}` : "未报告", true],
+          ["覆盖网地址", presenceEntry.endpoint?.mappedCidr || "未报告", true],
           ["共享状态", presenceEntry.capability?.sharing || "未报告"],
           ["提供模型", presenceEntry.capability?.providesModels === true ? "是" : "否"],
           ["身份", P2P_TOFU_LABELS[security.tofu] || "尚未确认"],
@@ -534,7 +542,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     const choices = [];
     for (const model of items(models)) {
       const value = typeof model === "string" ? { id: model } : model;
-      const choice = checkbox(value.displayName ? `${value.displayName} · ${value.id}` : value.id, selected.includes(value.id));
+      const choice = checkbox(value.displayName ? `${value.displayName}（${value.id}）` : value.id, selected.includes(value.id));
       choice.input.dataset.modelId = value.id;
       choice.input.disabled = value.completePrice === false;
       const row = el("div", null, "choice-row"); row.append(choice.label);
@@ -635,7 +643,10 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   const legacyRequests = el("details", null, "advanced-recovery");
   legacyRequests.append(el("summary", "高级应急：旧版申请文件"));
   legacyRequests.append(requestCard);
-  roots.sharing.append(p2pRequestsCard, p2pApprovalsCard, shareIntro, publication, ownIdentity, legacyRequests, consumersCard);
+  // Publication fields belong to the sharing block, not to a floating details
+  // between two cards.
+  shareIntro.append(publication);
+  roots.sharing.append(p2pRequestsCard, p2pApprovalsCard, shareIntro, ownIdentity, legacyRequests, consumersCard);
   function policySelection(models) {
     const policy = state?.status.config.share?.models;
     return items(models).filter((model) => model.completePrice && (Array.isArray(policy) ? policy.some((rule) => rule === "*" || rule === model.id || (rule.endsWith("/*") && model.id.startsWith(rule.slice(0, -1)))) : model.allowedByPolicy)).map((model) => model.id);
@@ -749,7 +760,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         updateSelectionControls();
       });
       const body = el("div"); body.append(choice.label, paragraph(model.id), paragraph(priceText(model.pricing)), priceDetails(model));
-      row.append(body, badge(model.completePrice ? "价格完整" : "缺少价格", model.completePrice ? "good" : "warn"));
+      row.append(body);
       modelsList.append(row);
     }
     updateSelectionControls();
@@ -782,7 +793,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   function listenerText(listener) {
     if (!listener || typeof listener.state !== "string") return "控制通道未读取";
     const where = listener.state === "ready"
-      ? `${listener.reachability === "overlay" ? "覆盖网" : listener.reachability === "lan" ? "局域网（非覆盖网专属）" : "本机"}${listener.verified ? " · 已验证" : " · 未验证"}`
+      ? `${listener.reachability === "overlay" ? "覆盖网" : listener.reachability === "lan" ? "局域网（非覆盖网专属）" : "本机"}${listener.verified ? "，已验证" : "，未验证"}`
       : "不可用";
     return where;
   }
@@ -802,7 +813,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       root.append(identify, details("身份与报价", [["伙伴", peer.quote?.node?.displayName || peer.hostname || "伙伴"], ["报价指纹", acceptance.quoteHash], ["价格版本", peer.quote?.publication?.version], ["价格未锁定", "是（priceLocked: false）"]]));
       if (needsIdentity) root.append(el("p", P2P_TOFU_LABELS[security.tofu] || "首次连接，需要核对身份", "inline-warning"));
       const getModels = modelChoices(root, items(peer.quote.models).map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" })), []);
-      const accept = needsIdentity ? checkbox(`我核对并接受此完整身份指纹：${acceptance.fingerprint}`) : null;
+      const accept = needsIdentity ? checkbox("我核对并接受上述完整身份指纹") : null;
       const agree = checkbox("我已核对完整身份指纹与报价，并发送一次使用申请");
       const submit = button(needsIdentity ? "核对身份并发送申请" : "发送使用申请", async () => {
         const chosen = getModels();
@@ -831,7 +842,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     let previewing = false;
     let previewGeneration = 0;
     openDialog("核对并批准使用请求", (root) => {
-      root.append(paragraph("一次确认会绑定这次请求、对方完整身份指纹、当前报价、选中模型的价格版本与批准代次。批准后密钥通过加密会话自动交付，不需要再发文件或复制密钥。"));
+      root.append(paragraph("核对伙伴、模型、价格和额度后再批准。密钥会自动安全交付，无需发送文件。"));
       const identify = el("p", "对方完整身份指纹（请逐字核对）：");
       identify.append(el("code", request.consumerFingerprint, "fingerprint"));
       root.append(identify, details("请求身份与绑定", [
@@ -846,7 +857,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       if (current.length !== items(request.models).length) {
         root.append(el("p", "当前报价缺少请求中的模型，不能批准；请拒绝或让伙伴重新申请。", "inline-warning"));
       }
-      root.append(paragraph("选择要批准的模型（默认全部请求模型）。客户端不计算价格版本，选中后由服务返回当前报价的 selected version。"));
+      root.append(paragraph("默认选择全部申请模型。选择变化后，需要重新预览当前报价。"));
       const choices = [];
       for (const model of current) {
         const choice = checkbox(model.displayName || model.id, selected.has(model.id));
@@ -855,18 +866,19 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
           invalidatePreview();
           updateApprove();
         });
+        // The checkbox is the choice; the single quote area below shows the price.
         const row = el("div", null, "choice-row");
-        row.append(choice.label, paragraph(priceText(model.pricing)));
+        row.append(choice.label);
         root.append(row);
         choices.push(choice);
       }
       const previewButton = button("预览选中报价", () => { void refreshPreview(); });
       const previewBox = el("div", null, "workflow-list");
       root.append(previewButton, previewBox);
-      const cap = field("本次授权的正额度（USD）", "number", typeof request.capUsd === "number" && request.capUsd > 0 ? String(request.capUsd) : "");
+      const cap = field("本次授权的额度（USD）", "number", typeof request.capUsd === "number" && request.capUsd > 0 ? String(request.capUsd) : "");
       cap.input.min = "0.0001"; cap.input.max = "1000000"; cap.input.step = "0.0001"; cap.input.required = true;
-      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍；0 在 Magpie 中表示不限制，不能当作暂停。"));
-      const accept = request.tofu === "accepted" ? null : checkbox(`我核对并接受此完整身份指纹：${request.consumerFingerprint}`);
+      cap.label.append(el("small", "额度必须大于 0；0 表示不限制，不能用于暂停。"));
+      const accept = request.tofu === "accepted" ? null : checkbox("我核对并接受上述完整身份指纹");
       const agree = checkbox("我确认批准这次请求，并接受当前报价、模型与额度");
       const submit = button("确认批准", () => {
         const chosen = [...selected];
@@ -910,13 +922,14 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       function renderPreview() {
         previewBox.replaceChildren();
         if (!preview) return;
+        previewBox.append(el("p", "当前报价", "subhead"));
         for (const model of preview.models) {
           const pricing = items(preview.pricing).find((row) => row.id === model)?.pricing;
           const row = el("div", null, "choice-row");
           row.append(el("strong", model), paragraph(pricing ? priceText(pricing) : "当前报价未提供价格"));
           previewBox.append(row);
         }
-        previewBox.append(details("选中报价的技术绑定", [["选中价格版本", preview.priceVersion], ["报价指纹", preview.quoteHash], ["模型数", String(preview.models.length)]]));
+        previewBox.append(details("选中报价的技术绑定", [["选中价格版本", preview.priceVersion, true], ["报价指纹", preview.quoteHash, true], ["模型数", String(preview.models.length)]]));
       }
       async function refreshPreview() {
         if (!selected.size) { dialogError.textContent = "请至少选择一个模型。"; dialogError.hidden = false; return; }
@@ -954,7 +967,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   function rejectP2p(request) {
     openDialog("拒绝这次使用请求", (root) => {
       root.append(paragraph("拒绝不会创建密钥，也不会影响其他伙伴。"));
-      root.append(details("请求身份", [["伙伴节点", request.consumerNodeId], ["完整身份指纹", request.consumerFingerprint], ["请求的模型", items(request.models).join("、") || "未提供"]]));
+      root.append(details("请求身份", [["伙伴节点", request.consumerNodeId, true], ["完整身份指纹", request.consumerFingerprint, true], ["请求的模型", items(request.models).join("、") || "未提供"]]));
       const note = field("拒绝说明（可选）"); note.input.maxLength = 300;
       const submit = button("确认拒绝", () => void run("p2p-reject", { requestId: request.requestId, ...(note.input.value.trim() ? { note: note.input.value.trim() } : {}) }, () => closeDialog()), true);
       root.append(note.label, submit);
@@ -973,8 +986,11 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const row = el("article", null, "workflow-row");
       const top = toolbar(request.consumerHostname || request.consumerNodeId || "伙伴");
       top.append(badge(P2P_INBOUND_LABELS[request.state] || request.state || "需要处理", actionable ? (request.tofu === "changed" ? "warn" : "info") : "neutral"));
-      row.append(top, paragraph(`${items(request.models).length} 个模型 · 建议额度 ${request.capUsd === null || request.capUsd === undefined ? "未提供" : money(request.capUsd)} · 到期 ${when(request.expiresAt)}`));
-      row.append(details("完整身份与报价", [["伙伴节点", request.consumerNodeId], ["完整身份指纹", request.consumerFingerprint], ["报价指纹", request.quoteHash], ["价格版本", request.priceVersion], ["身份状态", P2P_TOFU_LABELS[request.tofu] || request.tofu || "未提供"], ["收到时间", when(request.receivedAt)]]));
+      row.append(top);
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", `${items(request.models).length} 个模型`), el("li", `建议额度 ${request.capUsd === null || request.capUsd === undefined ? "未提供" : money(request.capUsd)}`), el("li", `到期 ${when(request.expiresAt)}`));
+      row.append(meta);
+      row.append(details("完整身份与报价", [["伙伴节点", request.consumerNodeId], ["完整身份指纹", request.consumerFingerprint, true], ["报价指纹", request.quoteHash, true], ["价格版本", request.priceVersion, true], ["身份状态", P2P_TOFU_LABELS[request.tofu] || request.tofu || "未提供"], ["收到时间", when(request.receivedAt)]]));
       if (request.tofu && request.tofu !== "accepted") row.append(el("p", P2P_TOFU_LABELS[request.tofu] || request.tofu, "inline-warning"));
       if (request.detail) row.append(el("p", requestDetails[request.state] || requestDetails[request.detail] || "这次请求需要处理；请查看技术详情。", "inline-warning"));
       if (actionable) {
@@ -1004,8 +1020,11 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const row = el("article", null, "workflow-row");
       const top = toolbar(approval.consumerNodeId || "伙伴");
       top.append(badge(P2P_APPROVAL_LABELS[approval.state] || approval.state || "需要处理", needsAction ? "warn" : "neutral"));
-      row.append(top, paragraph(`${items(approval.models).length} 个模型 · 额度上限 ${capLabel(approval.capUsd)} · 交付 ${P2P_DELIVERY_LABELS[approval.delivery?.state] || approval.delivery?.state || "未提供"}`));
-      row.append(details("授权、交付与身份", [["伙伴节点", approval.consumerNodeId], ["伙伴身份指纹", approval.consumerFingerprint], ["本机节点", approval.providerNodeId], ["本机身份指纹", approval.providerFingerprint], ["报价指纹", approval.quoteHash], ["价格版本", approval.priceVersion], ["代次", approval.generation], ["密钥引用（不透明）", approval.keyId], ["批准时间", when(approval.approvedAt)], ["到期", when(approval.expiresAt)], ["最近错误", approval.delivery?.lastError]]));
+      row.append(top);
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", `${items(approval.models).length} 个模型`), el("li", `额度上限 ${capLabel(approval.capUsd)}`), el("li", `交付 ${P2P_DELIVERY_LABELS[approval.delivery?.state] || approval.delivery?.state || "未提供"}`));
+      row.append(meta);
+      row.append(details("授权、交付与身份", [["伙伴节点", approval.consumerNodeId, true], ["伙伴身份指纹", approval.consumerFingerprint, true], ["本机节点", approval.providerNodeId, true], ["本机身份指纹", approval.providerFingerprint, true], ["报价指纹", approval.quoteHash, true], ["价格版本", approval.priceVersion, true], ["代次", approval.generation], ["密钥引用（不透明）", approval.keyId, true], ["批准时间", when(approval.approvedAt)], ["到期", when(approval.expiresAt)], ["最近错误", approval.delivery?.lastError]]));
       // The raw transport/protocol error stays in the technical details; the
       // ordinary line explains the operational consequence.
       if (needsAction) {
@@ -1027,7 +1046,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     const p2p = p2pOf();
     const listener = record(p2p.listener);
     const summary = el("article", null, "workflow-row");
-    summary.append(toolbar("控制通道"), paragraph(`${P2P_CONNECTION_LABELS[listener.state] || listener.state || "未读取"} · ${listenerText(listener)}${listener.port ? ` · 端口 ${listener.port}` : ""}`));
+    summary.append(toolbar("控制通道"), paragraph(`${P2P_CONNECTION_LABELS[listener.state] || listener.state || "未读取"}，${listenerText(listener)}${listener.port ? `，端口 ${listener.port}` : ""}`));
     if (listener.detail) summary.append(el("p", listener.detail, "inline-warning"));
     p2pConnectionsList.append(summary);
     const outbound = items(p2p.outboundRequests);
@@ -1037,8 +1056,12 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const top = toolbar(request.providerHostname || request.providerNodeId || "伙伴");
       top.append(badge(P2P_OUTBOUND_LABELS[request.state] || request.state || "需要处理", request.state === "connected" ? "good" : request.state === "action-needed" ? "warn" : "info"));
       const ack = record(request.ack);
-      row.append(top, paragraph(`${items(request.models).length} 个模型 · ${ack.state === "registered" ? `已注册 ${items(ack.models).length} 个 · 额度 ${capLabel(ack.capUsd)}` : ack.state === "failed" ? "注册失败" : "等待注册回读"}`));
-      row.append(details("申请身份与报价", [["伙伴节点", request.providerNodeId], ["完整身份指纹", request.providerFingerprint], ["报价指纹", request.quoteHash], ["价格版本", request.priceVersion], ["申请时间", when(request.createdAt)], ["更新时间", when(request.updatedAt)], ["最近说明", request.detail]]));
+      row.append(top);
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", `${items(request.models).length} 个模型`));
+      meta.append(el("li", ack.state === "registered" ? `已注册 ${items(ack.models).length} 个，额度 ${capLabel(ack.capUsd)}` : ack.state === "failed" ? "注册失败" : "等待注册回读"));
+      row.append(meta);
+      row.append(details("申请身份与报价", [["伙伴节点", request.providerNodeId, true], ["完整身份指纹", request.providerFingerprint, true], ["报价指纹", request.quoteHash, true], ["价格版本", request.priceVersion, true], ["申请时间", when(request.createdAt)], ["更新时间", when(request.updatedAt)], ["最近说明", request.detail]]));
       if (request.state === "action-needed") {
         row.append(el("p", "需要人工处理；不会自动重发申请或创建第二个密钥。", "inline-warning"));
         const tech = el("div", null, "workflow-actions");
@@ -1051,8 +1074,11 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const row = el("article", null, "workflow-row");
       const top = toolbar(connection.providerHostname || connection.providerNodeId || "伙伴");
       top.append(badge(P2P_CONNECTION_LABELS[connection.state] || connection.state || "需要处理", connection.state === "connected" ? "good" : "warn"));
-      row.append(top, paragraph(`${items(connection.models).length} 个模型 · 额度 ${capLabel(connection.capUsd)} · 回读 ${when(connection.readbackAt)}`));
-      row.append(details("连接与回读", [["伙伴节点", connection.providerNodeId], ["原生 Remote id", connection.providerId], ["最近说明", connection.detail]]));
+      row.append(top);
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", `${items(connection.models).length} 个模型`), el("li", `额度 ${capLabel(connection.capUsd)}`), el("li", `回读 ${when(connection.readbackAt)}`));
+      row.append(meta);
+      row.append(details("连接与回读", [["伙伴节点", connection.providerNodeId, true], ["原生 Remote id", connection.providerId, true], ["最近说明", connection.detail]]));
       p2pConnectionsList.append(row);
     }
   }
@@ -1086,7 +1112,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
   function previewConnection(document, preview) {
     openDialog("核对授权并连接", (root) => {
-      root.append(paragraph("本机已验证此文件的申请方、共享方身份和当前报价。请再次核对以下信息，确认后才会创建原生 Remote Magpie 连接。"), details("授权身份与模型", [["共享方", preview.provider?.hostname || preview.provider?.nodeId], ["接受方", preview.consumer?.nodeId], ["模型范围", items(preview.models).join("、")], ["额度", capLabel(preview.capUsd)], ["完整身份指纹", preview.quote?.identityFingerprint], ["完整报价指纹", preview.quote?.contentHash], ["完整价格版本", preview.quote?.priceVersion], ["价格锁定", "否（priceLocked: false）"]]));
+      root.append(paragraph("本机已验证此文件的申请方、共享方身份和当前报价。请再次核对以下信息，确认后才会创建原生 Remote Magpie 连接。"), details("授权身份与模型", [["共享方", preview.provider?.hostname || preview.provider?.nodeId], ["接受方", preview.consumer?.nodeId], ["模型范围", items(preview.models).join("、")], ["额度", capLabel(preview.capUsd)], ["完整身份指纹", preview.quote?.identityFingerprint, true], ["完整报价指纹", preview.quote?.contentHash, true], ["完整价格版本", preview.quote?.priceVersion, true], ["价格锁定", "否（priceLocked: false）"]]));
       const agree = checkbox("我已核对上述伙伴、模型与价格，并确认连接");
       const submit = button("创建此伙伴连接", () => {
         if (!agree.input.checked || !secretDocument) return;
@@ -1107,7 +1133,9 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const doc = requestDocument(request);
       const row = el("article", null, "workflow-row");
       const title = toolbar(doc.consumer?.hostname || doc.consumer?.nodeId || "伙伴申请"); title.append(badge(statusNames[request.status] || "待审批"));
-      row.append(title, paragraph(`${items(doc.models).length} 个模型 · ${doc.createdAt || request.importedAt || "待核对"}`));
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", `${items(doc.models).length} 个模型`), el("li", `${doc.createdAt || request.importedAt || "待核对"}`));
+      row.append(title, meta);
       const actions = el("div", null, "workflow-actions");
       actions.append(button(request.status === "pending" ? "核对并审批" : "查看申请", () => approveRequest(request)));
       row.append(actions); requestsList.append(row);
@@ -1117,13 +1145,13 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     const doc = requestDocument(request);
     openDialog("核对伙伴申请", (root) => {
       const reasons = items(request.reasons || request.comparison?.reasons);
-      root.append(details("申请身份与报价", [["申请方", doc.consumer?.hostname || doc.consumer?.nodeId], ["共享方", doc.provider?.hostname || doc.provider?.nodeId], ["申请身份指纹", doc.quote?.identityFingerprint], ["申请报价指纹", doc.quote?.contentHash], ["申请价格版本", doc.quote?.priceVersion], ["当前报价指纹", request.currentQuote?.contentHash || state.status.catalog?.quote?.contentHash], ["当前身份指纹", request.currentQuote?.identityFingerprint || state.status.catalog?.quote?.identity?.fingerprint], ["价格锁定", "否（priceLocked: false）"]]));
+      root.append(details("申请身份与报价", [["申请方", doc.consumer?.hostname || doc.consumer?.nodeId], ["共享方", doc.provider?.hostname || doc.provider?.nodeId], ["申请身份指纹", doc.quote?.identityFingerprint, true], ["申请报价指纹", doc.quote?.contentHash, true], ["申请价格版本", doc.quote?.priceVersion, true], ["当前报价指纹", request.currentQuote?.contentHash || state.status.catalog?.quote?.contentHash, true], ["当前身份指纹", request.currentQuote?.identityFingerprint || state.status.catalog?.quote?.identity?.fingerprint, true], ["价格锁定", "否（priceLocked: false）"]]));
       if (reasons.length) root.append(el("p", reasons.join("；"), "inline-warning"));
       const currentModels = items(state.status.catalog?.quote?.models);
       const getModels = modelChoices(root, items(doc.models).map((id) => ({ ...(currentModels.find((model) => model.id === id) || {}), id, completePrice: currentModels.some((model) => model.id === id && priceText(model.pricing) !== "价格不完整，不能授权") })), items(doc.models));
       if (request.status !== "pending") { root.append(paragraph(`此申请${statusNames[request.status] || "已处理"}。`)); return; }
       const cap = field("本次明确授权的额度（USD）", "number", ""); cap.input.min = "0.0001"; cap.input.max = "1000000"; cap.input.step = "0.0001"; cap.input.required = true; cap.input.placeholder = "请输入大于等于 0.0001 的金额";
-      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍。0 在 Magpie 中表示不设上限，不能作为暂停。"));
+      cap.label.append(el("small", "额度必须是 $0.0001 的整数倍。0 表示不设上限，不能作为暂停。"));
       const agree = checkbox("我已核对申请方、当前报价、模型与额度，明确批准此次授权");
       const submit = button("批准此申请", () => {
         if (!agree.input.checked || !validCap(cap.input.value) || !getModels().length) { dialogError.textContent = "请选择至少一个当前可授权模型，填写有效正额度，并明确确认批准。"; dialogError.hidden = false; return; }
@@ -1143,7 +1171,10 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const top = toolbar(consumer.consumerId);
       const capVerified = safeCap(consumer.capUsd);
       top.append(badge(consumer.revokedAt ? "已撤销" : consumer.paused ? "已暂停" : !capVerified ? (knownCap(consumer.capUsd) ? "额度上限不安全" : "额度上限待核验") : consumer.spent ? "额度已用尽" : "已授权", consumer.revokedAt || consumer.paused || consumer.spent || !capVerified ? "warn" : "good"));
-      row.append(top, paragraph(`${items(consumer.models).length} 个模型 · 额度上限 ${capLabel(consumer.capUsd)} · 已用 ${money(consumer.usedUsd)} · 剩余 ${money(consumer.leftUsd)}`), details("模型、计费与授权详情", [["模型范围", items(consumer.models).join("、")], ["价格版本", consumer.priceVersion], ["接受的报价", consumer.acceptedQuoteHash], ["累计调用", consumer.calls], ["下次窗口", consumer.reset], ["暂停原因", consumer.paused?.reason], ["计费不确定性", consumer.ledger?.uncertain], ["价格锁定", "否（priceLocked: false）"]]));
+      row.append(top);
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", `${items(consumer.models).length} 个模型`), el("li", `额度上限 ${capLabel(consumer.capUsd)}`), el("li", `已用 ${money(consumer.usedUsd)}`), el("li", `剩余 ${money(consumer.leftUsd)}`));
+      row.append(meta, details("模型、计费与授权详情", [["模型范围", items(consumer.models).join("、")], ["价格版本", consumer.priceVersion], ["接受的报价", consumer.acceptedQuoteHash], ["累计调用", consumer.calls], ["下次窗口", consumer.reset], ["暂停原因", consumer.paused?.reason], ["计费不确定性", consumer.ledger?.uncertain], ["价格锁定", "否（priceLocked: false）"]]));
       if (!capVerified && !consumer.revokedAt) row.append(el("p", `${capLabel(consumer.capUsd)}。请点击“检查授权”核验当前上限；这不表示剩余额度为零。`, "inline-warning"));
       if (!consumer.revokedAt) {
         const actions = el("div", null, "workflow-actions");
@@ -1176,7 +1207,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
   function reissueConsumer(consumer, preview) {
     openDialog("重新确认并恢复授权", (root) => {
-      root.append(paragraph(consumer.paused ? "此伙伴的授权已暂停。只有当前模型价格、报价与账目都能验证时，才可重新签发授权。该操作不会增加余额，也不会重置历史使用量。" : "此伙伴的授权尚未绑定当前目录报价，或接受的报价与当前版本不同。只有明确核对并接受当前价格与报价后，才可重新签发并交付授权。该操作不会增加余额，也不会重置历史使用量。"), details("当前待接受的价格绑定", [["伙伴", consumer.consumerId], ["模型", items(consumer.models).join("、")], ["当前价格版本", preview.currentPriceVersion], ["当前报价指纹", preview.currentQuoteHash], ["暂停原因", preview.consumer?.paused?.reason || consumer.paused?.reason], ["价格锁定", "否（priceLocked: false）"]]));
+      root.append(paragraph(consumer.paused ? "此伙伴的授权已暂停。只有当前模型价格、报价与账目都能验证时，才可重新签发授权。该操作不会增加余额，也不会重置历史使用量。" : "此伙伴的授权尚未绑定当前目录报价，或接受的报价与当前版本不同。只有明确核对并接受当前价格与报价后，才可重新签发并交付授权。该操作不会增加余额，也不会重置历史使用量。"), details("当前待接受的价格绑定", [["伙伴", consumer.consumerId], ["模型", items(consumer.models).join("、")], ["当前价格版本", preview.currentPriceVersion, true], ["当前报价指纹", preview.currentQuoteHash, true], ["暂停原因", preview.consumer?.paused?.reason || consumer.paused?.reason], ["价格锁定", "否（priceLocked: false）"]]));
       if (!preview.currentPriceVersion || !preview.currentQuoteHash) { root.append(el("p", "当前报价缺少完整价格或模型范围，暂时不能重新签发。请先检查模型目录和价格。", "inline-warning")); return; }
       const agree = checkbox("我已核对上述完整报价与模型，并接受新的价格绑定");
       const submit = button("接受并重新签发", () => {
@@ -1233,10 +1264,13 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       const limit = record(provider.limit);
       const capVerified = safeCap(limit.costLimit);
       top.append(badge(!capVerified ? (knownCap(limit.costLimit) ? "额度上限不安全" : "额度上限待核验") : limit.spent === true ? "额度已用尽" : statusNames[provider.status] || "需要处理", provider.status === "connected" && capVerified && limit.spent !== true ? "good" : "warn"));
-      row.append(top, paragraph(`原生 Remote Magpie · ${provider.remoteMagpieId || provider.id}`), paragraph(`额度上限 ${capLabel(limit.costLimit)} · 已用 ${money(limit.cost)} · 剩余 ${money(limit.costLeft)}`));
+      row.append(top, paragraph(`原生 Remote Magpie：${provider.remoteMagpieId || provider.id}`));
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", `额度上限 ${capLabel(limit.costLimit)}`), el("li", `已用 ${money(limit.cost)}`), el("li", `剩余 ${money(limit.costLeft)}`));
+      row.append(meta);
       if (!capVerified) row.append(el("p", `${capLabel(limit.costLimit)}。请点击“检查连接与额度”核验；网络已连接不代表额度上限安全。`, "inline-warning"));
       if (provider.detail) row.append(el("p", provider.detail, "inline-warning"));
-      row.append(details("连接与核验信息", [["本机接入地址", provider.url], ["伙伴网络地址", provider.mappedCidr], ["最近连接", provider.lastConnectedAt], ["原生限额状态", limit.spent === true ? "额度已用尽，原生调用可能返回 429" : provider.limit ? "已读取" : "尚未读取"], ["授权说明", "401 表示密钥未被接受；429 表示原生限额拒绝。两者不是网络连通证明。"]]));
+      row.append(details("连接与核验信息", [["本机接入地址", provider.url, true], ["伙伴网络地址", provider.mappedCidr, true], ["最近连接", provider.lastConnectedAt], ["原生限额状态", limit.spent === true ? "额度已用尽，原生调用可能返回 429" : provider.limit ? "已读取" : "尚未读取"], ["授权说明", "401 表示密钥未被接受；429 表示原生限额拒绝。两者不是网络连通证明。"]]));
       const actions = el("div", null, "workflow-actions");
       // Both reads persist a new evidence record, so refresh the state once after
       // the explicit action (the polling endpoint itself never probes).

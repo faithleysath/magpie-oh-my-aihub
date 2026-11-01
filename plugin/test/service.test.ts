@@ -273,6 +273,10 @@ async function service(opts: { sharing?: boolean; consuming?: boolean; fresh?: b
     consumingEnabled: opts.consuming ?? true,
     networkName: "service-lab",
     networkSecret: "service-lab-secret",
+    // Pinned away from the 10.77.0.2/10.77.0.3 peer fixtures: a random local
+    // address colliding with a peer is classified as "self" and is a 1/254 test
+    // flake, not a product condition. Same pin as catalog-service.
+    virtualIpv4: "10.77.0.99/24",
   });
   return s;
 }
@@ -316,6 +320,7 @@ async function serviceSim(
     consumingEnabled: opts.consuming ?? true,
     networkName: "service-lab",
     networkSecret: "service-lab-secret",
+    virtualIpv4: "10.77.0.99/24",
   });
   return sim;
 }

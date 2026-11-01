@@ -85,10 +85,14 @@ describe("read-only network/asset UI", () => {
       expect(ui.root.textContent).toContain("ETH");
       expect(ui.root.textContent).toContain("USDC");
       expect(ui.root.textContent).toContain("BSC USDC 未在只读注册表列出时不支持");
-      expect(ui.root.textContent).toContain("不可授信");
-      expect(ui.root.textContent).toContain("主网发送、授信、自动充值和资金流当前未开放");
+      expect(ui.root.textContent).toContain("不计入可消费额度");
+      expect(ui.root.textContent).toContain("主网付款、自动充值和资金流仍未开放");
+      expect(ui.root.textContent).not.toContain("授信");
+      expect(ui.root.textContent).not.toContain("链 56");
+      expect(ui.root.textContent).not.toContain("链 8453");
+      expect(ui.root.textContent).toContain("BSC");
       expect(ui.calls.map((call) => call.name)).toEqual(["network-local-state"]);
-      expect(all(ui.root, "button").filter((node) => node.textContent === "读取所选只读余额")).toHaveLength(1);
+      expect(all(ui.root, "button").filter((node) => node.textContent === "读取余额")).toHaveLength(1);
       expect(ui.root.textContent).not.toContain("$0.00");
     } finally { ui.restore(); }
   });
@@ -118,13 +122,13 @@ describe("read-only network/asset UI", () => {
     const ui = mount({ "network-local-state": async () => state, "network-local-watch-address": async (input) => { state = { ...state, watchAddresses: [input.address] }; return state; } });
     try {
       await ui.show();
-      const input = inputByLabel(ui.root, "公开 watch 地址");
-      input.value = "0x0"; await find(ui.root, "button", "添加 watch 地址").click(); await flush();
+      const input = inputByLabel(ui.root, "公开地址");
+      input.value = "0x0"; await find(ui.root, "button", "添加只读地址").click(); await flush();
       expect(ui.calls.filter((call) => call.name === "network-local-watch-address")).toHaveLength(0);
-      input.value = ADDRESS; await find(ui.root, "button", "添加 watch 地址").click(); await flush();
+      input.value = ADDRESS; await find(ui.root, "button", "添加只读地址").click(); await flush();
       expect(ui.calls.find((call) => call.name === "network-local-watch-address").input).toEqual({ address: ADDRESS });
       expect(ui.root.textContent).toContain(ADDRESS);
-      expect(ui.root.textContent).toContain("钱包连接地址不会自动成为 watch/收款地址");
+      expect(ui.root.textContent).toContain("已添加 1 个只读查询地址");
     } finally { ui.restore(); }
   });
 
@@ -139,8 +143,8 @@ describe("read-only network/asset UI", () => {
       const chain = selectByLabel(ui.root, "网络"); chain.value = "8453"; await chain.emit("change");
       const asset = selectByLabel(ui.root, "资产"); expect([...asset.descendants()].some((node) => node.tagName === "OPTION" && node.value === USDC_ID)).toBe(true);
       asset.value = USDC_ID; await asset.emit("change");
-      const address = selectByLabel(ui.root, "已 watch 地址"); address.value = ADDRESS; await address.emit("change");
-      await find(ui.root, "button", "读取所选只读余额").click(); await flush();
+      const address = selectByLabel(ui.root, "只读地址"); address.value = ADDRESS; await address.emit("change");
+      await find(ui.root, "button", "读取余额").click(); await flush();
       expect(ui.calls.find((call) => call.name === "network-local-balance-refresh").input).toEqual({ chainId: 8453, address: ADDRESS, addressSource: "watch", assetId: USDC_ID });
       expect(ui.root.textContent).toContain("1.234567");
       expect(ui.root.textContent).toContain("未估值");
@@ -156,7 +160,7 @@ describe("read-only network/asset UI", () => {
       await ui.show();
       expect(ui.root.textContent).toContain("历史已知余额");
       expect(ui.root.textContent).toContain("不是实时");
-      expect(ui.root.textContent).toContain("显式 watch");
+      expect(ui.root.textContent).toContain("你添加的只读地址");
       expect(ui.root.textContent).not.toContain("实时绿");
     } finally { ui.restore(); }
   });
@@ -167,8 +171,8 @@ describe("read-only network/asset UI", () => {
     const ui = mount({ "network-local-state": async () => state });
     try {
       await ui.show();
-      expect(ui.root.textContent).toContain("无法读取");
-      expect(ui.root.textContent).toContain("不代表你清空了选择");
+      expect(ui.root.textContent).toContain("读不到");
+      expect(ui.root.textContent).toContain("这不等于你清空了选择");
       expect(all(ui.root, "input").filter((node) => node.type === "checkbox")).toHaveLength(0);
     } finally { ui.restore(); }
   });
@@ -178,9 +182,9 @@ describe("read-only network/asset UI", () => {
     const ui = mount({ "network-local-state": async () => state, "network-local-watch-address": async () => state });
     try {
       await ui.show();
-      const input = inputByLabel(ui.root, "公开 watch 地址"); input.value = ADDRESS;
-      await find(ui.root, "button", "添加 watch 地址").click(); await flush();
-      expect(ui.root.textContent).toContain("最多只能显式 watch 32");
+      const input = inputByLabel(ui.root, "公开地址"); input.value = ADDRESS;
+      await find(ui.root, "button", "添加只读地址").click(); await flush();
+      expect(ui.root.textContent).toContain("最多只能添加 32");
       expect(ui.calls.filter((call) => call.name === "network-local-watch-address")).toHaveLength(0);
     } finally { ui.restore(); }
   });
@@ -192,8 +196,8 @@ describe("read-only network/asset UI", () => {
       await ui.show();
       const chain = selectByLabel(ui.root, "网络"); chain.value = "56"; await chain.emit("change");
       const asset = selectByLabel(ui.root, "资产"); asset.value = "native"; await asset.emit("change");
-      const address = selectByLabel(ui.root, "已 watch 地址"); address.value = ADDRESS; await address.emit("change");
-      await find(ui.root, "button", "读取所选只读余额").click(); await flush();
+      const address = selectByLabel(ui.root, "只读地址"); address.value = ADDRESS; await address.emit("change");
+      await find(ui.root, "button", "读取余额").click(); await flush();
       expect(ui.root.textContent).toContain("余额未知");
       expect(ui.root.textContent).not.toContain("0 BNB");
       expect(ui.calls.filter((call) => call.name === "network-local-balance-refresh")).toHaveLength(1);
@@ -206,7 +210,7 @@ describe("read-only network/asset UI", () => {
       await ui.show();
       expect(ui.root.textContent).toContain("只读网络服务未接入");
       expect(ui.root.textContent).not.toContain("USDC");
-      expect(all(ui.root, "button").filter((node) => node.textContent === "读取所选只读余额")).toHaveLength(0);
+      expect(all(ui.root, "button").filter((node) => node.textContent === "读取余额")).toHaveLength(0);
       expect(ui.calls.map((call) => call.name)).toEqual(["network-local-state"]);
     } finally { ui.restore(); }
   });

@@ -16,6 +16,10 @@ const STATUS_LABEL = {
   signed: "已签名，等待提供方确认",
   unknown: "状态未知",
 };
+const CHAIN_NAMES = { 56: "BSC", 8453: "Base", 97: "BSC 测试网", 84532: "Base 测试网" };
+/** Ordinary network name; the numeric chain id stays in technical details. */
+const chainName = (id) => CHAIN_NAMES[Number(id)] || "未知网络";
+
 const TONE = {
   received: "good",
   waitingpayment: "info",
@@ -80,7 +84,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     return node;
   };
   const p = (text, className = "muted") => el("p", text, className);
-  const pill = (text, tone = "neutral") => el("span", text, `pill ${tone}`);
+  const statusText = (text, tone = "neutral") => el("span", text, `status-text ${tone}`);
   const field = (label, type = "text", placeholder = "") => {
     const wrap = el("label", null, "field");
     const input = el("input");
@@ -112,19 +116,19 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   };
 
   const shell = el("section", null, "card workflow-section wallet-payment-section");
-  shell.append(el("h2", "无文件充值（P2P 付款）"));
-  shell.append(p("由已认证的伙伴连接交换付款条件；签名只在本机钱包确认，付款只在明确预览后发送。没有 JSON 文件或签名文件步骤。"));
+  shell.append(el("h2", "充值"));
+  shell.append(p("向已授权的伙伴充值。付款条件通过已认证的连接交换，签名只在本机钱包确认，付款只在明确预览后发送。"));
   const unavailable = p("本机 P2P 付款服务尚未启动。", "inline-warning");
   unavailable.hidden = true;
   const providerBox = el("div", null, "wallet-payment-group");
   const consumerBox = el("div", null, "wallet-payment-group");
-  const autoBox = el("div", null, "wallet-payment-group");
+  const autoBox = el("details", null, "workflow-details wallet-payment-auto");
   shell.append(unavailable, providerBox, consumerBox, autoBox);
   root.replaceChildren(shell);
 
   const requestForm = el("div", null, "wallet-payment-form");
-  const requestProvider = selectField("伙伴提供方");
-  const requestChain = selectField("网络（测试链）");
+  const requestProvider = selectField("伙伴");
+  const requestChain = selectField("网络");
   const requestAsset = selectField("资产");
   const requestAmount = field("金额（代币单位）", "text", "例如 1.5");
   const requestError = p("", "form-error");
@@ -159,13 +163,13 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   providerBox.append(el("h3", "提供方：我的收款与发票"), providerRequests);
   consumerBox.append(el("h3", "我的充值"), obligations);
 
-  autoBox.append(el("h3", "自动充值：提醒 + 一键确认（FULL AUTO 未实现）"));
-  autoBox.append(p("本阶段不执行无人值守签名。开启后只在提供方剩余额度低于触发值时提醒；真正付款仍需上面的预览和确认。主网 56/8453 永远关闭。"));
+  autoBox.append(el("summary", "自动充值提醒（可选）"));
+  autoBox.append(p("开启后只在伙伴剩余额度低于触发值时提醒；真正付款仍要上面的预览和确认。主网充值不开放。"));
   const autoEnabled = el("input");
   autoEnabled.type = "checkbox";
   const autoLabel = el("label", null, "workflow-check");
   autoLabel.append(autoEnabled, el("span", "启用余额不足提醒"));
-  const autoProvider = selectField("伙伴提供方");
+  const autoProvider = selectField("伙伴");
   const autoChain = selectField("网络");
   const autoAsset = selectField("资产");
   const autoTrigger = field("触发额度（USD）", "number", "1");
@@ -205,14 +209,14 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
 
   function providerChoices(s) {
     const remotes = Array.isArray(s?.consumer?.remotes) ? s.consumer.remotes : [];
-    return remotes.map((remote) => [remote.providerNodeId, `${remote.providerNodeId} · 授权 ${remote.generation} · 上限 $${remote.capUsd}`]);
+    return remotes.map((remote) => [remote.providerNodeId, `${remote.providerNodeId}，授权 ${remote.generation}，上限 $${remote.capUsd}`]);
   }
 
   function assetChoices(s, chainId) {
     const assets = Array.isArray(s?.provider?.assets) ? s.provider.assets : [];
     return assets.filter((asset) => !chainId || asset.chainId === Number(chainId)).map((asset) => {
-      const network = (s?.provider?.networks || []).includes(asset.chainId) ? `链 ${asset.chainId}` : "未知网络";
-      return [asset.assetId, `${asset.symbol} · ${network} · ${asset.contractAddress.slice(0, 10)}…`];
+      const network = (s?.provider?.networks || []).includes(asset.chainId) ? chainName(asset.chainId) : "未知网络";
+      return [asset.assetId, `${asset.symbol}，${network}，${asset.contractAddress.slice(0, 10)}…`];
     });
   }
 
@@ -220,10 +224,10 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     if (!state) return;
     setOptions(requestProvider.select, providerChoices(state), "选择已授权的伙伴");
     const chains = [...new Set((state.provider?.assets || []).map((a) => a.chainId))].sort((a, b) => a - b);
-    setOptions(requestChain.select, chains.map((chain) => [chain, `链 ${chain}`]), "选择网络");
+    setOptions(requestChain.select, chains.map((chain) => [chain, chainName(chain)]), "选择网络");
     setOptions(requestAsset.select, assetChoices(state, requestChain.select.value), "选择资产");
     setOptions(autoProvider.select, providerChoices(state), "选择伙伴");
-    setOptions(autoChain.select, chains.map((chain) => [chain, `链 ${chain}`]), "选择网络");
+    setOptions(autoChain.select, chains.map((chain) => [chain, chainName(chain)]), "选择网络");
     setOptions(autoAsset.select, assetChoices(state, autoChain.select.value), "选择资产");
   }
 
@@ -241,7 +245,7 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     requestButton.disabled = true;
     try {
       const result = await act("payment-p2p-request", { providerNodeId, chainId, assetId, amountRaw });
-      try { notice(`已发送充值申请${result.invoiceId ? `（${result.invoiceId}）` : ""}，等待提供方付款条件`, "good"); } catch { /* advisory */ }
+      try { notice(`已发送充值申请${result.invoiceId ? `（${result.invoiceId}）` : ""}，等待伙伴给出付款条件`, "good"); } catch { /* advisory */ }
       await refreshState();
     } catch (error) {
       showError(requestError, String(error?.message || error));
@@ -311,37 +315,55 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
   function renderPreview(obligation, preview) {
     previewBox.replaceChildren();
     previewBox.hidden = false;
-    previewBox.append(el("h4", "付款预览（只读）"));
+    previewBox.append(el("h4", "付款预览"));
+    // The ordinary confirmation shows only what the user must recognise. Chain
+    // id, nonce, gas and the signature digest live in one collapsed block.
     const facts = el("dl", null, "facts wallet-payment-facts");
-    const rows = [
-      ["发票", preview.invoiceId],
-      ["网络", `链 ${preview.chainId}`],
-      ["资产", `${preview.assetId}`],
-      ["收款地址", preview.recipientAddress],
-      ["金额", `${preview.amountTokens}（原始 ${preview.amountRaw}）`],
-      ["付款地址", preview.payerAddress],
-      ["Nonce", String(preview.nonce)],
-      ["Gas 上限", `${preview.gasLimit} × ${preview.maxFeePerGas} wei`],
-      ["最坏 Gas 花费", `${preview.maxGasCostWei} wei（${preview.nativeSymbol}）`],
-      ["代币余额", formatRawAmount(preview.tokenBalanceRaw, preview.decimals)],
-      ["EIP-712 摘要", preview.digest],
-      ["预览有效期", preview.expiresAt],
+    const visibleRows = [
+      ["网络", chainName(preview.chainId), false],
+      ["资产", `${preview.assetId}`, true],
+      ["金额", `${preview.amountTokens}`, true],
+      ["收款地址", preview.recipientAddress, true],
+      ["付款地址", preview.payerAddress, true],
     ];
-    for (const [label, value] of rows) {
+    for (const [label, value, identifier] of visibleRows) {
       const row = el("div");
-      row.append(el("dt", label), el("dd", value));
+      const dd = el("dd", value);
+      if (identifier) dd.className = "mono";
+      row.append(el("dt", label), dd);
       facts.append(row);
+    }
+    const technical = el("details", null, "workflow-details");
+    technical.append(el("summary", "技术详情"));
+    const technicalRows = [
+      ["发票", preview.invoiceId, true],
+      ["chainId", preview.chainId, true],
+      ["资产 ID", `${preview.assetId}`, true],
+      ["原始金额", preview.amountRaw, true],
+      ["Nonce", String(preview.nonce), true],
+      ["Gas 上限", `${preview.gasLimit} × ${preview.maxFeePerGas} wei`, true],
+      ["最坏 Gas 花费", `${preview.maxGasCostWei} wei（${preview.nativeSymbol}）`, true],
+      ["代币余额", formatRawAmount(preview.tokenBalanceRaw, preview.decimals), true],
+      ["EIP-712 摘要", preview.digest, true],
+      ["预览有效期", preview.expiresAt, false],
+    ];
+    for (const [label, value, identifier] of technicalRows) {
+      const row = el("div");
+      const dd = el("span", value);
+      if (identifier) dd.className = "mono";
+      row.append(el("strong", label), dd);
+      technical.append(row);
     }
     const confirm = el("input");
     confirm.type = "checkbox";
     const label = el("label", null, "workflow-check");
-    label.append(confirm, el("span", "我已核对以上网络、资产、收款地址、金额和 Gas 上限；只发送这一笔。"));
+    label.append(confirm, el("span", "我已核对以上网络、资产、收款地址和金额；只发送这一笔。"));
     const send = button("确认并从本机钱包付款", () => void sendPayment(obligation, preview.previewRef), true);
     send.disabled = true;
     confirm.addEventListener("change", () => { send.disabled = !confirm.checked; });
     const actions = el("div", null, "wallet-payment-actions");
     actions.append(send, button("关闭预览", () => { previewBox.hidden = true; previewBox.replaceChildren(); }));
-    previewBox.append(facts, label, actions);
+    previewBox.append(facts, technical, label, actions);
     previewBox.scrollIntoView?.({ block: "nearest" });
   }
 
@@ -403,10 +425,13 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
     for (const request of rows) {
       const li = el("li");
       const head = el("div", null, "wallet-payment-row-head");
-      head.append(el("strong", `${formatRawAmount(request.amountRaw, request.decimals)} · 链 ${request.chainId}`), pill(paymentStatusLabel(request.status), paymentStatusTone(request.status)));
-      const detail = el("small", `发票 ${request.invoiceId} · 顾客 ${request.consumerNodeId} · ${request.signaturePresent ? "已验签" : "未签名"} · ${request.expiresAt}`);
-      li.append(head, detail);
-      if (request.payerAddress) li.append(el("small", `付款地址 ${request.payerAddress}`));
+      const amount = el("strong", formatRawAmount(request.amountRaw, request.decimals));
+      amount.className = "amount";
+      head.append(amount, statusText(paymentStatusLabel(request.status), paymentStatusTone(request.status)));
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", chainName(request.chainId)), el("li", `发票 ${request.invoiceId}`), el("li", `顾客 ${request.consumerNodeId}`), el("li", request.signaturePresent ? "已验签" : "未签名"), el("li", request.expiresAt));
+      li.append(head, meta);
+      if (request.payerAddress) { const payer = el("small", `付款地址 ${request.payerAddress}`); payer.className = "mono"; li.append(payer); }
       if (request.error) li.append(el("small", `错误 ${request.error}`));
       providerRequests.append(li);
     }
@@ -423,10 +448,14 @@ export function mountPaymentP2p({ client, getState, notice = () => {}, refreshSt
       const li = el("li");
       const head = el("div", null, "wallet-payment-row-head");
       const status = obligation.peerStatus || obligation.status;
-      head.append(el("strong", `${formatRawAmount(obligation.amountRaw, obligation.decimals)} · 链 ${obligation.chainId}`), pill(paymentStatusLabel(status), paymentStatusTone(status)));
+      const amount = el("strong", formatRawAmount(obligation.amountRaw, obligation.decimals));
+      amount.className = "amount";
+      head.append(amount, statusText(paymentStatusLabel(status), paymentStatusTone(status)));
       li.append(head);
-      li.append(el("small", `伙伴 ${obligation.providerNodeId} · 发票 ${obligation.invoiceId} · ${obligation.signed ? "已签名" : "未签名"} · 到期 ${obligation.expiresAt}`));
-      if (obligation.payerAddress) li.append(el("small", `付款地址 ${obligation.payerAddress}`));
+      const meta = el("ul", null, "meta-list");
+      meta.append(el("li", chainName(obligation.chainId)), el("li", `伙伴 ${obligation.providerNodeId}`), el("li", `发票 ${obligation.invoiceId}`), el("li", obligation.signed ? "已签名" : "未签名"), el("li", `到期 ${obligation.expiresAt}`));
+      li.append(meta);
+      if (obligation.payerAddress) { const payer = el("small", `付款地址 ${obligation.payerAddress}`); payer.className = "mono"; li.append(payer); }
       const actions = el("div", null, "wallet-payment-actions");
       const available = obligationActions(obligation);
       if (available.includes("sign")) actions.append(button("核对并签名", () => startSign(obligation)));
