@@ -10,7 +10,7 @@ Object.defineProperty(process, "ppid", { get: () => parent });
 const calls: string[] = [];
 mock.module(join(src, "paths.ts"), () => ({ statePath: (...p: string[]) => join(dir, ...p), stateDir: () => dir,
   pluginRoot: () => dir, magpieDataDir: () => dir, resolveMagpieBin: () => "/fixture/magpie" }));
-mock.module(join(src, "log.ts"), () => ({ redact: (s: string) => s, logger: { info() {}, warn() {}, error() {} } }));
+mock.module(join(src, "log.ts"), () => ({ redact: (s: string) => s, registerSecret() {}, recentLogs: () => [], logger: { info() {}, warn() {}, error() {} } }));
 mock.module(join(src, "magpie.ts"), () => ({ Magpie: class { version() { return "fixture"; } } }));
 mock.module(join(src, "easytier.ts"), () => ({ ownsProcess: () => false }));
 mock.module(join(src, "console-api.ts"), () => ({ CONSOLE_ACTIONS: [], consoleState: async () => ({}), consoleAction: async () => ({}) }));
@@ -21,6 +21,7 @@ const consoleFixture = () => {
   return { port: 12346, issueTicket: () => "unused", pendingPairings: () => [], approvePairing: () => false, stop() {} };
 };
 mock.module(join(src, "console-server.ts"), () => ({
+  ConsoleInputError: class ConsoleInputError extends Error { code: string; status: number; constructor(message: string, code = "invalid_input", status = 400) { super(message); this.code = code; this.status = status; } },
   startConsoleServer: consoleFixture,
   startConsoleServerWithFallback: () => ({ server: consoleFixture(), fallback: false }),
 }));
@@ -28,7 +29,7 @@ mock.module(join(src, "console-launch.ts"), () => ({ readOwnPluginOptions: () =>
   saveConsolePort() {}, publishUnavailableLauncher() {}, startConsoleLauncher: () => ({ stop() {} }) }));
 mock.module(join(src, "server.ts"), () => ({ startApi: () => { calls.push("api"); return { port: 12345, stop() {} }; } }));
 let constructors = 0;
-mock.module(join(src, "service.ts"), () => ({ Service: class {
+mock.module(join(src, "service.ts"), () => ({ catalogQuoteUsability: () => ({ usable: false, detail: "fixture" }), Service: class {
   supervisor = { snapshot: () => ({ pid: null }) };
   constructor() { calls.push("construct"); constructors++; if (mode === "constructor" && constructors === 1) throw new Error("fixture constructor fail"); }
   config() { return null; }

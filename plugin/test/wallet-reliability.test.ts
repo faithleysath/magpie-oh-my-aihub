@@ -638,7 +638,9 @@ describe("C. a rate change cannot silently change a deposit's value", () => {
       decimals: 6,
       issuerType: "mock",
       testnetOnly: true,
+      credit: true,
       enabled: true,
+      evidence: null,
       pricing: { nanosPerToken: "2000000000", version: "v2", kind: "fixed-test-rate", note: "x" },
     };
     // The registry says 2, the caller asks for the issued 1.

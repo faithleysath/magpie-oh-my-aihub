@@ -1,0 +1,59 @@
+{
+  "schema": "ohmyaihub.phase10.wallet-journey/v1",
+  "at": "2026-10-31T11:56:00Z",
+  "platform": "macOS 26.6.2 arm64; Magpie 0.1.2289 GUI; ego-lite Chromium; isolated .portable profiles under /private/tmp/ohmyaihub-phase10-wallet-lab",
+  "provider": {
+    "nodeId": "13007b10",
+    "walletAddress": "0xa936eb7e152022407348ec404da1ae9cc592e874",
+    "walletPath": "provider/data/oh-my-aihub/wallet/keystore.json"
+  },
+  "consumer": {
+    "nodeId": "362b8977",
+    "walletAddress": "0x91761084493a71d69eb19088dcf182821e299fb0",
+    "receivingNetwork": 84532,
+    "testAsset": {
+      "chainId": 84532,
+      "contractAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "symbol": "tUSDC",
+      "decimals": 6,
+      "note": "isolated anvil MockToken, no value"
+    }
+  },
+  "steps": [
+    {
+      "step": "create wallet",
+      "result": "VERIFIED",
+      "detail": "one-time 12-word seed dialog; after close the wallet is locked; address shown but not trusted until unlock"
+    },
+    {
+      "step": "unlock",
+      "result": "VERIFIED",
+      "detail": "password unlock; addressVerified=true for the session; short expiry shown"
+    },
+    {
+      "step": "mnemonic export",
+      "result": "VERIFIED",
+      "detail": "purpose + explicit confirmation + fresh password; revealed seed equals the lab-private backup; values cleared on close, never in state/log/screenshot"
+    },
+    {
+      "step": "private-key export",
+      "result": "VERIFIED",
+      "detail": "purpose + explicit confirmation + fresh password; derived ethers address equals the wallet address; key never printed or stored in the repo"
+    },
+    {
+      "step": "restore from exported mnemonic",
+      "result": "VERIFIED",
+      "detail": "import with replace + current password; resulting locked wallet has the same public address"
+    },
+    {
+      "step": "secret leakage scan of lab tree",
+      "result": "VERIFIED",
+      "detail": "0 matches for the mnemonic or private key in logs/state/sqlite/browser-visible files; only the two 0600 lab-private files held them"
+    }
+  ],
+  "notClaimed": [
+    "no real mainnet wallet funds",
+    "no browser extension compatibility",
+    "no automatic recharge"
+  ]
+}

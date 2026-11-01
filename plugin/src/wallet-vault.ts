@@ -525,6 +525,11 @@ export interface PreparedPayment {
   readonly from: string;
   readonly chainId: number;
   readonly to: string;
+  /** native transfer (value > 0) or an exact ERC-20 transfer (value 0, data) */
+  readonly kind: "native" | "erc20";
+  readonly tokenAddress: string | null;
+  readonly tokenAmountRaw: string | null;
+  readonly tokenDecimals: number | null;
   readonly valueWei: string;
   readonly nonce: number;
   readonly gasLimit: string;
@@ -1019,6 +1024,37 @@ export class WalletVault {
     ) {
       fail("payment-invalid", "invalid gas or fee fields");
     }
+    return this.preparePaymentCore(input, "native", null);
+  }
+
+  private preparePaymentCore(
+    input: PaymentRequestInput,
+    kind: "native" | "erc20",
+    token: { tokenAddress: string; tokenAmountRaw: string; tokenDecimals: number } | null,
+  ): PreparedPayment {
+    if (this.publicAddress === null) fail("wallet-absent", "no wallet exists");
+    assertSignableChain(input.chainId, this.options.chainPolicy, this.options.allowedSigningChains);
+    if (!Number.isSafeInteger(input.chainId) || input.chainId < 1) fail("payment-invalid", "chain id must be a positive safe integer");
+    if (typeof input.valueWei !== "bigint" || input.valueWei < 0n || input.valueWei > UINT256_MAX) {
+      fail("payment-invalid", "payment value must be a uint256 bigint");
+    }
+    if (kind === "native" && input.valueWei <= 0n) fail("payment-invalid", "a native payment needs a positive value");
+    if (kind === "erc20" && input.valueWei !== 0n) fail("payment-invalid", "a token payment must not send native value");
+    if (!Number.isSafeInteger(input.nonce) || input.nonce < 0) fail("payment-invalid", "nonce must be a non-negative safe integer");
+    if (
+      typeof input.gasLimit !== "bigint" ||
+      typeof input.maxFeePerGas !== "bigint" ||
+      typeof input.maxPriorityFeePerGas !== "bigint" ||
+      input.gasLimit <= 0n ||
+      input.gasLimit > UINT256_MAX ||
+      input.maxFeePerGas <= 0n ||
+      input.maxFeePerGas > UINT256_MAX ||
+      input.maxPriorityFeePerGas < 0n ||
+      input.maxPriorityFeePerGas > UINT256_MAX ||
+      input.maxPriorityFeePerGas > input.maxFeePerGas
+    ) {
+      fail("payment-invalid", "invalid gas or fee fields");
+    }
     let to: string;
     try {
       to = getAddress(input.to);
@@ -1033,11 +1069,11 @@ export class WalletVault {
       fail("payment-invalid", "payment data is too large");
     }
     if (!isHexData(data)) fail("payment-invalid", "payment data must be an even-length hex string");
+    if (kind === "erc20" && (!token || data === "0x")) fail("payment-invalid", "a token payment needs exact calldata and token metadata");
     const normalizedData = data.toLowerCase();
     const maxGasCostWei = input.gasLimit * input.maxFeePerGas;
     const maxCostWei = input.valueWei + maxGasCostWei;
     if (maxCostWei > UINT256_MAX) fail("payment-invalid", "worst-case payment exceeds uint256");
-
     const transaction = {
       type: 2 as const,
       chainId: input.chainId,
@@ -1053,6 +1089,10 @@ export class WalletVault {
       from: this.publicAddress,
       chainId: input.chainId,
       to,
+      kind,
+      tokenAddress: token ? token.tokenAddress.toLowerCase() : null,
+      tokenAmountRaw: token ? token.tokenAmountRaw : null,
+      tokenDecimals: token ? token.tokenDecimals : null,
       valueWei: input.valueWei.toString(),
       nonce: input.nonce,
       gasLimit: input.gasLimit.toString(),
@@ -1064,6 +1104,51 @@ export class WalletVault {
       signable: true as const,
     });
     preparedPaymentRecords.set(prepared, { vaultId: this.vaultId, transaction, prepared });
+    return prepared;
+  }
+
+  /**
+   * Prepares one exact ERC-20 `transfer(recipient, amount)` on an allowed
+   * testnet. The token amount is not native value: the permit and the signed
+   * transaction bind the exact calldata (selector, recipient, amount), and the
+   * native budget is the gas ceiling only. The caller must separately verify
+   * the calldata hash against its own trusted binding.
+   */
+  prepareErc20Payment(input: PaymentRequestInput & {
+    tokenAddress: string;
+    recipient: string;
+    amountRaw: string;
+    decimals: number;
+  }): PreparedPayment {
+    if (this.publicAddress === null) fail("wallet-absent", "no wallet exists");
+    assertSignableChain(input.chainId, this.options.chainPolicy, this.options.allowedSigningChains);
+    if (!Number.isSafeInteger(input.chainId) || input.chainId < 1) fail("payment-invalid", "chain id must be a positive safe integer");
+    if (typeof input.amountRaw !== "string" || !/^(?:0|[1-9][0-9]{0,77})$/.test(input.amountRaw) || input.amountRaw === "0") {
+      fail("payment-invalid", "token amount must be a positive uint256 decimal string");
+    }
+    const amount = BigInt(input.amountRaw);
+    if (amount > UINT256_MAX) fail("payment-invalid", "token amount exceeds uint256");
+    if (!Number.isInteger(input.decimals) || input.decimals < 0 || input.decimals > 36) fail("payment-invalid", "token decimals are invalid");
+    let token: string;
+    let recipient: string;
+    try {
+      token = getAddress(input.tokenAddress);
+      recipient = getAddress(input.recipient);
+    } catch {
+      fail("payment-invalid", "token or recipient is not a valid address");
+    }
+    if (/^0x0{40}$/i.test(token) || /^0x0{40}$/i.test(recipient)) fail("payment-invalid", "token and recipient must not be the zero address");
+    const data = `0xa9059cbb${recipient.slice(2).toLowerCase().padStart(64, "0")}${amount.toString(16).padStart(64, "0")}`;
+    const prepared = this.preparePaymentCore({
+      chainId: input.chainId,
+      to: token,
+      valueWei: 0n,
+      data,
+      nonce: input.nonce,
+      gasLimit: input.gasLimit,
+      maxFeePerGas: input.maxFeePerGas,
+      maxPriorityFeePerGas: input.maxPriorityFeePerGas,
+    }, "erc20", { tokenAddress: token, tokenAmountRaw: input.amountRaw, tokenDecimals: input.decimals });
     return prepared;
   }
 

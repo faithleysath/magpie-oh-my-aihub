@@ -1,0 +1,67 @@
+{
+  "schema": "ohmyaihub.phase10.wallet-lab3-cleanup/v1",
+  "at": "2026-10-31T13:24:11Z",
+  "cleanup": {
+    "at": "2026-10-31T13:24:11Z",
+    "nodes": {
+      "provider": {
+        "before": [
+          1506,
+          1507,
+          27193,
+          27275
+        ],
+        "remaining": [],
+        "portsFree": {
+          "web": true,
+          "gateway": true,
+          "upstream": true,
+          "listen": true,
+          "catalog": true,
+          "socks": true,
+          "api-port": true,
+          "console-port": true,
+          "rpc": true
+        }
+      },
+      "consumer": {
+        "before": [
+          1522,
+          1523,
+          19953,
+          55677,
+          55790
+        ],
+        "remaining": [],
+        "portsFree": {
+          "web": true,
+          "gateway": true,
+          "upstream": true,
+          "listen": true,
+          "catalog": true,
+          "socks": true,
+          "api-port": true,
+          "console-port": true,
+          "rpc": true
+        }
+      }
+    }
+  },
+  "pins": {
+    "magpie": "0.1.2289",
+    "easytier": {
+      "version": "2.6.4",
+      "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+      "binaryHashes": {
+        "easytier-core": "6478a522b8637e2bd2ad3adad66ed04a71b35f832bd9889bffaf1863262f6ddf",
+        "easytier-cli": "c700c4fee1a7f35fcc1a048520d40cea477b6cf7bf6d75f423fe1642c1ebc75d"
+      }
+    }
+  },
+  "constraints": {
+    "pluginInstallByGUI": true,
+    "businessOperationsByHarness": false,
+    "publicChainWrites": false,
+    "browserLaunchedByHarness": false
+  }
+}

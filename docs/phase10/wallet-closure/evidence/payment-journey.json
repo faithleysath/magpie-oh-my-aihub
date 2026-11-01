@@ -1,0 +1,95 @@
+{
+  "schema": "ohmyaihub.phase10.payment-journey/v1",
+  "at": "2026-10-31T13:10:00Z",
+  "platform": "macOS 26.6.2 arm64; two portable Magpie 0.1.2289 + EasyTier 2.6.4 no-TUN; ego-lite",
+  "network": "phase10-wallet-lab3 (single host/LAN, not WAN)",
+  "consumer": {
+    "nodeId": "2afb43e6",
+    "walletAddress": "0xe7441250e3f1e9b242c3147af2961939fc195599"
+  },
+  "provider": {
+    "nodeId": "683922fb",
+    "walletAddress": "0xf91d6adc07a240b8663f965c17eebb5c5e3436b9"
+  },
+  "chain": {
+    "chainId": 84532,
+    "mode": "isolated anvil 1.8.6, chain id 84532",
+    "asset": {
+      "contract": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+      "symbol": "tUSDC",
+      "decimals": 6,
+      "note": "local MockToken; no value"
+    }
+  },
+  "payment": {
+    "invoiceId": "inv_68716e30-8c0e-411d-999f-8dcb748bb300",
+    "amountRaw": "1500000",
+    "amountTokens": "1.5",
+    "providerAuthorizationGeneration": 1,
+    "termsQuoteHash": "b060e694896d66826f0d5f91d1437da7cbcb6a0d487e7ea6f1fb3c48e611fcd2",
+    "priceVersion": "dcedd5b35bc1757a895501443338ef65e3e3eb4ffdd97f71ae551c5d75ec4db2",
+    "eip712Digest": "0x46fa344267d2edce4f54c0b5964a2c377d70ab2b4969abb1e78b7ff02505ef47",
+    "payer": "0xe7441250e3f1e9b242c3147af2961939fc195599",
+    "txHash": "0x4f7f160d92189fbf70a79768e2b8c392a2c1fb7a60da4d9cf3d6d00e6cd0489e",
+    "txStatus": "0x1",
+    "block": 4,
+    "journalState": "broadcast",
+    "journalReservation": "6ad18db3-70ef-4cce-b452-8e180f27c9c6",
+    "preview": {
+      "nonce": 1,
+      "gasLimit": "46048",
+      "maxFeePerGas": "3977720430",
+      "maxPriorityFeePerGas": "1000000000",
+      "tokenBalanceRaw": "8500000",
+      "nativeBalanceWei": "999894305045207115",
+      "note": "preview read-only after the first broadcast; the send path reused the journal reservation"
+    },
+    "providerEvent": {
+      "status": "credited",
+      "depositId": "chain:84532:0x5fbdb2315678afecb367f032d93f642f64180aa3:0x4f7f160d92189fbf70a79768e2b8c392a2c1fb7a60da4d9cf3d6d00e6cd0489e:0",
+      "block": 4
+    },
+    "ledger": {
+      "depositId": "chain:84532:0x5fbdb2315678afecb367f032d93f642f64180aa3:0x4f7f160d92189fbf70a79768e2b8c392a2c1fb7a60da4d9cf3d6d00e6cd0489e:0",
+      "amountNanos": 1500000000,
+      "status": "applied",
+      "fundsClass": "chain"
+    },
+    "magpieCap": {
+      "beforeUsd": 0.05,
+      "afterUsd": 1.55,
+      "usedUsd": 0
+    },
+    "consumerUi": "\u5df2\u5230\u8d26",
+    "providerObserved": "received",
+    "duplicateAfterRestart": {
+      "sameDepositId": true,
+      "chainDepositCount": 1,
+      "capUsd": 1.55,
+      "eventStatus": "credited"
+    }
+  },
+  "steps": [
+    "consumer UI payment request -> provider authenticated terms via B payment_message",
+    "built-in wallet EIP-712 signature (explicit confirmation) -> provider verify -> waitingpayment ack",
+    "preview nonce/gas/fees/balances -> explicit confirm -> journal reserve -> vault ERC-20 sign -> markBroadcasting -> anvil broadcast -> recordHash",
+    "provider watcher observed Transfer, matched the signed intent, required finality (one mined block in the isolated chain)",
+    "ledger deposit applied once, provider Magpie key cap raised 0.05 -> 1.55",
+    "provider status received pulled by consumer; UI shows \u5df2\u5230\u8d26",
+    "provider host restart re-scanned without a second deposit; cap and single deposit unchanged"
+  ],
+  "screenshot": "consumer-payment-received.png",
+  "reorgAttempt": {
+    "rpc": "anvil_reorg 6 [] after the credit",
+    "result": "the transaction was replayed/canonical in the new chain; no freeze observed; a post-credit removal was not achieved in this lab",
+    "status": "UNKNOWN in this lab; unit/prior Phase 7 anvil_reorg evidence only"
+  },
+  "hostProbeInvestigation": {
+    "observation": "~380 plugin boot + host shutdown pairs at the same millisecond; no uncaught exception, unhandled rejection, plugin failed to start or parent-gone line; one active owner PID remained",
+    "conclusion": "Magpie short-lived host/page probes invoke the plugin entry and exit before taking the lock; the active owner stayed and processed the payment. Not a crash and no safety check was disabled.",
+    "activeOwnerPaymentHostStarts": [
+      "2026-10-31T12:51:46Z",
+      "2026-10-31T13:10:17Z"
+    ]
+  }
+}

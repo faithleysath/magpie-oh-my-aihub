@@ -1,8 +1,12 @@
 import { redact } from "./log.ts";
-import { ConsoleInputError } from "./console-server.ts";
+import { ConsoleInputError, type ConsoleActionContext } from "./console-server.ts";
+import { PAYMENT_LOCAL_ACTIONS, paymentLocalAction } from "./payment-local-service.ts";
 import { configureInput } from "./server.ts";
 import { consoleWorkflows } from "./console-workflows.ts";
+import { NETWORK_LOCAL_ACTIONS, consoleNetworkAction, consoleNetworkState } from "./console-network.ts";
+import { PAYMENT_P2P_ACTIONS, paymentP2pAction, paymentP2pFor } from "./payment-p2p-host.ts";
 import { WALLET_CONSOLE_ACTIONS, consoleWalletAction, consoleWalletState } from "./console-wallet.ts";
+import { WALLET_VAULT_ACTIONS, walletLocalAction, walletLocalState, WalletLocalError } from "./wallet-local-service.ts";
 import { hex64, modelList, RequestValidationError } from "./connection-request.ts";
 import type { Service } from "./service.ts";
 import { controlAppFor } from "./control/app.ts";
@@ -16,6 +20,10 @@ export const CONSOLE_ACTIONS = [
   "provider-models", "provider-check", "provider-update-key", "provider-remove", "consumer-revoke", "consumer-models", "consumer-reissue", "consumer-check",
   "p2p-request", "p2p-quote-preview", "p2p-approve", "p2p-reject", "p2p-revoke", "p2p-recover",
   ...WALLET_CONSOLE_ACTIONS,
+  ...WALLET_VAULT_ACTIONS,
+  ...NETWORK_LOCAL_ACTIONS,
+  ...PAYMENT_LOCAL_ACTIONS,
+  ...PAYMENT_P2P_ACTIONS,
 ] as const;
 function clean<T>(value: T): T {
   if (typeof value === "string") return redact(value) as T;
@@ -23,11 +31,25 @@ function clean<T>(value: T): T {
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key,item]) => [key,clean(item)])) as T;
   return value;
 }
+async function paymentP2pState(service: Service): Promise<unknown> {
+  try {
+    return await paymentP2pFor(service)?.state() ?? null;
+  } catch {
+    return { available: false, reason: "payment-state-unavailable", readOnly: true };
+  }
+}
+
 export async function consoleState(service: Service) {
   const snapshot = service.consoleSnapshot();
   // Polling performs only local reads, never active probes.
   const workflows = consoleWorkflows(service).snapshot();
   const p2p = await controlAppFor(service)?.state() ?? null;
+  let walletVault: unknown;
+  try {
+    walletVault = await walletLocalState(service);
+  } catch {
+    walletVault = { wallet: null, error: "wallet-vault-unavailable" };
+  }
   return clean({
     schema: "ohmyaihub/console/1" as const, at: new Date().toISOString(), configured: Boolean(snapshot.config.nodeId),
     status: {
@@ -42,7 +64,9 @@ export async function consoleState(service: Service) {
       // The zero-file panel reads status.p2p; the control app's state object is
       // kept one level down so it can never overwrite the console schema.
       p2p,
-    }, ...workflows, wallet: consoleWalletState(service),
+      // Local P2P payment projection: no RPC, no signature, only stored state.
+      paymentP2p: await paymentP2pState(service),
+    }, ...workflows, wallet: consoleWalletState(service), walletVault, networkLocal: consoleNetworkState(service),
   });
 }
 const refuse = (message: string): never => { throw new ConsoleInputError(message); };
@@ -65,8 +89,24 @@ function knownRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
   return /^(no (?:active consumer|remote provider|discovered catalogue peer)|configure this node first|consumption is disabled|choose |refusing |networkName must|networkSecret must|bad peer address|the (?:request|accepted|effective price|provider's catalogue identity|identity of|key of)|a shared model|consumer .+ (?:is paused|was revoked|has an unconfirmed|has no)|cannot reissue|this key is bound|pass the catalogue|.* is (?:first-seen|offline|unverified|stale);|.* offered an older|.* does not offer:)/.test(message);
 }
-export async function consoleAction(service: Service, name: string, input: Record<string, unknown>): Promise<unknown> {
+export async function consoleAction(
+  service: Service,
+  name: string,
+  input: Record<string, unknown>,
+  context?: ConsoleActionContext,
+): Promise<unknown> {
   try {
+    if ((PAYMENT_P2P_ACTIONS as readonly string[]).includes(name)) return paymentP2pAction(service, name, input, context);
+    if ((PAYMENT_LOCAL_ACTIONS as readonly string[]).includes(name)) return paymentLocalAction(service, name, input, context);
+    if ((WALLET_VAULT_ACTIONS as readonly string[]).includes(name)) {
+      try {
+        return await walletLocalAction(service, name, input, context);
+      } catch (error) {
+        if (error instanceof WalletLocalError) throw new ConsoleInputError(error.message);
+        throw error;
+      }
+    }
+    if ((NETWORK_LOCAL_ACTIONS as readonly string[]).includes(name)) return consoleNetworkAction(service, name, input);
     if ((WALLET_CONSOLE_ACTIONS as readonly string[]).includes(name)) return consoleWalletAction(service, name, input);
     const w = () => consoleWorkflows(service);
     if (name.startsWith("p2p-")) {

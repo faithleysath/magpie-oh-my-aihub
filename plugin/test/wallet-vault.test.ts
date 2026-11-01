@@ -1474,3 +1474,74 @@ describe("concurrency and failure cleanup", () => {
     expect(permit.remainingUses).toBe(0);
   });
 });
+
+describe("built-in ERC-20 payment signing", () => {
+  const TOKEN = "0x5fbdb2315678afecb367f032d93f642f64180aa3";
+  const RECIPIENT = "0x3d80c477021e3fa568e91c73baec8e806518d9a6";
+  const selector = "a9059cbb";
+
+  function tokenInput(overrides: Record<string, unknown> = {}) {
+    return {
+      chainId: 31337,
+      to: TOKEN,
+      valueWei: 0n,
+      nonce: 7,
+      gasLimit: 90_000n,
+      maxFeePerGas: 3_000_000_000n,
+      maxPriorityFeePerGas: 1_000_000_000n,
+      tokenAddress: TOKEN,
+      recipient: RECIPIENT,
+      amountRaw: "1500000",
+      decimals: 6,
+      ...overrides,
+    };
+  }
+
+  test("prepares and signs one exact transfer(recipient, amount) with zero native value", async () => {
+    const { vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    const prepared = vault.prepareErc20Payment(tokenInput() as never);
+    const expected = `0x${selector}${RECIPIENT.slice(2).padStart(64, "0")}${(1_500_000n).toString(16).padStart(64, "0")}`;
+    expect(prepared.kind).toBe("erc20");
+    expect(prepared.to).toBe(getAddress(TOKEN));
+    expect(prepared.valueWei).toBe("0");
+    expect(prepared.data).toBe(expected);
+    expect(prepared.tokenAddress).toBe(TOKEN);
+    expect(prepared.tokenAmountRaw).toBe("1500000");
+    expect(prepared.tokenDecimals).toBe(6);
+    const permit = vault.createSigningPermit({ kind: "payment", purpose: "payment", prepared, maxUses: 1 });
+    const signed = await vault.signPayment({ prepared, permit });
+    expect(signed.broadcast).toBe(false);
+    const parsed = Transaction.from(signed.rawTransaction);
+    expect(parsed.to).toBe(getAddress(TOKEN));
+    expect(parsed.value).toBe(0n);
+    expect(parsed.data).toBe(expected);
+    expect(parsed.nonce).toBe(7);
+  });
+
+  test("refuses a zero amount, zero addresses, a mainnet chain and native value on the token path", async () => {
+    const { vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    expect(() => vault.prepareErc20Payment(tokenInput({ amountRaw: "0" }) as never)).toThrow(WalletVaultError);
+    expect(() => vault.prepareErc20Payment(tokenInput({ recipient: "0x" + "0".repeat(40) }) as never)).toThrow(WalletVaultError);
+    expect(() => vault.prepareErc20Payment(tokenInput({ tokenAddress: "0x" + "0".repeat(40) }) as never)).toThrow(WalletVaultError);
+    expect(() => vault.prepareErc20Payment(tokenInput({ amountRaw: "1".repeat(90) }) as never)).toThrow(WalletVaultError);
+    expect(() => vault.prepareErc20Payment(tokenInput({ chainId: 56 }) as never)).toThrow(WalletVaultError);
+    expect(() => vault.prepareErc20Payment(tokenInput({ chainId: 8453 }) as never)).toThrow(WalletVaultError);
+    expect(() => vault.prepareErc20Payment(tokenInput({ decimals: 37 }) as never)).toThrow(WalletVaultError);
+  });
+
+  test("a permit is bound to the exact token calldata, so a later swap cannot be signed", async () => {
+    const { vault } = await openVault();
+    await vault.importMnemonic({ mnemonic: VECTOR_12, password: PASSWORD });
+    await vault.unlock(PASSWORD);
+    const first = vault.prepareErc20Payment(tokenInput() as never);
+    const permit = vault.createSigningPermit({ kind: "payment", purpose: "payment", prepared: first, maxUses: 1 });
+    const swapped = vault.prepareErc20Payment(tokenInput({ amountRaw: "2500000" }) as never);
+    await expect(vault.signPayment({ prepared: swapped, permit })).rejects.toMatchObject({ code: "signing-permit-invalid" });
+    const signed = await vault.signPayment({ prepared: first, permit });
+    expect(Transaction.from(signed.rawTransaction).data).toBe(first.data);
+  });
+});

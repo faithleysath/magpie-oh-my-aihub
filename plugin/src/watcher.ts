@@ -32,6 +32,7 @@ import { assetIdOf, type AssetRecord, type NetworkRecord, type NetworkRegistry }
 import { matchesTransfer, isExpired, type DepositIntent } from "./deposits.ts";
 import { keccak256Hex } from "./keccak.ts";
 import { usdToNanos, type PriceParts } from "./pricing.ts";
+import type { KnownFundsClass } from "./ledger.ts";
 
 /** `Transfer(address,address,uint256)` — the only event this phase watches. */
 export const TRANSFER_TOPIC = keccak256Hex("Transfer(address,address,uint256)");
@@ -64,6 +65,9 @@ export function finalityVerdict(input: {
   finalizedBlock: number | null;
 }): FinalityVerdict {
   const { policy } = input;
+  if (policy.mode === "read-only") {
+    return { final: false, detail: "read-only network: finality is not asserted and nothing is credited", confirmations: 0 };
+  }
   if (policy.mode === "finalized-tag") {
     if (input.finalizedBlock === null) return { final: false, detail: "the chain does not answer the finalized tag", confirmations: 0 };
     const confirmations = input.finalizedBlock - input.eventBlock;
@@ -151,6 +155,9 @@ export function rateForDeposit(input: {
   intent: { rateNanosPerToken?: string | null; priceVersion: string };
   asset: AssetRecord;
 }): { ok: true; nanosPerToken: string; priceVersion: string } | { ok: false; reason: string } {
+  if (!input.asset.credit || input.asset.pricing.kind !== "fixed-test-rate") {
+    return { ok: false, reason: `asset ${input.asset.assetId} is not creditable; a mainnet/read-only asset has no USD rate` };
+  }
   const snapshot = input.intent.rateNanosPerToken;
   if (snapshot && snapshot !== "") {
     // The version on the intent is the one that was signed; a registry edit
@@ -172,7 +179,15 @@ export function rateForDeposit(input: {
 /** What the watcher needs from the ledger. Narrow on purpose: it cannot repricing anything. */
 export interface CreditSink {
   /** books a deposit intent; idempotent by id */
-  depositIntent(input: { id: string; consumerId: string; amountNanos: number; source: string }): { created: boolean };
+  depositIntent(input: {
+    id: string;
+    consumerId: string;
+    amountNanos: number;
+    source: string;
+    fundsClass?: KnownFundsClass;
+    chainId?: number | null;
+    assetId?: string | null;
+  }): { created: boolean };
   /** applies the deposit to a consumer's window and Magpie cap */
   applyDeposit(input: { id: string; consumerId: string; amountNanos: number }): Promise<void>;
   /** a credited event was reverted: freeze, never silently adjust */
@@ -745,7 +760,15 @@ export class ChainWatcher {
       // asks the ledger for the same deposit rather than a new one.
       const depositId = `chain:${event.id}`;
       try {
-        this.ledger.depositIntent({ id: depositId, consumerId: intent.consumerId, amountNanos: conversion.nanos, source: `chain:${event.chainId}` });
+        this.ledger.depositIntent({
+          id: depositId,
+          consumerId: intent.consumerId,
+          amountNanos: conversion.nanos,
+          source: `chain:${event.chainId}`,
+          fundsClass: "chain",
+          chainId: event.chainId,
+          assetId: asset.assetId,
+        });
       } catch (e) {
         this.store.setEventStatus(event.id, "manualReview", `the ledger refused the deposit: ${String((e as Error).message ?? e)}`);
         this.store.anomaly({

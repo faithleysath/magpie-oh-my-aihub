@@ -26,6 +26,7 @@ mock.module(join(src, "console-launch.ts"), () => ({
   startConsoleLauncher: () => ({ stop() {} }),
 }));
 mock.module(join(src, "console-server.ts"), () => ({
+  ConsoleInputError: class ConsoleInputError extends Error { code: string; status: number; constructor(message: string, code = "invalid_input", status = 400) { super(message); this.code = code; this.status = status; } },
   startConsoleServer: () => ({ port: 12346, origin: "http://127.0.0.1:12346", issueTicket: () => "unused-fixture", pendingPairings: () => [], approvePairing: () => false, stop() {} }),
   startConsoleServerWithFallback: () => ({ server: { port: 12346, origin: "http://127.0.0.1:12346", issueTicket: () => "unused-fixture", pendingPairings: () => [], approvePairing: () => false, stop() {} }, fallback: false }),
 }));
@@ -35,6 +36,7 @@ mock.module(join(src, "console-api.ts"), () => ({
 mock.module(join(src, "server.ts"), () => ({ startApi: () => ({ port: 12345, stop() {} }) }));
 mock.module(join(src, "control", "app.ts"), () => ({ startControlApp: async () => null, controlAppFor: () => null }));
 mock.module(join(src, "service.ts"), () => ({
+  catalogQuoteUsability: () => ({ usable: false, detail: "fixture" }),
   Service: class {
     supervisor = { snapshot: () => ({ pid: null }) };
     config() { return config; }

@@ -1,0 +1,45 @@
+{
+  "schema": "ohmyaihub.phase10.wallet-lab3/v1",
+  "at": "2026-10-31T13:12:00Z",
+  "pins": {
+    "magpie": {
+      "version": "0.1.2289",
+      "commit": "5c637f17b25dad63c490b1edf242c11a83b1b059",
+      "appBinarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c"
+    },
+    "easytier": {
+      "version": "2.6.4",
+      "commit": "8428a89d2dabc94c97d370ec607c6ca142473626"
+    },
+    "bunHost": "1.4.4",
+    "foundry": "1.8.6"
+  },
+  "topology": "two portable Magpie nodes on one host/LAN, real EasyTier 2.6.4 no-TUN; no WAN",
+  "catalogue": "provider 3426, consumer 3427 (fixed 3426..3430 window); both peers discovered",
+  "bFlow": {
+    "result": "REPRODUCED",
+    "approvalId": "92ad3328f47558cf1d8f24958c3d45a3",
+    "remoteGeneration": 1,
+    "consumer": "2afb43e6",
+    "provider": "683922fb",
+    "providerCapUsd": 0.05,
+    "delivery": "acked"
+  },
+  "paymentFlow": {
+    "result": "REPRODUCED",
+    "invoiceId": "inv_68716e30-8c0e-411d-999f-8dcb748bb300",
+    "txHash": "0x4f7f160d92189fbf70a79768e2b8c392a2c1fb7a60da4d9cf3d6d00e6cd0489e",
+    "block": 4,
+    "ledgerDeposit": "applied",
+    "capUsd": 1.55,
+    "consumerUi": "\u5df2\u5230\u8d26",
+    "duplicateRestart": "one chain deposit, cap unchanged"
+  },
+  "mainnet": "read-only public RPC only; no funds",
+  "evidence": [
+    "payment-journey.json",
+    "consumer-payment-received.png",
+    "wallet-journey.json",
+    "mainnet-readonly.json"
+  ]
+}

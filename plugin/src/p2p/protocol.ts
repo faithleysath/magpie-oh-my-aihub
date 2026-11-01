@@ -53,6 +53,7 @@ export const P2P_MESSAGE_TYPES = [
   "payment_request",
   "status",
   "credit_updated",
+  "payment_message",
 ] as const;
 export type P2pMessageType = (typeof P2P_MESSAGE_TYPES)[number];
 
@@ -71,6 +72,7 @@ export const P2P_TYPE_CODES: Readonly<Record<P2pMessageType, number>> = Object.f
   payment_request: 8,
   status: 9,
   credit_updated: 10,
+  payment_message: 11,
 });
 
 export const P2P_TYPE_BY_CODE: Readonly<Record<number, P2pMessageType>> = Object.freeze(
@@ -85,6 +87,26 @@ export const P2P_TYPE_BY_CODE: Readonly<Record<number, P2pMessageType>> = Object
  * own review.
  */
 export const P2P_B1_UNSUPPORTED: readonly P2pMessageType[] = Object.freeze(["payment_request", "credit_updated"]);
+
+/**
+ * B's payment hook is a transport, not an accountant. The body is one C frame
+ * plus the C idempotency/correlation that B needs for bounded dedupe; every
+ * field inside `payment` is opaque to B. B never reads a chain id, amount,
+ * invoice or status, never calls Ledger/Provisioner/Wallet and cannot credit.
+ */
+export const P2P_PAYMENT_WRAPPER_SCHEMA = "ohmyaihub/p2p-payment/v1";
+export const P2P_PAYMENT_CORRELATION_MAX = 200;
+export const P2P_PAYMENT_IDEMPOTENCY_MAX = 200;
+
+export interface P2pPaymentMessageBody {
+  schema: typeof P2P_PAYMENT_WRAPPER_SCHEMA;
+  /** C-provided idempotency; B only hashes/dedupes it. */
+  idempotency: string;
+  /** C-provided correlation (the C request id), or null. */
+  correlation: string | null;
+  /** Opaque C payment frame. B never interprets any field. */
+  payment: Record<string, unknown>;
+}
 
 /** Hard size caps. The body cap is enforced after canonicalisation. */
 export const P2P_MAX_JSON_BYTES = 16 * 1024;
@@ -704,6 +726,7 @@ type BodyByType = {
   payment_request: P2pPaymentRequestBody;
   status: P2pStatusBody;
   credit_updated: P2pCreditUpdatedBody;
+  payment_message: P2pPaymentMessageBody;
 };
 
 export type P2pBody<T extends P2pMessageType> = BodyByType[T];
@@ -939,6 +962,11 @@ function validateBody(type: P2pMessageType, raw: unknown, ctx: { from: P2pPeerId
         approvalState: o.approvalState,
       } satisfies P2pStatusBody;
     }
+    case "payment_message": {
+      assertKeys(o, ["schema", "idempotency", "correlation", "payment"], "body");
+      if (o.schema !== P2P_PAYMENT_WRAPPER_SCHEMA) fail("malformed", "the payment wrapper schema is not supported");
+      return paymentMessageBody({ idempotency: o.idempotency, correlation: o.correlation, payment: o.payment });
+    }
     case "credit_updated": {
       assertKeys(o, ["creditId", "consumerNodeId", "fundsClass", "amountUsd", "state"], "body");
       if (!isHex32(o.creditId)) fail("malformed", "the credit id is invalid");
@@ -954,6 +982,34 @@ function validateBody(type: P2pMessageType, raw: unknown, ctx: { from: P2pPeerId
 }
 
 // --- construction ------------------------------------------------------------
+
+/**
+ * Builds/validates the one B-owned wrapper for a C payment frame. B checks only
+ * its own envelope concerns (schema, idempotency/correlation shape, opaque JSON
+ * size); it never reads a field inside `payment`.
+ */
+export function paymentMessageBody(input: {
+  idempotency: unknown;
+  correlation: unknown;
+  payment: unknown;
+}): P2pPaymentMessageBody {
+  const o = objectOf(input, "payment wrapper");
+  assertKeys(o, ["idempotency", "correlation", "payment"], "payment wrapper");
+  if (typeof o.idempotency !== "string" || o.idempotency.length < 1 || o.idempotency.length > P2P_PAYMENT_IDEMPOTENCY_MAX || /[\x00-\x1f\x7f]/.test(o.idempotency)) {
+    fail("malformed", "the payment idempotency key is invalid");
+  }
+  if (o.correlation !== null && (typeof o.correlation !== "string" || o.correlation.length < 1 || o.correlation.length > P2P_PAYMENT_CORRELATION_MAX || /[\x00-\x1f\x7f]/.test(o.correlation))) {
+    fail("malformed", "the payment correlation is invalid");
+  }
+  const payment = objectOf(o.payment, "payment wrapper.payment");
+  if (Buffer.byteLength(canonicalJson(payment)) > P2P_MAX_BODY_BYTES - 512) fail("oversize", "the payment frame is too large for the transport");
+  return {
+    schema: P2P_PAYMENT_WRAPPER_SCHEMA,
+    idempotency: o.idempotency,
+    correlation: o.correlation as string | null,
+    payment: payment as Record<string, unknown>,
+  };
+}
 
 /** A deterministic, content-addressed handle for a request document. */
 export function requestHashOf(request: P2pRequestDocument): string {
