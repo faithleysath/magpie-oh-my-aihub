@@ -20,8 +20,12 @@ export interface LogTailOptions {
   address: string;
   /** the 32-byte topic form of this node's address: `0x` + 24 zeros + the address */
   toTopic: string;
-  /** a block that holds a transfer to us; it may not be final yet */
-  onBlock: (block: number) => void;
+  /**
+   * One pushed log. It is the whole `eth_getLogs` entry, so the watcher never has
+   * to ask a rate-limited endpoint for the same thing again — only the receipt,
+   * which is a cheap call every provider serves.
+   */
+  onLog: (log: Record<string, unknown>) => void;
 }
 
 export interface LogTailStatus {
@@ -148,14 +152,14 @@ export class LogTail {
         return;
       }
       if (payload.method !== "eth_subscription") return;
-      const result = (payload.params as { result?: { blockNumber?: unknown } } | undefined)?.result;
-      const raw = typeof result?.blockNumber === "string" ? result.blockNumber : "";
+      const result = (payload.params as { result?: Record<string, unknown> } | undefined)?.result;
+      if (!result || typeof result !== "object") return;
+      const raw = typeof result.blockNumber === "string" ? result.blockNumber : "";
       const block = Number.parseInt(raw, 16);
-      if (!Number.isFinite(block)) return;
       this.received += 1;
-      this.lastBlock = block;
+      if (Number.isFinite(block)) this.lastBlock = block;
       try {
-        this.opts.onBlock(block);
+        this.opts.onLog(result);
       } catch {
         /* the watcher's own callback must not kill the socket */
       }

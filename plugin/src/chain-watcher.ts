@@ -156,7 +156,7 @@ export class Watcher {
    * cursor still moves only contiguously — so a deposit is credited within a pass
    * of its block becoming final instead of waiting for a sweep to reach it.
    */
-  private readonly hints = new Map<number, Set<number>>();
+  private readonly hints = new Map<number, Map<string, RpcLog>>();
   /** One live log subscription per chain, when the provider offers one. */
   private readonly tails = new Map<number, LogTail>();
   /** Last head seen per chain, for `sync()` and for the hints' finality gate. */
@@ -232,25 +232,27 @@ export class Watcher {
         url,
         address: chain.usdc,
         toTopic: addressTopic(self),
-        onBlock: (block) => this.hint(chain.chainId, block),
+        onLog: (log) => this.hint(chain.chainId, log as unknown as RpcLog),
       });
       this.tails.set(chain.chainId, tail);
       tail.start();
     }
   }
 
-  /** Remembers a block a subscription reported; the pass sorts them out. */
-  private hint(chainId: number, block: number): void {
-    let set = this.hints.get(chainId);
-    if (!set) {
-      set = new Set<number>();
-      this.hints.set(chainId, set);
+  /** Remembers a log a subscription pushed; the pass turns it into a deposit. */
+  private hint(chainId: number, log: RpcLog): void {
+    const key = `${String(log.transactionHash ?? "")}:${String(log.logIndex ?? "")}`;
+    if (!key.trim() || key === ":") return;
+    let kept = this.hints.get(chainId);
+    if (!kept) {
+      kept = new Map<string, RpcLog>();
+      this.hints.set(chainId, kept);
     }
-    set.add(block);
+    kept.set(key, log);
     // A burst on a busy token can outrun the pass; keep the newest handful.
-    if (set.size > 256) {
-      const drop = [...set].sort((a, b) => a - b).slice(0, set.size - 256);
-      for (const block of drop) set.delete(block);
+    if (kept.size > 512) {
+      const drop = [...kept.keys()].slice(0, kept.size - 512);
+      for (const old of drop) kept.delete(old);
     }
   }
 
@@ -349,8 +351,16 @@ export class Watcher {
     };
 
     // Rollback first: a reorg that already happened must not survive the pass
-    // that scans past it.
-    const reverted = await this.recheckRecent(chain, client, head, self);
+    // that scans past it. It is also a log-range read, so a rate-limited endpoint
+    // can refuse it; that must not cost us the deposits a subscription already
+    // told us about.
+    const reverted = await this.recheckRecent(chain, client, head, self).catch(
+      (error: unknown): { reverted: number; payers: Set<string>; detail: string | null } => ({
+        reverted: 0,
+        payers: new Set<string>(),
+        detail: `reorg check skipped: ${shortError(error)}`,
+      }),
+    );
     result.reverted = reverted.reverted;
     const revertedPayers = reverted.payers;
     if (reverted.detail) result.detail = reverted.detail;
@@ -485,53 +495,47 @@ export class Watcher {
     payers: Set<string>,
     result: ChainPassResult,
   ): Promise<void> {
-    const hinted = this.hints.get(chain.chainId);
-    if (!hinted || hinted.size === 0) return;
-    const blocks = [...hinted].filter((block) => block <= finalBlock).sort((a, b) => a - b).slice(0, 32);
-    if (blocks.length === 0) return;
+    const kept = this.hints.get(chain.chainId);
+    if (!kept || kept.size === 0) return;
+    const rows: { key: string; log: RpcLog }[] = [];
+    for (const [key, log] of kept) {
+      const block = hexToNumber(log.blockNumber);
+      if (block !== null && block <= finalBlock) rows.push({ key, log });
+      if (rows.length >= 32) break;
+    }
+    if (rows.length === 0) return;
 
-    for (const block of blocks) {
+    for (const { key, log } of rows) {
       try {
-        const logs = await client.getLogs({
-          address: chain.usdc,
-          fromBlock: block,
-          toBlock: block,
-          topics: [TRANSFER_TOPIC, null, self],
-        });
-        hinted.delete(block);
-        const fresh: NewDeposit[] = [];
-        for (const log of logs) {
-          const row = this.candidate(chain, log, self);
-          if (!row) continue;
-          await this.verifyReceipt(client, chain, log, row);
-          row.seenAt = this.now();
-          fresh.push(row);
+        const row = this.candidate(chain, log, self);
+        if (!row) {
+          kept.delete(key);
+          continue;
         }
-        if (fresh.length === 0) continue;
+        await this.verifyReceipt(client, chain, log, row);
+        row.seenAt = this.now();
         const db = this.db;
         const inserted = db.transaction(() => {
-          let count = 0;
-          for (const row of fresh) {
-            const isNew = insertCreditedDeposit(db, row);
-            const revived = isNew ? false : recreditDeposit(db, row);
-            if (!isNew && !revived) continue;
-            count += 1;
-            payers.add(row.from);
-            logger.info(
-              `watcher: ${chain.label} ${revived ? "re-credited" : "credited"} ${row.amountRaw.toString()} raw ` +
-                `from ${row.from} in ${row.txHash}#${row.logIndex} (block ${row.blockNumber}, via subscription)`,
-            );
-          }
-          return count;
+          const isNew = insertCreditedDeposit(db, row);
+          const revived = isNew ? false : recreditDeposit(db, row);
+          if (!isNew && !revived) return 0;
+          payers.add(row.from);
+          logger.info(
+            `watcher: ${chain.label} ${revived ? "re-credited" : "credited"} ${row.amountRaw.toString()} raw ` +
+              `from ${row.from} in ${row.txHash}#${row.logIndex} (block ${row.blockNumber}, via subscription)`,
+          );
+          return 1;
         })();
+        kept.delete(key);
         result.credited += inserted;
       } catch (error) {
-        // Left in the set: the next pass tries again, and the sweep covers it
-        // anyway once the cursor gets there.
-        logger.debug(`watcher: ${chain.label} hinted block ${block} failed (${shortError(error)})`);
+        // The receipt is not there yet, or a reorg took the block: the log stays
+        // in the map and the next pass tries again.
+        logger.debug(`watcher: ${chain.label} pushed log ${key} not creditable yet (${shortError(error)})`);
       }
     }
   }
+
 
   /**
    * Verifies every candidate against its receipt and commits the rows together
