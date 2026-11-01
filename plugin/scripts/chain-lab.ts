@@ -91,6 +91,7 @@ const localNetwork: NetworkRecord = {
   chainId: LOCAL_CHAIN_ID,
   displayName: "Anvil (local EVM)",
   family: "evm",
+  rpcQuorum: 1,
   networkType: "testnet",
   support: "credit",
   receivable: false,
