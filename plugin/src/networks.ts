@@ -42,10 +42,11 @@ export type ChainFamily = "evm";
 /**
  * What a network may do in this build.
  *
- * `credit` is the existing testnet watcher path: scan, verify finality, book a
- * ledger deposit and raise a Magpie cap. `read-only` means metadata, a read-only
- * balance query and (when `receivable` is true) selection as a provider's
- * receiving network. It never reaches the watcher, the ledger or a cap.
+ * `credit` is the watcher path: scan, verify finality, book a ledger deposit and
+ * raise a Magpie cap. It is used by the two product mainnets (BSC 56, Base 8453)
+ * *and* the two development testnets (97, 84532) through exactly the same code.
+ * `read-only` remains for metadata/balance-only records that must never credit;
+ * it is not the production mainnet state any more.
  */
 export type NetworkSupport = "credit" | "read-only";
 
@@ -98,7 +99,16 @@ export interface NetworkRecord {
   support: NetworkSupport;
   /** may a provider explicitly select this as a receiving network? */
   receivable: boolean;
-  /** ordered; the first healthy one is used and the rest are fallbacks */
+  /**
+   * How many independent RPC endpoints must agree before a credit-critical read
+   * is trusted. 1 keeps the development/testnet failover behaviour; a product
+   * mainnet must use at least 2 (the registry refuses a weaker record).
+   */
+  rpcQuorum: number;
+  /**
+   * Ordered candidates. Order is not authority: the quorum reader asks the
+   * whole set and refuses a contradictory answer rather than taking the first.
+   */
   rpcEndpoints: string[];
   blockExplorer: string;
   nativeSymbol: string;
@@ -119,9 +129,10 @@ export interface NetworkRecord {
  * Registry input allows old documents (and old tests) to omit the new
  * capability fields; the constructor fills a safe default before validating.
  */
-export type NetworkRecordInput = Omit<NetworkRecord, "support" | "receivable" | "nativeDecimals" | "evidence"> & {
+export type NetworkRecordInput = Omit<NetworkRecord, "support" | "receivable" | "rpcQuorum" | "nativeDecimals" | "evidence"> & {
   support?: NetworkSupport;
   receivable?: boolean;
+  rpcQuorum?: number;
   nativeDecimals?: number;
   evidence?: NetworkEvidence | null;
 };
@@ -162,7 +173,9 @@ export interface AssetRecord {
   /**
    * How one raw unit becomes the ledger's nano-USD. A fixed test rate is
    * recorded as a version so a later change cannot silently reprice history.
-   * A mainnet/read-only asset has `kind: "not-creditable"` and no rate.
+   * A product stablecoin uses `stablecoin-usd`: its face value is the peg the
+   * issuer promises, not an oracle price, and the provider accepts that peg.
+   * A display-only asset has `kind: "not-creditable"` and no rate.
    */
   pricing: AssetPricing;
   /** required for a non-mock (mainnet) asset */
@@ -178,12 +191,20 @@ export interface AssetPricing {
   /** nano-USD per whole token, as an integer string (bigint-safe); "0" when not creditable */
   nanosPerToken: string;
   version: string;
-  /** `fixed-test-rate` for the phase-7 mock tokens; `not-creditable` for mainnet */
-  kind: "fixed-test-rate" | "not-creditable";
+  /**
+   * `fixed-test-rate` for mock test tokens, `stablecoin-usd` for a verified
+   * dollar stablecoin credited at face value, `not-creditable` for display only.
+   */
+  kind: "fixed-test-rate" | "stablecoin-usd" | "not-creditable";
   note: string;
 }
 
-export const NETWORK_REGISTRY_VERSION = 2;
+/**
+ * Version 3 makes BSC 56 and Base 8453 first-class credit networks with verified
+ * assets. Version 2 documents are migrated in `loadRegistry`: only the seeded
+ * read-only records are upgraded, and the migration never invents an asset.
+ */
+export const NETWORK_REGISTRY_VERSION = 3;
 
 /**
  * The only real chains this build may credit. A `networkType:"testnet"` label
@@ -191,7 +212,7 @@ export const NETWORK_REGISTRY_VERSION = 2;
  * Local forks/simulations must opt in explicitly through
  * `simulationChainIds`, and only for the small local-lab set below.
  */
-export const CREDIT_CHAIN_ALLOWLIST = [97, 84532] as const;
+export const CREDIT_CHAIN_ALLOWLIST = [56, 97, 8453, 84532] as const;
 
 /** Local EVM ids that a test/fork registry may opt into; never real mainnets. */
 export const LOCAL_SIMULATION_CHAIN_IDS = [1337, 31337, 31338] as const;
@@ -220,6 +241,7 @@ export const DEFAULT_NETWORKS: NetworkRecord[] = [
     networkType: "testnet",
     support: "credit",
     receivable: false,
+    rpcQuorum: 1,
     rpcEndpoints: [
       "https://bsc-testnet-rpc.publicnode.com",
       "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
@@ -257,6 +279,7 @@ export const DEFAULT_NETWORKS: NetworkRecord[] = [
     networkType: "testnet",
     support: "credit",
     receivable: false,
+    rpcQuorum: 1,
     rpcEndpoints: ["https://sepolia.base.org", "https://base-sepolia-rpc.publicnode.com", "https://base-sepolia.gateway.tenderly.co"],
     blockExplorer: "https://sepolia.basescan.org",
     nativeSymbol: "ETH",
@@ -282,13 +305,13 @@ export const DEFAULT_NETWORKS: NetworkRecord[] = [
 ];
 
 /**
- * The two real mainnets as first-class, **read-only** product networks.
+ * The two real mainnets as first-class **credit** product networks.
  *
- * They are not `enabled`: `enabled` still means "the watcher may scan and the
- * ledger may credit this chain", and that is false for both. The read-only
- * capability is a separate field (`support`) and the balance reader has its own
- * gate (`requireReadableNetwork`). There is no primary/default field; selection
- * starts empty and is explicit (see `receiving-networks.ts`).
+ * BSC and Base are peers: the same record shape, the same watcher, the same
+ * ledger bridge and the same finality check. Neither is a default. They are
+ * enabled because this build is the production payment build; the per-chain
+ * `rpcQuorum` (2) and the verified assets are what make a credit decision safe,
+ * not a hidden feature flag.
  */
 export const PRODUCT_NETWORKS: NetworkRecord[] = [
   {
@@ -296,32 +319,39 @@ export const PRODUCT_NETWORKS: NetworkRecord[] = [
     displayName: "BNB Smart Chain",
     family: "evm",
     networkType: "mainnet",
-    support: "read-only",
+    support: "credit",
     receivable: true,
-    rpcEndpoints: ["https://bsc-dataseed.bnbchain.org", "https://bsc-dataseed-public.bnbchain.org"],
+    rpcQuorum: 2,
+    rpcEndpoints: [
+      "https://bsc-dataseed.bnbchain.org",
+      "https://bsc-rpc.publicnode.com",
+      "https://bsc-dataseed1.defibit.io",
+    ],
     blockExplorer: "https://bscscan.com",
     nativeSymbol: "BNB",
     nativeDecimals: 18,
-    enabled: false,
+    enabled: true,
     finality: {
-      // BEP-126 gives fast finality; the public RPC's `finalized` tag was
-      // observed at ~the head on 2026-10-31. This build never credits a mainnet,
-      // so no confirmation depth is asserted or used. The policy is explicit
-      // rather than copied from the testnet.
-      mode: "read-only",
-      confirmations: 0,
-      reorgDepth: 0,
+      // Measured 2026-11-01 (four independent public endpoints): the `finalized`
+      // tag lags `latest` by one block, and `safe` is at or one block ahead of
+      // `finalized`. BEP-126 fast finality is the chain's own guarantee, so the
+      // tag is the real condition; one extra block is required as the depth a
+      // credit waits for, and a hash change at that height reverts the event.
+      mode: "finalized-tag",
+      confirmations: 1,
+      reorgDepth: 1,
       rationale:
-        "Read-only product network: nothing is credited, so finality is not asserted. BEP-126 fast finality exists (https://github.com/bnb-chain/BEPs/blob/master/BEPs/BEP126.md); the public RPC finalized tag was observed near the head on 2026-10-31, but it is not a credit condition in this build.",
+        "BEP-126 gives fast finality; the public RPC finalized tag was measured one block behind latest across bnbchain, publicnode, defibit and ninicoin endpoints on 2026-11-01. A credit requires the finalized tag plus its block hash still being canonical.",
+      measured: { at: MAINNET_CHECKED_AT, finalizedLagBlocks: 1, blockTimeSec: 0.75, source: "bsc-dataseed/publicnode/defibit/ninicoin eth_getBlockByNumber(finalized)" },
     },
     scanIntervalSec: 5,
     maxBlockRange: 2000,
-    notes: "Read-only product network. No watcher, no ledger credit, no send, no automatic recharge.",
+    notes: "Production credit network. BSC USDC is the Binance-Peg bridged asset, not a Circle-native deployment.",
     evidence: {
       source: "BNB Smart Chain docs — JSON-RPC Endpoint",
       url: "https://docs.bnbchain.org/bnb-smart-chain/developers/json_rpc/json-rpc-endpoint/",
       checkedAt: MAINNET_CHECKED_AT,
-      note: "Docs list BSC Mainnet (ChainID 0x38, 56 in decimal) and https://bsc-dataseed.bnbchain.org. eth_chainId returned 0x38 on 2026-10-31 (read-only).",
+      note: "Docs list BSC Mainnet (ChainID 0x38, 56 decimal) and https://bsc-dataseed.bnbchain.org. eth_chainId returned 0x38 on 2026-11-01 (read-only).",
     },
   },
   {
@@ -329,48 +359,83 @@ export const PRODUCT_NETWORKS: NetworkRecord[] = [
     displayName: "Base",
     family: "evm",
     networkType: "mainnet",
-    support: "read-only",
+    support: "credit",
     receivable: true,
-    rpcEndpoints: ["https://mainnet.base.org"],
+    rpcQuorum: 2,
+    rpcEndpoints: ["https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://1rpc.io/base"],
     blockExplorer: "https://basescan.org",
     nativeSymbol: "ETH",
     nativeDecimals: 18,
-    enabled: false,
+    enabled: true,
     finality: {
-      mode: "read-only",
+      // Measured 2026-11-01: `finalized` lagged `latest` by ~600 blocks
+      // (~20 min at ~2 s blocks) and two independent providers agreed on the
+      // same finalized height. Base inherits L1 finality, so waiting for the
+      // tag is the real condition, not a guessed confirmation count.
+      mode: "finalized-tag",
       confirmations: 0,
       reorgDepth: 0,
       rationale:
-        "Read-only product network: nothing is credited, so finality is not asserted. Base is an L2 whose finalized tag tracks L1; the tag was observed lagging the head on 2026-10-31, but it is not a credit condition in this build.",
+        "Base is an L2: its finalized tag tracks L1 finality and lagged the head by ~600 blocks on 2026-11-01, with mainnet.base.org and publicnode agreeing. The tag is the credit condition; a hash change at the event height reverts and freezes.",
+      measured: { at: MAINNET_CHECKED_AT, finalizedLagBlocks: 590, blockTimeSec: 2.0, source: "mainnet.base.org/publicnode eth_getBlockByNumber(finalized)" },
     },
     scanIntervalSec: 12,
     maxBlockRange: 2000,
-    notes: "Read-only product network. No watcher, no ledger credit, no send, no automatic recharge.",
+    notes: "Production credit network. Base native USDC is a Circle-issued deployment.",
     evidence: {
       source: "Base docs — Connect to Base (Network Details)",
       url: "https://docs.base.org/get-started/connect-to-base",
       checkedAt: MAINNET_CHECKED_AT,
-      note: "Docs list Base Mainnet RPC https://mainnet.base.org, Chain ID 8453, Currency ETH and explorer basescan.org. eth_chainId returned 0x2105 on 2026-10-31 (read-only).",
+      note: "Docs list Base Mainnet RPC https://mainnet.base.org, Chain ID 8453, Currency ETH and explorer basescan.org. eth_chainId returned 0x2105 on 2026-11-01 (read-only).",
     },
   },
 ];
 
 /**
- * Backwards-compatible name for the read-only mainnet records. They used to be
- * "reserved and always disabled"; they are now displayable product networks, but
- * still disabled for credit and still refused by `requireEnabledNetwork`.
+ * Backwards-compatible name. The records are no longer read-only; they are the
+ * product mainnets, enabled for credit through the same watcher as a testnet.
  */
 export const RESERVED_MAINNETS: NetworkRecord[] = PRODUCT_NETWORKS;
 
 /**
- * Verified mainnet assets. Only assets with an issuer-official contract source
- * and a matching on-chain quadruple belong here. There is intentionally no BSC
- * USDC entry: Circle's official mainnet list does not include BNB Smart Chain
- * (checked 2026-10-31), and the BSC token is a bridged/third-party asset whose
- * issuer evidence is not established in this build. It stays unsupported rather
- * than guessed.
+ * Verified production assets. An asset belongs here only with an issuer/bridge
+ * source and a matching on-chain `(chainId, contract, decimals, symbol)` tuple.
+ *
+ * BSC has no Circle-native USDC (Circle's mainnet table did not list BSC when
+ * checked on 2026-11-01). The real BSC dollar asset is Binance-Peg USD Coin,
+ * a bridged 18-decimal token; it is a *different asset* from Base's 6-decimal
+ * Circle deployment and is recorded as such. Symbols are never compared.
  */
 export const MAINNET_ASSETS: AssetRecord[] = [
+  {
+    assetId: "eip155:56:0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+    chainId: 56,
+    contractAddress: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+    symbol: "USDC",
+    name: "USD Coin (Binance-Peg)",
+    decimals: 18,
+    issuerType: "bridged",
+    testnetOnly: false,
+    credit: true,
+    enabled: true,
+    pricing: {
+      nanosPerToken: "1000000000",
+      version: "stablecoin-usd:56:binance-peg-usdc:v1",
+      kind: "stablecoin-usd",
+      note: "Credited at 1 USD per token because Binance states the peg is 1:1; this is the issuer's redemption claim, not an oracle quote. A depeg is a provider risk and is not hidden.",
+    },
+    evidence: {
+      issuer: "Binance (Binance-Peg)",
+      source: "BscScan verified BEP-20 contract; CoinGecko BSC token list; on-chain metadata read",
+      url: "https://bscscan.com/token/0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+      checkedAt: MAINNET_CHECKED_AT,
+      onchainChainId: 56,
+      onchainContract: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+      onchainDecimals: 18,
+      onchainSymbol: "USDC",
+      note: "symbol()=USDC, decimals()=18 and name()=USD Coin were read via https://bsc-dataseed.bnbchain.org on 2026-11-01; CoinGecko's chain-56 list names it Binance Bridged USDC (BNB Smart Chain). Circle's official table did not list BSC on the same date.",
+    },
+  },
   {
     assetId: "eip155:8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     chainId: 8453,
@@ -380,13 +445,13 @@ export const MAINNET_ASSETS: AssetRecord[] = [
     decimals: 6,
     issuerType: "native-issuer",
     testnetOnly: false,
-    credit: false,
+    credit: true,
     enabled: true,
     pricing: {
-      nanosPerToken: "0",
-      version: "not-creditable:8453:usdc:v1",
-      kind: "not-creditable",
-      note: "Base native USDC is display/read-only in this build. No fixed test rate is reused and no USD credit is computed.",
+      nanosPerToken: "1000000000",
+      version: "stablecoin-usd:8453:circle-usdc:v1",
+      kind: "stablecoin-usd",
+      note: "Credited at 1 USD per token because Circle redeems native USDC at face value; this is an issuer peg assumption, not a market oracle.",
     },
     evidence: {
       issuer: "Circle",
@@ -397,7 +462,7 @@ export const MAINNET_ASSETS: AssetRecord[] = [
       onchainContract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       onchainDecimals: 6,
       onchainSymbol: "USDC",
-      note: "Base is listed in Circle's mainnet USDC table. decimals()=6 and symbol()=USDC were re-read on 2026-10-31 via https://mainnet.base.org.",
+      note: "Base is listed in Circle's mainnet USDC table. decimals()=6, symbol()=USDC and name()=USD Coin were re-read on 2026-11-01 via https://mainnet.base.org.",
     },
   },
 ];
@@ -429,7 +494,10 @@ function assertRpcEndpoint(endpoint: string, chainId: number, readOnly: boolean)
     throw new Error(`chain ${chainId}: ${endpoint} is not a URL`);
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`chain ${chainId}: ${endpoint} must be http or https`);
-  if (readOnly && url.protocol !== "https:") throw new Error(`chain ${chainId}: ${endpoint} must use https for a mainnet/read-only network`);
+  // A loopback endpoint is a local node/isolated fork; it has no network
+  // attacker to protect against. Every remote mainnet endpoint must be HTTPS.
+  const loopback = url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "localhost";
+  if (readOnly && url.protocol !== "https:" && !loopback) throw new Error(`chain ${chainId}: ${endpoint} must use https for a mainnet/read-only network`);
   if (url.username || url.password) throw new Error(`chain ${chainId}: ${endpoint} must not contain credentials`);
   if (url.hash) throw new Error(`chain ${chainId}: ${endpoint} must not contain a fragment`);
 }
@@ -479,7 +547,8 @@ function normalizeNetwork(input: NetworkRecordInput): NetworkRecord {
   return {
     ...input,
     support,
-    receivable: input.receivable ?? support === "read-only",
+    receivable: input.receivable ?? false,
+    rpcQuorum: input.rpcQuorum ?? 1,
     nativeDecimals: input.nativeDecimals ?? 18,
     evidence: input.evidence ?? null,
     rpcEndpoints: [...input.rpcEndpoints],
@@ -551,23 +620,27 @@ export class NetworkRegistry {
         if (n.networkType !== "mainnet") {
           throw new Error(`chain ${n.chainId} is a real mainnet; relabelling it as ${n.networkType} cannot unlock credit`);
         }
-        if (n.support !== "read-only") {
-          throw new Error(`chain ${n.chainId} is a real mainnet and must stay read-only; credit is forbidden`);
+        if (!this.creditChainAllowed(n.chainId)) {
+          throw new Error(`chain ${n.chainId} is a real mainnet that is not on the production credit allowlist`);
         }
-        if (n.enabled) {
-          throw new Error(`chain ${n.chainId} is a real mainnet and cannot be watched or credited in this phase`);
-        }
+        if (n.support !== "credit") throw new Error(`chain ${n.chainId} is a product mainnet; only credit support is implemented`);
         assertNetworkEvidence(n.evidence, n.chainId);
-      }
-      if (n.networkType === "mainnet" && n.support !== "read-only") {
-        throw new Error(`chain ${n.chainId} is mainnet; only the read-only support level is implemented`);
+        if (!Number.isInteger(n.rpcQuorum) || n.rpcQuorum < 2) {
+          throw new Error(`chain ${n.chainId} is a product mainnet; rpcQuorum must be at least 2, got ${String(n.rpcQuorum)}`);
+        }
+        if (n.finality.mode === "read-only") throw new Error(`chain ${n.chainId} is a product mainnet and cannot assert no finality`);
+      } else {
+        if (n.networkType === "mainnet") throw new Error(`chain ${n.chainId} is labelled mainnet but is not a known product mainnet`);
+        if (!Number.isInteger(n.rpcQuorum) || n.rpcQuorum < 1) {
+          throw new Error(`chain ${n.chainId} needs a positive integer rpcQuorum`);
+        }
+        if (n.rpcQuorum > Math.max(1, n.rpcEndpoints.length)) {
+          throw new Error(`chain ${n.chainId} asks for ${n.rpcQuorum} agreeing endpoints but lists only ${n.rpcEndpoints.length}`);
+        }
       }
       if (n.networkType === "mainnet" || n.support === "read-only") assertNetworkEvidence(n.evidence, n.chainId);
       if (n.support === "read-only" && n.enabled) {
         throw new Error(`chain ${n.chainId} is read-only; it cannot be enabled for the watcher`);
-      }
-      if (n.enabled && n.networkType !== "testnet") {
-        throw new Error(`chain ${n.chainId} is not a testnet; this phase does not watch or credit it`);
       }
       if (n.enabled && n.support !== "credit") {
         throw new Error(`chain ${n.chainId} is enabled without the credit support level`);
@@ -577,8 +650,16 @@ export class NetworkRegistry {
           `chain ${n.chainId} is not on the credit allowlist (${CREDIT_CHAIN_ALLOWLIST.join(", ")}); a testnet label or a local edit is not enough`,
         );
       }
-      if (n.receivable && n.support !== "read-only") {
-        throw new Error(`chain ${n.chainId} is creditable; only a read-only product network may be selected for receiving`);
+      if (n.enabled && isMainnetChainId(n.chainId)) {
+        const uniqueHosts = new Set(n.rpcEndpoints.map((endpoint) => {
+          try { return new URL(endpoint).host; } catch { return endpoint; }
+        }));
+        if (uniqueHosts.size < n.rpcQuorum) {
+          throw new Error(`chain ${n.chainId} needs ${n.rpcQuorum} distinct RPC hosts for a production credit quorum; it lists ${uniqueHosts.size}`);
+        }
+      }
+      if (n.receivable && n.support !== "credit") {
+        throw new Error(`chain ${n.chainId} is not creditable, so it cannot be a receiving network`);
       }
       if (n.finality.mode === "read-only" && n.enabled) {
         throw new Error(`chain ${n.chainId} asserts no finality, so it cannot be watched`);
@@ -594,25 +675,31 @@ export class NetworkRegistry {
       ids.add(a.assetId);
       if (!seen.has(a.chainId)) throw new Error(`asset ${a.assetId} names an unregistered chain`);
       if (!Number.isInteger(a.decimals) || a.decimals < 0 || a.decimals > 36) throw new Error(`asset ${a.assetId} has an unusable decimals value`);
-      if (a.testnetOnly !== a.credit) {
-        throw new Error(`asset ${a.assetId} must be either a creditable test asset or a non-creditable product asset`);
-      }
       const net = this.nets.find((n) => n.chainId === a.chainId)!;
       if (a.credit) {
-        if (net.networkType !== "testnet" || net.support !== "credit") throw new Error(`asset ${a.assetId} is creditable but its chain is not a credit testnet`);
-        if (a.issuerType !== "mock") throw new Error(`asset ${a.assetId} would be credited; a creditable test asset must be a mock`);
-        if (a.pricing.kind !== "fixed-test-rate") throw new Error(`asset ${a.assetId} is creditable without a fixed test rate`);
-        if (!/^\d+$/.test(a.pricing.nanosPerToken) || BigInt(a.pricing.nanosPerToken) <= 0n) {
-          throw new Error(`asset ${a.assetId} has an unusable fixed test rate`);
+        if (net.support !== "credit") throw new Error(`asset ${a.assetId} is creditable but its chain has no credit support`);
+        if (a.testnetOnly) {
+          if (net.networkType !== "testnet") throw new Error(`asset ${a.assetId} is a test asset on a mainnet record`);
+          if (a.issuerType !== "mock") throw new Error(`asset ${a.assetId} would be credited; a creditable test asset must be a mock`);
+          if (a.pricing.kind !== "fixed-test-rate") throw new Error(`asset ${a.assetId} is creditable without a fixed test rate`);
+          if (!/^\d+$/.test(a.pricing.nanosPerToken) || BigInt(a.pricing.nanosPerToken) <= 0n) {
+            throw new Error(`asset ${a.assetId} has an unusable fixed test rate`);
+          }
+          if (a.evidence !== null) throw new Error(`asset ${a.assetId} is a mock and cannot claim issuer evidence`);
+        } else {
+          if (net.networkType !== "mainnet") throw new Error(`asset ${a.assetId} is a production asset but its chain is not a product mainnet`);
+          if (a.issuerType === "mock") throw new Error(`asset ${a.assetId} is a mainnet asset; a mock issuer is refused`);
+          if (a.pricing.kind !== "stablecoin-usd") throw new Error(`asset ${a.assetId} is a production credit asset without a verified stablecoin rate`);
+          if (a.pricing.nanosPerToken !== "1000000000") throw new Error(`asset ${a.assetId} must credit one stablecoin as exactly 1 USD`);
+          assertAssetEvidence(a);
         }
-        if (a.evidence !== null) throw new Error(`asset ${a.assetId} is a mock and cannot claim issuer evidence`);
       } else {
-        if (net.networkType !== "mainnet" || net.support !== "read-only") {
-          throw new Error(`asset ${a.assetId} is non-creditable but its chain is not a read-only mainnet`);
+        if (net.networkType !== "mainnet" && net.support !== "read-only") {
+          throw new Error(`asset ${a.assetId} is non-creditable but its chain is not a display-only network`);
         }
-        if (a.issuerType === "mock") throw new Error(`asset ${a.assetId} is a mainnet asset; a mock issuer is refused`);
-        if (a.pricing.kind !== "not-creditable") throw new Error(`asset ${a.assetId} is mainnet; a fixed test rate cannot be reused`);
-        if (a.pricing.nanosPerToken !== "0") throw new Error(`asset ${a.assetId} is mainnet and must not carry a USD rate`);
+        if (a.issuerType === "mock") throw new Error(`asset ${a.assetId} is a production asset; a mock issuer is refused`);
+        if (a.pricing.kind !== "not-creditable") throw new Error(`asset ${a.assetId} is display-only; a credit rate cannot be attached`);
+        if (a.pricing.nanosPerToken !== "0") throw new Error(`asset ${a.assetId} is display-only and must not carry a USD rate`);
         assertAssetEvidence(a);
       }
     }
@@ -641,10 +728,10 @@ export class NetworkRegistry {
     return this.nets.filter((n) => n.enabled).map((n) => ({ ...n, rpcEndpoints: [...n.rpcEndpoints] }));
   }
 
-  /** Only networks that may credit; a mainnet is never in this set. */
+  /** Every network this build may watch and credit, including the two product mainnets. */
   creditableNetworks(): NetworkRecord[] {
     return this.nets
-      .filter((n) => n.enabled && n.support === "credit" && n.networkType === "testnet" && this.creditChainAllowed(n.chainId) && !isMainnetChainId(n.chainId))
+      .filter((n) => n.enabled && n.support === "credit" && this.creditChainAllowed(n.chainId))
       .map((n) => ({ ...n, rpcEndpoints: [...n.rpcEndpoints] }));
   }
 
@@ -678,9 +765,7 @@ export class NetworkRegistry {
   requireEnabledNetwork(chainId: number): NetworkRecord {
     const n = this.network(chainId);
     if (!n) throw new Error(`chain ${chainId} is not registered`);
-    if (isMainnetChainId(chainId) || n.networkType === "mainnet" || n.support === "read-only") {
-      throw new Error(`chain ${chainId} is mainnet/read-only; this build does not watch or credit it`);
-    }
+    if (n.support !== "credit") throw new Error(`chain ${chainId} is read-only; this build does not watch or credit it`);
     if (!n.enabled) throw new Error(`chain ${chainId} (${n.displayName}) is disabled`);
     if (!this.creditChainAllowed(chainId)) {
       throw new Error(`chain ${chainId} is not on the credit allowlist (${CREDIT_CHAIN_ALLOWLIST.join(", ")}); refusing to watch or credit it`);
@@ -689,11 +774,8 @@ export class NetworkRegistry {
     return n;
   }
 
-  /** The credit gate, including the hard chain-id rule. */
+  /** The credit gate, including the hard chain-id rule and the production quorum. */
   requireCreditableNetwork(chainId: number): NetworkRecord {
-    if (isMainnetChainId(chainId)) {
-      throw new Error(`chain ${chainId} is a real mainnet; credit is forbidden in this build`);
-    }
     const n = this.requireEnabledNetwork(chainId);
     if (n.support !== "credit") throw new Error(`chain ${chainId} has no credit support`);
     return n;
@@ -719,8 +801,6 @@ export class NetworkRegistry {
   setNetworkEnabled(chainId: number, enabled: boolean): NetworkRecord {
     const n = this.nets.find((x) => x.chainId === chainId);
     if (!n) throw new Error(`chain ${chainId} is not registered`);
-    if (enabled && isMainnetChainId(chainId)) throw new Error(`chain ${chainId} is a real mainnet and cannot be enabled in this phase`);
-    if (enabled && n.networkType === "mainnet") throw new Error(`chain ${chainId} is mainnet and cannot be enabled in this phase`);
     if (enabled && n.support !== "credit") throw new Error(`chain ${chainId} is ${n.support} and cannot be enabled for credit`);
     if (enabled && !this.creditChainAllowed(chainId)) {
       throw new Error(`chain ${chainId} is not on the credit allowlist (${CREDIT_CHAIN_ALLOWLIST.join(", ")}); enabling it would credit an unknown chain`);
@@ -878,6 +958,51 @@ function downgradeLegacyLocalNetworks(doc: RegistryDocument): { doc: RegistryDoc
   return { doc: { ...doc, networks }, changed };
 }
 
+/**
+ * Upgrades the v1/v2 seeded read-only mainnet records to the v3 production
+ * credit records. It is deliberately narrow: a record is upgraded only when it
+ * still carries the seeded read-only shape and note, so an operator's custom
+ * network is never silently turned into a credit chain. Custom RPC endpoints are
+ * kept and the product endpoints are added; the union must still meet the
+ * quorum. An asset disabled by the operator stays disabled.
+ */
+function upgradeSeededMainnets(doc: RegistryDocument): { doc: RegistryDocument; changed: boolean } {
+  let changed = false;
+  const networks = doc.networks.map((n) => {
+    const product = PRODUCT_NETWORKS.find((p) => p.chainId === n.chainId);
+    if (!product) return n;
+    // v1/v2 seeded records are the only mainnet records with support
+    // "read-only". A production v3 record is already "credit" and is left alone.
+    const seeded = n.networkType === "mainnet" && n.support === "read-only";
+    if (!seeded) return n;
+    changed = true;
+    const extra = n.rpcEndpoints.filter((endpoint) => !product.rpcEndpoints.includes(endpoint));
+    return {
+      ...product,
+      rpcEndpoints: [...new Set([...product.rpcEndpoints, ...extra])],
+      enabled: true,
+    };
+  });
+  const assets = doc.assets.map((a) => {
+    const product = MAINNET_ASSETS.find((p) => p.assetId === a.assetId);
+    if (!product) return a;
+    // A display-only seeded asset (v2) or a record missing the credit fields is
+    // upgraded; a record already marked credit is left as the operator set it.
+    if (a.credit === true) return a;
+    changed = true;
+    return { ...product, enabled: a.enabled !== false };
+  });
+  const assetIds = new Set(assets.map((a) => a.assetId));
+  const networkIds = new Set(networks.map((n) => n.chainId));
+  for (const product of MAINNET_ASSETS) {
+    if (networkIds.has(product.chainId) && !assetIds.has(product.assetId)) {
+      assets.push(product);
+      changed = true;
+    }
+  }
+  return { doc: { version: NETWORK_REGISTRY_VERSION, networks, assets }, changed };
+}
+
 function seedDocument(): RegistryDocument {
   return {
     version: NETWORK_REGISTRY_VERSION,
@@ -887,8 +1012,8 @@ function seedDocument(): RegistryDocument {
 }
 
 /**
- * Loads the registry, seeding the two testnets and the two read-only mainnets on
- * first use.
+ * Loads the registry, seeding the two credit testnets and the two production
+ * credit mainnets on first use.
  *
  * An existing file is authoritative for what it contains: a chain the operator
  * disabled stays disabled, and a seeded default is never silently re-enabled.
@@ -940,7 +1065,9 @@ export function loadRegistry(path = registryPath()): NetworkRegistry {
     }
     const downgraded = downgradeLegacyLocalNetworks(doc);
     doc = downgraded.doc;
-    migrated = migrated || downgraded.changed;
+    const upgraded = upgradeSeededMainnets(doc);
+    doc = upgraded.doc;
+    migrated = migrated || downgraded.changed || upgraded.changed;
     try {
       const reg = new NetworkRegistry(doc, (d) => writeJsonAtomic(path, d));
       if (migrated) {
@@ -974,7 +1101,7 @@ export function defaultRegistry(): NetworkRegistry {
   return new NetworkRegistry({ version: NETWORK_REGISTRY_VERSION, networks: DEFAULT_NETWORKS, assets: [] });
 }
 
-/** The full seeded registry: two credit testnets plus two read-only mainnets. */
+/** The full seeded registry: two credit testnets plus two production mainnets. */
 export function productRegistry(): NetworkRegistry {
   return new NetworkRegistry(seedDocument());
 }

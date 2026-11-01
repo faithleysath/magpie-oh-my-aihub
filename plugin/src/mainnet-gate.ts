@@ -1,22 +1,28 @@
-// The mainnet capability gate: a hard, registry-independent boundary.
+// The production chain capability matrix.
 //
-// Phase 10 C1 makes BSC (56) and Base (8453) first-class *read-only* product
-// networks. That is a smaller change than it sounds, but it is exactly the kind
-// of change where a later "just one flag" would be dangerous, so the rule lives
-// here rather than only in the registry document:
+// Version 3 of the registry makes BSC 56 and Base 8453 first-class credit
+// networks. The old blanket "mainnet means no send and no credit" rule is gone;
+// what remains here is a small, registry-independent chain-id layer so a forged
+// `networkType: "testnet"` label still cannot make chain 56 a test chain.
 //
-//   - the chain ids are constants in this module, not fields in `networks.json`;
-//   - a registry record that relabels 56 as `testnet` or `credit` is refused by
-//     `networks.ts` *and* this module still refuses the operation;
-//   - no UI action, plugin option or environment variable is read here, so
-//     there is nothing to toggle;
-//   - the only allowed mainnet capabilities are reading metadata, reading a
-//     balance and selecting the chain as a receiving network. Sending,
-//     crediting and automatic recharge are always refused.
+// The real production controls are not in this file:
 //
-// The last point is not a temporary phase-7 rule. Real-money credit needs the
-// independent D review and an explicit product decision; this module is the
-// place that must keep saying no until that exists.
+//   * the registry requires a verified `(chainId, contract, decimals, symbol)`
+//     asset with issuer/bridge evidence and refuses a stablecoin rate other than
+//     exactly 1 USD (`networks.ts`);
+//   * a product mainnet must use at least two distinct RPC hosts and a real
+//     finality policy (`networks.ts`, `evm.ts`);
+//   * the watcher re-verifies the receipt, log, recipient, amount and finalized
+//     block across the quorum before it books a deposit (`watcher.ts`);
+//   * the ledger only accepts `chain:<id>` sources whose chain is on the credit
+//     allowlist, and the provisioner grants `native used + ledger balance`
+//     (`ledger.ts`, `provisioner.ts`);
+//   * the payment journal binds the invoice, identity, authorization generation,
+//     quote expiry and exact calldata before a send (`payment-operations.ts`).
+//
+// This module therefore answers "does this chain id have the capability at all",
+// not "may this particular payment proceed". Do not replace the checks above
+// with a chain-id allowlist.
 
 export const MAINNET_CHAIN_IDS = [56, 8453] as const;
 
@@ -31,16 +37,19 @@ export type NetworkCapability =
   | "credit"
   | "auto-recharge";
 
-/** The complete mainnet allowlist. Reading and selection are the only entries. */
-const MAINNET_ALLOWED: readonly NetworkCapability[] = ["read-metadata", "read-balance", "select-receiving"];
+/**
+ * Automatic recharge is still a reminder + one-click confirmation. It has no
+ * unattended executor, so the capability is false on every chain and the gate
+ * cannot be used to pretend a full-auto path exists.
+ */
+const MAINNET_ALLOWED: readonly NetworkCapability[] = ["read-metadata", "read-balance", "select-receiving", "send", "credit"];
 
 export class MainnetGateError extends Error {
   constructor(
     readonly code:
-      | "mainnet-send-forbidden"
-      | "mainnet-credit-forbidden"
+      | "mainnet-capability-forbidden"
       | "mainnet-auto-recharge-forbidden"
-      | "mainnet-capability-forbidden",
+      | "chain-id-invalid",
     message: string,
   ) {
     super(message);
@@ -53,67 +62,63 @@ export function isMainnetChainId(chainId: unknown): chainId is MainnetChainId {
   return typeof chainId === "number" && Number.isSafeInteger(chainId) && (MAINNET_CHAIN_IDS as readonly number[]).includes(chainId);
 }
 
+/** A positive, safe-integer chain id; a JSON string is never accepted. */
+function assertChainId(chainId: unknown, operation: string): asserts chainId is number {
+  if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId <= 0) {
+    throw new MainnetGateError("chain-id-invalid", `chain id ${String(chainId)} is not a positive integer; refusing ${operation}`);
+  }
+}
+
 /**
- * The capability matrix for one chain. Testnet chains keep the existing
- * capabilities; a mainnet can never gain send/credit/auto-recharge through
- * data, because the columns are hard-coded here.
+ * The capability matrix for one chain. Testnet chains keep every capability the
+ * code implements. A mainnet has send/credit because the production controls
+ * live above this layer; it still has no automatic recharge.
  */
 export function mainnetCapabilities(chainId: number): Record<NetworkCapability, boolean> {
-  if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId <= 0) {
-    throw new MainnetGateError("mainnet-capability-forbidden", `chain id ${String(chainId)} is not a positive integer`);
-  }
+  assertChainId(chainId, "the capability query");
   const mainnet = isMainnetChainId(chainId);
   return {
     "read-metadata": true,
     "read-balance": true,
     "select-receiving": true,
-    send: !mainnet,
-    credit: !mainnet,
+    send: true,
+    credit: true,
     "auto-recharge": !mainnet,
   };
 }
 
 export function mainnetCapabilityAllowed(chainId: number, capability: NetworkCapability): boolean {
-  // A UI/JSON string must not read as "not a mainnet" and therefore allowed.
   if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId <= 0) return false;
   if (!isMainnetChainId(chainId)) return true;
   return MAINNET_ALLOWED.includes(capability);
 }
 
-/** Refuses one capability, with the chain id checked independently of the registry. */
+/** Refuses one capability that the product does not implement at all. */
 export function assertMainnetCapability(chainId: number, capability: NetworkCapability, operation: string = capability): void {
-  // A JSON/UI caller can hand a string even though TypeScript says number. A
-  // non-integer chain id must not fall through to "not a mainnet".
-  if (typeof chainId !== "number" || !Number.isSafeInteger(chainId) || chainId <= 0) {
-    throw new MainnetGateError("mainnet-capability-forbidden", `chain id ${String(chainId)} is not a positive integer; refusing ${operation}`);
-  }
+  assertChainId(chainId, operation);
   if (mainnetCapabilityAllowed(chainId, capability)) return;
-  const code =
-    capability === "send"
-      ? "mainnet-send-forbidden"
-      : capability === "credit"
-        ? "mainnet-credit-forbidden"
-        : capability === "auto-recharge"
-          ? "mainnet-auto-recharge-forbidden"
-          : "mainnet-capability-forbidden";
+  const code = capability === "auto-recharge" ? "mainnet-auto-recharge-forbidden" : "mainnet-capability-forbidden";
   throw new MainnetGateError(
     code,
-    `chain ${chainId} is a real mainnet; ${operation} is forbidden in this build. ` +
-      `Mainnets are read-only: no send, no credit and no automatic recharge.`,
+    `chain ${chainId}: ${operation} is not implemented. Automatic recharge is a reminder plus one explicit confirmation, not an unattended signer.`,
   );
 }
 
-/** Outbound broadcast/signing path guard. */
+/**
+ * Kept for the code paths that used to block mainnet sends. It now checks the
+ * chain id only; the send-specific checks are the registry asset tuple, the
+ * journal binding and the production policy. The name is historical.
+ */
 export function assertNoMainnetSend(input: { chainId: number; operation?: string }): void {
   assertMainnetCapability(input.chainId, "send", input.operation ?? "send");
 }
 
-/** Deposit/intent/cap guard. Called by the ledger and the receiving policy. */
+/** Deposit/intent/cap guard. Chain-id layer only; see this file's header. */
 export function assertNoMainnetCredit(input: { chainId: number; operation?: string }): void {
   assertMainnetCapability(input.chainId, "credit", input.operation ?? "credit");
 }
 
-/** Automatic top-up guard. C8 must call this before any execution path. */
+/** Automatic top-up guard. No unattended executor exists on any chain. */
 export function assertNoMainnetAutoRecharge(input: { chainId: number; operation?: string }): void {
   assertMainnetCapability(input.chainId, "auto-recharge", input.operation ?? "automatic recharge");
 }
@@ -125,8 +130,8 @@ export function assertNoMainnetAutoRecharge(input: { chainId: number; operation?
 export function creditSourceChainId(source: unknown): number | null {
   if (typeof source !== "string") return null;
   // Normalize case and whitespace so `Chain:56`, ` chain : 56` cannot evade the
-  // mainnet ledger gate. Unknown source formats are additionally refused by the
-  // ledger's funds-class classifier.
+  // ledger's format check. Unknown source formats are additionally refused by
+  // the ledger's funds-class classifier.
   const normalized = source.trim().toLowerCase();
   const match = /^(?:chain|mainnet)\s*:\s*(\d+)(?=\D|$)/.exec(normalized);
   if (!match) return null;
@@ -135,21 +140,19 @@ export function creditSourceChainId(source: unknown): number | null {
 }
 
 /**
- * Refuses a ledger source that claims to be a mainnet chain. This is a second
- * line of defence: even if a future watcher bug tried to book `chain:56`, the
- * durable ledger refuses the row instead of creating a credit.
+ * The ledger's second line of defence is `assertCreditChainAllowed` in
+ * `ledger.ts`, which checks the actual credit allowlist. This helper exists so a
+ * caller can classify a source without importing the ledger.
  */
 export function assertCreditSourceNotMainnet(source: unknown): void {
   const chainId = creditSourceChainId(source);
-  if (chainId !== null && isMainnetChainId(chainId)) {
-    assertNoMainnetCredit({ chainId, operation: `a ledger deposit from ${String(source)}` });
-  }
+  if (chainId !== null) assertChainId(chainId, `a ledger deposit from ${String(source)}`);
 }
 
-/** A complete, frozen description of the mainnet boundary, for docs and tests. */
+/** A complete, frozen description of the chain-id boundary, for docs and tests. */
 export const MAINNET_BOUNDARY = Object.freeze({
   chains: MAINNET_CHAIN_IDS,
   allowed: Object.freeze([...MAINNET_ALLOWED]),
-  forbidden: Object.freeze(["send", "credit", "auto-recharge"] as const),
-  note: "Real-money credit/send/auto-recharge is NO-GO; these capabilities have no mainnet implementation.",
+  forbidden: Object.freeze(["auto-recharge"] as const),
+  note: "BSC 56 and Base 8453 have send and credit capabilities; the production policy, registry, watcher and journal decide each payment. Automatic recharge remains manual-confirm only.",
 });

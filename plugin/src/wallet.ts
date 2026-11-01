@@ -38,7 +38,7 @@ import { EvmClient } from "./evm.ts";
 import { nanosToUsd, usdToNanos } from "./pricing.ts";
 import { ReadOnlyChainReader, type ReadOnlyBalance, type ReadOnlyBalanceInput, type ReadOnlyChainSummary } from "./readonly-balance.ts";
 import { ReceivingNetworkPolicy, type PaymentRequestVerdict, type ReceivingSelection } from "./receiving-networks.ts";
-import { assertNoMainnetCredit, isMainnetChainId } from "./mainnet-gate.ts";
+import { assertProductionCreditAsset, assertProductionCreditNetwork } from "./production-policy.ts";
 
 /** The receiving addresses a provider has published, keyed by `(providerId, chainId)`. */
 export interface ReceivingAddress {
@@ -367,8 +367,7 @@ export class Wallet {
    * already controls. The plugin holds no private key for either side.
    */
   setReceivingAddress(providerId: string, chainId: number, address: string): ReceivingAddress {
-    assertNoMainnetCredit({ chainId, operation: "a receiving address / watcher credit" });
-    this.registry.requireEnabledNetwork(chainId);
+    assertProductionCreditNetwork(this.registry.requireEnabledNetwork(chainId));
     if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error("a receiving address must be a 20-byte hex address");
     if (address.toLowerCase() === "0x0000000000000000000000000000000000000000") throw new Error("the zero address cannot receive");
     if (!providerId || providerId.length > 64) throw new Error("a receiving address needs a provider id");
@@ -450,20 +449,21 @@ export class Wallet {
   }): SignableIntent {
     const known = this.registry.network(input.chainId);
     if (!known) throw new Error(`chain ${input.chainId} is not registered`);
-    if (isMainnetChainId(input.chainId) || known.support === "read-only") {
-      // The selection is checked first so an unselected chain says so; a selected
-      // mainnet then gets the read-only refusal. Neither path creates an intent.
-      const verdict = this.paymentRequestVerdict(input.providerId, input.chainId);
-      if (!verdict.allowed) throw new Error(verdict.reason);
-    }
+    // The selection is checked first so an unselected chain says so. A selected
+    // chain must also be a real, enabled credit network; the policy is the same
+    // for BSC, Base and the two development testnets.
+    const verdict = this.paymentRequestVerdict(input.providerId, input.chainId);
+    if (!verdict.allowed) throw new Error(verdict.reason);
     const net = this.registry.requireEnabledNetwork(input.chainId);
+    assertProductionCreditNetwork(net);
     const asset = this.registry.asset(input.assetId);
     if (!asset) throw new Error(`no asset ${input.assetId}`);
     if (asset.chainId !== input.chainId) throw new Error(`asset ${input.assetId} belongs to chain ${asset.chainId}`);
     if (!asset.enabled) throw new Error(`asset ${input.assetId} is disabled`);
-    if (!asset.credit || asset.pricing.kind !== "fixed-test-rate") {
-      throw new Error(`asset ${input.assetId} is not creditable; a mainnet or read-only asset cannot back a deposit intent`);
+    if (!asset.credit || (asset.pricing.kind !== "fixed-test-rate" && asset.pricing.kind !== "stablecoin-usd")) {
+      throw new Error(`asset ${input.assetId} is not creditable; a display-only asset cannot back a deposit intent`);
     }
+    assertProductionCreditAsset(net, asset);
     const recipient = input.recipientAddress ?? this.receivingAddressFor(input.providerId, input.chainId);
     if (!recipient) {
       throw new Error(
@@ -588,8 +588,8 @@ export class Wallet {
 
   private startChain(chainId: number): void {
     if (this.running.has(chainId)) return;
-    assertNoMainnetCredit({ chainId, operation: "watcher start" });
     const net = this.registry.requireEnabledNetwork(chainId);
+    assertProductionCreditNetwork(net);
     const watcher = this.makeWatcher({
       network: net,
       registry: this.registry,
@@ -650,9 +650,10 @@ export class Wallet {
 
   /** One scan of one chain, for the CLI's "rescan now". */
   async scanNow(chainId: number): Promise<ScanResult> {
-    assertNoMainnetCredit({ chainId, operation: "a manual scan" });
+    const network = this.registry.requireEnabledNetwork(chainId);
+    assertProductionCreditNetwork(network);
     const watcher = this.watchers.get(chainId) ?? this.makeWatcher({
-      network: this.registry.requireEnabledNetwork(chainId),
+      network,
       registry: this.registry,
       store: this.store,
       ledger: this.credit,

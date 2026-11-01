@@ -2,8 +2,8 @@
 //
 // This module can read; it cannot write. It has no signer, no transaction, no
 // `eth_sendRawTransaction`, no cap and no ledger. A balance is returned as raw
-// base units with an explicit `creditEligible: false` and `usdValue: null`, so a
-// later UI cannot accidentally present a mainnet balance as spendable credit.
+// base units with an explicit `creditEligible` flag and, for a verified
+// stablecoin, a face-value USD amount. It still cannot send, credit or sign.
 //
 // The query is registry-driven and strict:
 //
@@ -22,6 +22,7 @@
 import { EvmClient, type EvmClientOptions } from "./evm.ts";
 import type { AssetRecord, NetworkRecord, NetworkRegistry } from "./networks.ts";
 import { formatTokenAmount } from "./walletamount.ts";
+import { productionReadiness } from "./production-policy.ts";
 
 export const BALANCE_OF_SELECTOR = "0x70a08231";
 export const SYMBOL_SELECTOR = "0x95d89b41";
@@ -41,7 +42,7 @@ export interface ReadOnlyAssetView {
   name: string;
   decimals: number;
   issuerType: string;
-  credit: false;
+  credit: boolean;
 }
 
 export interface ReadOnlyBalance {
@@ -59,10 +60,10 @@ export interface ReadOnlyBalance {
   balanceTokens: string;
   blockNumber: number;
   readOnly: true;
-  /** a mainnet balance is never spendable credit in this build */
-  creditEligible: false;
-  /** no rate is defined for a mainnet, so no USD value is invented */
-  usdValue: null;
+  /** true only for an enabled, verified credit asset whose network passes the production policy */
+  creditEligible: boolean;
+  /** face value for a verified stablecoin; null for the native coin or a display-only asset */
+  usdValue: string | null;
   note: string;
   observedAt: string;
 }
@@ -177,8 +178,8 @@ export class ReadOnlyChainReader {
   async balance(input: ReadOnlyBalanceInput): Promise<ReadOnlyBalance> {
     const address = assertAddress(input.address);
     const net = this.registry.requireReadableNetwork(input.chainId);
-    if (net.support !== "read-only") {
-      throw new Error(`chain ${net.chainId} is a testnet/credit network; this reader is for read-only product networks only`);
+    if (net.support !== "read-only" && !net.enabled) {
+      throw new Error(`chain ${net.chainId} is not enabled for a readable balance`);
     }
     const asset: AssetRecord | null = input.assetId ? this.registry.requireReadableAsset(input.assetId) : null;
     if (asset && asset.chainId !== net.chainId) {
@@ -213,7 +214,7 @@ export class ReadOnlyChainReader {
         name: asset.name,
         decimals: asset.decimals,
         issuerType: asset.issuerType,
-        credit: false,
+        credit: asset.credit,
       };
     } else {
       balanceRaw = quantity(await client.call<string>("eth_getBalance", [address, "latest"]), "eth_getBalance");
@@ -221,6 +222,20 @@ export class ReadOnlyChainReader {
       assetView = null;
     }
 
+    const readiness = productionReadiness(net, this.registry.assetsForChain(net.chainId));
+    const creditEligible = assetView !== null
+      ? readiness.ready && readiness.creditableAssets.some((a) => a.assetId === assetView!.assetId)
+      : false;
+    const usdValue = assetView && creditEligible && assetView.credit
+      ? (() => {
+          const asset = this.registry.asset(assetView.assetId);
+          if (!asset || asset.pricing.kind !== "stablecoin-usd") return null;
+          const nanos = (balanceRaw * BigInt(asset.pricing.nanosPerToken)) / (10n ** BigInt(asset.decimals));
+          const whole = nanos / 1_000_000_000n;
+          const fraction = (nanos % 1_000_000_000n).toString().padStart(9, "0").slice(0, 6);
+          return `${whole}.${fraction}`;
+        })()
+      : null;
     return {
       schema: "ohmyaihub.readonly-balance/v1",
       chainId: net.chainId,
@@ -235,12 +250,12 @@ export class ReadOnlyChainReader {
       balanceTokens: formatTokenAmount(balanceRaw.toString(), decimals),
       blockNumber,
       readOnly: true,
-      creditEligible: false,
-      usdValue: null,
+      creditEligible,
+      usdValue,
       note:
-        net.networkType === "mainnet"
-          ? "Read-only mainnet balance. This build cannot send, credit or automatically recharge a mainnet; no USD value is computed."
-          : "Read-only balance on a testnet. This query does not credit anything.",
+        creditEligible
+          ? `Verified ${net.displayName} balance. A transfer to a selected receiving address is credited by the watcher after finality; this query itself does not credit anything.`
+          : `Balance on ${net.displayName}. This asset/network is not creditable right now, so the balance is display-only.`,
       observedAt: this.now().toISOString(),
     };
   }

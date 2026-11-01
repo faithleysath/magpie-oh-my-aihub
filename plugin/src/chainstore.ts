@@ -103,7 +103,13 @@ export interface ChainAnomaly {
     | "bad-log"
     | "over-credit"
     /** the intent's rate snapshot no longer matches and cannot be proven */
-    | "rate-mismatch";
+    | "rate-mismatch"
+    /** endpoints disagreed, or too few answered, for a credit-critical read */
+    | "rpc-quorum"
+    /** the production policy refused a credit at the bridge */
+    | "production-policy"
+    /** a credited deposit was reversed after a reorg */
+    | "reorg-reversal";
   eventId: string | null;
   detail: string;
   resolvedAt: string | null;

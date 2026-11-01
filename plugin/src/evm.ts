@@ -1,16 +1,24 @@
 // A minimal EVM JSON-RPC client for deposit watching.
 //
 // Deliberately small: it reads blocks, logs, receipts and one `decimals()` call.
-// It never signs, never sends a transaction and never holds a key. Every call
-// goes to an operator-configured endpoint list; the first endpoint that answers
-// wins and the others are only tried on failure, so one provider's outage does
-// not stop a chain.
+// It never signs, never sends a transaction and never holds a key.
+//
+// Two read modes:
+//
+//  * `call()` is the historical failover reader for development/testnet work:
+//    the first endpoint that answers wins. A single endpoint is enough because
+//    a testnet deposit is explicitly not production money.
+//  * `*Quorum()` is the production reader. It asks every configured endpoint,
+//    requires `minimum` identical answers, and refuses a contradictory answer.
+//    A head/finalized height is the *minimum* across endpoints (a lagging node
+//    can only delay a credit, never advance one); a block, receipt, log set or
+//    contract call must be byte-identical after normalization.
 //
 // Two rules matter for money and are enforced here rather than by callers:
 //
-//  1. `eth_chainId` is checked on connect. An endpoint that answers with another
-//     chain id is refused, because a log from the wrong chain would credit the
-//     wrong asset. (A BSC node must never be able to answer for Base.)
+//  1. `eth_chainId` is checked on every endpoint. An endpoint that answers with
+//     another chain id is refused, because a log from the wrong chain would
+//     credit the wrong asset. (A BSC node must never answer for Base.)
 //  2. Nothing is inferred from a missing field. A block without a hash, a log
 //     without a `logIndex`, or a receipt that is not `status: 0x1` is an error,
 //     not a zero.
@@ -108,6 +116,45 @@ export class RpcError extends Error {
     super(message);
     this.name = "RpcError";
   }
+}
+
+/**
+ * The endpoints did not produce one agreed, sufficiently supported answer.
+ * This is never "fall back to the first healthy endpoint": a credit decision is
+ * paused and retried later instead of guessing.
+ */
+export class QuorumError extends Error {
+  constructor(
+    message: string,
+    readonly method: string,
+    readonly details: readonly string[] = [],
+  ) {
+    super(message);
+    this.name = "QuorumError";
+  }
+}
+
+/** Deterministic JSON for comparing two RPC results (object key order is not significant). */
+function canonical(value: unknown): string {
+  if (value === null || typeof value === "number" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj).filter((k) => obj[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`).join(",")}}`;
+  }
+  return "null";
+}
+
+function groupAnswers<T>(answers: { url: string; result: T }[]): Map<string, { result: T; urls: string[] }> {
+  const groups = new Map<string, { result: T; urls: string[] }>();
+  for (const answer of answers) {
+    const key = canonical(answer.result);
+    const group = groups.get(key);
+    if (group) group.urls.push(answer.url);
+    else groups.set(key, { result: answer.result, urls: [answer.url] });
+  }
+  return groups;
 }
 
 export class EvmClient {
@@ -316,6 +363,264 @@ export class EvmClient {
     if (typeof raw.blockHash !== "string") throw new Error(`a log in ${txHash} has no blockHash`);
     if (!Array.isArray(raw.topics)) throw new Error(`a log in ${txHash} has no topics`);
     return raw;
+  }
+
+  /**
+   * Asks every endpoint for one method and requires `minimum` identical answers.
+   * All answered values must agree; a single contradictory answer refuses the
+   * read even when `minimum` others agree, because a credit decision must not
+   * pick a winner between two chains. `normalize` lets a caller drop volatile
+   * fields that are not part of the decision (never use it to drop a hash).
+   */
+  async callQuorum<T>(
+    method: string,
+    params: unknown[],
+    minimum: number,
+    options: { normalize?: (value: T) => unknown; timeoutMs?: number } = {},
+  ): Promise<T> {
+    if (!Number.isInteger(minimum) || minimum < 1) throw new Error("a quorum needs a positive integer minimum");
+    if (this.endpoints.length < minimum) {
+      throw new QuorumError(`${method}: ${this.endpoints.length} endpoint(s) configured, quorum needs ${minimum}`, method);
+    }
+    const verified = await Promise.allSettled(this.endpoints.map(async (url) => {
+      await this.verifyEndpoint(url);
+      return url;
+    }));
+    const usable = this.endpoints.filter((_, i) => verified[i]!.status === "fulfilled");
+    if (usable.length < minimum) {
+      const details = verified.map((v, i) => `${this.endpoints[i]}: ${v.status === "rejected" ? String((v.reason as Error)?.message ?? v.reason).slice(0, 160) : "ok"}`);
+      throw new QuorumError(`${method}: only ${usable.length} endpoint(s) verified, quorum needs ${minimum}`, method, details);
+    }
+    const settled = await Promise.allSettled(usable.map(async (url) => {
+      const started = this.now();
+      try {
+        const result = await this.requestAt<T>(url, method, params, options.timeoutMs);
+        this.markOk(url, this.now() - started);
+        return { url, result };
+      } catch (e) {
+        this.markBad(url, String((e as Error)?.message ?? e).slice(0, 200));
+        throw e;
+      }
+    }));
+    const answers: { url: string; result: T }[] = [];
+    const failures: string[] = [];
+    settled.forEach((outcome, i) => {
+      if (outcome.status === "fulfilled") answers.push(outcome.value);
+      else failures.push(`${usable[i]}: ${String((outcome.reason as Error)?.message ?? outcome.reason).slice(0, 160)}`);
+    });
+    if (answers.length < minimum) {
+      throw new QuorumError(`${method}: only ${answers.length} endpoint(s) answered, quorum needs ${minimum}`, method, failures);
+    }
+    const normalized = options.normalize
+      ? answers.map((a) => ({ url: a.url, result: options.normalize!(a.result) as T }))
+      : answers;
+    const groups = groupAnswers(normalized);
+    if (groups.size !== 1) {
+      const summary = [...groups.values()].map((g) => `${g.urls.join("+")} => ${canonical(g.result).slice(0, 120)}`);
+      throw new QuorumError(`${method}: endpoints disagree (${summary.join(" | ")})`, method, [...failures, ...summary]);
+    }
+    const only = [...groups.values()][0]!;
+    if (only.urls.length < minimum) {
+      throw new QuorumError(`${method}: only ${only.urls.length} endpoint(s) agree, quorum needs ${minimum}`, method, failures);
+    }
+    return only.result;
+  }
+
+  /**
+   * A block at the conservative head (minimum height across the quorum). Every
+   * endpoint has that height, so its hash can be compared; using each endpoint's
+   * own "latest" would compare different blocks and never agree.
+   */
+  async headBlockQuorum(minimum: number): Promise<EvmBlock> {
+    const head = await this.blockNumberQuorum(minimum);
+    return this.blockQuorum(head, minimum);
+  }
+
+  /**
+   * A numeric JSON-RPC quantity across the quorum. `identical` is for a nonce or
+   * a token balance (a difference is a refusal), `max` for a gas estimate (be
+   * conservative) and `min` for a tip (never overpay because one provider is
+   * greedy). At least `minimum` endpoints must answer.
+   */
+  async quantityQuorum(
+    method: string,
+    params: unknown[],
+    minimum: number,
+    mode: "identical" | "max" | "min",
+  ): Promise<bigint> {
+    const settled = await Promise.allSettled(this.endpoints.map(async (url) => {
+      await this.verifyEndpoint(url);
+      const raw = await this.requestAt<unknown>(url, method, params);
+      if (typeof raw !== "string" || !/^0x[0-9a-fA-F]+$/.test(raw)) throw new Error(`${method} did not return a hex quantity`);
+      return BigInt(raw);
+    }));
+    const values = settled.filter((s): s is PromiseFulfilledResult<bigint> => s.status === "fulfilled").map((s) => s.value);
+    if (values.length < minimum) {
+      const details = settled.map((s, i) => `${this.endpoints[i]}: ${s.status === "rejected" ? String((s.reason as Error)?.message ?? s.reason).slice(0, 120) : "ok"}`);
+      throw new QuorumError(`${method}: only ${values.length} endpoint(s) answered, quorum needs ${minimum}`, method, details);
+    }
+    if (mode === "identical") {
+      const first = values[0]!;
+      if (!values.every((v) => v === first)) throw new QuorumError(`${method}: endpoints returned different quantities`, method);
+      return first;
+    }
+    return mode === "max" ? values.reduce((a, b) => (b > a ? b : a)) : values.reduce((a, b) => (b < a ? b : a));
+  }
+
+  /**
+   * The conservative head: the lowest answered head. A lagging endpoint delays
+   * a scan; a lying high endpoint cannot make the watcher skip a block. The
+   * caller still requires `minimum` answers.
+   */
+  async blockNumberQuorum(minimum: number): Promise<number> {
+    const settled = await Promise.allSettled(this.endpoints.map(async (url) => {
+      await this.verifyEndpoint(url);
+      return EvmClient.toNumber(await this.requestAt<string>(url, "eth_blockNumber", []), "eth_blockNumber");
+    }));
+    const heads = settled.filter((s): s is PromiseFulfilledResult<number> => s.status === "fulfilled").map((s) => s.value);
+    if (heads.length < minimum) throw new QuorumError(`eth_blockNumber: only ${heads.length} endpoint(s) answered, quorum needs ${minimum}`, "eth_blockNumber");
+    return Math.min(...heads);
+  }
+
+  /** The lowest finalized height across the quorum; null only when none answers. */
+  async finalizedNumberQuorum(minimum: number): Promise<number | null> {
+    const settled = await Promise.allSettled(this.endpoints.map(async (url) => {
+      await this.verifyEndpoint(url);
+      const raw = await this.requestAt<unknown>(url, "eth_getBlockByNumber", ["finalized", false]);
+      if (!raw || typeof raw !== "object") return null;
+      return EvmClient.toNumber((raw as { number: string }).number, "finalized number");
+    }));
+    const values = settled.filter((s): s is PromiseFulfilledResult<number | null> => s.status === "fulfilled").map((s) => s.value).filter((v): v is number => v !== null);
+    if (values.length < minimum) {
+      throw new QuorumError(`eth_getBlockByNumber(finalized): only ${values.length} endpoint(s) answered, quorum needs ${minimum}`, "eth_getBlockByNumber");
+    }
+    return Math.min(...values);
+  }
+
+  /** A block at a fixed height/tag, identical across the quorum. */
+  async blockQuorum(tag: "latest" | "safe" | "finalized" | number, minimum: number): Promise<EvmBlock> {
+    const param = typeof tag === "number" ? `0x${tag.toString(16)}` : tag;
+    return this.callQuorum<unknown>("eth_getBlockByNumber", [param, false], minimum, {
+      normalize: (raw) => {
+        const b = EvmClient.block(raw, `block ${tag}`);
+        return { number: EvmClient.toNumber(b.number, "block number"), hash: b.hash.toLowerCase(), parentHash: b.parentHash.toLowerCase(), timestamp: b.timestamp };
+      },
+    }).then((raw) => EvmClient.block(raw, `block ${tag}`));
+  }
+
+  /** A receipt, identical across the quorum. Null means no endpoint has it yet. */
+  async receiptQuorum(txHash: string, minimum: number): Promise<EvmReceipt | null> {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new Error("a transaction hash is 32 bytes of hex");
+    const settled = await Promise.allSettled(this.endpoints.map(async (url) => {
+      await this.verifyEndpoint(url);
+      const raw = await this.requestAt<unknown>(url, "eth_getTransactionReceipt", [txHash]);
+      if (!raw || typeof raw !== "object") return null;
+      const r = raw as Record<string, unknown>;
+      if (typeof r.blockHash !== "string" || typeof r.blockNumber !== "string" || typeof r.status !== "string") {
+        throw new Error(`receipt ${txHash} is incomplete on ${url}`);
+      }
+      const logs = Array.isArray(r.logs) ? (r.logs as EvmLog[]).map((l) => EvmClient.log(l, txHash)) : [];
+      return {
+        transactionHash: txHash.toLowerCase(),
+        blockNumber: r.blockNumber,
+        blockHash: r.blockHash.toLowerCase(),
+        status: r.status.toLowerCase(),
+        logs: logs.map((l) => ({
+          ...l,
+          address: l.address.toLowerCase(),
+          topics: l.topics.map((t) => t.toLowerCase()),
+          blockHash: l.blockHash.toLowerCase(),
+          transactionHash: l.transactionHash.toLowerCase(),
+          data: l.data.toLowerCase(),
+        })),
+      } satisfies EvmReceipt;
+    }));
+    const values = settled.filter((s): s is PromiseFulfilledResult<EvmReceipt | null> => s.status === "fulfilled").map((s) => s.value);
+    if (values.length < minimum) throw new QuorumError(`eth_getTransactionReceipt: only ${values.length} endpoint(s) answered, quorum needs ${minimum}`, "eth_getTransactionReceipt");
+    const present = values.filter((v): v is EvmReceipt => v !== null);
+    if (present.length === 0) return null;
+    if (present.length !== values.length) {
+      throw new QuorumError("eth_getTransactionReceipt: some endpoints returned the receipt and some did not", "eth_getTransactionReceipt");
+    }
+    const groups = groupAnswers(present.map((result, i) => ({ url: this.endpoints[i] ?? `endpoint-${i}`, result })));
+    if (groups.size !== 1) throw new QuorumError("eth_getTransactionReceipt: endpoints disagree", "eth_getTransactionReceipt", [...groups.values()].map((g) => canonical(g.result).slice(0, 200)));
+    return present[0]!;
+  }
+
+  /** A transaction's public send fields; no signature is exposed. */
+  async transaction(txHash: string): Promise<{ from: string; to: string | null; input: string; value: string; nonce: string; blockHash: string | null; blockNumber: string | null } | null> {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new Error("a transaction hash is 32 bytes of hex");
+    const raw = await this.call<unknown>("eth_getTransactionByHash", [txHash]);
+    if (!raw || typeof raw !== "object") return null;
+    const t = raw as Record<string, unknown>;
+    if (typeof t.from !== "string" || typeof t.input !== "string" || typeof t.value !== "string" || typeof t.nonce !== "string") {
+      throw new Error(`transaction ${txHash} is incomplete`);
+    }
+    return {
+      from: t.from.toLowerCase(),
+      to: typeof t.to === "string" ? t.to.toLowerCase() : null,
+      input: t.input.toLowerCase(),
+      value: t.value,
+      nonce: t.nonce,
+      blockHash: typeof t.blockHash === "string" ? t.blockHash.toLowerCase() : null,
+      blockNumber: typeof t.blockNumber === "string" ? t.blockNumber : null,
+    };
+  }
+
+  /** The same transaction from the quorum; a disagreement is a refusal. */
+  async transactionQuorum(txHash: string, minimum: number): Promise<{ from: string; to: string | null; input: string; value: string; nonce: string; blockHash: string | null; blockNumber: string | null } | null> {
+    return this.callQuorum<unknown>("eth_getTransactionByHash", [txHash], minimum, {
+      normalize: (raw) => {
+        if (!raw || typeof raw !== "object") return null;
+        const t = raw as Record<string, unknown>;
+        if (typeof t.from !== "string" || typeof t.input !== "string" || typeof t.value !== "string" || typeof t.nonce !== "string") {
+          throw new Error(`transaction ${txHash} is incomplete`);
+        }
+        return {
+          from: t.from.toLowerCase(),
+          to: typeof t.to === "string" ? t.to.toLowerCase() : null,
+          input: t.input.toLowerCase(),
+          value: t.value,
+          nonce: t.nonce,
+          blockHash: typeof t.blockHash === "string" ? t.blockHash.toLowerCase() : null,
+          blockNumber: typeof t.blockNumber === "string" ? t.blockNumber : null,
+        };
+      },
+    }).then((v) => (v as { from: string; to: string | null; input: string; value: string; nonce: string; blockHash: string | null; blockNumber: string | null } | null));
+  }
+
+  /** A log page, identical across the quorum after a stable sort. */
+  async logsQuorum(input: { address: string | string[]; topics: (string | null)[]; fromBlock: number; toBlock: number }, minimum: number): Promise<EvmLog[]> {
+    return this.callQuorum<unknown[]>("eth_getLogs", [{
+      address: input.address,
+      topics: input.topics,
+      fromBlock: `0x${input.fromBlock.toString(16)}`,
+      toBlock: `0x${input.toBlock.toString(16)}`,
+    }], minimum, {
+      normalize: (raw) => {
+        if (!Array.isArray(raw)) throw new Error("eth_getLogs did not return a list");
+        return raw.map((l) => EvmClient.log(l as EvmLog, "eth_getLogs")).map((l) => ({
+          address: l.address.toLowerCase(),
+          topics: l.topics.map((t) => t.toLowerCase()),
+          data: l.data.toLowerCase(),
+          blockNumber: String(BigInt(l.blockNumber)),
+          blockHash: l.blockHash.toLowerCase(),
+          transactionHash: l.transactionHash.toLowerCase(),
+          logIndex: String(BigInt(l.logIndex)),
+          removed: l.removed === true,
+        })).sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber) || Number(a.logIndex) - Number(b.logIndex) || a.transactionHash.localeCompare(b.transactionHash));
+      },
+    }).then((raw) => (raw as EvmLog[]).map((l) => EvmClient.log(l, "eth_getLogs")));
+  }
+
+  /** A `decimals()`/`balanceOf()` call, identical across the quorum. */
+  async callDataQuorum(to: string, data: string, minimum: number): Promise<string> {
+    return this.callQuorum<string>("eth_call", [{ to, data }, "latest"], minimum, {
+      normalize: (out) => {
+        if (typeof out !== "string" || !/^0x[0-9a-fA-F]*$/.test(out)) throw new Error("eth_call returned no hex data");
+        return out.toLowerCase();
+      },
+    });
   }
 
   /** One page of logs; `null` blockHash tags are not accepted by every provider, so numbers are used. */

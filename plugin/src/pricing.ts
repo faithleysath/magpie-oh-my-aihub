@@ -56,6 +56,11 @@ export interface PriceTier {
 
 export type PriceBook = Record<string, PriceParts>;
 
+export interface ModelLimit {
+  contextWindow: number | null;
+  maxOutputTokens: number | null;
+}
+
 export interface PriceSnapshot {
   /** SHA-256 over the sorted model -> price document */
   version: string;
@@ -63,6 +68,12 @@ export interface PriceSnapshot {
   body: string;
   models: string[];
   prices: PriceBook;
+  /**
+   * Optional per-model bounds from Magpie's catalogue. They are not part of the
+   * price version (a changed context window does not reprice history), but they
+   * bound the one-call reserve used by the prepaid cap guard.
+   */
+  limits?: Record<string, ModelLimit>;
 }
 
 /** A usage record's token fields, as Magpie wrote them. */
@@ -232,7 +243,7 @@ export function priceVersionOf(models: string[], prices: PriceBook): string {
  * fail closed, not issue a key.
  */
 export function priceSnapshot(
-  metas: { id: string; price: unknown }[],
+  metas: { id: string; price: unknown; contextWindow?: number | null; maxOutputTokens?: number | null }[],
   models: string[],
 ): PriceSnapshot | null {
   // A consumer's whitelist may be a glob (`provider/*`). The native key keeps
@@ -262,12 +273,71 @@ export function priceSnapshot(
     if (!normalized) return null;
     prices[id] = normalized;
   }
+  const limits: Record<string, ModelLimit> = {};
+  for (const id of ids) {
+    const meta = byId.get(id);
+    limits[id] = {
+      contextWindow: typeof meta?.contextWindow === "number" && Number.isFinite(meta.contextWindow) && meta.contextWindow > 0 ? meta.contextWindow : null,
+      maxOutputTokens: typeof meta?.maxOutputTokens === "number" && Number.isFinite(meta.maxOutputTokens) && meta.maxOutputTokens > 0 ? meta.maxOutputTokens : null,
+    };
+  }
   return {
     version: priceVersionOf(ids, prices),
     body: JSON.stringify({ models: ids, prices }),
     models: ids,
     prices,
+    limits,
   };
+}
+
+/**
+ * A conservative nano-USD reserve for one in-flight call at the pinned prices.
+ *
+ * Magpie's native admission uses `body bytes / 4 + the key's mean output`, which
+ * is a *soft* reservation: a long output or an unusually large prompt can cost
+ * more than the reservation. This reserve is not a hard cap either, but it makes
+ * the overshoot finite and, combined with a token limit on the same key, keeps a
+ * normal concurrent workload from spending an unbounded multiple of the balance.
+ *
+ * The estimate is `maxOutputTokens * output price + 10% of the context window *
+ * the most expensive input-side price`. A model with no catalogue bounds returns
+ * null, and the caller must not claim a bounded reserve for it.
+ */
+export function maxCallReserveNanos(snapshot: PriceSnapshot): number | null {
+  let worst = 0;
+  for (const id of snapshot.models) {
+    const price = snapshot.prices[id];
+    const limit = snapshot.limits?.[id];
+    if (!price || !limit || limit.maxOutputTokens === null || limit.contextWindow === null) return null;
+    const inputSide = Math.max(price.input, price.cache_read, price.cache_write, price.cache_write_1h ?? 0);
+    const usd = (limit.maxOutputTokens * price.output + Math.min(limit.contextWindow, 200_000) * 0.1 * inputSide) / 1_000_000;
+    if (!Number.isFinite(usd) || usd < 0) return null;
+    worst = Math.max(worst, usd);
+  }
+  return Math.ceil(worst * 1_000_000_000);
+}
+
+/**
+ * The most any one token can cost at this snapshot, in nano-USD per token.
+ * Used for the second (token-count) cap on a Magpie key.
+ */
+export function maxNanosPerToken(snapshot: PriceSnapshot): number | null {
+  let worst = 0;
+  for (const id of snapshot.models) {
+    const price = snapshot.prices[id];
+    if (!price) return null;
+    const perMillion = Math.max(
+      price.input,
+      price.output,
+      price.cache_read,
+      price.cache_write,
+      price.cache_write_1h ?? 0,
+      ...(price.tiers ?? []).flatMap((t) => [t.input, t.output, t.cache_read, t.cache_write, t.cache_write_1h ?? 0]),
+    );
+    if (!Number.isFinite(perMillion) || perMillion < 0) return null;
+    worst = Math.max(worst, perMillion);
+  }
+  return Math.ceil(worst * 1000);
 }
 
 /** Parses a snapshot stored with a window; null for a corrupt document. */
