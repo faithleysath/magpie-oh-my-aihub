@@ -1,55 +1,53 @@
 # Oh My AIHub
 
-让一台 Magpie 共享自己的模型，也能使用朋友的 Magpie。BSC 与 Base 是两条平权的生产付款网络；日常安装、连接、授权和充值都在 **Magpie + 独立浏览器控制台**完成，无需终端、源码目录、数据目录或单独安装 Bun。
+Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTier 私有网里的伙伴，或使用伙伴共享的模型。没有界面、没有本机控制台、不开第二个 AI 网关——所有操作由 agent 通过 MCP 工具完成。
 
-> 本文件底部的历史验收段落保留为历史记录；不再代表当前产品能力。
+节点身份是一个内置的 EVM 钱包地址。共享的模型和价格由这把私钥签名发布；别人向你地址转入的 USDC 就是可用额度（`cap = 已确认入账总额 D`）；谁批准谁发 Gateway Key。AI 请求始终走「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」，插件只负责组网、签名目录、申请/审批和记账。
 
-AI 请求始终走「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」。Magpie 负责原生模型路由、Gateway Key、用量和限额；本插件管理私有连接与授权，不增加 AI 代理或第二套计费网关。
-
-## 从 Magpie 安装
+## 安装
 
 1. 打开 Magpie 的 **Plugins → Discover**。
-2. 如果搜索结果为空，在列表底部找到手动添加入口，输入 `github:faithleysath/magpie-oh-my-aihub` 并安装。
-3. 打开 **Oh My AIHub** 插件页，点击 **打开控制台**。系统默认浏览器会打开本机控制台。Magpie 自己管理插件运行所需的 Bun。
-4. 想换一个浏览器：复制插件页显示的普通本机地址，在该浏览器选择 **配对此浏览器**，回到 Magpie 刷新，核对完整八位码并批准。地址本身不能登录。
+2. 如果搜不到，在列表底部用手动添加入口填：`github:faithleysath/magpie-oh-my-aihub`
+3. 打开 **Oh My AIHub** 插件页——那一页就是用户手册（这是什么、三步装好、18 个工具、首次使用、安全边界、常见错误、已知限制）。
+4. 让 agent 调用 `magpie-oh-my-aihub_join_network` 加入网络，其余按插件页走。
 
-上面的 GitHub 地址是合并后的常规安装入口。开发分支后缀只供验证，未合并改动不会因安装常规地址自动出现。更新插件也通过 Magpie 的 Plugins 页面完成。
+插件装好后会自动生成节点钱包，私钥在插件数据目录的 `wallet/key.hex`（`0600`）。插件不写 Magpie 选项，也不读它的管理接口。
 
-接下来按[首次使用指南](docs/ONBOARDING.md)配置网络，并在「我的共享」或「发现模型」中继续。已经连接后查阅[日常操作](docs/OPERATIONS.md)。备份、灾难恢复与维护者脚本放在[高级 CLI 参考](docs/ADVANCED-CLI.md)。
+## 把工具接给 agent
 
-## 两种能力，一套网络
-
-| 我想做什么 | 控制台入口 |
+| 用途 | MCP 地址 |
 | --- | --- |
-| 把自己 Magpie 的模型共享给朋友 | 我的共享：选择有完整价格的本机模型、发布目录、手动审批网络申请并自动交付授权 |
-| 使用朋友共享的模型 | 发现模型：核对完整身份指纹与报价、直接发送无文件申请；批准后自动连接 |
-| 查看网络与原生限额状态 | 总览、我的连接、网络与设置 |
-| 在 BSC 或 Base 上给伙伴充值 | 钱包 → 充值：选择伙伴、网络、已核验 USDC 和金额；逐笔签名、预览、确认、观察最终性 |
-| 查看链上余额与伙伴用量 | 钱包 → 收款地址余额；我的共享 → 已授权伙伴的用量与额度 |
+| 全部插件 | `http://127.0.0.1:3425/mcp/magpie/tools` |
+| 只本插件 | `http://127.0.0.1:3425/mcp/magpie/tools/magpie-oh-my-aihub` |
 
-两种能力可以同时打开；所有连接共用一个 EasyTier 核心。共享模型只来自这台 Magpie 的本机服务，不转售朋友的 Remote Magpie。每个共享方独立保存自己的消费者账目和余额，没有跨节点统一余额。
+Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agent 打开即可；更早的版本手工填上面的 URL。本机 agent 免 Gateway Key；别的机器上的 agent 需要 Magpie 打开 **Share on local network** 并拿到 Gateway Key。
 
-## 当前验收范围
+18 个工具，Magpie 会给名字加插件前缀 `magpie-oh-my-aihub_`：
 
-**已实测（REPRODUCED）**：两份全新隔离的 Magpie **0.1.2171** 图形环境、EasyTier **2.6.4**；Magpie 正常 GitHub UI 安装和 Update；默认浏览器入口、八位码配对与首次配置；提供方发布有价本机模型、消费方核对完整指纹、网络申请、提供方手动批准正额度、授权自动交付及原生 Remote Magpie 连接。Magpie 自带的 **Test models** 已观察到有效调用 **200**、额度用尽后原生 **429**。模型上游为受控模拟服务，不代表真实付费供应商验收。
+| 分类 | 工具 |
+| --- | --- |
+| 节点 | `status`、`wallet`、`wallet_import`、`wallet_export`、`join_network` |
+| 提供方 | `native_models`、`share_models`、`consumers`、`approve_request`、`reject_request`、`revoke_consumer` |
+| 消费方 | `discover`、`request_access`、`connect_provider`、`disconnect_provider`、`connections` |
+| 钱 | `send_payment`、`history` |
 
-**已实测的受控模拟范围**：Ego 浏览器完成 BSC/Base 两条本地模拟 RPC、真实 EIP-712 文档与合成外部钱包签名 → 生产 Watcher/Ledger/Provisioner → 原生额度读回 `$1.0001`、再到 `$2.0001`；Base 只增加最新高度不入账，达到 finalized 后才入账；重复事件/扫描不重复记账，原生 Magpie 调用从 429 恢复为 200。RPC503 保留为未知。WebKit 完成第二提供方完整手动授权流程；注入内容显示为字面文本且不执行，暂停第二提供方时第一方原生调用仍200，恢复通过。
+## 安全边界
 
-WebKit 钱包9步真实 UI 复测也已通过：新增0.5 BSC模拟入账、最终性/重放和原生 Test models200。
+- **网络密码是唯一的入网门**。同一个 EasyTier 私有网里的节点彼此可达，覆盖网内是明文 HTTP，插件不做二次加密、不做配对、不做节点信任列表。
+- **私钥只在本机**。工具永远不返回私钥；`wallet_export` 只写到本机文件。导出之后能读到那个文件的人（包括 agent）就能拿走它，这是本机权限问题，插件挡不住。
+- **插件不转发 AI 请求**。它不代理、不计 token、不另写请求账单；用量和限额都在 Magpie 自己的 Gateway Key 上。
+- 覆盖网地址不是身份，只是路由线索。目录和申请靠签名证明「这份模型和价格确实是这个地址公布的」，签名者必须等于文档里的 `address`。
+- 对外只开两个端口：`3426` 目录/申请/轮询，`3425` Magpie 模型网关。Magpie 管理界面永远不映射到覆盖网。
+- Gateway Key 只通过「提供方 → 消费方」的签名轮询交付给对应地址，不落日志、不进 `status`。
+- 一个钱包就是一台节点的全部身份；两台机器用同一个私钥就是同一个账户，余额共享。
 
-**仍未确认（UNKNOWN）**：真实浏览器钱包扩展、原生 WKWebView、Linux/Windows 桌面、SSH 端到端交互未完成本轮验收。本地模拟没有新的公链付款，也不代表真实资金安全。付款恢复以 journal 记录为准；未知发送状态需要按已知交易哈希人工核对。
+## 文档
 
-Magpie **0.1.2038** 仍是已有价格与计费语义的测量基线；没有在 0.1.2171 重测全部历史重定价、并发超额和窗口行为。早期真实 BSC 测试网、Base Sepolia 转账及双主机链上证据与本轮 GUI 验收分开。
+| 文档 | 是什么 |
+| --- | --- |
+| `plugin/page/doc.md`（安装后的插件页） | **用户手册**。面向使用者：怎么装、怎么用、每个工具干什么、报错怎么处理、有哪些已知限制。 |
+| [docs/DESIGN-V2.md](docs/DESIGN-V2.md) | **规格**。面向维护者：产品决策、协议字段、端口与数据文件、Magpie 上游事实与出处、分阶段实施和验收口径。 |
+| [plugin/README.md](plugin/README.md) | 维护者速查：目录结构、状态文件、数据流、自检命令。 |
+| [docs/history/ARCHITECTURE-pre-v2.md](docs/history/ARCHITECTURE-pre-v2.md) | 旧实现（本机控制台 + P2P + 旧钱包/账本）的架构记录，已不再代表当前代码。 |
 
-## 使用边界
-
-- 控制台只监听 `127.0.0.1`，需要一次性打开凭证或明确配对。永不把 Magpie 管理界面发布到局域网、覆盖网或公网，也没有 Quick Tunnel。
-- 原生插件页保存打开偏好、打开请求或配对批准会重启**所有插件共用的宿主**，已有控制台会话会失效。普通控制台业务操作直接调用现有 Service；网络变更可能重启 EasyTier，但不靠保存 Magpie 插件选项执行。
-- Gateway Key 是访问秘密，授权只通过覆盖网直接送达对应伙伴；不要截图、复制或转发。
-- `priceLocked: false` 表示价格没有被锁定。正额度不是实时硬结算保证；价格检测有间隔，并发请求也可能超额。`0` 在 Magpie 原生上限中表示无限额，不能当作暂停。
-- 生产付款只支持注册表中核验过的 BSC/Base USDC。BSC USDC 是 Binance-Peg 桥接资产（18 位小数），Base USDC 是 Circle 原生资产（6 位小数），两者不是同一个资产，不能按符号混用。
-- 付款逐笔确认，不自动签名、不自动转账；内置钱包和外置钱包都受同一 journal 发送门约束。没有代币发行、代管私钥、买卖、兑换、跨链桥或法币交易。
-- Magpie 的额度是软上限；插件用成本上限、token 上限和一次性调用预留降低正常并发超额，但不宣称绝对硬上限。价格变化会暂停并要求重新授权。
-- BSC Testnet 与 Base Sepolia 仅保留为开发工具；mock 代币不是 USDC、不值钱。
-
-设计与技术证据见[架构决策](docs/ARCHITECTURE.md)、[验证任务](docs/VALIDATION.md)和[插件说明](plugin/README.md)。历史验证结论以各自版本、平台及报告范围为准。
+类型检查：`cd plugin && bun run typecheck`。文档页由 `cd plugin && bun run build:page` 从 `page/doc.md` 渲染。

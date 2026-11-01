@@ -1,7 +1,7 @@
 {
   "name": "@oh-my-aihub/magpie-plugin",
   "version": "0.6.0",
-  "description": "Magpie plugin: EasyTier no-TUN supervisor and Gateway Key provisioner for private AI sharing",
+  "description": "Magpie plugin: signed model catalogue, private EasyTier overlay sharing and on-chain USDC credit, driven entirely through MCP tools",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
@@ -21,12 +21,9 @@
     "permissions": []
   },
   "files": [
-    "bin/",
     "src/",
-    "console/",
+    "page/doc.md",
     "page/index.html",
-    "page/app.js",
-    "page/settings.js",
     "page/style.css",
     "page/icon.svg",
     "README.md"

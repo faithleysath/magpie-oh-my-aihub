@@ -1,7 +1,7 @@
 {
   "name": "@oh-my-aihub/magpie-plugin",
   "version": "0.6.0",
-  "description": "Local browser console for Magpie native P2P model sharing over EasyTier",
+  "description": "Magpie 的纯后端插件：MCP 工具驱动的私有 EasyTier 组网、签名目录、申请审批与链上 USDC 额度",
   "type": "module",
   "main": "plugin/src/index.ts",
   "repository": {
@@ -24,13 +24,10 @@
   "files": [
     "plugin/package.json",
     "plugin/src/",
-    "plugin/console/",
+    "plugin/page/doc.md",
     "plugin/page/index.html",
-    "plugin/page/app.js",
-    "plugin/page/settings.js",
     "plugin/page/style.css",
     "plugin/page/icon.svg",
-    "plugin/bin/",
     "plugin/README.md",
     "README.md"
   ],

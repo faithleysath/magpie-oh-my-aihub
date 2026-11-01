@@ -3,7 +3,65 @@ import { dirname, join } from "node:path";
 import { magpieDataDir } from "./paths.ts";
 import { run, runOk } from "./run.ts";
 import { registerSecret } from "./log.ts";
-import { unsupportedPriceReason, type UnsupportedPriceReason } from "./pricing.ts";
+
+/**
+ * A price form this plugin cannot freeze; never a zero price.
+ *
+ *  - `peak`: Magpie's 0.1.2289 `catalog.Price` keeps the off-peak price and
+ *    doubles it at the vendor's peak hours. The plugin has no call-time
+ *    multiplier, so treating this price as complete would bill every peak call
+ *    at the off-peak rate.
+ *  - `rate-window`: `provider.rateWindows` is applied before /v1/models answers,
+ *    so the returned number is only today's window.
+ *  - `tier-limit`: more tiers than Magpie's schema accepts.
+ */
+export type UnsupportedPriceReason = "peak" | "rate-window" | "tier-limit";
+
+/** Magpie's catalogue schema accepts at most 10 tiers; bound the check too. */
+const MAX_PRICE_TIERS = 10;
+
+/** Refuses one price object, without looking at its provider. */
+function directUnsupportedPriceReason(price: unknown): UnsupportedPriceReason | null {
+  if (!price || typeof price !== "object" || Array.isArray(price)) return null;
+  const p = price as Record<string, unknown>;
+  // A price object carrying rate windows is not a shape /v1/models writes;
+  // refuse it rather than guessing which window applies.
+  if (Object.hasOwn(p, "rateWindows")) return "rate-window";
+  // An empty `peak` is what Magpie writes for a price that holds at every hour
+  // (`omitempty`), so it is accepted; any non-empty value is refused.
+  if (Object.hasOwn(p, "peak") && p.peak !== undefined && p.peak !== "") return "peak";
+  return null;
+}
+
+/**
+ * The one place that recognizes a price the plugin cannot freeze. Only an empty
+ * array of rate windows is accepted; a missing or partial price is refused by
+ * the caller rather than treated as zero.
+ */
+export function unsupportedPriceReason(
+  price: unknown,
+  provider?: { rateWindows?: unknown } | null,
+): UnsupportedPriceReason | null {
+  if (provider && provider.rateWindows !== undefined) {
+    const windows = provider.rateWindows;
+    if (!Array.isArray(windows) || windows.length !== 0) return "rate-window";
+  }
+  const direct = directUnsupportedPriceReason(price);
+  if (direct) return direct;
+  if (price && typeof price === "object" && !Array.isArray(price)) {
+    const tiers = (price as Record<string, unknown>).tiers;
+    if (Array.isArray(tiers)) {
+      // A finite, non-recursive walk: a tier cannot nest tiers in the supported
+      // schema, and a hostile/cyclic object must not turn this into unbounded work.
+      if (tiers.length > MAX_PRICE_TIERS) return "tier-limit";
+      for (const tier of tiers) {
+        const reason = directUnsupportedPriceReason(tier);
+        if (reason) return reason;
+      }
+    }
+  }
+  return null;
+}
 
 export interface KeyLimit {
   period?: string;
