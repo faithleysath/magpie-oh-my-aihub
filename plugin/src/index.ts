@@ -21,4 +21,8 @@ export default function plugin(_input?: unknown, _options?: unknown): {
   return { tool: TOOLS };
 }
 
-export { boot };
+/**
+ * Test seam. Magpie calls every exported function as a plugin, so helpers live
+ * on an object instead of being exported as functions themselves.
+ */
+export const _internal = { boot };

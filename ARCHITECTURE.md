@@ -165,6 +165,8 @@ remaining   = D − Magpie 原生 used（当前窗口）
 | 只本插件（0.1.2516+） | `http://127.0.0.1:3425/mcp/magpie/tools/magpie-plugin` | `<tool>` |
 | MCP 路由 | `http://127.0.0.1:3425/mcp/magpie/hub/<agent>` | `magpie-plugin__<tool>` |
 
+**插件契约**：入口只导出 default 插件函数；测试辅助放在 `_internal` 对象里，因为 Magpie 会把每个导出函数都当插件调用。工具名匹配 `^[A-Za-z0-9_-]{1,48}$`，MCP 名是 `<短名>_<工具名>`（≤64 字符）；`args` 是 JSON Schema，`execute(args, ctx)` 返回字符串；单次工具最多 55 秒。
+
 **Magpie CLI**：
 
 - `gateway-key limit <id> 3650d --cost <usd>`，`--cost` ≥ `0.0001`；`0` 表示无限额。
@@ -191,7 +193,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/index.ts` | 插件入口。默认导出同步返回 `{tool}` 的 18 个工具，真实工作在后台 `boot()`。 |
+| `src/index.ts` | 插件入口。默认导出同步返回 `{tool}` 的 18 个工具；测试辅助放在 `_internal` 对象里，不额外导出函数。 |
 | `src/runtime.ts` | 一个宿主进程一个运行时：boot 顺序、30 秒目录重签、`cap`/Key 重同步、身份替换、退出钩子。 |
 | `src/config.ts` | `state.json`（version 3）的读写。 |
 | `src/db.ts` | `ledger.sqlite` 五张表和金额换算（整数 micro-USD）。 |
