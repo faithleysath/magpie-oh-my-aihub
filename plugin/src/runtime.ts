@@ -196,11 +196,12 @@ export async function refreshCatalog(runtime: Runtime, resolve: SharedModelResol
   if (catalogRefreshing) return;
   catalogRefreshing = true;
   try {
-    if (runtime.config.network && !runtime.server.listening) {
-      // Where a peer's connection lands depends on the mode: with a device the
-      // kernel delivers it to whatever address it was sent to, so the listener
-      // takes every interface. Through the user-space stack EasyTier rewrites it
-      // to 127.0.0.1, so that is what the listener binds.
+    if (runtime.config.network) {
+      // Where a peer's connection lands depends on the mode, and the mode can
+      // change between passes (a join restarts the core): with a device the kernel
+      // delivers it to whatever address it was sent to, so the listener takes every
+      // interface. Through the user-space stack EasyTier rewrites it to 127.0.0.1.
+      // `start` rebinds only when the host differs, so this is cheap to repeat.
       const mode = runtime.overlay.currentMode();
       runtime.server.start(mode === "tun" ? "0.0.0.0" : "127.0.0.1");
     }

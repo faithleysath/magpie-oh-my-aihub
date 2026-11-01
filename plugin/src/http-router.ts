@@ -1,4 +1,5 @@
-// The one HTTP listener this plugin owns: `<lan>:3426`.
+// The one HTTP listener this plugin owns: port 3426, on the address a peer's
+// connection lands on (every interface with a TUN device, 127.0.0.1 without).
 //
 // Three endpoints, nothing else:
 //   GET  /catalog    the signed directory
@@ -7,8 +8,7 @@
 //
 // Every route is plain HTTP on the overlay: EasyTier encrypts the transport and
 // the network secret is the only door. No CORS, no cookies, no admin surface, no
-// cache. The listener is the LAN address EasyTier exports — never `0.0.0.0`,
-// never loopback in production.
+// cache.
 //
 // Verification is strict: exact field sets, 16 KiB bodies, a ±5 minute clock
 // window, EIP-191 `personal_sign` over `canonicalJson` of the document, and the
@@ -217,25 +217,29 @@ export class DirectoryServer {
     };
   }
 
-  /** Binds `<lanIp>:<controlPort>`. Idempotent; a failed bind is a status detail. */
-  start(lanIp: string | null): boolean {
-    if (!lanIp) {
-      this.bindDetail = "no exportable LAN address (没有可导出的 LAN 地址)";
+  /**
+   * Binds `<host>:<controlPort>`: every interface with a TUN device, `127.0.0.1`
+   * without one (that is where the user-space stack rewrites inbound). Rebinds
+   * when the host changes; a failed bind is a status detail.
+   */
+  start(host: string | null): boolean {
+    if (!host) {
+      this.bindDetail = "no bind address (没有可绑定的地址)";
       return false;
     }
-    if (this.server && this.boundHost === lanIp) return true;
+    if (this.server && this.boundHost === host) return true;
     if (this.server) this.stop();
     try {
       this.server = Bun.serve({
-        hostname: lanIp,
+        hostname: host,
         port: this.opts.controlPort,
         idleTimeout: 10,
         fetch: (req) => this.handle(req),
       });
-      this.boundHost = lanIp;
+      this.boundHost = host;
       this.bindDetail = null;
       logger.info(
-        `directory listening on http://${lanIp}:${this.opts.controlPort}` +
+        `directory listening on http://${host}:${this.opts.controlPort}` +
           `${CATALOG_PATH}, ${REQUEST_PATH} (GET, POST)`,
       );
       return true;
@@ -243,7 +247,7 @@ export class DirectoryServer {
       const message = messageOf(error);
       this.server = null;
       this.boundHost = null;
-      this.bindDetail = `cannot bind ${lanIp}:${this.opts.controlPort}: ${message.slice(0, 200)}`;
+      this.bindDetail = `cannot bind ${host}:${this.opts.controlPort}: ${message.slice(0, 200)}`;
       logger.error(`directory: ${this.bindDetail}`);
       return false;
     }
