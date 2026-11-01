@@ -1,0 +1,31 @@
+{
+  "schema": "ohmyaihub.phase10.final-cleanup/v1",
+  "at": "2026-10-31T14:55:00Z",
+  "owned_roots": [
+    "/tmp/phase10-final-lab",
+    "/tmp/phase10-final-lab2",
+    "/tmp/phase10-final-chain",
+    "/tmp/magpie-2289",
+    "/tmp/eip-old-profile",
+    "/tmp/mm-ext",
+    "/tmp/rabby-ext"
+  ],
+  "roots_absent": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+  ],
+  "lab_proofs": [
+    "lab1-cleanup-proof.json",
+    "lab2-cleanup-proof.json"
+  ],
+  "anvil": "stopped; isolated chain id 84532; no funds; deployment and funding receipts kept in evidence",
+  "browser": "isolated Chrome-for-Testing profile and unpacked MetaMask/Rabby extensions deleted; the user's Chrome/default profile was never used",
+  "user_profile": "the user's Magpie installation, data directory and port 3425 were not touched; all nodes ran from /tmp portable copies",
+  "process_scan": "no easytier-core, lab Magpie web or lab plugin host process remained at cleanup time",
+  "note": "Evidence keeps only public ids/fingerprints/hashes/statuses; no seed, private key, Gateway Key, network secret or session ticket."
+}

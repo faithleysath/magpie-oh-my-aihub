@@ -182,6 +182,12 @@ export interface ProviderPaymentServiceOptions {
    * config binding, so terms always name the consumer's real approval.
    */
   authorizationFor?: (consumerNodeId: string) => { authorizationGeneration: number; quoteHash: string; priceVersion: string } | null;
+  /**
+   * Re-read the wallet registry at frame time. Without this a test asset that
+   * the operator registers after the host started is refused as "provider does
+   * not allow this payment network" until the whole host restarts.
+   */
+  allowedNow?: () => { networks: readonly number[]; assets: readonly PaymentAsset[] };
 }
 
 export interface ConsumerPaymentServiceOptions {
@@ -229,8 +235,12 @@ export class ProviderPaymentService {
   get config(): ProviderPaymentConfig { return this.options.config; }
 
   private allowedAsset(selection: PaymentSelection): void {
-    if (!this.options.config.allowedNetworks.includes(selection.chainId)) paymentFail("authority", "provider does not allow this payment network");
-    if (!this.options.config.allowedAssets.some((asset) => sameJson(asset, selection.asset))) {
+    const allowed = this.options.allowedNow?.() ?? {
+      networks: this.options.config.allowedNetworks,
+      assets: this.options.config.allowedAssets,
+    };
+    if (!allowed.networks.includes(selection.chainId)) paymentFail("authority", "provider does not allow this payment network");
+    if (!allowed.assets.some((asset) => sameJson(asset, selection.asset))) {
       paymentFail("authority", "provider does not allow this asset tuple");
     }
   }

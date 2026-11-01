@@ -1,0 +1,133 @@
+{
+  "schema": "ohmyaihub.phase10.reactivation-delivery/v2",
+  "at": "2026-10-31T16:16:00Z",
+  "platform": "real portable Magpie 0.1.2289 + EasyTier 2.6.4 no-TUN, two nodes one host/LAN",
+  "flow": [
+    "initial approval delivered ($0.05 cap), native Remote p2p-786339993dcbeeb7, 200 call",
+    "provider B revoke -> old key 555d80... removed, old ledger window closed/revoked",
+    "provider host restart (stale sessions) -> consumer new request",
+    "consumer outbox connection_request retried after HTTP 410 stale-session drop (attempts=2, final sent)",
+    "provider explicit re-approval -> reactivation path: new key f12949... + new ledger window + priceVersion bound",
+    "sealed delivery reached consumer -> new Remote p2p-22cf242a21fa71c2, cap $0.05, ACK",
+    "new model call through consumer Magpie gateway: 200, body 'hello from provider'"
+  ],
+  "providerLog": [
+    "2026/11/01 00:09:08 refused GET /v1/models from 192.168.10.84:57264: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:09:08 refused GET /v1/models from 192.168.10.84:57266: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:09:08 refused GET /v1/models from 192.168.10.84:57267: the API key ending in -key is not an enabled magpie gateway key: it is disabled, removed or mistyped",
+    "2026/11/01 00:10:48 refused GET /v1/models from 192.168.10.84:57716: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:11:49 plugin: [oh-my-aihub] 2026-10-31T16:11:49.488Z INFO created gateway key ohmyaihub-4b4ad5d3 (555d80e53e58a1fe60a0519b) for 4b4ad5d3",
+    "2026/11/01 00:11:52 refused GET /v1/models from 192.168.10.84:57928: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:11:52 refused GET /v1/models from 192.168.10.84:57928: the API key ending in mpxq is not an enabled magpie gateway key: it is disabled, removed or mistyped",
+    "2026/11/01 00:12:31 refused GET /v1/magpie/limit from 192.168.10.84:57716: the API key ending in 6432 is not an enabled magpie gateway key: it is disabled, removed or mistyped",
+    "2026/11/01 00:12:31 plugin: [oh-my-aihub] 2026-10-31T16:12:31.857Z INFO revoked gateway key ohmyaihub-4b4ad5d3 (555d80e53e58a1fe60a0519b) enforcement=keyRevoked",
+    "2026/11/01 00:12:48 refused GET /v1/models from 192.168.10.84:58177: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:13:14 refused GET /v1/models from 192.168.10.84:58442: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:13:26 refused GET /v1/models from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:14:40 plugin: [oh-my-aihub] 2026-10-31T16:14:40.824Z INFO reactivating consumer 4b4ad5d3 after an explicit re-approval",
+    "2026/11/01 00:14:41 plugin: [oh-my-aihub] 2026-10-31T16:14:41.224Z INFO ledger account 4b4ad5d3 reactivated with a new window (history preserved)",
+    "2026/11/01 00:14:41 plugin: [oh-my-aihub] 2026-10-31T16:14:41.224Z INFO reactivated gateway key ohmyaihub-4b4ad5d3 (f12949a631f96b64874e113a) for 4b4ad5d3",
+    "2026/11/01 00:14:41 refused GET /v1/magpie/concurrency from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:14:43 refused GET /v1/magpie/concurrency from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:14:44 refused GET /v1/models from 192.168.10.84:58774: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:14:44 refused GET /v1/models from 192.168.10.84:58774: the API key ending in qeqh is not an enabled magpie gateway key: it is disabled, removed or mistyped",
+    "2026/11/01 00:14:46 refused GET /v1/magpie/concurrency from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:14:56 refused GET /v1/magpie/concurrency from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:15:06 refused GET /v1/magpie/concurrency from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:15:16 refused GET /v1/magpie/concurrency from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:15:26 refused GET /v1/magpie/concurrency from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)",
+    "2026/11/01 00:15:36 refused GET /v1/magpie/concurrency from 192.168.10.84:58495: no API key was sent: send a magpie gateway key as Authorization: Bearer <key> (or x-api-key)"
+  ],
+  "consumerRecords": [
+    {
+      "consumerId": "4b4ad5d3",
+      "keyName": "ohmyaihub-4b4ad5d3",
+      "keyId": "f12949a631f96b64874e113a",
+      "capUsd": 0.05,
+      "creditedUsd": 0,
+      "revokedAt": null,
+      "priceVersion": "dcedd5b35bc1757a895501443338ef65e3e3eb4ffdd97f71ae551c5d75ec4db2",
+      "acceptedQuoteHash": "076eecc3d33f158f4a48110670c557d876cbed30ddd837e60d8eb89520cdacb9"
+    }
+  ],
+  "approvals": [
+    {
+      "approval_id": "a9f3ea42eb27f8e74ed616a9b8850f69",
+      "state": "revoked",
+      "generation": 1,
+      "key_id": "555d80e53e58a1fe60a0519b",
+      "key_name": "ohmyaihub-4b4ad5d3"
+    },
+    {
+      "approval_id": "ecb11a47bbe70113a05842ec4fb66859",
+      "state": "acked",
+      "generation": 1,
+      "key_id": "f12949a631f96b64874e113a",
+      "key_name": "ohmyaihub-4b4ad5d3"
+    }
+  ],
+  "ledgerWindows": [
+    {
+      "id": "0e288408-183c-481f-b069-5eafcfd4793e",
+      "consumer_id": "4b4ad5d3",
+      "key_id": "555d80e53e58a1fe60a0519b",
+      "status": "closed",
+      "cap_nanos": 50000000,
+      "opened_at": "2026-10-31T16:11:49.486Z",
+      "closed_at": "2026-10-31T16:12:31.857Z",
+      "close_reason": "revoked"
+    },
+    {
+      "id": "ebf9a115-ba7c-4620-b172-be2c441fe327",
+      "consumer_id": "4b4ad5d3",
+      "key_id": "f12949a631f96b64874e113a",
+      "status": "open",
+      "cap_nanos": 50000000,
+      "opened_at": "2026-10-31T16:14:41.223Z",
+      "closed_at": null,
+      "close_reason": null
+    }
+  ],
+  "consumerOutbox": [
+    {
+      "type": "ack",
+      "state": "sent",
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "type": "connection_request",
+      "state": "sent",
+      "attempts": 2,
+      "last_error": null
+    },
+    {
+      "type": "ack",
+      "state": "sent",
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "type": "connection_request",
+      "state": "sent",
+      "attempts": 1,
+      "last_error": null
+    }
+  ],
+  "newRemote": {
+    "id": "p2p-22cf242a21fa71c2",
+    "capUsd": 0.05,
+    "usedUsd": 0
+  },
+  "call": {
+    "id": "phase9-provider-2",
+    "model": "provider-model",
+    "usage": {
+      "prompt_tokens": 5,
+      "completion_tokens": 7,
+      "total_tokens": 12
+    }
+  },
+  "oneActiveKey": true,
+  "note": "The old key/Remote are gone; the new approval is a new key and the old approval is revoked. The ledger keeps the closed old window; the new window names the new key. The provider lab ledger account key field was stale before the follow-up fix; the fix is covered by the ledger reactivation test."
+}

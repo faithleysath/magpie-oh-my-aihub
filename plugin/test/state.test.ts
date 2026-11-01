@@ -250,3 +250,9 @@ describe("phase-5 catalogue migration", () => {
     expect(loaded.state.config!.catalog.minTopUpUsd).toBe(1);
   });
 });
+
+
+test("an invalid stored nodeId is refused instead of being reused as an identity", () => {
+  writeLegacy({ version: STATE_VERSION, config: { ...legacyProvider.config, nodeId: "ohmyaihub-5b3c05b0" } });
+  expect(() => loadState()).toThrow(/nodeId is not a valid overlay identity/);
+});

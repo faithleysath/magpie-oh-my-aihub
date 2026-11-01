@@ -1,0 +1,159 @@
+{
+  "schema": "ohmyaihub.phase10.final-p2p-calls/v1",
+  "at": "2026-10-31T14:50:00Z",
+  "platform": "macOS 26.6.2 arm64; two portable Magpie 0.1.2289 + EasyTier 2.6.4 no-TUN (single host/LAN)",
+  "model": "p2p-c1f5b0e59ee74282/provider/provider-model",
+  "gateway": "consumer's own Magpie gateway (LAN), sandbox caller key created only for this lab",
+  "note": "No Gateway Key, network secret or wallet secret is included. 200x5 then 429 is Magpie's own budget enforcement; call 7 after provider revoke returns 404 because the Remote model was removed.",
+  "calls": [
+    {
+      "call": 1,
+      "sha256": "9401d515d204d0902d3e4b4874548516c4dfd5f5e706ef38872d23e6c3fb8be8",
+      "body": {
+        "id": "phase9-provider-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "provider-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello from provider"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 5,
+          "completion_tokens": 7,
+          "total_tokens": 12
+        }
+      }
+    },
+    {
+      "call": 2,
+      "sha256": "ee7e4b2175268da1f7d7d8f2259be760c85a18b2a616072e5b63af8f89f262a3",
+      "body": {
+        "id": "phase9-provider-2",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "provider-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello from provider"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 5,
+          "completion_tokens": 7,
+          "total_tokens": 12
+        }
+      }
+    },
+    {
+      "call": 3,
+      "sha256": "019786ac608eb0144616246d37acee2ba8fe119634aaaa9064f8cc0cf0e650bd",
+      "body": {
+        "id": "phase9-provider-3",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "provider-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello from provider"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 5,
+          "completion_tokens": 7,
+          "total_tokens": 12
+        }
+      }
+    },
+    {
+      "call": 4,
+      "sha256": "fd7b06b64616d08fb585cfb084b643e0402d593f0ea68a8f80d77e502f17242b",
+      "body": {
+        "id": "phase9-provider-4",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "provider-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello from provider"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 5,
+          "completion_tokens": 7,
+          "total_tokens": 12
+        }
+      }
+    },
+    {
+      "call": 5,
+      "sha256": "e049c503ea8586f23987da402750a142694dd2bb673068b49fdec663882e181a",
+      "body": {
+        "id": "phase9-provider-5",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "provider-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "hello from provider"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 5,
+          "completion_tokens": 7,
+          "total_tokens": 12
+        }
+      }
+    },
+    {
+      "call": 6,
+      "sha256": "d44097b293a72ce44132890f1fd4216a0ffc6a99cde2f7d05c20cdc5883cc58d",
+      "body": {
+        "error": {
+          "code": null,
+          "message": "Remote magpie: magpie gateway key \"ohmyaihub-5b3c05b0\" has used $0.06 of its $0.05 estimated cost for this 3650-day cycle; it resets at 2036-10-28 22:38 CST",
+          "param": null,
+          "type": "rate_limit_error"
+        }
+      }
+    },
+    {
+      "call": 7,
+      "sha256": "cfacecdc9e2cfc4ab437dd6bdb3d57ffb47aa66330272392d4752a5540218495",
+      "body": {
+        "error": {
+          "code": null,
+          "message": "magpie knows no model \"p2p-c1f5b0e59ee74282/provider/provider-model\"; did you mean consumer/consumer-model? Name a model as provider/model (as /v1/models lists it), a routing group's id or name, or a bare model id (one served by several providers goes to the group magpie found for it, else to the first of them in the Providers order); it has consumer/consumer-model",
+          "param": null,
+          "type": "not_found_error"
+        }
+      }
+    }
+  ]
+}

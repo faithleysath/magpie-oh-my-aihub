@@ -212,7 +212,9 @@ export function modelEvidenceSummary(providers, now = Date.now()) {
 // Zero-file P2P states (B assembly contract, draft). Labels only; no secrets.
 const P2P_INBOUND_LABELS = {
   requested: "待核对", "awaiting-trust": "需要核对身份", "waiting-tofu": "需要核对身份",
-  "awaiting-approval": "待批准", pending: "待批准", approved: "已批准", rejected: "已拒绝", expired: "已过期",
+  "awaiting-approval": "待批准", pending: "待批准", approved: "已批准", acked: "已交付",
+  connected: "已连接", rejected: "已拒绝", expired: "已过期", revoked: "已撤销",
+  "action-needed": "需要处理",
 };
 const P2P_OUTBOUND_LABELS = {
   requested: "等待批准", "awaiting-trust": "等待对方核对身份", "awaiting-approval": "等待批准",
@@ -965,21 +967,31 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
     p2pInboundList.replaceChildren();
     const rows = items(p2pOf().inboundRequests);
     if (!rows.length) { p2pInboundList.append(empty("还没有收到使用请求", "伙伴在“发现”里直接申请后，会在这里出现；不需要文件、端口或密钥。")); return; }
-    for (const request of rows) {
-      const actionable = ["pending", "waiting-tofu", "awaiting-trust", "awaiting-approval", "requested"].includes(request.state);
+    const actionableStates = ["pending", "waiting-tofu", "awaiting-trust", "awaiting-approval", "requested"];
+    const requestDetails = { declined: "这次申请已拒绝；没有创建密钥。", "operator-revoked": "此授权已由你撤销；历史请求与账目保留。", revoked: "此授权已撤销；历史请求与账目保留。", expired: "这次申请已过期；需要重新申请。" };
+    const card = (request, actionable) => {
       const row = el("article", null, "workflow-row");
       const top = toolbar(request.consumerHostname || request.consumerNodeId || "伙伴");
       top.append(badge(P2P_INBOUND_LABELS[request.state] || request.state || "需要处理", actionable ? (request.tofu === "changed" ? "warn" : "info") : "neutral"));
       row.append(top, paragraph(`${items(request.models).length} 个模型 · 建议额度 ${request.capUsd === null || request.capUsd === undefined ? "未提供" : money(request.capUsd)} · 到期 ${when(request.expiresAt)}`));
       row.append(details("完整身份与报价", [["伙伴节点", request.consumerNodeId], ["完整身份指纹", request.consumerFingerprint], ["报价指纹", request.quoteHash], ["价格版本", request.priceVersion], ["身份状态", P2P_TOFU_LABELS[request.tofu] || request.tofu || "未提供"], ["收到时间", when(request.receivedAt)]]));
       if (request.tofu && request.tofu !== "accepted") row.append(el("p", P2P_TOFU_LABELS[request.tofu] || request.tofu, "inline-warning"));
-      if (request.detail) row.append(el("p", request.detail, "inline-warning"));
+      if (request.detail) row.append(el("p", requestDetails[request.state] || requestDetails[request.detail] || "这次请求需要处理；请查看技术详情。", "inline-warning"));
       if (actionable) {
         const actions = el("div", null, "workflow-actions");
         actions.append(button("核对并批准", () => approveP2p(request)), button("拒绝", () => rejectP2p(request)));
         row.append(actions);
       }
-      p2pInboundList.append(row);
+      return row;
+    };
+    const actionable = rows.filter((r) => actionableStates.includes(r.state));
+    const history = rows.filter((r) => !actionableStates.includes(r.state));
+    for (const request of actionable) p2pInboundList.append(card(request, true));
+    if (history.length) {
+      const past = el("details", null, "workflow-details");
+      past.append(el("summary", `历史请求（${history.length}）`), el("p", "已批准、已拒绝、已过期或已撤销的请求按时间保留，只用于核对；不会产生新的密钥。"));
+      for (const request of history) past.append(card(request, false));
+      p2pInboundList.append(past);
     }
   }
   const P2P_APPROVAL_LABELS = { pending: "待交付", approved: "已批准", delivering: "正在交付", delivered: "已交付", revoked: "已撤销", rejected: "已拒绝", expired: "已过期", uncertain: "结果未知" };
@@ -994,7 +1006,8 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
       top.append(badge(P2P_APPROVAL_LABELS[approval.state] || approval.state || "需要处理", needsAction ? "warn" : "neutral"));
       row.append(top, paragraph(`${items(approval.models).length} 个模型 · 额度上限 ${capLabel(approval.capUsd)} · 交付 ${P2P_DELIVERY_LABELS[approval.delivery?.state] || approval.delivery?.state || "未提供"}`));
       row.append(details("授权、交付与身份", [["伙伴节点", approval.consumerNodeId], ["伙伴身份指纹", approval.consumerFingerprint], ["本机节点", approval.providerNodeId], ["本机身份指纹", approval.providerFingerprint], ["报价指纹", approval.quoteHash], ["价格版本", approval.priceVersion], ["代次", approval.generation], ["密钥引用（不透明）", approval.keyId], ["批准时间", when(approval.approvedAt)], ["到期", when(approval.expiresAt)], ["最近错误", approval.delivery?.lastError]]));
-      if (approval.detail) row.append(el("p", approval.detail, "inline-warning"));
+      // The raw transport/protocol error stays in the technical details; the
+      // ordinary line explains the operational consequence.
       if (needsAction) {
         row.append(el("p", "交付结果未知或需要人工处理；不会自动重发或创建第二个密钥。", "inline-warning"));
         const tech = el("div", null, "workflow-actions");
@@ -1137,7 +1150,13 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
         actions.append(button("检查授权", () => void run("consumer-check", { consumerId: consumer.consumerId }, (result) => {
           const current = result.consumer || consumer;
           if (current.paused || !current.acceptedQuoteHash || current.acceptedQuoteHash !== result.currentQuoteHash || current.priceVersion !== result.currentPriceVersion) reissueConsumer(current, result);
-        })), button("交付访问授权", () => revealAuthorization(consumer)), button("调整模型范围", () => editConsumerModels(consumer)), button("撤销授权", () => confirmAction("撤销伙伴授权", "撤销后，此伙伴原有密钥将失效。已有账目会保留。", "consumer-revoke", { consumerId: consumer.consumerId }, "我确认撤销此伙伴的访问授权")));
+        })), button("交付访问授权", () => revealAuthorization(consumer)), button("调整模型范围", () => editConsumerModels(consumer)));
+        // The ordinary revoke lives on the network-authorization card above.
+        // This legacy file-flow consumer has no network approval, so its revoke
+        // stays only as an explicit advanced recovery action.
+        const legacy = el("details", null, "workflow-details");
+        legacy.append(el("summary", "高级：旧版授权撤销"), el("p", "旧版文件授权没有网络审批记录。普通撤销请使用上方网络授权中的“撤销此授权”；这里仅在紧急恢复时使用。", "inline-warning"), button("撤销旧版授权", () => confirmAction("撤销旧版伙伴授权", "撤销后，此伙伴原有密钥将失效。已有账目会保留。", "consumer-revoke", { consumerId: consumer.consumerId }, "我确认撤销此伙伴的访问授权")));
+        actions.append(legacy);
         row.append(actions);
       }
       consumersList.append(row);
@@ -1145,7 +1164,7 @@ export function mountProviders({ client, getState, onState, notice, setBusy, ref
   }
   function editConsumerModels(consumer) {
     openDialog("调整伙伴模型范围", (root) => {
-      root.append(paragraph("只允许选择当前共享的有完整价格的本机模型。模型范围不能为空；停止访问请使用撤销授权。"));
+      root.append(paragraph("只允许选择当前共享的有完整价格的本机模型。模型范围不能为空；停止访问请使用上方网络授权中的“撤销此授权”。"));
       const models = items(state.status.catalog?.quote?.models).filter((model) => items(consumer.models).includes(model.id)).map((model) => ({ ...model, completePrice: priceText(model.pricing) !== "价格不完整，不能授权" }));
       const getModels = modelChoices(root, models, items(consumer.models));
       const agree = checkbox("我确认更新此伙伴的模型范围");

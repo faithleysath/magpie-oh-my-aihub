@@ -1955,6 +1955,10 @@ export class P2pNode {
             this.store.markOutboxSent(row.messageId, at);
             sent += 1;
           } catch (e) {
+            // An explicit 410 means the peer restarted and no longer knows this
+            // session. Discard only that session; the next poll hello opens a
+            // fresh one and the same row (same idempotency) is retried.
+            if (this.isStaleSessionError(e)) this.dropStaleSession(session, "peer-closed-session");
             const result = this.store.markOutboxRetry(row.messageId, at, e instanceof Error ? e.message : String(e), this.retry);
             if (result.dead) dead += 1;
             else failed += 1;
@@ -1993,6 +1997,30 @@ export class P2pNode {
 
   private assertOpen(): void {
     if (this.closed) fail("session_closed", "the P2P node is closed");
+  }
+
+  /**
+   * Only an explicit "this session is gone" verdict may discard a session. A
+   * 400/403/500/timeout is not evidence that the peer restarted, and must keep
+   * the normal bounded retry/backoff.
+   */
+  private isStaleSessionError(error: unknown): boolean {
+    const message = String((error as Error)?.message ?? error);
+    return /\bHTTP 410\b/.test(message) || /session_closed|session closed|session is not open/i.test(message);
+  }
+
+  /** Drop a session the peer explicitly closed so the next hello re-authenticates. */
+  private dropStaleSession(session: P2pSession, reason: string): void {
+    if (!session.closedReason) session.close(reason);
+    this.sessions.delete(session.sessionId);
+    this.pollAuthorized.delete(session.sessionId);
+    this.helloCache.clear();
+  }
+
+  /** Close and remove one session (used by a caller after an explicit 410). */
+  dropSession(sessionId: string, reason = "stale-session"): void {
+    const session = this.sessions.get(sessionId);
+    if (session) this.dropStaleSession(session, reason);
   }
 
   private serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -2414,6 +2442,7 @@ export class P2pNode {
         await this.transport.frame({ sessionId: session.sessionId, peer: session.peer }, frame);
         this.store.markOutboxSent(row.messageId, this.clock());
       } catch (e) {
+        if (this.isStaleSessionError(e)) this.dropStaleSession(session, "peer-closed-session");
         this.store.markOutboxRetry(row.messageId, this.clock(), e instanceof Error ? e.message : String(e), this.retry);
       }
     }

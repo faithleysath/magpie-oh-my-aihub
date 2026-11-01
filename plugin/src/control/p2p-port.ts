@@ -674,6 +674,7 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
         const at = now().toISOString();
         const state = loadApprovals(approvalStateFile);
         const existing = state.approvals.find((a) => a.approvalId === input.approvalId);
+        const native = service.provisioner.find(input.consumer.nodeId);
         if (existing) {
           if (
             existing.requestHash !== input.requestHash ||
@@ -686,7 +687,17 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           ) {
             throw new ControlServiceRefusal("conflict", "the approval id is already bound to a different decision");
           }
-          if (existing.state === "approved") return materialsFrom(existing);
+          if (existing.state === "approved") {
+            // A retry of an approval whose native key was revoked elsewhere is
+            // not a successful idempotent replay: converge the record to
+            // revoked and require a new generation.
+            if (existing.keyId && (!native || native.revokedAt || native.keyId !== existing.keyId)) {
+              const revoked: ApprovalRecord = { ...existing, state: "revoked", error: "the native key was revoked outside this approval; superseded", updatedAt: at };
+              saveApprovals(approvalStateFile, { version: 1, approvals: state.approvals.map((a) => (a.approvalId === existing.approvalId ? revoked : a)) });
+              throw new ControlServiceRefusal("conflict", "this approval's native key is gone; request a new generation");
+            }
+            return materialsFrom(existing);
+          }
           if (existing.state === "revoked") throw new ControlServiceRefusal("conflict", "this approval was already revoked");
           const recovered = recoverApproval(existing, service, at);
           if (recovered) {
@@ -695,11 +706,21 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           }
           throw new ControlServiceRefusal("conflict", "this approval was already attempted and no second key will be created");
         }
-        const sameRequest = state.approvals.find((a) => a.requestHash === input.requestHash && a.state !== "revoked");
+        // An approval whose native key was already revoked through the
+        // legacy operator path (or replaced by another key) is not an active
+        // approval any more: the persisted row may still say "approved", but
+        // the key it named is gone. Keep blocking only while the native key is
+        // still the one this approval issued.
+        const stillActive = (a: ApprovalRecord): boolean => {
+          if (a.state === "revoked") return false;
+          if (!a.keyId) return true;
+          return Boolean(native) && !native!.revokedAt && native!.keyId === a.keyId;
+        };
+        const sameRequest = state.approvals.find((a) => a.requestHash === input.requestHash && stillActive(a));
         if (sameRequest) {
           throw new ControlServiceRefusal("conflict", "this request already has an approval attempt; do not create a second key");
         }
-        const sameConsumer = state.approvals.find((a) => a.consumerNodeId === input.consumer.nodeId && a.state !== "revoked");
+        const sameConsumer = state.approvals.find((a) => a.consumerNodeId === input.consumer.nodeId && stillActive(a));
         if (sameConsumer) {
           throw new ControlServiceRefusal("conflict", "this consumer already has an active approval; revoke it before a new one");
         }
@@ -710,7 +731,20 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
         const pending = recordFor(input, at);
         pending.priceVersion = selectedPrice;
         pending.expiresAt = new Date(now().getTime() + 10 * 60_000).toISOString();
-        saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, pending] });
+        // Keep the durable record truthful: an approval made inactive by a
+        // revoke outside this port is marked revoked before a new generation
+        // is added, so it cannot be mistaken for a live authorization later.
+        const superseded = new Set(
+          state.approvals
+            .filter((a) => a.consumerNodeId === input.consumer.nodeId && a.state !== "revoked" && !stillActive(a))
+            .map((a) => a.approvalId),
+        );
+        const records = state.approvals.map((a) =>
+          superseded.has(a.approvalId)
+            ? { ...a, state: "revoked" as const, error: "the native key was revoked outside this approval; superseded", updatedAt: at }
+            : a,
+        );
+        saveApprovals(approvalStateFile, { version: 1, approvals: [...records, pending] });
         const expiresAt = pending.expiresAt;
         let materials: P2pApprovedMaterials;
         try {
@@ -746,11 +780,11 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           // clear so the operator can retry after fixing the quote.
           const recovered = recoverApproval(pending, service, now().toISOString());
           if (recovered) {
-            saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, recovered] });
+            saveApprovals(approvalStateFile, { version: 1, approvals: [...records, recovered] });
             return materialsFrom(recovered);
           }
           if (!service.provisioner.find(input.consumer.nodeId)) {
-            saveApprovals(approvalStateFile, { version: 1, approvals: state.approvals });
+            saveApprovals(approvalStateFile, { version: 1, approvals: records });
           } else {
             const failed: ApprovalRecord = {
               ...pending,
@@ -758,7 +792,7 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
               error: String((error as Error)?.message ?? error).slice(0, 300),
               updatedAt: now().toISOString(),
             };
-            saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, failed] });
+            saveApprovals(approvalStateFile, { version: 1, approvals: [...records, failed] });
           }
           throw error;
         }
@@ -774,7 +808,7 @@ export function createP2pBusinessPort(service: Service, options: P2pBusinessPort
           error: null,
           updatedAt: now().toISOString(),
         };
-        saveApprovals(approvalStateFile, { version: 1, approvals: [...state.approvals, approved] });
+        saveApprovals(approvalStateFile, { version: 1, approvals: [...records, approved] });
         return materials;
       });
     },

@@ -69,7 +69,7 @@ export class P2pLab {
   storeB: P2pStore;
   A!: P2pNode;
   B!: P2pNode;
-  readonly faults: LabFaults & { disableProviderPush?: boolean } = {};
+  readonly faults: LabFaults & { disableProviderPush?: boolean; staleFrameOnce?: boolean } = {};
   readonly calls = {
     validate: 0,
     approve: 0,
@@ -138,6 +138,10 @@ export class P2pLab {
       canPush: (peer) => !(self === "B" && this.faults.disableProviderPush),
       frame: async (session, frame) => {
         this.sentFrames.push({ sessionId: session.sessionId, from: self, frame: Buffer.from(frame) });
+        if (self === "A" && this.faults.staleFrameOnce) {
+          this.faults.staleFrameOnce = false;
+          throw new Error("control frame HTTP 410");
+        }
         if (self === "B" && this.faults.disableProviderPush) throw new Error("provider push disabled for poll test");
         const targetNode = self === "A" ? this.B : this.A;
         await targetNode.handleFrame(session.sessionId, frame);

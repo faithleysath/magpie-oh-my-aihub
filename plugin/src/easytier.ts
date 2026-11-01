@@ -450,6 +450,8 @@ export function relocationDecision(i: RelocationInput): { relocate: boolean; pen
 
 export interface SupervisorOptions {
   lanIp?: () => string | null;
+  /** Only the host-lock owner may start, adopt, restart or stop the core. */
+  ownsHost?: () => boolean;
   /** injected for tests; production always verifies the downloaded binaries */
   binaries?: Binaries;
   /** how long start() waits for the owned RPC portal (tests shorten it) */
@@ -478,6 +480,7 @@ export class EasytierSupervisor {
   private bin: Binaries | null = null;
   /** the ownership probe used by waitForRpc and every refresh */
   private ownership: SocketOwnershipProbe;
+  private readonly ownsHost: () => boolean;
   private rpcTimeoutMs: number;
   /** start marker of the supervised process, never taken from stale state alone */
   private processStart: string | null = null;
@@ -503,6 +506,7 @@ export class EasytierSupervisor {
     this.opts = opts;
     this.lanIpSource = opts.lanIp ?? safeLanIp;
     this.ownership = opts.probe?.socketOwner ?? new OsSocketOwnership();
+    this.ownsHost = opts.ownsHost ?? (() => true);
     this.rpcTimeoutMs = Math.max(200, opts.rpcTimeoutMs ?? 20_000);
     this.probe = {
       nodeInfo: opts.probe?.nodeInfo ?? (() => this.nodeInfo()),
@@ -560,6 +564,11 @@ export class EasytierSupervisor {
    * host take over a core that is already up instead of fighting it.
    */
   async start(cfg: EasytierConfig): Promise<SupervisorState> {
+    if (!this.ownsHost()) throw new Error("this supervisor instance does not own the host; refusing to start or adopt the overlay core");
+    if (process.env.OH_MY_AIHUB_TRACE === "1") {
+      const caller = (new Error().stack ?? "").split("\n").slice(2, 4).map((l) => l.trim()).join(" | ");
+      logger.info(`trace supervisor.start running=${this.state.running} ${caller}`);
+    }
     if (this.state.running) await this.stop();
     this.stopping = false;
     this.cfg = cfg;
@@ -609,15 +618,28 @@ export class EasytierSupervisor {
             `(recorded ${JSON.stringify(persisted.process.processStart)}, now ${JSON.stringify(currentStart)})`,
         );
       }
-      logger.info(`adopting running easytier-core pid ${persisted.process.pid}`);
-      this.state.pid = persisted.process.pid;
-      this.state.startedAt = persisted.process.startedAt || new Date().toISOString();
-      this.state.running = true;
-      this.state.rpcPort = cfg.rpcPort;
-      this.processStart = currentStart;
-      this.startMonitor();
-      await this.refresh();
-      return this.snapshot();
+      // A running core that still carries a different hostname is not the
+      // identity the current state/config names. Do not adopt it silently: stop
+      // this owned core and start it again from the freshly rendered TOML so the
+      // ET hostname, catalogue identity and self-connect guard agree.
+      const observedHost = await this.probe.nodeInfo()
+        .then((info) => extractToml(info.config, "hostname"))
+        .catch(() => null);
+      if (observedHost && observedHost !== overlayHostname(cfg)) {
+        logger.warn(`running core reports hostname ${observedHost}, not ${overlayHostname(cfg)}; restarting with the canonical identity`);
+        await this.stop();
+        this.stopping = false;
+      } else {
+        logger.info(`adopting running easytier-core pid ${persisted.process.pid}`);
+        this.state.pid = persisted.process.pid;
+        this.state.startedAt = persisted.process.startedAt || new Date().toISOString();
+        this.state.running = true;
+        this.state.rpcPort = cfg.rpcPort;
+        this.processStart = currentStart;
+        this.startMonitor();
+        await this.refresh();
+        return this.snapshot();
+      }
     }
 
     const version = (await run([this.bin.core, "--version"], { timeoutMs: 10_000 })).stdout.trim();
@@ -740,6 +762,14 @@ export class EasytierSupervisor {
   }
 
   async stop(): Promise<void> {
+    if (!this.ownsHost()) {
+      logger.warn("non-owner supervisor stop: leaving the shared overlay core untouched");
+      return;
+    }
+    if (process.env.OH_MY_AIHUB_TRACE === "1") {
+      const caller = (new Error().stack ?? "").split("\n").slice(2, 4).map((l) => l.trim()).join(" | ");
+      logger.info(`trace supervisor.stop pid=${this.state.pid} ${caller}`);
+    }
     this.stopping = true;
     if (this.timer) {
       clearInterval(this.timer);
@@ -1152,6 +1182,10 @@ export class EasytierSupervisor {
 
   /** Stops an owned core that cannot be proven safe, and keeps it stopped. */
   private async haltUnsafe(problems: string[]): Promise<void> {
+    if (!this.ownsHost()) {
+      logger.error(`non-owner runtime check found ${problems.join("; ")}; not stopping a core this instance does not own`);
+      return;
+    }
     this.state.lastError = `refusing to serve: ${problems.join("; ")}`;
     this.state.aclOk = false;
     this.state.aclProblems = problems;

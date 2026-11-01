@@ -1,0 +1,1100 @@
+{
+  "schema": "ohmyaihub-phase9-isolated-lab/v1",
+  "at": "2026-10-31T16:17:44Z",
+  "repoHead": "29a4a3b5e24ce2bd58f17ac21ef085fa3d1abb7d",
+  "sourceReference": {
+    "repoHead": "70b8423883f0dcbd8a74f1ce6fa934f37c519fc5",
+    "scope": "current working-tree production files"
+  },
+  "platform": {
+    "os": "Darwin",
+    "release": "25.6.0",
+    "arch": "arm64"
+  },
+  "magpieVersion": "0.1.2289",
+  "magpieSourceSha": "5c637f17b25dad63c490b1edf242c11a83b1b059",
+  "hostBun": {
+    "version": "1.4.4",
+    "sha256": "0a2237cdcfa0d16ef501d9acca9f0026309ef348bea7393a64e8d1e3609565cc",
+    "origin": "Magpie-managed cache fixture"
+  },
+  "billingPin": "0.1.2038",
+  "compatibility": "UNKNOWN until actor acceptance",
+  "easytier": {
+    "version": "2.6.4",
+    "commit": "8428a89d2dabc94c97d370ec607c6ca142473626",
+    "binaryHashes": {
+      "easytier-core": "6478a522b8637e2bd2ad3adad66ed04a71b35f832bd9889bffaf1863262f6ddf",
+      "easytier-cli": "c700c4fee1a7f35fcc1a048520d40cea477b6cf7bf6d75f423fe1642c1ebc75d"
+    }
+  },
+  "nodes": {
+    "provider": {
+      "ports": {
+        "web": 43620,
+        "gateway": 20516,
+        "upstream": 36056,
+        "listen": 36616,
+        "catalog": 25913,
+        "socks": 20110,
+        "api-port": 34517,
+        "console-port": 57319,
+        "rpc": 17914
+      },
+      "binarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
+      "readiness": {
+        "at": "2026-10-31T16:09:08Z",
+        "webReachable": true,
+        "webLoopbackOnly": true,
+        "gatewayNoKeyStatus": 401,
+        "gatewayWrongKeyStatus": 401,
+        "pluginInstalledByHarness": false
+      },
+      "runningPids": [
+        83131,
+        83132,
+        92694,
+        92759
+      ],
+      "package": {
+        "schema": "ohmyaihub-phase9-isolated-lab/v1",
+        "files": {
+          "README.md": "a5f238d647566ca1343ac20810effa91cf105402f6a4121cf53a0b3a5bf1e559",
+          "package.json": "63e3e3a8c3773279a5214c4239fd86ac4b2a177444ff70b1f2bcb727da043c6c",
+          "plugin/.gitignore": "4f7c54d23c1248dd69990ea2333770e7e07e88319fce314bdf2c9e50900f86d7",
+          "plugin/README.md": "2eb8cdd3c5b2d92dc39011e2d03208df3082ed8274833b341cad2dde25e91be6",
+          "plugin/bin/ohmyaihub.ts": "61c56b527babdc379e7009c8834e2417da0bbf43cda6463b682731f6cb02d023",
+          "plugin/bin/operator-connect.ts": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+          "plugin/bin/operator-lib.ts": "6e7f4175b78e2723a9ab2106839735836902852ffc632b2a7f6a89b305be8ab0",
+          "plugin/bin/operator-remote.ts": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+          "plugin/bin/operator-setup.ts": "d6922e6cead7512f99e8c019b691eeaa65feb466c681b8d921372f63c8626d11",
+          "plugin/bin/operator-share.ts": "44ccc5867e9eb94d4a83c8d32a88f76dbf0b26a7b8fa74f00b82ea7f0c8a3fdc",
+          "plugin/bin/wallet-wizard.ts": "44547745139b09e83a723a326f5a6114c556e1bc0c58a7f8a63009e6b8359f35",
+          "plugin/bunfig.toml": "10a3f62d65ae46a855ce1b30f10f73d6c5e97beb42fc4b330e7e8f0f7a0c3c84",
+          "plugin/console/app.js": "20d5454d8b96c0496fd8b574c3c3c76aea9cd646baf324bab700bfec9cf2952a",
+          "plugin/console/app.test.js": "09f0a1e263a04fcf107836b240d895a3dbfa990dab450f68896cd0f9cb17f470",
+          "plugin/console/external-wallet.js": "55e65ab63ef2924ad5f9b198902187f0657524f96c0a46b6679929a338a8f4a2",
+          "plugin/console/external-wallet.test.js": "728d089616a2e063b75c0c5296bfa0bde7a01e08ca14bc07fa215b0705f7024c",
+          "plugin/console/index.html": "65902b02aebf2b6a184765e934f838f03739212d98cdeb2cbdeb0e149056fb51",
+          "plugin/console/network.js": "73d4a773fd6f6d56d637c4e93f08fc6fe6d972771d9ba24521fd7db1fea0386c",
+          "plugin/console/network.test.js": "f41016af9c3f7f80cca8b80d1c7a8c54ab5f3a5bcd5e50a2514e7e7c8f9342b2",
+          "plugin/console/payment-local-port.js": "83f3ae171a89ba19add1123b4e83523b02fce431dcad2b9b06d425fc09d95c4a",
+          "plugin/console/payment-local-port.test.js": "a67789784196c98ba7530bdb97b402b688cb0d2539e6107ca263a68a7c276869",
+          "plugin/console/payment-p2p-ui.js": "ba32c4d8a8890dedf06aceff12cc4fc080cd65c93e2ef92e353cca6c926cbe5b",
+          "plugin/console/payment-p2p-ui.test.js": "8662387ded6658b1b48b203841af272e33e46ee68e72d45b5bab746e14e0f551",
+          "plugin/console/providers.js": "21ca0b0c03fb0e90845854bc2384a1f1853a7a275402e3448b10a3721cc35492",
+          "plugin/console/providers.test.js": "7350e008c72e501d1ec8f98c538383a40cdeccd9cc77fd8df37ff9dca14e31fb",
+          "plugin/console/session.js": "b523b122f395d8cc9d786ee2a587c0e6d48a5cb028acbb29ef7a7066d0c20cd3",
+          "plugin/console/session.test.js": "bd96417bf26ca56288f34dc8d6e93431f95707c55cce2fb001132d671100871c",
+          "plugin/console/shell.test.js": "8c9ce0fd2e6ef67a96bb51db827491201b3c90221aa3a193c9cb13547c070962",
+          "plugin/console/style.css": "8c0ba8394e267f68cb28851cb9c1a0dd2e4c5d800ecbd7b1c6dd2ff6cca6068a",
+          "plugin/console/wallet-network-ui.js": "c77a7535ab269ab73637d0b840e723d885217a8a687464eaf4ae04953e9d40ce",
+          "plugin/console/wallet-network-ui.test.js": "d05e60c4d1eb7dc90c1c3119eee20d11a738e51f2c59110d8ce11b3033a53abc",
+          "plugin/console/wallet-vault-ui.js": "f0d590a9d13c51273d7eb9367a5bd9055d856a5a27fae511cbd406deb6231391",
+          "plugin/console/wallet-vault-ui.test.js": "d5e127c429f3f8ee0bc28a26abdeab4915a5f175edbea0781e1bfdf8b144bb72",
+          "plugin/console/wallet.js": "a27d3af6d1b8c931b6f5d109525de580bc2258a19b1d8ab54259c5a9125a32c2",
+          "plugin/console/wallet.test.js": "a07b47c47972f9274319a6e75341849a9c91f98bd80f5ff618704bdef5c26382",
+          "plugin/demo/mock-topup.sh": "e2da5feee92d941f74f2a95dfaa78cddba43e736bed7ae746c7b025607360905",
+          "plugin/package.json": "b4dfd2a88c7492b37a56f58f99691ee164acab2b1338c69506afd5d7c814df93",
+          "plugin/page/app.js": "0fd835be0b0dcda43407886226bf657b4d86a3383a1c44eb33ad2aa989cd6c6d",
+          "plugin/page/icon.svg": "b54786387431d9068a3899542ddaffcc98ca81cfb537d0abf63aae99a70a9095",
+          "plugin/page/index.html": "d60f04e496f3686ac725cab1860186c25364eee3ac0d89f59342e97eece901a3",
+          "plugin/page/settings.js": "097275edcce74491ede48f74b5a15418708348bf81a98240aaad1f8031839024",
+          "plugin/page/style.css": "bcabe4d08f4a7c70c59a4411e4395e307b2d130cacf728a08a6ad26b972a84c9",
+          "plugin/src/acl.ts": "b537f86936877408637409dd74b31d7e3a91f5ee738a4911186ec6782f5ef148",
+          "plugin/src/addresses.ts": "c627b67dd46850bb3a59815450b270b2f0b8203195f971656d73e82ebe6a0b1c",
+          "plugin/src/catalog.ts": "105a2327bf968c69f6a622bea4b244bd40619fdf0628a2d0875862f8692a3ef2",
+          "plugin/src/chainstore.ts": "41e519f41276a1bab53b07be3d1277255acbc748462252f1787f206134abe4a5",
+          "plugin/src/connection-request.ts": "a99d4c68fc2c24536db846c203da0c293faa485f5fc780961c5377871f48cc77",
+          "plugin/src/console-api.ts": "6ed7b6e492fb22c40d5df5238cc0b82a4295ba0a39fadb3c3ac425841784e5df",
+          "plugin/src/console-launch.ts": "0d681506e01ea4292d5234f19904ac076241be2e955057f53616f12cf97c62f2",
+          "plugin/src/console-network.ts": "68b96d1cb8538f8bb8e812c35d1c92bf83e4b04a7b95b54d58365da991195282",
+          "plugin/src/console-pairing.ts": "7244f6d3fb15cabc0a00aecb79151f106fb59c79ec618128a115385bc1043801",
+          "plugin/src/console-server.ts": "cf9fb707520bc17e631a1cc3935460c9de05206b752695510667e8c3e938ebb3",
+          "plugin/src/console-wallet.ts": "0a7f744852f35c7e7d11802edd2983cce89ede9a11ba719c431a633a13605457",
+          "plugin/src/console-workflows.ts": "026f2ccc20f51af44900338b2f7397fd38867fae902891289cc5d0877ab0a346",
+          "plugin/src/control/app.ts": "4476f3cb8ffd56c7a62b8403c875a1d70de377fb0b5885bf97492d7241e618cf",
+          "plugin/src/control/http.ts": "2709885819d8d392f863b11425811fd7d9d9d2d5faf79a996369e4473bdcae8c",
+          "plugin/src/control/p2p-port.ts": "2f3973a5b51684510e27d7798ae7d2ff03587852617f497c0f56758f15887bf7",
+          "plugin/src/control/presence-trust.ts": "d1abafd72d2a26edd3cabc5bc6db7d890bc6aa7c005615aae7458124889b3900",
+          "plugin/src/control/presence.ts": "90c995928d4b797e34e16ec3ebe05da1c5e661f31f4ef605a13d74b1f57e2ba1",
+          "plugin/src/control/service-port.ts": "713dfd583104c9aa64de26c10a013c896930296c060569cca0e34abaef46a438",
+          "plugin/src/deposits.ts": "6f9e1410ddcbb56f25bc82c4c60387967c531d260c9ef12d95ddbac7a996d002",
+          "plugin/src/easytier-manifest.ts": "0ff7eae45720f10b749f0c35d0390f0205fb2dc762152755d641a9c02c445ae8",
+          "plugin/src/easytier.ts": "daf3ad494014aa1a849a63008fa991e786bc2857d1349a217a3312c4065cab95",
+          "plugin/src/eip712.ts": "b0dd433ce64d0f74fc6106f61770570db9c79d8d95cd7256a69b9063a6ee0879",
+          "plugin/src/evm.ts": "948919a9c7661d01452f9cff675454d7429e3b7ea0b8e2197b4be850e81910ae",
+          "plugin/src/index.ts": "0424b23d00e4b3ef67b0ff3387a81bf8629b78b58ec8e1591421c37f0dce60fd",
+          "plugin/src/keccak.ts": "583be0b547e70b5b4eb09b7f8605fa89181bad7c5d9f552ce3e0a82a25242226",
+          "plugin/src/ledger.ts": "51c95bc7d7133e16e705c1ff9d4dcf934f99e349ba98105244dc9f2915fafdac",
+          "plugin/src/legacy-recovery.ts": "106be6de2c3a5df60d3448054e3828fe08901a4f1158392b812ff16e0aa2c7bd",
+          "plugin/src/lock.ts": "8646f8197e1fc19654c95e88b5c83d1c036048762f1e82f2f9f9c2a41c39b4b7",
+          "plugin/src/log.ts": "cf88df38324e641050493a71d7950a3e910b7e34f6ac865d3a5a89428014ee15",
+          "plugin/src/magpie.ts": "33d286c6002c5e378c9152b5c69e5bf113e1510903255f4ef21fe28c63a917c4",
+          "plugin/src/mainnet-gate.ts": "04afc6675c2b8140da54515f7f4e1710fcfe3beec1c0d49f0a72f3eb7e9d52b0",
+          "plugin/src/mainnet-surface.ts": "c181dc9d1fd80386fe0eafd5a13f179dbd36989244c2b16a094efbdc81b56d2d",
+          "plugin/src/network.ts": "e58aab953f9ad3e2ddf87b9c94a6d605f5706f3a873ef3e27618c479f3ca4e93",
+          "plugin/src/networks.ts": "676ddde5846173694f895c0e1f8aca9319c719a8cf44771d6fe303e947264680",
+          "plugin/src/p2p/crypto.ts": "edbbdd0650bd0960aa832feb38d1e367c0947e67bae13fa4211da50b89f71e98",
+          "plugin/src/p2p/handshake.ts": "77854e773d3b2701d35d156ef4ec261c46f00b248bf692971831e2b91346ff6f",
+          "plugin/src/p2p/identity.ts": "528c8341beda72185fce5445f36bc224d3803c38f89f2cefac0a00ce409c4f4c",
+          "plugin/src/p2p/index.ts": "d973ecb75aebadfd937fd4dc3b7fb8cfbd2b5de622eb857572c5ff747f019e6d",
+          "plugin/src/p2p/node.ts": "71e8d3091b2b0e479f2c8d9e3531bb8b3997443421014cef28260494fe60eb60",
+          "plugin/src/p2p/protocol.ts": "a4a951031edf87da01e6c844d99975c7a916e8555dc0d1481e29cdf523a0be41",
+          "plugin/src/p2p/session.ts": "4c67d364ba1451443ebfec17dffa2ccba012fc4cfec2329d96dbd68c4d541b36",
+          "plugin/src/p2p/store.ts": "e6be3a79a2df8a3513231faf0c6edc749f204c4c471480b2c4c5c30c665650d4",
+          "plugin/src/p2p-payment-protocol.ts": "6615b88f2163ca2986bfc7018743e070253456b1fc0bee92f0ae8d986661ccd0",
+          "plugin/src/p2p-payment-store.ts": "9826435cebdc5aa979f3acaf575d465ba73620a11a183c5595693a585a492396",
+          "plugin/src/p2p-payment.ts": "eb4f6ef1d86efc8be087238932c2c1deb81fe098218338a779b87ea3055520c3",
+          "plugin/src/page-snapshot.ts": "ffcafdcba5d527738b67f56268038a7354dbfca43df98b71cea433005f884b0b",
+          "plugin/src/paths.ts": "469b52617d90f88dcffa5e29216b0b76889a31c8f0fe9c34659c8bb079123a2d",
+          "plugin/src/payment-local-service.ts": "3bac892cbc773740c5eb23ddc2173a9ffc80ac35edf8ede38caafbadc58eb6ad",
+          "plugin/src/payment-operations.ts": "3c58fe14d0f65a4c92572aa55984e84c214ebe8c99b04ec480f91d550eaf95f6",
+          "plugin/src/payment-p2p-host.ts": "3a9942104e5fabcf06d535e70f5cdcf3b007e758b1edc4d5c5d284d2cb1a9c3f",
+          "plugin/src/plugin-options.ts": "2b0b251226ce4a81fa431e01d8fb77907ee3f53769b9192863bfdfae72c468d6",
+          "plugin/src/ports.ts": "73b5d4b9cdddbc45b5d4a4a4508d11670ab6e156ef5c635482d5a17df413b3b1",
+          "plugin/src/pricing.ts": "ddf47ba523894e8b8064f65ae7d6fbb0f79eafc6118617ea1594cc9aee4f9b47",
+          "plugin/src/provisioner.ts": "a2116c827ec7987492678cdd8bf9e1d299c12d634cb19d0ea4e9c660ee099845",
+          "plugin/src/readonly-balance.ts": "c59d00196619c85cd1f6467f79ae53c30ceee97f15be39f4473558e167c73630",
+          "plugin/src/receiving-networks.ts": "f3f607c5bc453c4ec81ee5f747a7bd1b3ca3189f97b2d07c8d459bddb4c1e15d",
+          "plugin/src/run.ts": "4d537776f825b0a7f76f262772f01bb651630e1712cd67a518e4060faf1f77c7",
+          "plugin/src/secp256k1.ts": "4af540c69f077fc8b84478e5fee8f30ee153985ea78a5b2691e0a480e87aa60a",
+          "plugin/src/server.ts": "66ff7908e6a8829d57ae0baf038ae5dc28aabada896fb5fd46172a57f20baca2",
+          "plugin/src/service.ts": "4381b14cdd38f6f64028d61fa3e306ef7c24f4da6ed089bc4a94e85d825a29fa",
+          "plugin/src/state.ts": "f8b58399ac8c1c9a59b45e541c33ed218fbbc6437d8a4db7bd6c839dedf66d16",
+          "plugin/src/store.ts": "83fc0c0a267e43bcf639830dd2abbd50a44202b65a0e8ef5fbcb854a733c9f2c",
+          "plugin/src/wallet-local-service.ts": "5b2a91f7148454f7efd9dc239bca3b687462aa4aacc5e722e0b52db43c6b0345",
+          "plugin/src/wallet-payment-send.ts": "036c59a5ee0fc4e9bf4edcc7dec6a5489b8fd93d0c595fd45c49eea55f3a09d4",
+          "plugin/src/wallet-vault.ts": "8664a006352e87d9d23b1a2f4ff8ccc5d133ab18ece6c0d68762bb5e702ebb63",
+          "plugin/src/wallet-workflows.ts": "c331d6a089fbf923ab159a93e8ccc9d526d32b42b1334584bc3e80c533bae597",
+          "plugin/src/wallet.ts": "6b09c39c797f9edd1cfe12e61254a7d0fb0835dbb999256c4aca348af41ab834",
+          "plugin/src/walletamount.ts": "671db303b6dde34273883a98d5eb39ecf658a63825c73d3d3adc9e1040b68486",
+          "plugin/src/walletstatement.ts": "d150925238388db9b56cbc92e049447ca044534f79337ec4524f6cb6bbba3f88",
+          "plugin/src/walletview.ts": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+          "plugin/src/watcher.ts": "f6d75cbe55cd554feb541bd47f08e5c2e077ff90d4fce73b0280e9cb91e6cf46",
+          "plugin/tsconfig.json": "d01a79d1f5cb83a208abf1cd8db618522f2a5389c1e8b7d873f7e9ec65c6ce73"
+        },
+        "at": "2026-10-31T16:09:05Z"
+      },
+      "packageEvidenceRole": "fixture copy only; actual installation is recorded separately",
+      "actualInstalledSource": {
+        "status": "MISMATCH",
+        "installedKind": "local",
+        "installedSpec": "<owned local package>",
+        "entryMain": "plugin/src/index.ts",
+        "matchCount": 73,
+        "mismatchCount": 1,
+        "files": {
+          "package.json": {
+            "installedSha256": "63e3e3a8c3773279a5214c4239fd86ac4b2a177444ff70b1f2bcb727da043c6c",
+            "repoSha256": "63e3e3a8c3773279a5214c4239fd86ac4b2a177444ff70b1f2bcb727da043c6c",
+            "matches": true
+          },
+          "plugin/console/app.js": {
+            "installedSha256": "20d5454d8b96c0496fd8b574c3c3c76aea9cd646baf324bab700bfec9cf2952a",
+            "repoSha256": "20d5454d8b96c0496fd8b574c3c3c76aea9cd646baf324bab700bfec9cf2952a",
+            "matches": true
+          },
+          "plugin/console/external-wallet.js": {
+            "installedSha256": "55e65ab63ef2924ad5f9b198902187f0657524f96c0a46b6679929a338a8f4a2",
+            "repoSha256": "55e65ab63ef2924ad5f9b198902187f0657524f96c0a46b6679929a338a8f4a2",
+            "matches": true
+          },
+          "plugin/console/index.html": {
+            "installedSha256": "65902b02aebf2b6a184765e934f838f03739212d98cdeb2cbdeb0e149056fb51",
+            "repoSha256": "65902b02aebf2b6a184765e934f838f03739212d98cdeb2cbdeb0e149056fb51",
+            "matches": true
+          },
+          "plugin/console/network.js": {
+            "installedSha256": "73d4a773fd6f6d56d637c4e93f08fc6fe6d972771d9ba24521fd7db1fea0386c",
+            "repoSha256": "73d4a773fd6f6d56d637c4e93f08fc6fe6d972771d9ba24521fd7db1fea0386c",
+            "matches": true
+          },
+          "plugin/console/payment-local-port.js": {
+            "installedSha256": "83f3ae171a89ba19add1123b4e83523b02fce431dcad2b9b06d425fc09d95c4a",
+            "repoSha256": "83f3ae171a89ba19add1123b4e83523b02fce431dcad2b9b06d425fc09d95c4a",
+            "matches": true
+          },
+          "plugin/console/payment-p2p-ui.js": {
+            "installedSha256": "ba32c4d8a8890dedf06aceff12cc4fc080cd65c93e2ef92e353cca6c926cbe5b",
+            "repoSha256": "ba32c4d8a8890dedf06aceff12cc4fc080cd65c93e2ef92e353cca6c926cbe5b",
+            "matches": true
+          },
+          "plugin/console/providers.js": {
+            "installedSha256": "21ca0b0c03fb0e90845854bc2384a1f1853a7a275402e3448b10a3721cc35492",
+            "repoSha256": "21ca0b0c03fb0e90845854bc2384a1f1853a7a275402e3448b10a3721cc35492",
+            "matches": true
+          },
+          "plugin/console/session.js": {
+            "installedSha256": "b523b122f395d8cc9d786ee2a587c0e6d48a5cb028acbb29ef7a7066d0c20cd3",
+            "repoSha256": "b523b122f395d8cc9d786ee2a587c0e6d48a5cb028acbb29ef7a7066d0c20cd3",
+            "matches": true
+          },
+          "plugin/console/style.css": {
+            "installedSha256": "8c0ba8394e267f68cb28851cb9c1a0dd2e4c5d800ecbd7b1c6dd2ff6cca6068a",
+            "repoSha256": "8c0ba8394e267f68cb28851cb9c1a0dd2e4c5d800ecbd7b1c6dd2ff6cca6068a",
+            "matches": true
+          },
+          "plugin/console/wallet-network-ui.js": {
+            "installedSha256": "c77a7535ab269ab73637d0b840e723d885217a8a687464eaf4ae04953e9d40ce",
+            "repoSha256": "c77a7535ab269ab73637d0b840e723d885217a8a687464eaf4ae04953e9d40ce",
+            "matches": true
+          },
+          "plugin/console/wallet-vault-ui.js": {
+            "installedSha256": "f0d590a9d13c51273d7eb9367a5bd9055d856a5a27fae511cbd406deb6231391",
+            "repoSha256": "f0d590a9d13c51273d7eb9367a5bd9055d856a5a27fae511cbd406deb6231391",
+            "matches": true
+          },
+          "plugin/console/wallet.js": {
+            "installedSha256": "a27d3af6d1b8c931b6f5d109525de580bc2258a19b1d8ab54259c5a9125a32c2",
+            "repoSha256": "a27d3af6d1b8c931b6f5d109525de580bc2258a19b1d8ab54259c5a9125a32c2",
+            "matches": true
+          },
+          "plugin/page/app.js": {
+            "installedSha256": "0fd835be0b0dcda43407886226bf657b4d86a3383a1c44eb33ad2aa989cd6c6d",
+            "repoSha256": "0fd835be0b0dcda43407886226bf657b4d86a3383a1c44eb33ad2aa989cd6c6d",
+            "matches": true
+          },
+          "plugin/page/index.html": {
+            "installedSha256": "d60f04e496f3686ac725cab1860186c25364eee3ac0d89f59342e97eece901a3",
+            "repoSha256": "d60f04e496f3686ac725cab1860186c25364eee3ac0d89f59342e97eece901a3",
+            "matches": true
+          },
+          "plugin/page/settings.js": {
+            "installedSha256": "097275edcce74491ede48f74b5a15418708348bf81a98240aaad1f8031839024",
+            "repoSha256": "097275edcce74491ede48f74b5a15418708348bf81a98240aaad1f8031839024",
+            "matches": true
+          },
+          "plugin/page/style.css": {
+            "installedSha256": "bcabe4d08f4a7c70c59a4411e4395e307b2d130cacf728a08a6ad26b972a84c9",
+            "repoSha256": "bcabe4d08f4a7c70c59a4411e4395e307b2d130cacf728a08a6ad26b972a84c9",
+            "matches": true
+          },
+          "plugin/src/acl.ts": {
+            "installedSha256": "b537f86936877408637409dd74b31d7e3a91f5ee738a4911186ec6782f5ef148",
+            "repoSha256": "b537f86936877408637409dd74b31d7e3a91f5ee738a4911186ec6782f5ef148",
+            "matches": true
+          },
+          "plugin/src/addresses.ts": {
+            "installedSha256": "c627b67dd46850bb3a59815450b270b2f0b8203195f971656d73e82ebe6a0b1c",
+            "repoSha256": "c627b67dd46850bb3a59815450b270b2f0b8203195f971656d73e82ebe6a0b1c",
+            "matches": true
+          },
+          "plugin/src/catalog.ts": {
+            "installedSha256": "105a2327bf968c69f6a622bea4b244bd40619fdf0628a2d0875862f8692a3ef2",
+            "repoSha256": "105a2327bf968c69f6a622bea4b244bd40619fdf0628a2d0875862f8692a3ef2",
+            "matches": true
+          },
+          "plugin/src/chainstore.ts": {
+            "installedSha256": "41e519f41276a1bab53b07be3d1277255acbc748462252f1787f206134abe4a5",
+            "repoSha256": "41e519f41276a1bab53b07be3d1277255acbc748462252f1787f206134abe4a5",
+            "matches": true
+          },
+          "plugin/src/connection-request.ts": {
+            "installedSha256": "a99d4c68fc2c24536db846c203da0c293faa485f5fc780961c5377871f48cc77",
+            "repoSha256": "a99d4c68fc2c24536db846c203da0c293faa485f5fc780961c5377871f48cc77",
+            "matches": true
+          },
+          "plugin/src/console-api.ts": {
+            "installedSha256": "6ed7b6e492fb22c40d5df5238cc0b82a4295ba0a39fadb3c3ac425841784e5df",
+            "repoSha256": "6ed7b6e492fb22c40d5df5238cc0b82a4295ba0a39fadb3c3ac425841784e5df",
+            "matches": true
+          },
+          "plugin/src/console-launch.ts": {
+            "installedSha256": "0d681506e01ea4292d5234f19904ac076241be2e955057f53616f12cf97c62f2",
+            "repoSha256": "0d681506e01ea4292d5234f19904ac076241be2e955057f53616f12cf97c62f2",
+            "matches": true
+          },
+          "plugin/src/console-network.ts": {
+            "installedSha256": "68b96d1cb8538f8bb8e812c35d1c92bf83e4b04a7b95b54d58365da991195282",
+            "repoSha256": "68b96d1cb8538f8bb8e812c35d1c92bf83e4b04a7b95b54d58365da991195282",
+            "matches": true
+          },
+          "plugin/src/console-pairing.ts": {
+            "installedSha256": "7244f6d3fb15cabc0a00aecb79151f106fb59c79ec618128a115385bc1043801",
+            "repoSha256": "7244f6d3fb15cabc0a00aecb79151f106fb59c79ec618128a115385bc1043801",
+            "matches": true
+          },
+          "plugin/src/console-server.ts": {
+            "installedSha256": "cf9fb707520bc17e631a1cc3935460c9de05206b752695510667e8c3e938ebb3",
+            "repoSha256": "cf9fb707520bc17e631a1cc3935460c9de05206b752695510667e8c3e938ebb3",
+            "matches": true
+          },
+          "plugin/src/console-wallet.ts": {
+            "installedSha256": "0a7f744852f35c7e7d11802edd2983cce89ede9a11ba719c431a633a13605457",
+            "repoSha256": "0a7f744852f35c7e7d11802edd2983cce89ede9a11ba719c431a633a13605457",
+            "matches": true
+          },
+          "plugin/src/console-workflows.ts": {
+            "installedSha256": "026f2ccc20f51af44900338b2f7397fd38867fae902891289cc5d0877ab0a346",
+            "repoSha256": "026f2ccc20f51af44900338b2f7397fd38867fae902891289cc5d0877ab0a346",
+            "matches": true
+          },
+          "plugin/src/deposits.ts": {
+            "installedSha256": "6f9e1410ddcbb56f25bc82c4c60387967c531d260c9ef12d95ddbac7a996d002",
+            "repoSha256": "6f9e1410ddcbb56f25bc82c4c60387967c531d260c9ef12d95ddbac7a996d002",
+            "matches": true
+          },
+          "plugin/src/easytier-manifest.ts": {
+            "installedSha256": "0ff7eae45720f10b749f0c35d0390f0205fb2dc762152755d641a9c02c445ae8",
+            "repoSha256": "0ff7eae45720f10b749f0c35d0390f0205fb2dc762152755d641a9c02c445ae8",
+            "matches": true
+          },
+          "plugin/src/easytier.ts": {
+            "installedSha256": "daf3ad494014aa1a849a63008fa991e786bc2857d1349a217a3312c4065cab95",
+            "repoSha256": "daf3ad494014aa1a849a63008fa991e786bc2857d1349a217a3312c4065cab95",
+            "matches": true
+          },
+          "plugin/src/eip712.ts": {
+            "installedSha256": "b0dd433ce64d0f74fc6106f61770570db9c79d8d95cd7256a69b9063a6ee0879",
+            "repoSha256": "b0dd433ce64d0f74fc6106f61770570db9c79d8d95cd7256a69b9063a6ee0879",
+            "matches": true
+          },
+          "plugin/src/evm.ts": {
+            "installedSha256": "948919a9c7661d01452f9cff675454d7429e3b7ea0b8e2197b4be850e81910ae",
+            "repoSha256": "948919a9c7661d01452f9cff675454d7429e3b7ea0b8e2197b4be850e81910ae",
+            "matches": true
+          },
+          "plugin/src/index.ts": {
+            "installedSha256": "0424b23d00e4b3ef67b0ff3387a81bf8629b78b58ec8e1591421c37f0dce60fd",
+            "repoSha256": "0424b23d00e4b3ef67b0ff3387a81bf8629b78b58ec8e1591421c37f0dce60fd",
+            "matches": true
+          },
+          "plugin/src/keccak.ts": {
+            "installedSha256": "583be0b547e70b5b4eb09b7f8605fa89181bad7c5d9f552ce3e0a82a25242226",
+            "repoSha256": "583be0b547e70b5b4eb09b7f8605fa89181bad7c5d9f552ce3e0a82a25242226",
+            "matches": true
+          },
+          "plugin/src/ledger.ts": {
+            "installedSha256": "51c95bc7d7133e16e705c1ff9d4dcf934f99e349ba98105244dc9f2915fafdac",
+            "repoSha256": "aacf3c5faeb8d8ab61fc443dd76e527d1169b8673562725300696a5027ac8c02",
+            "matches": false
+          },
+          "plugin/src/legacy-recovery.ts": {
+            "installedSha256": "106be6de2c3a5df60d3448054e3828fe08901a4f1158392b812ff16e0aa2c7bd",
+            "repoSha256": "106be6de2c3a5df60d3448054e3828fe08901a4f1158392b812ff16e0aa2c7bd",
+            "matches": true
+          },
+          "plugin/src/lock.ts": {
+            "installedSha256": "8646f8197e1fc19654c95e88b5c83d1c036048762f1e82f2f9f9c2a41c39b4b7",
+            "repoSha256": "8646f8197e1fc19654c95e88b5c83d1c036048762f1e82f2f9f9c2a41c39b4b7",
+            "matches": true
+          },
+          "plugin/src/log.ts": {
+            "installedSha256": "cf88df38324e641050493a71d7950a3e910b7e34f6ac865d3a5a89428014ee15",
+            "repoSha256": "cf88df38324e641050493a71d7950a3e910b7e34f6ac865d3a5a89428014ee15",
+            "matches": true
+          },
+          "plugin/src/magpie.ts": {
+            "installedSha256": "33d286c6002c5e378c9152b5c69e5bf113e1510903255f4ef21fe28c63a917c4",
+            "repoSha256": "33d286c6002c5e378c9152b5c69e5bf113e1510903255f4ef21fe28c63a917c4",
+            "matches": true
+          },
+          "plugin/src/mainnet-gate.ts": {
+            "installedSha256": "04afc6675c2b8140da54515f7f4e1710fcfe3beec1c0d49f0a72f3eb7e9d52b0",
+            "repoSha256": "04afc6675c2b8140da54515f7f4e1710fcfe3beec1c0d49f0a72f3eb7e9d52b0",
+            "matches": true
+          },
+          "plugin/src/mainnet-surface.ts": {
+            "installedSha256": "c181dc9d1fd80386fe0eafd5a13f179dbd36989244c2b16a094efbdc81b56d2d",
+            "repoSha256": "c181dc9d1fd80386fe0eafd5a13f179dbd36989244c2b16a094efbdc81b56d2d",
+            "matches": true
+          },
+          "plugin/src/network.ts": {
+            "installedSha256": "e58aab953f9ad3e2ddf87b9c94a6d605f5706f3a873ef3e27618c479f3ca4e93",
+            "repoSha256": "e58aab953f9ad3e2ddf87b9c94a6d605f5706f3a873ef3e27618c479f3ca4e93",
+            "matches": true
+          },
+          "plugin/src/networks.ts": {
+            "installedSha256": "676ddde5846173694f895c0e1f8aca9319c719a8cf44771d6fe303e947264680",
+            "repoSha256": "676ddde5846173694f895c0e1f8aca9319c719a8cf44771d6fe303e947264680",
+            "matches": true
+          },
+          "plugin/src/p2p-payment-protocol.ts": {
+            "installedSha256": "6615b88f2163ca2986bfc7018743e070253456b1fc0bee92f0ae8d986661ccd0",
+            "repoSha256": "6615b88f2163ca2986bfc7018743e070253456b1fc0bee92f0ae8d986661ccd0",
+            "matches": true
+          },
+          "plugin/src/p2p-payment-store.ts": {
+            "installedSha256": "9826435cebdc5aa979f3acaf575d465ba73620a11a183c5595693a585a492396",
+            "repoSha256": "9826435cebdc5aa979f3acaf575d465ba73620a11a183c5595693a585a492396",
+            "matches": true
+          },
+          "plugin/src/p2p-payment.ts": {
+            "installedSha256": "eb4f6ef1d86efc8be087238932c2c1deb81fe098218338a779b87ea3055520c3",
+            "repoSha256": "eb4f6ef1d86efc8be087238932c2c1deb81fe098218338a779b87ea3055520c3",
+            "matches": true
+          },
+          "plugin/src/page-snapshot.ts": {
+            "installedSha256": "ffcafdcba5d527738b67f56268038a7354dbfca43df98b71cea433005f884b0b",
+            "repoSha256": "ffcafdcba5d527738b67f56268038a7354dbfca43df98b71cea433005f884b0b",
+            "matches": true
+          },
+          "plugin/src/paths.ts": {
+            "installedSha256": "469b52617d90f88dcffa5e29216b0b76889a31c8f0fe9c34659c8bb079123a2d",
+            "repoSha256": "469b52617d90f88dcffa5e29216b0b76889a31c8f0fe9c34659c8bb079123a2d",
+            "matches": true
+          },
+          "plugin/src/payment-local-service.ts": {
+            "installedSha256": "3bac892cbc773740c5eb23ddc2173a9ffc80ac35edf8ede38caafbadc58eb6ad",
+            "repoSha256": "3bac892cbc773740c5eb23ddc2173a9ffc80ac35edf8ede38caafbadc58eb6ad",
+            "matches": true
+          },
+          "plugin/src/payment-operations.ts": {
+            "installedSha256": "3c58fe14d0f65a4c92572aa55984e84c214ebe8c99b04ec480f91d550eaf95f6",
+            "repoSha256": "3c58fe14d0f65a4c92572aa55984e84c214ebe8c99b04ec480f91d550eaf95f6",
+            "matches": true
+          },
+          "plugin/src/payment-p2p-host.ts": {
+            "installedSha256": "3a9942104e5fabcf06d535e70f5cdcf3b007e758b1edc4d5c5d284d2cb1a9c3f",
+            "repoSha256": "3a9942104e5fabcf06d535e70f5cdcf3b007e758b1edc4d5c5d284d2cb1a9c3f",
+            "matches": true
+          },
+          "plugin/src/plugin-options.ts": {
+            "installedSha256": "2b0b251226ce4a81fa431e01d8fb77907ee3f53769b9192863bfdfae72c468d6",
+            "repoSha256": "2b0b251226ce4a81fa431e01d8fb77907ee3f53769b9192863bfdfae72c468d6",
+            "matches": true
+          },
+          "plugin/src/ports.ts": {
+            "installedSha256": "73b5d4b9cdddbc45b5d4a4a4508d11670ab6e156ef5c635482d5a17df413b3b1",
+            "repoSha256": "73b5d4b9cdddbc45b5d4a4a4508d11670ab6e156ef5c635482d5a17df413b3b1",
+            "matches": true
+          },
+          "plugin/src/pricing.ts": {
+            "installedSha256": "ddf47ba523894e8b8064f65ae7d6fbb0f79eafc6118617ea1594cc9aee4f9b47",
+            "repoSha256": "ddf47ba523894e8b8064f65ae7d6fbb0f79eafc6118617ea1594cc9aee4f9b47",
+            "matches": true
+          },
+          "plugin/src/provisioner.ts": {
+            "installedSha256": "a2116c827ec7987492678cdd8bf9e1d299c12d634cb19d0ea4e9c660ee099845",
+            "repoSha256": "a2116c827ec7987492678cdd8bf9e1d299c12d634cb19d0ea4e9c660ee099845",
+            "matches": true
+          },
+          "plugin/src/readonly-balance.ts": {
+            "installedSha256": "c59d00196619c85cd1f6467f79ae53c30ceee97f15be39f4473558e167c73630",
+            "repoSha256": "c59d00196619c85cd1f6467f79ae53c30ceee97f15be39f4473558e167c73630",
+            "matches": true
+          },
+          "plugin/src/receiving-networks.ts": {
+            "installedSha256": "f3f607c5bc453c4ec81ee5f747a7bd1b3ca3189f97b2d07c8d459bddb4c1e15d",
+            "repoSha256": "f3f607c5bc453c4ec81ee5f747a7bd1b3ca3189f97b2d07c8d459bddb4c1e15d",
+            "matches": true
+          },
+          "plugin/src/run.ts": {
+            "installedSha256": "4d537776f825b0a7f76f262772f01bb651630e1712cd67a518e4060faf1f77c7",
+            "repoSha256": "4d537776f825b0a7f76f262772f01bb651630e1712cd67a518e4060faf1f77c7",
+            "matches": true
+          },
+          "plugin/src/secp256k1.ts": {
+            "installedSha256": "4af540c69f077fc8b84478e5fee8f30ee153985ea78a5b2691e0a480e87aa60a",
+            "repoSha256": "4af540c69f077fc8b84478e5fee8f30ee153985ea78a5b2691e0a480e87aa60a",
+            "matches": true
+          },
+          "plugin/src/server.ts": {
+            "installedSha256": "66ff7908e6a8829d57ae0baf038ae5dc28aabada896fb5fd46172a57f20baca2",
+            "repoSha256": "66ff7908e6a8829d57ae0baf038ae5dc28aabada896fb5fd46172a57f20baca2",
+            "matches": true
+          },
+          "plugin/src/service.ts": {
+            "installedSha256": "4381b14cdd38f6f64028d61fa3e306ef7c24f4da6ed089bc4a94e85d825a29fa",
+            "repoSha256": "4381b14cdd38f6f64028d61fa3e306ef7c24f4da6ed089bc4a94e85d825a29fa",
+            "matches": true
+          },
+          "plugin/src/state.ts": {
+            "installedSha256": "f8b58399ac8c1c9a59b45e541c33ed218fbbc6437d8a4db7bd6c839dedf66d16",
+            "repoSha256": "f8b58399ac8c1c9a59b45e541c33ed218fbbc6437d8a4db7bd6c839dedf66d16",
+            "matches": true
+          },
+          "plugin/src/store.ts": {
+            "installedSha256": "83fc0c0a267e43bcf639830dd2abbd50a44202b65a0e8ef5fbcb854a733c9f2c",
+            "repoSha256": "83fc0c0a267e43bcf639830dd2abbd50a44202b65a0e8ef5fbcb854a733c9f2c",
+            "matches": true
+          },
+          "plugin/src/wallet-local-service.ts": {
+            "installedSha256": "5b2a91f7148454f7efd9dc239bca3b687462aa4aacc5e722e0b52db43c6b0345",
+            "repoSha256": "5b2a91f7148454f7efd9dc239bca3b687462aa4aacc5e722e0b52db43c6b0345",
+            "matches": true
+          },
+          "plugin/src/wallet-payment-send.ts": {
+            "installedSha256": "036c59a5ee0fc4e9bf4edcc7dec6a5489b8fd93d0c595fd45c49eea55f3a09d4",
+            "repoSha256": "036c59a5ee0fc4e9bf4edcc7dec6a5489b8fd93d0c595fd45c49eea55f3a09d4",
+            "matches": true
+          },
+          "plugin/src/wallet-vault.ts": {
+            "installedSha256": "8664a006352e87d9d23b1a2f4ff8ccc5d133ab18ece6c0d68762bb5e702ebb63",
+            "repoSha256": "8664a006352e87d9d23b1a2f4ff8ccc5d133ab18ece6c0d68762bb5e702ebb63",
+            "matches": true
+          },
+          "plugin/src/wallet-workflows.ts": {
+            "installedSha256": "c331d6a089fbf923ab159a93e8ccc9d526d32b42b1334584bc3e80c533bae597",
+            "repoSha256": "c331d6a089fbf923ab159a93e8ccc9d526d32b42b1334584bc3e80c533bae597",
+            "matches": true
+          },
+          "plugin/src/wallet.ts": {
+            "installedSha256": "6b09c39c797f9edd1cfe12e61254a7d0fb0835dbb999256c4aca348af41ab834",
+            "repoSha256": "6b09c39c797f9edd1cfe12e61254a7d0fb0835dbb999256c4aca348af41ab834",
+            "matches": true
+          },
+          "plugin/src/walletamount.ts": {
+            "installedSha256": "671db303b6dde34273883a98d5eb39ecf658a63825c73d3d3adc9e1040b68486",
+            "repoSha256": "671db303b6dde34273883a98d5eb39ecf658a63825c73d3d3adc9e1040b68486",
+            "matches": true
+          },
+          "plugin/src/walletstatement.ts": {
+            "installedSha256": "d150925238388db9b56cbc92e049447ca044534f79337ec4524f6cb6bbba3f88",
+            "repoSha256": "d150925238388db9b56cbc92e049447ca044534f79337ec4524f6cb6bbba3f88",
+            "matches": true
+          },
+          "plugin/src/walletview.ts": {
+            "installedSha256": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+            "repoSha256": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+            "matches": true
+          },
+          "plugin/src/watcher.ts": {
+            "installedSha256": "f6d75cbe55cd554feb541bd47f08e5c2e077ff90d4fce73b0280e9cb91e6cf46",
+            "repoSha256": "f6d75cbe55cd554feb541bd47f08e5c2e077ff90d4fce73b0280e9cb91e6cf46",
+            "matches": true
+          }
+        },
+        "note": "Hashes describe the enabled installed package, not the unused fixture copy; process reload is a separate acceptance check."
+      }
+    },
+    "consumer": {
+      "ports": {
+        "web": 45168,
+        "gateway": 26370,
+        "upstream": 39313,
+        "listen": 51484,
+        "catalog": 25912,
+        "socks": 20141,
+        "api-port": 34518,
+        "console-port": 57324,
+        "rpc": 17927
+      },
+      "binarySha256": "c534dbcdb92031aa42ef6e4429d558f16d7e679b8508f82fcfde2bc07c45080c",
+      "readiness": {
+        "at": "2026-10-31T16:09:08Z",
+        "webReachable": true,
+        "webLoopbackOnly": true,
+        "gatewayNoKeyStatus": 401,
+        "gatewayWrongKeyStatus": 401,
+        "pluginInstalledByHarness": false
+      },
+      "runningPids": [
+        83147,
+        83148,
+        88561,
+        91686
+      ],
+      "package": {
+        "schema": "ohmyaihub-phase9-isolated-lab/v1",
+        "files": {
+          "README.md": "a5f238d647566ca1343ac20810effa91cf105402f6a4121cf53a0b3a5bf1e559",
+          "package.json": "63e3e3a8c3773279a5214c4239fd86ac4b2a177444ff70b1f2bcb727da043c6c",
+          "plugin/.gitignore": "4f7c54d23c1248dd69990ea2333770e7e07e88319fce314bdf2c9e50900f86d7",
+          "plugin/README.md": "2eb8cdd3c5b2d92dc39011e2d03208df3082ed8274833b341cad2dde25e91be6",
+          "plugin/bin/ohmyaihub.ts": "61c56b527babdc379e7009c8834e2417da0bbf43cda6463b682731f6cb02d023",
+          "plugin/bin/operator-connect.ts": "a66d0935877a87a9b22b54250dd48fa8fba5a1614c6c683fad3bb3b904479abd",
+          "plugin/bin/operator-lib.ts": "6e7f4175b78e2723a9ab2106839735836902852ffc632b2a7f6a89b305be8ab0",
+          "plugin/bin/operator-remote.ts": "f71e1602e9fe984154b09d44b9c9ab59d57e76cafc78d5cf8afe574c8ebb1455",
+          "plugin/bin/operator-setup.ts": "d6922e6cead7512f99e8c019b691eeaa65feb466c681b8d921372f63c8626d11",
+          "plugin/bin/operator-share.ts": "44ccc5867e9eb94d4a83c8d32a88f76dbf0b26a7b8fa74f00b82ea7f0c8a3fdc",
+          "plugin/bin/wallet-wizard.ts": "44547745139b09e83a723a326f5a6114c556e1bc0c58a7f8a63009e6b8359f35",
+          "plugin/bunfig.toml": "10a3f62d65ae46a855ce1b30f10f73d6c5e97beb42fc4b330e7e8f0f7a0c3c84",
+          "plugin/console/app.js": "20d5454d8b96c0496fd8b574c3c3c76aea9cd646baf324bab700bfec9cf2952a",
+          "plugin/console/app.test.js": "09f0a1e263a04fcf107836b240d895a3dbfa990dab450f68896cd0f9cb17f470",
+          "plugin/console/external-wallet.js": "55e65ab63ef2924ad5f9b198902187f0657524f96c0a46b6679929a338a8f4a2",
+          "plugin/console/external-wallet.test.js": "728d089616a2e063b75c0c5296bfa0bde7a01e08ca14bc07fa215b0705f7024c",
+          "plugin/console/index.html": "65902b02aebf2b6a184765e934f838f03739212d98cdeb2cbdeb0e149056fb51",
+          "plugin/console/network.js": "73d4a773fd6f6d56d637c4e93f08fc6fe6d972771d9ba24521fd7db1fea0386c",
+          "plugin/console/network.test.js": "f41016af9c3f7f80cca8b80d1c7a8c54ab5f3a5bcd5e50a2514e7e7c8f9342b2",
+          "plugin/console/payment-local-port.js": "83f3ae171a89ba19add1123b4e83523b02fce431dcad2b9b06d425fc09d95c4a",
+          "plugin/console/payment-local-port.test.js": "a67789784196c98ba7530bdb97b402b688cb0d2539e6107ca263a68a7c276869",
+          "plugin/console/payment-p2p-ui.js": "ba32c4d8a8890dedf06aceff12cc4fc080cd65c93e2ef92e353cca6c926cbe5b",
+          "plugin/console/payment-p2p-ui.test.js": "8662387ded6658b1b48b203841af272e33e46ee68e72d45b5bab746e14e0f551",
+          "plugin/console/providers.js": "21ca0b0c03fb0e90845854bc2384a1f1853a7a275402e3448b10a3721cc35492",
+          "plugin/console/providers.test.js": "7350e008c72e501d1ec8f98c538383a40cdeccd9cc77fd8df37ff9dca14e31fb",
+          "plugin/console/session.js": "b523b122f395d8cc9d786ee2a587c0e6d48a5cb028acbb29ef7a7066d0c20cd3",
+          "plugin/console/session.test.js": "bd96417bf26ca56288f34dc8d6e93431f95707c55cce2fb001132d671100871c",
+          "plugin/console/shell.test.js": "8c9ce0fd2e6ef67a96bb51db827491201b3c90221aa3a193c9cb13547c070962",
+          "plugin/console/style.css": "8c0ba8394e267f68cb28851cb9c1a0dd2e4c5d800ecbd7b1c6dd2ff6cca6068a",
+          "plugin/console/wallet-network-ui.js": "c77a7535ab269ab73637d0b840e723d885217a8a687464eaf4ae04953e9d40ce",
+          "plugin/console/wallet-network-ui.test.js": "d05e60c4d1eb7dc90c1c3119eee20d11a738e51f2c59110d8ce11b3033a53abc",
+          "plugin/console/wallet-vault-ui.js": "f0d590a9d13c51273d7eb9367a5bd9055d856a5a27fae511cbd406deb6231391",
+          "plugin/console/wallet-vault-ui.test.js": "d5e127c429f3f8ee0bc28a26abdeab4915a5f175edbea0781e1bfdf8b144bb72",
+          "plugin/console/wallet.js": "a27d3af6d1b8c931b6f5d109525de580bc2258a19b1d8ab54259c5a9125a32c2",
+          "plugin/console/wallet.test.js": "a07b47c47972f9274319a6e75341849a9c91f98bd80f5ff618704bdef5c26382",
+          "plugin/demo/mock-topup.sh": "e2da5feee92d941f74f2a95dfaa78cddba43e736bed7ae746c7b025607360905",
+          "plugin/package.json": "b4dfd2a88c7492b37a56f58f99691ee164acab2b1338c69506afd5d7c814df93",
+          "plugin/page/app.js": "0fd835be0b0dcda43407886226bf657b4d86a3383a1c44eb33ad2aa989cd6c6d",
+          "plugin/page/icon.svg": "b54786387431d9068a3899542ddaffcc98ca81cfb537d0abf63aae99a70a9095",
+          "plugin/page/index.html": "d60f04e496f3686ac725cab1860186c25364eee3ac0d89f59342e97eece901a3",
+          "plugin/page/settings.js": "097275edcce74491ede48f74b5a15418708348bf81a98240aaad1f8031839024",
+          "plugin/page/style.css": "bcabe4d08f4a7c70c59a4411e4395e307b2d130cacf728a08a6ad26b972a84c9",
+          "plugin/src/acl.ts": "b537f86936877408637409dd74b31d7e3a91f5ee738a4911186ec6782f5ef148",
+          "plugin/src/addresses.ts": "c627b67dd46850bb3a59815450b270b2f0b8203195f971656d73e82ebe6a0b1c",
+          "plugin/src/catalog.ts": "105a2327bf968c69f6a622bea4b244bd40619fdf0628a2d0875862f8692a3ef2",
+          "plugin/src/chainstore.ts": "41e519f41276a1bab53b07be3d1277255acbc748462252f1787f206134abe4a5",
+          "plugin/src/connection-request.ts": "a99d4c68fc2c24536db846c203da0c293faa485f5fc780961c5377871f48cc77",
+          "plugin/src/console-api.ts": "6ed7b6e492fb22c40d5df5238cc0b82a4295ba0a39fadb3c3ac425841784e5df",
+          "plugin/src/console-launch.ts": "0d681506e01ea4292d5234f19904ac076241be2e955057f53616f12cf97c62f2",
+          "plugin/src/console-network.ts": "68b96d1cb8538f8bb8e812c35d1c92bf83e4b04a7b95b54d58365da991195282",
+          "plugin/src/console-pairing.ts": "7244f6d3fb15cabc0a00aecb79151f106fb59c79ec618128a115385bc1043801",
+          "plugin/src/console-server.ts": "cf9fb707520bc17e631a1cc3935460c9de05206b752695510667e8c3e938ebb3",
+          "plugin/src/console-wallet.ts": "0a7f744852f35c7e7d11802edd2983cce89ede9a11ba719c431a633a13605457",
+          "plugin/src/console-workflows.ts": "026f2ccc20f51af44900338b2f7397fd38867fae902891289cc5d0877ab0a346",
+          "plugin/src/control/app.ts": "4476f3cb8ffd56c7a62b8403c875a1d70de377fb0b5885bf97492d7241e618cf",
+          "plugin/src/control/http.ts": "2709885819d8d392f863b11425811fd7d9d9d2d5faf79a996369e4473bdcae8c",
+          "plugin/src/control/p2p-port.ts": "2f3973a5b51684510e27d7798ae7d2ff03587852617f497c0f56758f15887bf7",
+          "plugin/src/control/presence-trust.ts": "d1abafd72d2a26edd3cabc5bc6db7d890bc6aa7c005615aae7458124889b3900",
+          "plugin/src/control/presence.ts": "90c995928d4b797e34e16ec3ebe05da1c5e661f31f4ef605a13d74b1f57e2ba1",
+          "plugin/src/control/service-port.ts": "713dfd583104c9aa64de26c10a013c896930296c060569cca0e34abaef46a438",
+          "plugin/src/deposits.ts": "6f9e1410ddcbb56f25bc82c4c60387967c531d260c9ef12d95ddbac7a996d002",
+          "plugin/src/easytier-manifest.ts": "0ff7eae45720f10b749f0c35d0390f0205fb2dc762152755d641a9c02c445ae8",
+          "plugin/src/easytier.ts": "daf3ad494014aa1a849a63008fa991e786bc2857d1349a217a3312c4065cab95",
+          "plugin/src/eip712.ts": "b0dd433ce64d0f74fc6106f61770570db9c79d8d95cd7256a69b9063a6ee0879",
+          "plugin/src/evm.ts": "948919a9c7661d01452f9cff675454d7429e3b7ea0b8e2197b4be850e81910ae",
+          "plugin/src/index.ts": "0424b23d00e4b3ef67b0ff3387a81bf8629b78b58ec8e1591421c37f0dce60fd",
+          "plugin/src/keccak.ts": "583be0b547e70b5b4eb09b7f8605fa89181bad7c5d9f552ce3e0a82a25242226",
+          "plugin/src/ledger.ts": "51c95bc7d7133e16e705c1ff9d4dcf934f99e349ba98105244dc9f2915fafdac",
+          "plugin/src/legacy-recovery.ts": "106be6de2c3a5df60d3448054e3828fe08901a4f1158392b812ff16e0aa2c7bd",
+          "plugin/src/lock.ts": "8646f8197e1fc19654c95e88b5c83d1c036048762f1e82f2f9f9c2a41c39b4b7",
+          "plugin/src/log.ts": "cf88df38324e641050493a71d7950a3e910b7e34f6ac865d3a5a89428014ee15",
+          "plugin/src/magpie.ts": "33d286c6002c5e378c9152b5c69e5bf113e1510903255f4ef21fe28c63a917c4",
+          "plugin/src/mainnet-gate.ts": "04afc6675c2b8140da54515f7f4e1710fcfe3beec1c0d49f0a72f3eb7e9d52b0",
+          "plugin/src/mainnet-surface.ts": "c181dc9d1fd80386fe0eafd5a13f179dbd36989244c2b16a094efbdc81b56d2d",
+          "plugin/src/network.ts": "e58aab953f9ad3e2ddf87b9c94a6d605f5706f3a873ef3e27618c479f3ca4e93",
+          "plugin/src/networks.ts": "676ddde5846173694f895c0e1f8aca9319c719a8cf44771d6fe303e947264680",
+          "plugin/src/p2p/crypto.ts": "edbbdd0650bd0960aa832feb38d1e367c0947e67bae13fa4211da50b89f71e98",
+          "plugin/src/p2p/handshake.ts": "77854e773d3b2701d35d156ef4ec261c46f00b248bf692971831e2b91346ff6f",
+          "plugin/src/p2p/identity.ts": "528c8341beda72185fce5445f36bc224d3803c38f89f2cefac0a00ce409c4f4c",
+          "plugin/src/p2p/index.ts": "d973ecb75aebadfd937fd4dc3b7fb8cfbd2b5de622eb857572c5ff747f019e6d",
+          "plugin/src/p2p/node.ts": "71e8d3091b2b0e479f2c8d9e3531bb8b3997443421014cef28260494fe60eb60",
+          "plugin/src/p2p/protocol.ts": "a4a951031edf87da01e6c844d99975c7a916e8555dc0d1481e29cdf523a0be41",
+          "plugin/src/p2p/session.ts": "4c67d364ba1451443ebfec17dffa2ccba012fc4cfec2329d96dbd68c4d541b36",
+          "plugin/src/p2p/store.ts": "e6be3a79a2df8a3513231faf0c6edc749f204c4c471480b2c4c5c30c665650d4",
+          "plugin/src/p2p-payment-protocol.ts": "6615b88f2163ca2986bfc7018743e070253456b1fc0bee92f0ae8d986661ccd0",
+          "plugin/src/p2p-payment-store.ts": "9826435cebdc5aa979f3acaf575d465ba73620a11a183c5595693a585a492396",
+          "plugin/src/p2p-payment.ts": "eb4f6ef1d86efc8be087238932c2c1deb81fe098218338a779b87ea3055520c3",
+          "plugin/src/page-snapshot.ts": "ffcafdcba5d527738b67f56268038a7354dbfca43df98b71cea433005f884b0b",
+          "plugin/src/paths.ts": "469b52617d90f88dcffa5e29216b0b76889a31c8f0fe9c34659c8bb079123a2d",
+          "plugin/src/payment-local-service.ts": "3bac892cbc773740c5eb23ddc2173a9ffc80ac35edf8ede38caafbadc58eb6ad",
+          "plugin/src/payment-operations.ts": "3c58fe14d0f65a4c92572aa55984e84c214ebe8c99b04ec480f91d550eaf95f6",
+          "plugin/src/payment-p2p-host.ts": "3a9942104e5fabcf06d535e70f5cdcf3b007e758b1edc4d5c5d284d2cb1a9c3f",
+          "plugin/src/plugin-options.ts": "2b0b251226ce4a81fa431e01d8fb77907ee3f53769b9192863bfdfae72c468d6",
+          "plugin/src/ports.ts": "73b5d4b9cdddbc45b5d4a4a4508d11670ab6e156ef5c635482d5a17df413b3b1",
+          "plugin/src/pricing.ts": "ddf47ba523894e8b8064f65ae7d6fbb0f79eafc6118617ea1594cc9aee4f9b47",
+          "plugin/src/provisioner.ts": "a2116c827ec7987492678cdd8bf9e1d299c12d634cb19d0ea4e9c660ee099845",
+          "plugin/src/readonly-balance.ts": "c59d00196619c85cd1f6467f79ae53c30ceee97f15be39f4473558e167c73630",
+          "plugin/src/receiving-networks.ts": "f3f607c5bc453c4ec81ee5f747a7bd1b3ca3189f97b2d07c8d459bddb4c1e15d",
+          "plugin/src/run.ts": "4d537776f825b0a7f76f262772f01bb651630e1712cd67a518e4060faf1f77c7",
+          "plugin/src/secp256k1.ts": "4af540c69f077fc8b84478e5fee8f30ee153985ea78a5b2691e0a480e87aa60a",
+          "plugin/src/server.ts": "66ff7908e6a8829d57ae0baf038ae5dc28aabada896fb5fd46172a57f20baca2",
+          "plugin/src/service.ts": "4381b14cdd38f6f64028d61fa3e306ef7c24f4da6ed089bc4a94e85d825a29fa",
+          "plugin/src/state.ts": "f8b58399ac8c1c9a59b45e541c33ed218fbbc6437d8a4db7bd6c839dedf66d16",
+          "plugin/src/store.ts": "83fc0c0a267e43bcf639830dd2abbd50a44202b65a0e8ef5fbcb854a733c9f2c",
+          "plugin/src/wallet-local-service.ts": "5b2a91f7148454f7efd9dc239bca3b687462aa4aacc5e722e0b52db43c6b0345",
+          "plugin/src/wallet-payment-send.ts": "036c59a5ee0fc4e9bf4edcc7dec6a5489b8fd93d0c595fd45c49eea55f3a09d4",
+          "plugin/src/wallet-vault.ts": "8664a006352e87d9d23b1a2f4ff8ccc5d133ab18ece6c0d68762bb5e702ebb63",
+          "plugin/src/wallet-workflows.ts": "c331d6a089fbf923ab159a93e8ccc9d526d32b42b1334584bc3e80c533bae597",
+          "plugin/src/wallet.ts": "6b09c39c797f9edd1cfe12e61254a7d0fb0835dbb999256c4aca348af41ab834",
+          "plugin/src/walletamount.ts": "671db303b6dde34273883a98d5eb39ecf658a63825c73d3d3adc9e1040b68486",
+          "plugin/src/walletstatement.ts": "d150925238388db9b56cbc92e049447ca044534f79337ec4524f6cb6bbba3f88",
+          "plugin/src/walletview.ts": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+          "plugin/src/watcher.ts": "f6d75cbe55cd554feb541bd47f08e5c2e077ff90d4fce73b0280e9cb91e6cf46",
+          "plugin/tsconfig.json": "d01a79d1f5cb83a208abf1cd8db618522f2a5389c1e8b7d873f7e9ec65c6ce73"
+        },
+        "at": "2026-10-31T16:09:06Z"
+      },
+      "packageEvidenceRole": "fixture copy only; actual installation is recorded separately",
+      "actualInstalledSource": {
+        "status": "MISMATCH",
+        "installedKind": "local",
+        "installedSpec": "<owned local package>",
+        "entryMain": "plugin/src/index.ts",
+        "matchCount": 73,
+        "mismatchCount": 1,
+        "files": {
+          "package.json": {
+            "installedSha256": "63e3e3a8c3773279a5214c4239fd86ac4b2a177444ff70b1f2bcb727da043c6c",
+            "repoSha256": "63e3e3a8c3773279a5214c4239fd86ac4b2a177444ff70b1f2bcb727da043c6c",
+            "matches": true
+          },
+          "plugin/console/app.js": {
+            "installedSha256": "20d5454d8b96c0496fd8b574c3c3c76aea9cd646baf324bab700bfec9cf2952a",
+            "repoSha256": "20d5454d8b96c0496fd8b574c3c3c76aea9cd646baf324bab700bfec9cf2952a",
+            "matches": true
+          },
+          "plugin/console/external-wallet.js": {
+            "installedSha256": "55e65ab63ef2924ad5f9b198902187f0657524f96c0a46b6679929a338a8f4a2",
+            "repoSha256": "55e65ab63ef2924ad5f9b198902187f0657524f96c0a46b6679929a338a8f4a2",
+            "matches": true
+          },
+          "plugin/console/index.html": {
+            "installedSha256": "65902b02aebf2b6a184765e934f838f03739212d98cdeb2cbdeb0e149056fb51",
+            "repoSha256": "65902b02aebf2b6a184765e934f838f03739212d98cdeb2cbdeb0e149056fb51",
+            "matches": true
+          },
+          "plugin/console/network.js": {
+            "installedSha256": "73d4a773fd6f6d56d637c4e93f08fc6fe6d972771d9ba24521fd7db1fea0386c",
+            "repoSha256": "73d4a773fd6f6d56d637c4e93f08fc6fe6d972771d9ba24521fd7db1fea0386c",
+            "matches": true
+          },
+          "plugin/console/payment-local-port.js": {
+            "installedSha256": "83f3ae171a89ba19add1123b4e83523b02fce431dcad2b9b06d425fc09d95c4a",
+            "repoSha256": "83f3ae171a89ba19add1123b4e83523b02fce431dcad2b9b06d425fc09d95c4a",
+            "matches": true
+          },
+          "plugin/console/payment-p2p-ui.js": {
+            "installedSha256": "ba32c4d8a8890dedf06aceff12cc4fc080cd65c93e2ef92e353cca6c926cbe5b",
+            "repoSha256": "ba32c4d8a8890dedf06aceff12cc4fc080cd65c93e2ef92e353cca6c926cbe5b",
+            "matches": true
+          },
+          "plugin/console/providers.js": {
+            "installedSha256": "21ca0b0c03fb0e90845854bc2384a1f1853a7a275402e3448b10a3721cc35492",
+            "repoSha256": "21ca0b0c03fb0e90845854bc2384a1f1853a7a275402e3448b10a3721cc35492",
+            "matches": true
+          },
+          "plugin/console/session.js": {
+            "installedSha256": "b523b122f395d8cc9d786ee2a587c0e6d48a5cb028acbb29ef7a7066d0c20cd3",
+            "repoSha256": "b523b122f395d8cc9d786ee2a587c0e6d48a5cb028acbb29ef7a7066d0c20cd3",
+            "matches": true
+          },
+          "plugin/console/style.css": {
+            "installedSha256": "8c0ba8394e267f68cb28851cb9c1a0dd2e4c5d800ecbd7b1c6dd2ff6cca6068a",
+            "repoSha256": "8c0ba8394e267f68cb28851cb9c1a0dd2e4c5d800ecbd7b1c6dd2ff6cca6068a",
+            "matches": true
+          },
+          "plugin/console/wallet-network-ui.js": {
+            "installedSha256": "c77a7535ab269ab73637d0b840e723d885217a8a687464eaf4ae04953e9d40ce",
+            "repoSha256": "c77a7535ab269ab73637d0b840e723d885217a8a687464eaf4ae04953e9d40ce",
+            "matches": true
+          },
+          "plugin/console/wallet-vault-ui.js": {
+            "installedSha256": "f0d590a9d13c51273d7eb9367a5bd9055d856a5a27fae511cbd406deb6231391",
+            "repoSha256": "f0d590a9d13c51273d7eb9367a5bd9055d856a5a27fae511cbd406deb6231391",
+            "matches": true
+          },
+          "plugin/console/wallet.js": {
+            "installedSha256": "a27d3af6d1b8c931b6f5d109525de580bc2258a19b1d8ab54259c5a9125a32c2",
+            "repoSha256": "a27d3af6d1b8c931b6f5d109525de580bc2258a19b1d8ab54259c5a9125a32c2",
+            "matches": true
+          },
+          "plugin/page/app.js": {
+            "installedSha256": "0fd835be0b0dcda43407886226bf657b4d86a3383a1c44eb33ad2aa989cd6c6d",
+            "repoSha256": "0fd835be0b0dcda43407886226bf657b4d86a3383a1c44eb33ad2aa989cd6c6d",
+            "matches": true
+          },
+          "plugin/page/index.html": {
+            "installedSha256": "d60f04e496f3686ac725cab1860186c25364eee3ac0d89f59342e97eece901a3",
+            "repoSha256": "d60f04e496f3686ac725cab1860186c25364eee3ac0d89f59342e97eece901a3",
+            "matches": true
+          },
+          "plugin/page/settings.js": {
+            "installedSha256": "097275edcce74491ede48f74b5a15418708348bf81a98240aaad1f8031839024",
+            "repoSha256": "097275edcce74491ede48f74b5a15418708348bf81a98240aaad1f8031839024",
+            "matches": true
+          },
+          "plugin/page/style.css": {
+            "installedSha256": "bcabe4d08f4a7c70c59a4411e4395e307b2d130cacf728a08a6ad26b972a84c9",
+            "repoSha256": "bcabe4d08f4a7c70c59a4411e4395e307b2d130cacf728a08a6ad26b972a84c9",
+            "matches": true
+          },
+          "plugin/src/acl.ts": {
+            "installedSha256": "b537f86936877408637409dd74b31d7e3a91f5ee738a4911186ec6782f5ef148",
+            "repoSha256": "b537f86936877408637409dd74b31d7e3a91f5ee738a4911186ec6782f5ef148",
+            "matches": true
+          },
+          "plugin/src/addresses.ts": {
+            "installedSha256": "c627b67dd46850bb3a59815450b270b2f0b8203195f971656d73e82ebe6a0b1c",
+            "repoSha256": "c627b67dd46850bb3a59815450b270b2f0b8203195f971656d73e82ebe6a0b1c",
+            "matches": true
+          },
+          "plugin/src/catalog.ts": {
+            "installedSha256": "105a2327bf968c69f6a622bea4b244bd40619fdf0628a2d0875862f8692a3ef2",
+            "repoSha256": "105a2327bf968c69f6a622bea4b244bd40619fdf0628a2d0875862f8692a3ef2",
+            "matches": true
+          },
+          "plugin/src/chainstore.ts": {
+            "installedSha256": "41e519f41276a1bab53b07be3d1277255acbc748462252f1787f206134abe4a5",
+            "repoSha256": "41e519f41276a1bab53b07be3d1277255acbc748462252f1787f206134abe4a5",
+            "matches": true
+          },
+          "plugin/src/connection-request.ts": {
+            "installedSha256": "a99d4c68fc2c24536db846c203da0c293faa485f5fc780961c5377871f48cc77",
+            "repoSha256": "a99d4c68fc2c24536db846c203da0c293faa485f5fc780961c5377871f48cc77",
+            "matches": true
+          },
+          "plugin/src/console-api.ts": {
+            "installedSha256": "6ed7b6e492fb22c40d5df5238cc0b82a4295ba0a39fadb3c3ac425841784e5df",
+            "repoSha256": "6ed7b6e492fb22c40d5df5238cc0b82a4295ba0a39fadb3c3ac425841784e5df",
+            "matches": true
+          },
+          "plugin/src/console-launch.ts": {
+            "installedSha256": "0d681506e01ea4292d5234f19904ac076241be2e955057f53616f12cf97c62f2",
+            "repoSha256": "0d681506e01ea4292d5234f19904ac076241be2e955057f53616f12cf97c62f2",
+            "matches": true
+          },
+          "plugin/src/console-network.ts": {
+            "installedSha256": "68b96d1cb8538f8bb8e812c35d1c92bf83e4b04a7b95b54d58365da991195282",
+            "repoSha256": "68b96d1cb8538f8bb8e812c35d1c92bf83e4b04a7b95b54d58365da991195282",
+            "matches": true
+          },
+          "plugin/src/console-pairing.ts": {
+            "installedSha256": "7244f6d3fb15cabc0a00aecb79151f106fb59c79ec618128a115385bc1043801",
+            "repoSha256": "7244f6d3fb15cabc0a00aecb79151f106fb59c79ec618128a115385bc1043801",
+            "matches": true
+          },
+          "plugin/src/console-server.ts": {
+            "installedSha256": "cf9fb707520bc17e631a1cc3935460c9de05206b752695510667e8c3e938ebb3",
+            "repoSha256": "cf9fb707520bc17e631a1cc3935460c9de05206b752695510667e8c3e938ebb3",
+            "matches": true
+          },
+          "plugin/src/console-wallet.ts": {
+            "installedSha256": "0a7f744852f35c7e7d11802edd2983cce89ede9a11ba719c431a633a13605457",
+            "repoSha256": "0a7f744852f35c7e7d11802edd2983cce89ede9a11ba719c431a633a13605457",
+            "matches": true
+          },
+          "plugin/src/console-workflows.ts": {
+            "installedSha256": "026f2ccc20f51af44900338b2f7397fd38867fae902891289cc5d0877ab0a346",
+            "repoSha256": "026f2ccc20f51af44900338b2f7397fd38867fae902891289cc5d0877ab0a346",
+            "matches": true
+          },
+          "plugin/src/deposits.ts": {
+            "installedSha256": "6f9e1410ddcbb56f25bc82c4c60387967c531d260c9ef12d95ddbac7a996d002",
+            "repoSha256": "6f9e1410ddcbb56f25bc82c4c60387967c531d260c9ef12d95ddbac7a996d002",
+            "matches": true
+          },
+          "plugin/src/easytier-manifest.ts": {
+            "installedSha256": "0ff7eae45720f10b749f0c35d0390f0205fb2dc762152755d641a9c02c445ae8",
+            "repoSha256": "0ff7eae45720f10b749f0c35d0390f0205fb2dc762152755d641a9c02c445ae8",
+            "matches": true
+          },
+          "plugin/src/easytier.ts": {
+            "installedSha256": "daf3ad494014aa1a849a63008fa991e786bc2857d1349a217a3312c4065cab95",
+            "repoSha256": "daf3ad494014aa1a849a63008fa991e786bc2857d1349a217a3312c4065cab95",
+            "matches": true
+          },
+          "plugin/src/eip712.ts": {
+            "installedSha256": "b0dd433ce64d0f74fc6106f61770570db9c79d8d95cd7256a69b9063a6ee0879",
+            "repoSha256": "b0dd433ce64d0f74fc6106f61770570db9c79d8d95cd7256a69b9063a6ee0879",
+            "matches": true
+          },
+          "plugin/src/evm.ts": {
+            "installedSha256": "948919a9c7661d01452f9cff675454d7429e3b7ea0b8e2197b4be850e81910ae",
+            "repoSha256": "948919a9c7661d01452f9cff675454d7429e3b7ea0b8e2197b4be850e81910ae",
+            "matches": true
+          },
+          "plugin/src/index.ts": {
+            "installedSha256": "0424b23d00e4b3ef67b0ff3387a81bf8629b78b58ec8e1591421c37f0dce60fd",
+            "repoSha256": "0424b23d00e4b3ef67b0ff3387a81bf8629b78b58ec8e1591421c37f0dce60fd",
+            "matches": true
+          },
+          "plugin/src/keccak.ts": {
+            "installedSha256": "583be0b547e70b5b4eb09b7f8605fa89181bad7c5d9f552ce3e0a82a25242226",
+            "repoSha256": "583be0b547e70b5b4eb09b7f8605fa89181bad7c5d9f552ce3e0a82a25242226",
+            "matches": true
+          },
+          "plugin/src/ledger.ts": {
+            "installedSha256": "51c95bc7d7133e16e705c1ff9d4dcf934f99e349ba98105244dc9f2915fafdac",
+            "repoSha256": "aacf3c5faeb8d8ab61fc443dd76e527d1169b8673562725300696a5027ac8c02",
+            "matches": false
+          },
+          "plugin/src/legacy-recovery.ts": {
+            "installedSha256": "106be6de2c3a5df60d3448054e3828fe08901a4f1158392b812ff16e0aa2c7bd",
+            "repoSha256": "106be6de2c3a5df60d3448054e3828fe08901a4f1158392b812ff16e0aa2c7bd",
+            "matches": true
+          },
+          "plugin/src/lock.ts": {
+            "installedSha256": "8646f8197e1fc19654c95e88b5c83d1c036048762f1e82f2f9f9c2a41c39b4b7",
+            "repoSha256": "8646f8197e1fc19654c95e88b5c83d1c036048762f1e82f2f9f9c2a41c39b4b7",
+            "matches": true
+          },
+          "plugin/src/log.ts": {
+            "installedSha256": "cf88df38324e641050493a71d7950a3e910b7e34f6ac865d3a5a89428014ee15",
+            "repoSha256": "cf88df38324e641050493a71d7950a3e910b7e34f6ac865d3a5a89428014ee15",
+            "matches": true
+          },
+          "plugin/src/magpie.ts": {
+            "installedSha256": "33d286c6002c5e378c9152b5c69e5bf113e1510903255f4ef21fe28c63a917c4",
+            "repoSha256": "33d286c6002c5e378c9152b5c69e5bf113e1510903255f4ef21fe28c63a917c4",
+            "matches": true
+          },
+          "plugin/src/mainnet-gate.ts": {
+            "installedSha256": "04afc6675c2b8140da54515f7f4e1710fcfe3beec1c0d49f0a72f3eb7e9d52b0",
+            "repoSha256": "04afc6675c2b8140da54515f7f4e1710fcfe3beec1c0d49f0a72f3eb7e9d52b0",
+            "matches": true
+          },
+          "plugin/src/mainnet-surface.ts": {
+            "installedSha256": "c181dc9d1fd80386fe0eafd5a13f179dbd36989244c2b16a094efbdc81b56d2d",
+            "repoSha256": "c181dc9d1fd80386fe0eafd5a13f179dbd36989244c2b16a094efbdc81b56d2d",
+            "matches": true
+          },
+          "plugin/src/network.ts": {
+            "installedSha256": "e58aab953f9ad3e2ddf87b9c94a6d605f5706f3a873ef3e27618c479f3ca4e93",
+            "repoSha256": "e58aab953f9ad3e2ddf87b9c94a6d605f5706f3a873ef3e27618c479f3ca4e93",
+            "matches": true
+          },
+          "plugin/src/networks.ts": {
+            "installedSha256": "676ddde5846173694f895c0e1f8aca9319c719a8cf44771d6fe303e947264680",
+            "repoSha256": "676ddde5846173694f895c0e1f8aca9319c719a8cf44771d6fe303e947264680",
+            "matches": true
+          },
+          "plugin/src/p2p-payment-protocol.ts": {
+            "installedSha256": "6615b88f2163ca2986bfc7018743e070253456b1fc0bee92f0ae8d986661ccd0",
+            "repoSha256": "6615b88f2163ca2986bfc7018743e070253456b1fc0bee92f0ae8d986661ccd0",
+            "matches": true
+          },
+          "plugin/src/p2p-payment-store.ts": {
+            "installedSha256": "9826435cebdc5aa979f3acaf575d465ba73620a11a183c5595693a585a492396",
+            "repoSha256": "9826435cebdc5aa979f3acaf575d465ba73620a11a183c5595693a585a492396",
+            "matches": true
+          },
+          "plugin/src/p2p-payment.ts": {
+            "installedSha256": "eb4f6ef1d86efc8be087238932c2c1deb81fe098218338a779b87ea3055520c3",
+            "repoSha256": "eb4f6ef1d86efc8be087238932c2c1deb81fe098218338a779b87ea3055520c3",
+            "matches": true
+          },
+          "plugin/src/page-snapshot.ts": {
+            "installedSha256": "ffcafdcba5d527738b67f56268038a7354dbfca43df98b71cea433005f884b0b",
+            "repoSha256": "ffcafdcba5d527738b67f56268038a7354dbfca43df98b71cea433005f884b0b",
+            "matches": true
+          },
+          "plugin/src/paths.ts": {
+            "installedSha256": "469b52617d90f88dcffa5e29216b0b76889a31c8f0fe9c34659c8bb079123a2d",
+            "repoSha256": "469b52617d90f88dcffa5e29216b0b76889a31c8f0fe9c34659c8bb079123a2d",
+            "matches": true
+          },
+          "plugin/src/payment-local-service.ts": {
+            "installedSha256": "3bac892cbc773740c5eb23ddc2173a9ffc80ac35edf8ede38caafbadc58eb6ad",
+            "repoSha256": "3bac892cbc773740c5eb23ddc2173a9ffc80ac35edf8ede38caafbadc58eb6ad",
+            "matches": true
+          },
+          "plugin/src/payment-operations.ts": {
+            "installedSha256": "3c58fe14d0f65a4c92572aa55984e84c214ebe8c99b04ec480f91d550eaf95f6",
+            "repoSha256": "3c58fe14d0f65a4c92572aa55984e84c214ebe8c99b04ec480f91d550eaf95f6",
+            "matches": true
+          },
+          "plugin/src/payment-p2p-host.ts": {
+            "installedSha256": "3a9942104e5fabcf06d535e70f5cdcf3b007e758b1edc4d5c5d284d2cb1a9c3f",
+            "repoSha256": "3a9942104e5fabcf06d535e70f5cdcf3b007e758b1edc4d5c5d284d2cb1a9c3f",
+            "matches": true
+          },
+          "plugin/src/plugin-options.ts": {
+            "installedSha256": "2b0b251226ce4a81fa431e01d8fb77907ee3f53769b9192863bfdfae72c468d6",
+            "repoSha256": "2b0b251226ce4a81fa431e01d8fb77907ee3f53769b9192863bfdfae72c468d6",
+            "matches": true
+          },
+          "plugin/src/ports.ts": {
+            "installedSha256": "73b5d4b9cdddbc45b5d4a4a4508d11670ab6e156ef5c635482d5a17df413b3b1",
+            "repoSha256": "73b5d4b9cdddbc45b5d4a4a4508d11670ab6e156ef5c635482d5a17df413b3b1",
+            "matches": true
+          },
+          "plugin/src/pricing.ts": {
+            "installedSha256": "ddf47ba523894e8b8064f65ae7d6fbb0f79eafc6118617ea1594cc9aee4f9b47",
+            "repoSha256": "ddf47ba523894e8b8064f65ae7d6fbb0f79eafc6118617ea1594cc9aee4f9b47",
+            "matches": true
+          },
+          "plugin/src/provisioner.ts": {
+            "installedSha256": "a2116c827ec7987492678cdd8bf9e1d299c12d634cb19d0ea4e9c660ee099845",
+            "repoSha256": "a2116c827ec7987492678cdd8bf9e1d299c12d634cb19d0ea4e9c660ee099845",
+            "matches": true
+          },
+          "plugin/src/readonly-balance.ts": {
+            "installedSha256": "c59d00196619c85cd1f6467f79ae53c30ceee97f15be39f4473558e167c73630",
+            "repoSha256": "c59d00196619c85cd1f6467f79ae53c30ceee97f15be39f4473558e167c73630",
+            "matches": true
+          },
+          "plugin/src/receiving-networks.ts": {
+            "installedSha256": "f3f607c5bc453c4ec81ee5f747a7bd1b3ca3189f97b2d07c8d459bddb4c1e15d",
+            "repoSha256": "f3f607c5bc453c4ec81ee5f747a7bd1b3ca3189f97b2d07c8d459bddb4c1e15d",
+            "matches": true
+          },
+          "plugin/src/run.ts": {
+            "installedSha256": "4d537776f825b0a7f76f262772f01bb651630e1712cd67a518e4060faf1f77c7",
+            "repoSha256": "4d537776f825b0a7f76f262772f01bb651630e1712cd67a518e4060faf1f77c7",
+            "matches": true
+          },
+          "plugin/src/secp256k1.ts": {
+            "installedSha256": "4af540c69f077fc8b84478e5fee8f30ee153985ea78a5b2691e0a480e87aa60a",
+            "repoSha256": "4af540c69f077fc8b84478e5fee8f30ee153985ea78a5b2691e0a480e87aa60a",
+            "matches": true
+          },
+          "plugin/src/server.ts": {
+            "installedSha256": "66ff7908e6a8829d57ae0baf038ae5dc28aabada896fb5fd46172a57f20baca2",
+            "repoSha256": "66ff7908e6a8829d57ae0baf038ae5dc28aabada896fb5fd46172a57f20baca2",
+            "matches": true
+          },
+          "plugin/src/service.ts": {
+            "installedSha256": "4381b14cdd38f6f64028d61fa3e306ef7c24f4da6ed089bc4a94e85d825a29fa",
+            "repoSha256": "4381b14cdd38f6f64028d61fa3e306ef7c24f4da6ed089bc4a94e85d825a29fa",
+            "matches": true
+          },
+          "plugin/src/state.ts": {
+            "installedSha256": "f8b58399ac8c1c9a59b45e541c33ed218fbbc6437d8a4db7bd6c839dedf66d16",
+            "repoSha256": "f8b58399ac8c1c9a59b45e541c33ed218fbbc6437d8a4db7bd6c839dedf66d16",
+            "matches": true
+          },
+          "plugin/src/store.ts": {
+            "installedSha256": "83fc0c0a267e43bcf639830dd2abbd50a44202b65a0e8ef5fbcb854a733c9f2c",
+            "repoSha256": "83fc0c0a267e43bcf639830dd2abbd50a44202b65a0e8ef5fbcb854a733c9f2c",
+            "matches": true
+          },
+          "plugin/src/wallet-local-service.ts": {
+            "installedSha256": "5b2a91f7148454f7efd9dc239bca3b687462aa4aacc5e722e0b52db43c6b0345",
+            "repoSha256": "5b2a91f7148454f7efd9dc239bca3b687462aa4aacc5e722e0b52db43c6b0345",
+            "matches": true
+          },
+          "plugin/src/wallet-payment-send.ts": {
+            "installedSha256": "036c59a5ee0fc4e9bf4edcc7dec6a5489b8fd93d0c595fd45c49eea55f3a09d4",
+            "repoSha256": "036c59a5ee0fc4e9bf4edcc7dec6a5489b8fd93d0c595fd45c49eea55f3a09d4",
+            "matches": true
+          },
+          "plugin/src/wallet-vault.ts": {
+            "installedSha256": "8664a006352e87d9d23b1a2f4ff8ccc5d133ab18ece6c0d68762bb5e702ebb63",
+            "repoSha256": "8664a006352e87d9d23b1a2f4ff8ccc5d133ab18ece6c0d68762bb5e702ebb63",
+            "matches": true
+          },
+          "plugin/src/wallet-workflows.ts": {
+            "installedSha256": "c331d6a089fbf923ab159a93e8ccc9d526d32b42b1334584bc3e80c533bae597",
+            "repoSha256": "c331d6a089fbf923ab159a93e8ccc9d526d32b42b1334584bc3e80c533bae597",
+            "matches": true
+          },
+          "plugin/src/wallet.ts": {
+            "installedSha256": "6b09c39c797f9edd1cfe12e61254a7d0fb0835dbb999256c4aca348af41ab834",
+            "repoSha256": "6b09c39c797f9edd1cfe12e61254a7d0fb0835dbb999256c4aca348af41ab834",
+            "matches": true
+          },
+          "plugin/src/walletamount.ts": {
+            "installedSha256": "671db303b6dde34273883a98d5eb39ecf658a63825c73d3d3adc9e1040b68486",
+            "repoSha256": "671db303b6dde34273883a98d5eb39ecf658a63825c73d3d3adc9e1040b68486",
+            "matches": true
+          },
+          "plugin/src/walletstatement.ts": {
+            "installedSha256": "d150925238388db9b56cbc92e049447ca044534f79337ec4524f6cb6bbba3f88",
+            "repoSha256": "d150925238388db9b56cbc92e049447ca044534f79337ec4524f6cb6bbba3f88",
+            "matches": true
+          },
+          "plugin/src/walletview.ts": {
+            "installedSha256": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+            "repoSha256": "5d5becd6e4c5e173e3a2c86d431fdbd6ff4de318df15fb0d8e731e4d0bcc91f8",
+            "matches": true
+          },
+          "plugin/src/watcher.ts": {
+            "installedSha256": "f6d75cbe55cd554feb541bd47f08e5c2e077ff90d4fce73b0280e9cb91e6cf46",
+            "repoSha256": "f6d75cbe55cd554feb541bd47f08e5c2e077ff90d4fce73b0280e9cb91e6cf46",
+            "matches": true
+          }
+        },
+        "note": "Hashes describe the enabled installed package, not the unused fixture copy; process reload is a separate acceptance check."
+      }
+    }
+  },
+  "cleanup": null,
+  "constraints": {
+    "pluginInstallByGUI": true,
+    "businessOperationsByHarness": false,
+    "publicChainWrites": false,
+    "browserLaunchedByHarness": false
+  }
+}

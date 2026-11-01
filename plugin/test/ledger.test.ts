@@ -71,6 +71,30 @@ describe("credit arithmetic", () => {
     expect(ledger.balance("alice").balanceNanos).toBe(usdToNanos(12.5));
   });
 
+  test("reactivation opens a new window under the new key and keeps the old rows", () => {
+    const first = open();
+    ledger.closeWindow(first.id, "revoked");
+    ledger.revokeAccount("alice", "revoked");
+    const second = ledger.reactivateAccount({
+      consumerId: "alice",
+      keyId: "key-2",
+      keyName: "lab-2",
+      price: snap,
+      windowSpec: "3650d",
+      startAt: "2026-10-31T00:00:00.000Z",
+      resetAt: "2036-10-28T00:00:00.000Z",
+      capNanos: usdToNanos(5),
+    });
+    expect(second.id).not.toBe(first.id);
+    expect(ledger.account("alice")?.keyId).toBe("key-2");
+    expect(ledger.account("alice")?.status).toBe("active");
+    expect(ledger.window(first.id)?.status).toBe("closed");
+    expect(ledger.window(first.id)?.keyId).toBe("key-1");
+    expect(ledger.window(first.id)?.closeReason).toBe("revoked");
+    expect(ledger.deposit("opening:alice")?.status).toBe("applied");
+    expect(ledger.balance("alice").depositedNanos).toBe(usdToNanos(10));
+  });
+
   test("a repeated deposit id is a no-op, a conflicting one is refused", () => {
     open();
     ledger.depositIntent({ id: "dep-1", consumerId: "alice", amountNanos: usdToNanos(1), source: "simulated" });

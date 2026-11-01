@@ -1,0 +1,44 @@
+{
+  "schema": "ohmyaihub.phase10.external-wallet-eip6963/v1",
+  "at": "2026-10-31T14:51:00Z",
+  "platform": "macOS 26.6.2 arm64; Playwright 1.64.1 driving Google Chrome for Testing (playwright chromium-1234) headed; isolated profile /tmp/eip-old-profile; the user's Chrome and default profile were not used",
+  "extensions": [
+    {
+      "path": "/tmp/mm-ext",
+      "manifest_version": 3,
+      "rdns": "io.metamask",
+      "source": "Chrome Web Store CRX nkbihfbeogaeaoehlefnkodbefgpgknn"
+    },
+    {
+      "path": "/tmp/rabby-ext",
+      "manifest_version": 3,
+      "rdns": "io.rabby",
+      "source": "Chrome Web Store CRX acmacodkjbdgmoleebolmdjonilkdbch"
+    }
+  ],
+  "observed": {
+    "serviceWorkers": [
+      "chrome-extension://ibjkaclgbonbcpfnbobokohfmdihclao/service-worker.js",
+      "chrome-extension://aiappokeiknmcefoamjfeejlbmblflbe/sw.js",
+      "https://metamask.github.io/phishing-warning/v5.1.0/service-worker.js"
+    ],
+    "eip6963": [
+      {
+        "name": "MetaMask",
+        "rdns": "io.metamask",
+        "uuid": "044bd8b7-68f5-4495-b82b-ce879b2e3f94"
+      },
+      {
+        "name": "Rabby (display name redacted from this copy)",
+        "rdns": "io.rabby",
+        "uuid": "a18e6dd2-7336-4c91-b199-70a4b81d73a6"
+      }
+    ]
+  },
+  "not_completed": {
+    "product_pairing_and_discovery_in_console": "not run in this profile",
+    "user_selection_account_connect_network_switch_eip712": "UNKNOWN; MetaMask onboarding/vault creation and popup automation were not completed",
+    "note": "A real extension announcing EIP-6963 is proven; a fake provider was not used. Wallet Usability remains NO-GO for the product-level external-wallet requirement."
+  },
+  "commands": "see docs/phase10/final-acceptance/REPORT.md section on external wallet"
+}

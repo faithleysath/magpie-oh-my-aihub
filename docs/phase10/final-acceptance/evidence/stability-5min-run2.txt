@@ -1,0 +1,12 @@
+start terminateP=23 terminateC=22 at=1793460996
+30s coreP=10187, coreC=282,
+61s coreP=10187, coreC=282,
+91s coreP=10187, coreC=282,
+122s coreP=10187, coreC=282,
+152s coreP=10187, coreC=282,
+182s coreP=10187, coreC=282,
+213s coreP=10187, coreC=282,
+244s coreP=10187, coreC=282,
+274s coreP=10187, coreC=282,
+305s coreP=10187, coreC=282,
+end terminateP=23 terminateC=22 deltaP=0 deltaC=0

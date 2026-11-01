@@ -1,0 +1,32 @@
+{
+  "schema": "ohmyaihub.phase10.reactivation/v1",
+  "at": "2026-10-31T15:50:00Z",
+  "platform": "real portable Magpie 0.1.2289 + EasyTier 2.6.4, isolated anvil 84532",
+  "providerLog": [
+    "2026/10/31 23:12:19 plugin: [oh-my-aihub] 2026-10-31T15:12:19.070Z INFO created gateway key ohmyaihub-6e046c20 (eba9febdb34fd494d1301097) for 6e046c20",
+    "2026/10/31 23:30:48 plugin: [oh-my-aihub] 2026-10-31T15:30:48.522Z INFO revoked gateway key ohmyaihub-6e046c20 (eba9febdb34fd494d1301097) enforcement=keyRevoked",
+    "2026/10/31 23:33:40 plugin: [oh-my-aihub] 2026-10-31T15:33:40.725Z INFO reactivating consumer 6e046c20 after an explicit re-approval",
+    "2026/10/31 23:33:41 plugin: [oh-my-aihub] 2026-10-31T15:33:41.129Z INFO ledger account 6e046c20 reactivated with a new window (history preserved)",
+    "2026/10/31 23:33:41 plugin: [oh-my-aihub] 2026-10-31T15:33:41.129Z INFO reactivated gateway key ohmyaihub-6e046c20 (bfc22e2bb3e710fff8f0550c) for 6e046c20",
+    "2026/10/31 23:35:33 plugin: [oh-my-aihub] 2026-10-31T15:35:33.863Z INFO revoked gateway key ohmyaihub-6e046c20 (bfc22e2bb3e710fff8f0550c)"
+  ],
+  "consumerRecords": [
+    {
+      "consumerId": "6e046c20",
+      "keyName": "ohmyaihub-6e046c20",
+      "keyId": "bfc22e2bb3e710fff8f0550c",
+      "capUsd": 0.05,
+      "creditedUsd": 0,
+      "revokedAt": "2026-10-31T15:35:33.862Z",
+      "priceVersion": null,
+      "acceptedQuoteHash": "206ebcfb95d20212bbb4f00c42057fe0304cee63f0d84152a789490501e198d4"
+    }
+  ],
+  "result": {
+    "providerKeyIssuedOnce": true,
+    "oneActiveKey": true,
+    "ledgerHistoryPreserved": true,
+    "consumerDelivery": "PARTIAL: the provider-side re-approval issued a new key (see consumerRecords.keyId) and opened a new ledger window; the sealed key delivery to the consumer was blocked by the B stale-session HTTP 410 (open transport defect), so the consumer did not re-register the new Remote in this lab.",
+    "unitTest": "plugin/test/control-p2p-port.test.ts: an externally revoked consumer can be re-approved as a new generation (new key id, exactly one active key, old approval revoked, ledger reactivated, priceVersion bound)"
+  }
+}
