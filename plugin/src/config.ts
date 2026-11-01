@@ -29,6 +29,17 @@ export interface NetworkConfig {
    * kept from then on. The X25519 pair it needs lives in `easytier/secure-key.json`.
    */
   secureMode: boolean;
+  /**
+   * Listen for peers instead of only dialling out.
+   *
+   * Without it EasyTier opens no port at all, so every packet reaches this node
+   * through whatever peer already holds a connection to it — in practice the
+   * seed, which is slower and depends on it. A listener is what lets two nodes
+   * talk directly. Only turn it on where an inbound port is actually reachable
+   * (a host with a public address, or a port forwarded to it), and open that
+   * port in the host's firewall.
+   */
+  listen: boolean;
 }
 
 export interface ShareConfig {
@@ -153,7 +164,13 @@ export function normalizeConfig(raw: unknown): HubConfig {
     const name = text(src.name);
     const secret = text(src.secret);
     if (name && secret) {
-      network = { name, secret, initialNode: text(src.initialNode), secureMode: src.secureMode === true };
+      network = {
+        name,
+        secret,
+        initialNode: text(src.initialNode),
+        secureMode: src.secureMode === true,
+        listen: src.listen === true,
+      };
     }
   }
 
@@ -208,6 +225,7 @@ export function writeConfig(cfg: HubConfig): void {
           secret: cfg.network.secret,
           initialNode: cfg.network.initialNode,
           secureMode: cfg.network.secureMode,
+          listen: cfg.network.listen,
         }
       : null,
     share: { models: [...cfg.share.models] },

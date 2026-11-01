@@ -83,6 +83,8 @@ export const CONTROL_PORT = envPort("OH_MY_AIHUB_CONTROL_PORT", 3426);
 export const GATEWAY_PORT = envPort("OH_MY_AIHUB_GATEWAY_PORT", 3425);
 export const SOCKS_PORT = envPort("OH_MY_AIHUB_SOCKS_PORT", 13400);
 export const RPC_PORT = envPort("OH_MY_AIHUB_RPC_PORT", 15888);
+/** The one inbound port an overlay listener uses (TCP and UDP). */
+export const LISTEN_PORT = envPort("OH_MY_AIHUB_LISTEN_PORT", 11010);
 
 const MAX_RESTARTS = 5;
 const RESTART_WINDOW_MS = 5 * 60_000;
@@ -190,6 +192,17 @@ export function renderOverlayConfig(
   const peers = peerUris(network.initialNode);
   if (peers.length > 0) {
     lines.push(`peer = [${peers.map((uri) => `{ uri = ${toml(uri)} }`).join(", ")}]`);
+  }
+
+  // Listening is what makes the overlay P2P: with no listener this node opens no
+  // port and every packet reaches it through a peer that already holds a
+  // connection — in practice the seed. Both transports are opened so a direct
+  // TCP connection and a direct UDP one are equally possible; the host's
+  // firewall must let them in.
+  if (network.listen) {
+    lines.push(
+      `listeners = [${toml(`tcp://0.0.0.0:${LISTEN_PORT}`)}, ${toml(`udp://0.0.0.0:${LISTEN_PORT}`)}]`,
+    );
   }
 
   // EasyTier 2.6.4 binds the SOCKS5 portal to the URL's host. It must be

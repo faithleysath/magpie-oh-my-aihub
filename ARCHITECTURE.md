@@ -96,6 +96,8 @@ EasyTier 用 **no-TUN** 模式。插件用 `[[proxy_network]]` 把本机 LAN 地
 
 导出的那个本地地址由 `detectLanIPv4()` 选：排除容器网卡（`docker*`、`br-*`、`veth*`、`virbr*`、`podman*`、`cni*`、`flannel*`），因为它们看起来像私网。而私网优先正是排序规则；在一台真实地址是公网的 VPS 上，`docker0` 会赢过 `ens17`，导出就指向对端永远连不上的地址。网卡名按 `en0/en1/eth0/eth1/ens<数字>/enp<数字>s<数字>/wlan<数字>` 优先。真的选错时用 `OH_MY_AIHUB_LAN_IP` 覆盖。
 
+默认不写 `listeners`：EasyTier 一个端口都不开，节点只能透过已经连着的对端到达，实际就是种子。`join_network` 的 `listen: true` 会写 `listeners = ["tcp://0.0.0.0:11010", "udp://0.0.0.0:11010"]`，两个传输都开才能直连（TCP 和 UDP 两种都可用），主机防火墙要放行；只在入站端口真的可达时开，否则对端会先试直连再回退到中继，白白多一轮。
+
 三个端点都监听 `<lan>:3426`，走覆盖网明文 HTTP。
 
 **签名**（三处共用）：原文是规范化 JSON（键排序、无空白、UTF-8），签名是 EIP-191 `personal_sign`，65 字节 hex，`v` 为 27/28；被签对象带 `schema` 做域分离（`omai/catalog/1`、`omai/request/1`、`omai/poll/1`）；验签得到的地址必须等于 `payload.address`。`request`/`poll` 的 `ts` 要求 ±5 分钟。
@@ -221,6 +223,7 @@ remaining   = D − Magpie 原生 used（当前窗口）
 - EasyTier 2.6.4 的 SOCKS5 在 TOML 里绑 `127.0.0.1`；`--socks5` 会绑 `0.0.0.0`，所以只能用 TOML 的 `socks5_proxy`。
 - 没有 `listeners` 时 EasyTier 默认监听 `tcp://0.0.0.0:11010`，入网不需要额外配置监听地址。
 - **无 TUN 模式没有虚拟 IPv4**：`no_tun = true` 下 EasyTier 2.6.4 不给任何节点分配虚拟 IP（`--ipv4` 也不行），`peer list` 的 `ipv4` 字段恒为空。所以邻居的身份是 hostname，要拨的地址是它导出的 mapped CIDR（`proxy_cidrs`），不能用 ipv4 做过滤条件。
+- 不写 `listeners` 时 EasyTier 2.6.4 **一个端口都不开**（`node.listeners` 里只有内部 `ring://`），`peer list` 里对方的 `cost` 会是 `relay`；写了 `listeners` 之后要么直达（`p2p`），要么仍然回退到中继，取决于两边入站端口是否真的可达。
 - Magpie 的 `peak` 是「低谷价 + 高峰时段翻倍」（0.1.2289），倍率按 2 处理；`tiers` 是整笔请求按档计价。两者都原样进 `omai/catalog/2`。
 - **网关 `/v1/models` 才是“真会路由”的清单**：路由组 `unlists` 藏起来的副本不在选择器里，但网关照样按 `provider/model` 路由（实测用未勾选的 `deepseek/deepseek-v4-pro` 打到了 DeepSeek 上游）。所以插件取候选 id 用网关（2 ms），`magpie models` 只当网关不在回环上时的回落（它现场查所有 provider 的目录，约 10 秒）。
 - EasyTier 2.6.4 的 secure mode：同网节点必须都开，没开的一方会被对端反复踢掉（官方文档说服务端能接旧客户端，实测不行）；`local_public_key` 必须显式给，否则报 `local public key is not set`；`peer_public_key` 写了不生效（填一个假公钥照样能连上），所以现在不做公钥 pin。
