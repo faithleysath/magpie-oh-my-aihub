@@ -41,11 +41,9 @@ function installState(): Record<string, unknown> {
 
 export const networkDaemonTool: ToolDef = {
   description:
-    "管理让 EasyTier 以 root 跑 TUN 设备的系统守护进程（macOS）。" +
-    "status 只看状态；install 会弹出系统管理员密码框，装一个 LaunchDaemon，" +
-    "之后本机就能用 TUN 模式（对端源地址是真地址，Gateway Key 才有意义）；uninstall 删除它。" +
-    "install 先做二进制下载，可能超过工具超时，返回 state:starting 后用 status 轮询。" +
-    "没有 root、又不想装这个守护进程时，节点会继续以 no-TUN 运行。",
+    "管理让 EasyTier 以 root 跑 TUN 的系统守护进程（macOS）。status 看状态；install 会弹系统管理员密码框，" +
+    "装好后本机才有 TUN（对端源地址是真地址，Gateway Key 才有意义）；uninstall 删除它。" +
+    "install 可能要下载二进制，超过工具超时返回 state:starting，用 status 轮询。不装则继续以 no-TUN 运行。",
   args: {
     type: "object",
     properties: {

@@ -169,6 +169,12 @@ interface CachedPoll {
   remainingUsd: string;
   gatewayPort: number;
   ts: string;
+  /**
+   * When this answer was cached. Optional because rows written by an earlier
+   * version have no such field, and a stale balance with no age is exactly the
+   * thing `status.consuming` must not hand to an agent.
+   */
+  at?: string;
 }
 
 /** Stores what the poll said, without the key: `status` must never print one. */
@@ -181,6 +187,7 @@ function rememberPoll(runtime: Runtime, provider: string, poll: PollResponse): v
     remainingUsd: poll.remainingUsd,
     gatewayPort: poll.gatewayPort,
     ts: poll.ts,
+    at: new Date().toISOString(),
   };
   metaSet(runtime.db, `poll:${provider}`, JSON.stringify(cached));
 }
@@ -339,6 +346,8 @@ export function consumingSnapshot(runtime: Runtime): {
     state: string;
     gatewayPort: number;
     localPort: number;
+    /** when the balance above was last polled; null when never */
+    cachedAt: string | null;
   }[];
 } {
   const requests: CachedRequest[] = [];
@@ -364,6 +373,7 @@ export function consumingSnapshot(runtime: Runtime): {
       state: cached?.state ?? "unknown",
       gatewayPort: cached?.gatewayPort ?? GATEWAY_PORT,
       localPort: connection.localPort,
+      cachedAt: cached?.at ?? null,
     };
   });
   return { requests, connections };
@@ -448,9 +458,9 @@ export const requestAccessTool: ToolDef = {
 
 export const connectTool: ToolDef = {
   description:
-    "连接一个已批准的提供方：签名轮询 GET /request。pending 等待批准；approved 但没有 Key 表示等待充值；" +
-    "拿到 Key 后分配本地转发口（13425 起）、加 EasyTier 转发、在 Magpie 里注册 Remote Magpie 并确认至少一个授权模型可见。" +
-    "幂等，可反复调用；已连接时重复调用会刷新 Key 与模型。",
+    "连接一个已批准的提供方：签名轮询 GET /request。返回 state：pending = 等批准；waiting-deposit = 批准了但还没充值（没有 Key）；" +
+    "active = 已拿到 Key（分配 13425 起的本地转发口、加 EasyTier 转发、在 Magpie 里注册 Remote Magpie 并确认至少一个授权模型可见）。" +
+    "幂等，重复调用会刷新 Key 与模型。",
   args: {
     type: "object",
     properties: {
@@ -564,7 +574,9 @@ export const connectTool: ToolDef = {
     );
     return jsonText({
       provider,
-      state: "ready",
+      // "active" is the word `consumers` uses for the same thing on the other
+      // side; a private "ready" only made the caller learn a second vocabulary.
+      state: "active",
       models: poll.grantedModels,
       localPort,
       forwardAdded,
@@ -575,7 +587,8 @@ export const connectTool: ToolDef = {
 export const disconnectTool: ToolDef = {
   description:
     "断开一个提供方：删除本插件建的那条 Remote Magpie（id 以 omai- 开头），从 state.json 移除连接并重启 EasyTier 核心，" +
-    "让本地转发真正消失（EasyTier 2.6.4 无法在运行时删除转发）。重启期间其他连接会短暂中断。",
+    "让本地转发真正消失（2.6.4 无法在运行时删除转发）。重启期间其他连接会短暂中断。" +
+    'forward:"removed"（转发真的没了）/ "pending-restart"（核心没重启成功，下次重启才消失）/ "not-recorded"（没有连接记录）。',
   args: {
     type: "object",
     properties: {
@@ -619,7 +632,13 @@ export const disconnectTool: ToolDef = {
     }
 
     if (!connection) {
-      return jsonText({ provider, removed, forwardRemoved: false, restarted: false, ...(detail ? { detail } : {}) });
+      return jsonText({
+        provider,
+        removed,
+        forward: "not-recorded",
+        restarted: false,
+        ...(detail ? { detail } : {}),
+      });
     }
 
     const next = {
@@ -647,7 +666,10 @@ export const disconnectTool: ToolDef = {
     return jsonText({
       provider,
       removed,
-      forwardRemoved: true,
+      // The listener is only really gone when the core came back up without it.
+      // Reporting `true` regardless, as an earlier version did, told the caller
+      // the opposite of what the detail string said.
+      forward: restarted ? "removed" : "pending-restart",
       restarted,
       ...(restarted
         ? { note: "EasyTier restarted so the forward really disappears; other connections were interrupted briefly" }
@@ -659,8 +681,9 @@ export const disconnectTool: ToolDef = {
 
 export const connectionsTool: ToolDef = {
   description:
-    "列出本机持有的连接：提供方地址、授权模型、对方报告的余额/已用/剩余、本地已发送、待投递 claim、状态与本地转发口。" +
-    "会签名轮询每个提供方（对方离线时用上次缓存的值并标 unknown）。localSentUsd > balanceUsd 或 providerBehind:true 表示对方可能还没记上账。",
+    "列出本机持有的连接：提供方地址、授权模型、对方报告的余额/已用/剩余、本地已发送、待投递 claim、本地转发口。" +
+    'state 是提供方对我的授权状态（none / pending / approved / revoked，对方离线时为 unknown），cachedAt 是这些数字的缓存时间。' +
+    "会签名轮询每个提供方；localSentUsd > balanceUsd 或 providerBehind:true 表示对方可能还没记上账。",
   args: { type: "object", properties: {}, additionalProperties: false },
   async execute() {
     const runtime = await getRuntime();
@@ -677,6 +700,7 @@ export const connectionsTool: ToolDef = {
           state: cached?.state ?? "unknown",
           gatewayPort: cached?.gatewayPort ?? GATEWAY_PORT,
           localPort: connection.localPort,
+          cachedAt: cached?.at ?? null,
         };
         if (!connection.peerHost) return base;
         try {
@@ -691,6 +715,7 @@ export const connectionsTool: ToolDef = {
             ...claimDiagnostics(runtime, connection.provider, poll.balanceUsd),
             state: poll.state,
             gatewayPort: poll.gatewayPort,
+            cachedAt: new Date().toISOString(),
           };
         } catch {
           return base;

@@ -6,11 +6,11 @@ import { fail, jsonText, objectArgs, optionalBoolean, optionalString, requiredSt
 
 export const joinNetworkTool: ToolDef = {
   description:
-    "加入（或修改）EasyTier 私有网络。写配置、启动或重启 EasyTier 核心，最多等 40 秒。" +
-    '成功返回 {state:"online"}；仍在启动返回 {state:"starting"}，用 status 轮询；失败抛 E_NETWORK_TIMEOUT。' +
-    "网络开了 secure mode 时要传 secureMode:true：那样的网络会拒掉没开的节点（peers 永远是空的）。" +
-    "本机密钥自动生成并保存，不需要和别人交换任何密钥。same network 重新 join 时省略 secureMode/listen 会沿用上次的值。" +
-    "默认开监听（tcp+udp 11010）以便别人直连；主机防火墙要放行这两个 11010，传 listen:false 可以不开端口。",
+    "加入（或修改）EasyTier 私有网络：写配置并启动/重启核心，最多等 40 秒。" +
+    '返回 {state:"online"}；{state:"starting"} 时用 status 轮询；超时抛 E_NETWORK_TIMEOUT。' +
+    "secureMode 必须和网络里其他人一致——开了 secure mode 的网会拒掉没开的节点，唯一症状是 peers 永远为空；" +
+    "本机密钥自动生成，不用交换。同一网络重 join 省略参数时沿用上次的 secureMode/listen/tun。" +
+    "默认 listen:true（开 tcp+udp 11010，防火墙要放行）；入站不可达只会回退到中继。",
   args: {
     type: "object",
     properties: {

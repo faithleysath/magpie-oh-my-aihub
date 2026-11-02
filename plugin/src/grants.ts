@@ -24,6 +24,7 @@ import type { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { magpieClient, type Magpie, type KeyRecord } from "./magpie.ts";
 import { catalogTimestamp } from "./catalog-service.ts";
+import { listContacts } from "./contacts.ts";
 import {
   balanceMicro,
   creditByPayer,
@@ -155,7 +156,32 @@ export interface ConsumerView {
 
 export interface ConsumersListing {
   consumers: ConsumerView[];
-  unclaimed: { address: string; balanceUsd: string }[];
+  /**
+   * Payers with credited money and nothing usable in return: never applied,
+   * applied and not approved yet, rejected, or revoked and paid again. `name` is
+   * the alias from this node's address book, or null.
+   *
+   * This used to be called `unclaimed`, which read like "these payments were
+   * never claimed" — they were: money only reaches the ledger through a
+   * `omai/deposit/1` claim. What is missing is the grant, not the claim.
+   */
+  payersWithoutGrant: { address: string; name: string | null; balanceUsd: string }[];
+}
+
+/**
+ * One alias per address, first alphabetically. The address book allows several
+ * aliases for one address; the listing only has room for a display name.
+ */
+function contactNames(db: Database): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    for (const contact of listContacts(db)) {
+      if (!out.has(contact.address)) out.set(contact.address, contact.alias);
+    }
+  } catch {
+    // The address book is a convenience: its failure must not blank the listing.
+  }
+  return out;
 }
 
 export interface GrantsOptions {
@@ -185,6 +211,15 @@ function shortError(error: unknown): string {
 function longError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw.replace(/\s+/g, " ").trim().slice(0, 600) || "unknown error";
+}
+
+const MAX_LISTED_MODELS = 15;
+
+/** "a, b, c (+7 more)", or "none" — never an empty tail in a message. */
+export function modelListForError(ids: readonly string[]): string {
+  if (ids.length === 0) return "none";
+  const listed = ids.slice(0, MAX_LISTED_MODELS).join(", ");
+  return ids.length > MAX_LISTED_MODELS ? `${listed} (+${ids.length - MAX_LISTED_MODELS} more)` : listed;
 }
 
 export function normalizeAddress(value: unknown): string {
@@ -430,7 +465,7 @@ export class Grants {
     const asked = models !== undefined && models.length > 0 ? cleanModelList(models) : parseModels(request?.models);
     if (asked.length === 0) {
       throw new Error(
-        `E_INPUT: ${target} has no pending request; pass models:[...] to approve an address seen in consumers.unclaimed`,
+        `E_INPUT: ${target} has no pending request; pass models:[...] to approve an address seen in payersWithoutGrant`,
       );
     }
 
@@ -438,9 +473,11 @@ export class Grants {
     const published = new Set(this.publishedModels());
     const granted = asked.filter((id) => shareable.has(id) && published.has(id));
     if (granted.length === 0) {
+      // Name what would have worked: the caller cannot fix a rejection it cannot see.
+      const available = [...published].filter((id) => shareable.has(id)).sort();
       throw new Error(
         `E_INPUT: none of the requested models is currently shared and priced ` +
-          `(asked ${asked.length}; check native_models and share_models)`,
+          `(asked ${asked.length}); approvable now: ${modelListForError(available)}`,
       );
     }
 
@@ -600,7 +637,7 @@ export class Grants {
    * A deposit was credited for `payer`. The balance is already in
    * the ledger; this recomputes `D → cap` and moves the Gateway Key to match. A
    * payer without an authorization is not an error: the money is visible in
-   * `consumers.unclaimed`, and approving that address later issues the key.
+   * `payersWithoutGrant`, and approving that address later issues the key.
    */
   async onDeposit(payer: string): Promise<CreditResult> {
     return this.resync(payer, "deposit");
@@ -662,7 +699,7 @@ export class Grants {
     if (!consumer) {
       logger.info(
         `${kind}: ${target} has ${formatUsd4(balance)} but no authorization here; ` +
-          "it is listed in consumers.unclaimed",
+          "it is listed in payersWithoutGrant",
       );
       return {
         ...base,
@@ -859,12 +896,26 @@ export class Grants {
       };
     });
 
-    const known = new Set(rows.map((row) => row.address));
-    const unclaimed = creditByPayer(this.db, provider)
-      .filter((payer) => !known.has(payer.address))
-      .map((payer) => ({ address: payer.address, balanceUsd: formatUsd4(payer.micro) }));
+    // Excluding only payers who hold a *usable* grant. "Has a consumers row" was
+    // the old test, and it hid the one case worth seeing: a revoked payer who
+    // paid again — they kept their row and vanished from the listing, so the
+    // money sat there with nobody looking for it. `active` already has a key and
+    // `waiting-deposit` gets one on the next credit, so neither is a stranger.
+    const granted = new Set(
+      rows
+        .filter((row) => row.state === "active" || row.state === "waiting-deposit")
+        .map((row) => row.address),
+    );
+    const names = contactNames(this.db);
+    const payersWithoutGrant = creditByPayer(this.db, provider)
+      .filter((payer) => !granted.has(payer.address))
+      .map((payer) => ({
+        address: payer.address,
+        name: names.get(payer.address) ?? null,
+        balanceUsd: formatUsd4(payer.micro),
+      }));
 
-    return { consumers, unclaimed };
+    return { consumers, payersWithoutGrant };
   }
 
   private displayState(row: ConsumerDbRow, balance: bigint, used: bigint): ConsumerState {

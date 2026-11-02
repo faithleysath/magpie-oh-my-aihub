@@ -52,7 +52,7 @@ export const statusTool: ToolDef = {
         models: doc?.models ?? [],
         catalogTs: doc?.ts ?? null,
         consumers: listing.consumers,
-        unclaimed: listing.unclaimed,
+        payersWithoutGrant: listing.payersWithoutGrant,
       };
     };
     const consuming = () => consumingSnapshot(runtime);

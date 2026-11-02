@@ -5,6 +5,7 @@
 import { writeConfig } from "../config.ts";
 import { getRuntime } from "../runtime.ts";
 import { CATALOG_MAX_MODEL_ID, type CatalogModel } from "../catalog-service.ts";
+import { modelListForError } from "../grants.ts";
 import { listNativeModels } from "./native-models.ts";
 import { fail, jsonText, objectArgs, type ToolDef } from "./types.ts";
 
@@ -48,7 +49,13 @@ export const shareModelsTool: ToolDef = {
     const native = await listNativeModels();
     const shareable = new Map(native.filter((model) => model.shareable).map((model) => [model.id, model]));
     for (const id of ids) {
-      if (!shareable.has(id)) fail("E_INPUT", `${id} is not a native priced model`);
+      if (shareable.has(id)) continue;
+      const known = native.find((model) => model.id === id);
+      const why = known?.reason ? ` (${known.reason})` : " (not in Magpie's model list)";
+      fail(
+        "E_INPUT",
+        `${id} is not a native priced model${why}; shareable now: ${modelListForError([...shareable.keys()])}`,
+      );
     }
     const selected: CatalogModel[] = ids.map((id) => ({
       id,

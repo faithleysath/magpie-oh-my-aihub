@@ -258,7 +258,8 @@ export interface HistoryResult {
     from: string;
     to: string;
     amountRaw: string;
-    amountUsd: string;
+    /** the same amount rendered with the chain's decimals; never a USD conversion */
+    amount: string;
     txHash: string;
     logIndex: number;
     blockNumber: number;
@@ -273,7 +274,7 @@ export interface HistoryResult {
     asset: "usdc" | "native";
     to: string;
     amountRaw: string;
-    amountUsd: string;
+    amount: string;
     state: string;
     txHash: string;
     createdAt: string;
@@ -282,8 +283,10 @@ export interface HistoryResult {
 }
 
 /**
- * Local deposits and payouts, newest first. `amountUsd` is the raw amount with
- * the chain's own decimals — never a converted or rounded value.
+ * Local deposits and payouts, newest first. `amountRaw` is the integer minimal
+ * unit; `amount` is the exact same amount with the chain's own decimals. Neither
+ * is a USD conversion: the field used to be called `amountUsd`, which read like
+ * one.
  */
 export function paymentHistory(deps: HistoryDeps): HistoryResult {
   const limit = clampLimit(deps.limit);
@@ -300,7 +303,7 @@ export function paymentHistory(deps: HistoryDeps): HistoryResult {
       from: row.from_addr,
       to: row.to_addr,
       amountRaw: row.amount_raw,
-      amountUsd: formatTokenAmount(row.amount_raw, chain?.decimals ?? 0),
+      amount: formatTokenAmount(row.amount_raw, chain?.decimals ?? 0),
       txHash: row.tx_hash,
       logIndex: row.log_index,
       blockNumber: row.block_number,
@@ -319,7 +322,7 @@ export function paymentHistory(deps: HistoryDeps): HistoryResult {
       asset: (native ? "native" : "usdc") as "native" | "usdc",
       to: row.to_addr,
       amountRaw: row.amount_raw,
-      amountUsd: formatTokenAmount(row.amount_raw, native ? 18 : chain?.decimals ?? 0),
+      amount: formatTokenAmount(row.amount_raw, native ? 18 : chain?.decimals ?? 0),
       state: row.state,
       txHash: row.tx_hash,
       createdAt: row.created_at,
@@ -360,7 +363,8 @@ const SEND_ARGS = {
     claim: {
       type: "boolean",
       description:
-        "已知提供方默认 true：付款后自动投递入账 claim；传 false 则只转账、不通知提供者（赠送/不记额度），以后仍可用 claim_deposit 手动补",
+        "默认 true：目标是已知提供方时付款后自动投递入账 claim（返回 claimQueued:true）。" +
+        "传 false 则只转账、不通知提供者（赠送，返回 gift:true），以后仍可用 claim_deposit 补",
     },
   },
   required: ["chain", "to", "amount"],
@@ -369,11 +373,10 @@ const SEND_ARGS = {
 
 export const sendPaymentTool: ToolDef = {
   description:
-    "从节点钱包发送 USDC（BSC 或 Base）到任意地址：出金、给提供方充值都用它。无二次确认、无目标白名单。" +
-    '成功返回 state:"sent"；广播无法确认时返回 state:"unknown" 并给出已签名交易的哈希，工具不会重发——' +
-    "先核对再决定。需要该链的原生币付 gas。目标是已知提供方时默认自动排队一条入账 claim（claim:queued），" +
-    "提供者离线也不影响付款，后台会重试；传 claim:false 则不投递、当赠送，之后仍可用 claim_deposit 手动补；" +
-    "外部钱包转账用 claim_deposit。",
+    "从节点钱包发 USDC 或原生币到任意地址：出金、给提供方充值都用它。无二次确认、不限目标。" +
+    'state:"sent" 表示已广播；"unknown" 给出已签名交易的哈希，本工具绝不重发。' +
+    "需要该链原生币付 gas。目标是已知提供方时自动排队入账 claim（返回 claimQueued:true），提供者离线也会后台重试；" +
+    "claim:false 只转账不投递，返回 gift:true，之后仍可用 claim_deposit 补。",
   args: SEND_ARGS,
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
@@ -430,13 +433,12 @@ export const sendPaymentTool: ToolDef = {
         }
       }
     }
+    // One boolean per question: did a claim get queued, and was this a gift.
+    // A single `claim` field with four values made the caller enumerate cases.
     return jsonText({
       ...result,
-      ...(claimQueued ? { claim: "queued" } : {}),
-      ...(!claimEnabled && result.asset === "usdc" && (result.state === "sent" || result.state === "unknown")
-        ? { claim: "suppressed" }
-        : {}),
-      ...(result.asset === "native" ? { claim: "not_applicable" } : {}),
+      ...(result.asset === "usdc" ? { claimQueued } : {}),
+      ...(result.asset === "usdc" && !claimEnabled ? { gift: true } : {}),
     });
   },
 };
@@ -444,7 +446,7 @@ export const sendPaymentTool: ToolDef = {
 export const historyTool: ToolDef = {
   description:
     "本地账目：已确认（以及已回滚）的入账，加上本钱包的出金。limit 默认 50、上限 200；" +
-    "address 只过滤某个付款方的入账。金额是该链资产的十进制值（USDC 或原生币），不做换算。",
+    "address 只过滤某个付款方的入账。每条记录有 amountRaw（整数最小单位）和 amount（按该链小数位的十进制值，不做换算）。",
   args: {
     type: "object",
     properties: {

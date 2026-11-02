@@ -61,10 +61,9 @@ async function withdrawIfSelf(
 
 export const contactsTool: ToolDef = {
   description:
-    "本机地址簿：给钱包地址起名字。之后 send_payment 的 to、request_access / connect_provider / " +
-    "disconnect_provider 的 provider、approve_request / reject_request / revoke_consumer 的 address、" +
-    "history 的 address，都可以直接用名字代替 0x。action=list（默认）列出全部；add 需要 alias 和 address，" +
-    "可选 note，同名重写会改指向并返回 previousAddress（省略 note 则保留原备注）；remove 接受 alias，或直接给地址删掉它的全部别名。" +
+    "本机地址簿：给钱包地址起名字。之后所有收对方地址的参数（send_payment 的 to、各种 provider/address）都能用名字代替 0x。" +
+    "action=list（默认）/ add（需 alias+address，可选 note）/ remove（给 alias，或给地址删掉它全部别名）。" +
+    "同名重写改指向并返回 previousAddress；给自己地址起名会发布进目录。" +
     "名字只是本机便利：不进签名、不进目录、不参与授权、不是转账白名单。",
   args: {
     type: "object",

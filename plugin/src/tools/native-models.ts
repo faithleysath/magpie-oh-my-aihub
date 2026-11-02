@@ -108,11 +108,9 @@ export async function listNativeModels(): Promise<NativeModel[]> {
 
 export const nativeModelsTool: ToolDef = {
   description:
-    "列出本机 Magpie 的原生模型和价格（USD / 1M tokens），以及可否共享。阶梯价（tiers）和高峰加价（peak）" +
-    "现在照原样发布，不再是不可共享的理由。只有非 remote-magpie 的 provider 且价格可发布才 shareable:true；" +
-    "否则给 reason：no-price（Magpie 没有可用价格）/ rate-window（按时段计价，一个数字只代表当前时段）/ tier-limit（阶数超过 10）。" +
-    "暴露在被路由组 unlists 藏起来的模型副本也算：它们仍然可以被网关路由，只是不在模型选择器里。" +
-    "Magpie 不可用时抛 E_MAGPIE，不返回空列表。",
+    "列出本机 Magpie 的原生模型和价格（USD / 1M tokens），以及能否共享。只有非 remote-magpie 的 provider " +
+    "且价格完整才 shareable:true；否则给 reason：no-price / rate-window（按时段计价，一个数字只代表当前时段）/ " +
+    "tier-limit（阶数超过 10）。tiers 和 peak 会照原样签进目录。Magpie 不可用时抛 E_MAGPIE，不返回空列表。",
   args: NO_ARGS,
   async execute() {
     return jsonText({ models: await listNativeModels() });

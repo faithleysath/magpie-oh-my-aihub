@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { saveContact } from "../src/contacts.ts";
 import { insertCreditedDeposit, openLedger } from "../src/db.ts";
 import { Grants } from "../src/grants.ts";
 import type { KeyRecord, LimitStatus, Magpie } from "../src/magpie.ts";
@@ -133,5 +134,37 @@ describe("Gateway Key accounting", () => {
     const second = await grants.approve(PAYER, ["devin/swe-2"]);
     expect(second.state).toBe("waiting-deposit");
     expect(second.keyIssued).toBe(false);
+  });
+});
+
+describe("payersWithoutGrant", () => {
+  test("a payer with money and no grant is listed until it is approved", async () => {
+    const { grants } = setup();
+    const before = await grants.listing({ usage: false });
+    expect(before.payersWithoutGrant).toEqual([{ address: PAYER, name: null, balanceUsd: "5.0000" }]);
+
+    await grants.approve(PAYER, ["devin/swe-2"]);
+    const after = await grants.listing({ usage: false });
+    expect(after.payersWithoutGrant).toEqual([]);
+  });
+
+  test("a revoked payer who still holds money is listed again", async () => {
+    const { grants } = setup();
+    await grants.approve(PAYER, ["devin/swe-2"]);
+    await grants.revoke(PAYER);
+
+    const listing = await grants.listing({ usage: false });
+    // The regression this replaces: the revoked payer kept its consumers row and
+    // was therefore invisible while its money was still in the ledger.
+    expect(listing.consumers[0]?.state).toBe("revoked");
+    expect(listing.payersWithoutGrant).toEqual([{ address: PAYER, name: null, balanceUsd: "5.0000" }]);
+  });
+
+  test("an address-book alias is reported as the name", async () => {
+    const { grants } = setup();
+    saveContact(db!, { alias: "  张三 ", address: PAYER, now: new Date().toISOString() });
+
+    const listing = await grants.listing({ usage: false });
+    expect(listing.payersWithoutGrant).toEqual([{ address: PAYER, name: "张三", balanceUsd: "5.0000" }]);
   });
 });

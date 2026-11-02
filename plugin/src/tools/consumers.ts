@@ -17,7 +17,8 @@ import { resolveTarget } from "./resolve.ts";
 export const consumersTool: ToolDef = {
   description:
     "列出本节点的消费者：地址、已批准/申请的模型、余额、已用、剩余和状态（pending / waiting-deposit / active / revoked）。" +
-    "unclaimed 是有入账但还没申请访问的地址。不返回任何 Key。",
+    "payersWithoutGrant 是有入账但没有可用授权的付款方（没申请过 / 待批准 / 被拒 / 被撤销后又打了钱），" +
+    "带地址簿里的名字（name，可能为 null）。不返回任何 Key。",
   args: { type: "object", properties: {}, additionalProperties: false },
   async execute() {
     const runtime = await getRuntime();
