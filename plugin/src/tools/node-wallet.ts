@@ -206,7 +206,7 @@ export function exportWallet(path: string, overwrite = false): { address: string
 
 async function readChain(spec: ChainRecord, address: string): Promise<WalletChain> {
   try {
-    // Same client as the watcher: ordered endpoints, sticky failover, no cached
+    // Same client as the claim path: ordered endpoints, sticky failover, no cached
     // head. A single dead public RPC must not turn a balance into "unavailable".
     const client = clientFor(spec, { timeoutMs: 8_000, rounds: 1 });
     const [native, usdc] = await Promise.all([

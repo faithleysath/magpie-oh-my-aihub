@@ -615,7 +615,7 @@ let shared: Magpie | null = null;
  * The one Magpie client for this host.
  *
  * `serial()` is per instance, so a fresh client per call would let two
- * approvals (or a watcher credit and an approval) run `gateway-key add` at the
+ * approvals (or a claim credit and an approval) run `gateway-key add` at the
  * same time. One client is what makes "one CLI call at a time" true.
  */
 export function magpieClient(): Magpie {

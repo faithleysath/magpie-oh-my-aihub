@@ -10,14 +10,17 @@
 
 import { logger } from "./log.ts";
 import { boot } from "./runtime.ts";
+import { startClaimRetry } from "./claims.ts";
 import { TOOLS } from "./tools/index.ts";
 
 export default function plugin(_input?: unknown, _options?: unknown): {
   tool: typeof TOOLS;
 } {
-  void boot().catch((error) => {
-    logger.error(`plugin bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
-  });
+  void boot()
+    .then(() => startClaimRetry())
+    .catch((error) => {
+      logger.error(`plugin bootstrap failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
   return { tool: TOOLS };
 }
 

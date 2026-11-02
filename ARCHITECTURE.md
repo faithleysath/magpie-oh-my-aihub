@@ -2,7 +2,7 @@
 
 Oh My AIHub 是 Magpie 的一个纯后端插件：让同一个 EasyTier 私有网里的几台 Magpie 互相把对方的**原生模型**当作 Remote Magpie 来用，用链上 USDC 预付结算。
 
-插件不做 AI 网关，不转发、不计 token、不做第二套计费。AI 请求始终是「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」。插件不提供控制台、CLI 或本机管理 API；唯一交互方式是 Magpie 暴露给 agent 的 20 个 MCP 工具。Magpie 里只有一页静态文档（`plugin/page/doc.md`），教用户把 agent 接上这些工具。
+插件不做 AI 网关，不转发、不计 token、不做第二套计费。AI 请求始终是「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」。插件不提供控制台、CLI 或本机管理 API；唯一交互方式是 Magpie 暴露给 agent 的 21 个 MCP 工具。Magpie 里只有一页静态文档（`plugin/page/doc.md`），教用户把 agent 接上这些工具。
 
 明确不是：模型市场、代币、撮合、托管、跨链、法币通道、公网服务、多租户 SaaS。
 
@@ -19,7 +19,7 @@ Oh My AIHub 是 Magpie 的一个纯后端插件：让同一个 EasyTier 私有�
 | D6b | 价格能写进目录就共享，写不进就不共享：四段价签 `omai/catalog/1`，带阶梯价或高峰价签 `omai/catalog/2` | 公布价必须能被读者自己算出来；装不下就发 /2，而不是猜一个数 |
 | D7 | 只共享原生模型：非 `remote-magpie`、非 `group/…`、非 `auto/…`，且价格完整 | 不转售别人的通道，价格必须可算 |
 | D8 | 批准只给模型范围，不给额度；额度 = 充值余额；申请与打钱互相独立 | 只有一个钱来源，cap 可推导 |
-| D9 | 任何人往我的地址打钱都按 `from` 记账，不需要申请、单据或认领 | 熟人网络，付款是自愿行为 |
+| D9 | 付款方用本节点钱包付款后提交 `txHash` claim，提供者按链上 `from` 记账；不扫描外部转账 | 熟人网络；claim 只是把某一笔指给提供者看，仍然验链 |
 | D10 | 余额多少就能用多少；提供方不想被用就撤销 | 不需要 per-consumer 上限 |
 | D11 | 付款工具一次调用即转，无二次确认，收款地址不限 | agent 原生；出金也要方便 |
 | D12 | 链 RPC 内置默认值 | 没有界面配置 RPC |
@@ -35,7 +35,7 @@ D13 的后果：Magpie 改价会重算历史用量，「剩余额度」会自己
 Magpie 进程
  └─ 插件宿主（Bun）
      ├─ boot：读 state.json → 钱包 → SQLite → EasyTier（有网络时）
-     │        → 3426 目录服务 → 链观察器 → 20 个工具
+     │        → 3426 目录服务 → 链观察器 → 21 个工具
      ├─ EasyTier core：root daemon 的 TUN 或宿主 no-TUN；3426 目录/控制、
      │                3425 网关、13400 SOCKS5、13425+ 本地转发
      ├─ 内置钱包（ethers）：keygen / 地址 / 签名 / 验签 / ERC-20 transfer
@@ -55,23 +55,27 @@ Magpie 进程
 | --- | --- | --- |
 | `state.json` | `{version:3, network:{name,secret,initialNode,secureMode,listen,tun}, share:{models}, connections:[{provider,localPort,peerHost}], hostname, displayName}`；上一版留 `.prev` | `0600` |
 | `wallet/key.hex` | 节点私钥。工具永远不返回它 | `0600` |
-| `ledger.sqlite` | 入账、申请、消费者、出金、扫描游标；WAL，`-wal`/`-shm` 同行 | `0600` |
+| `ledger.sqlite` | 入账、申请、消费者、出金、待投递 claim；WAL，`-wal`/`-shm` 同行 | `0600` |
 | `easytier/current.toml` | 生成的 EasyTier 配置（导出、ACL、SOCKS5、secure mode、逐连接转发） | `0600` |
 | `easytier/secure-key.json` | 本节点的 X25519 密钥对（只在 secure mode 下生成）。换了它就不是同一个节点 | `0600` |
 | `plugin.log` | 脱敏日志（私钥、Gateway Key、网络密码不落盘） | `0600` |
 
 ## 链的发现方式
 
-两层，缺一不可：
+**只有 claim，没有后台扫块，也没有日志订阅。** 提供者不轮询 `eth_getLogs`，不维护扫描游标，也不开 `eth_subscribe("logs")`；链上 RPC 只在被调用时使用。
 
-1. **订阅（实时）**：为每条链开一个 `eth_subscribe("logs")`，只订阅本地址的 USDC `Transfer`。推送到的块号进一个「提示集合」，pass 结束时对这些**已成最终态**的块单独 `eth_getLogs(block..block)` 并直接入账 —— 不推进游标，所以扫描区间仍然连续，重复扫描由唯一键去重。实测 BSC 25 秒收到 112 条、Base 1317 条。
-2. **扫描（兜底与回填）**：保留原来的 15 秒轮询 + `eth_getLogs` 分片，负责首次回填、断线期间的空档、以及不支持订阅的端点。游标只连续前进。
+1. 消费者 `send_payment` 先把 USDC 交易发上链，拿到 `txHash`。
+2. 消费者把 `omai/deposit/1`（`txHash`，可选 `logIndex`）用本节点钱包签名，直连提供者的 `POST /deposit`。
+3. 提供者只查这一笔的 `eth_getTransactionReceipt`，核对 USDC `Transfer`、收款地址、付款方和最终性，然后幂等入账。
+4. 提供者离线时，消费者把 claim 留在本地 SQLite 队列，后台按退避一直重试；重启后继续。队列只在提供者明确返回 `credited` / `already` / `failed` 时结束。
+5. 交易所/外部钱包的转账没有本节点签名，不会自动入账；这是“只靠 claim”的产品约束。
+6. `send_payment` 的 `claim:false` 是“只转账、不投递”，用于赠送；`history` 里这条 payout 标 `gift`，以后仍可手动 `claim_deposit`。
 
-订阅只是加速器：`wss://` 由链的 HTTP 端点推导（`https://` → `wss://`），连不上就静默退回纯扫描。`wallet` 返回的 `sync` 里有每条链的 `head / cursor / behind / hints / tail` —— **「钱到了额度不涨」先看 `behind`**。
+消费者侧 `connections` 会显示提供者报告的 `balanceUsd/usedUsd/remainingUsd`、本地 `localSentUsd`、`pendingClaims` 和 `providerBehind`；差额大就用 `claim_deposit` 补发。
 
 `consumers.key_secret` 必须落盘（要交给对方），和 Magpie 自己的 `caller-keys.json` 同级敏感度。
 
-`ledger.sqlite` 六张表：
+`ledger.sqlite` 七张表：
 
 ```sql
 deposits(id TEXT PRIMARY KEY,      -- chain:token:tx:logIndex
@@ -92,6 +96,11 @@ consumers(address TEXT PRIMARY KEY, granted_models TEXT, requested_models TEXT,
 
 payouts(tx_hash TEXT PRIMARY KEY, chain_id INTEGER, token TEXT, to_addr TEXT,
         amount_raw TEXT, state TEXT, created_at TEXT);
+
+deposit_claims(id TEXT PRIMARY KEY, -- chainId:txHash
+               provider TEXT, chain_id INTEGER, tx_hash TEXT, log_index INTEGER,
+               state TEXT,          -- pending | credited | failed
+               attempts INTEGER, last_at TEXT, error TEXT, created_at TEXT);
 
 meta(k TEXT PRIMARY KEY, v TEXT);
 
@@ -119,9 +128,21 @@ EasyTier 用 **虚拟 IP** 组网：生成的 TOML 固定写 `dhcp = true`，每
 
 `listeners` **默认开**（`join_network` 的 `listen` 默认 `true`，`listen: false` 才关）：开着才有被直连的可能。不开时 EasyTier 一个端口都不开，所有流量都经已经连着的对端中继。入站端口不可达也不影响功能，只是那次直连会回退成中继。
 
-三个端点都在 3426 上：TUN 绑定本节点覆盖网地址，no-TUN 绑定 `127.0.0.1`；覆盖网内是明文 HTTP。
+四个端点都在 3426 上：TUN 绑定本节点覆盖网地址，no-TUN 绑定 `127.0.0.1`；覆盖网内是明文 HTTP。
 
-**签名**（三处共用）：原文是规范化 JSON（键排序、无空白、UTF-8），签名是 EIP-191 `personal_sign`，65 字节 hex，`v` 为 27/28；被签对象带 `schema` 做域分离（`omai/catalog/1`、`omai/request/1`、`omai/poll/1`）；验签得到的地址必须等于 `payload.address`。`request`/`poll` 的 `ts` 要求 ±5 分钟。
+**签名**（四处共用）：原文是规范化 JSON（键排序、无空白、UTF-8），签名是 EIP-191 `personal_sign`，65 字节 hex，`v` 为 27/28；被签对象带 `schema` 做域分离（`omai/catalog/1`、`omai/request/1`、`omai/poll/1`、`omai/deposit/1`）；验签得到的地址必须等于 `payload.address`。`request`/`poll`/`deposit` 的 `ts` 要求 ±5 分钟。
+
+### `POST /deposit`
+
+消费者告诉提供者“请查这一笔”。消息签名覆盖 `{schema,address,chainId,txHash[,logIndex],ts}`；`address` 必须是交易付款方。提供者收到后：
+
+1. 验签和 ±5 分钟窗口；
+2. `eth_getTransactionReceipt(txHash)`，检查 status、`USDC Transfer`、`to = 本节点地址`、`from = address`；
+3. 等区块达到 BSC 15 确认 / Base `finalized`；
+4. 用 `depositId` 唯一键入账并重算 cap/Key；
+5. 返回 `credited | already | pending | not_found | failed`，响应里的 `account` 不含 Gateway Key。
+
+`pending` 表示交易还不可见或不够最终，消费者后台会重试；`not_found` 表示 receipt 里没有该付款方转给本节点的 Transfer。`POST /deposit` 单独限流 12 次/地址/分钟，因为一次 claim 要读一次 receipt。
 
 ### `GET /catalog`
 
@@ -211,11 +232,11 @@ remaining   = D − used
 - **申请与批准是两件事**：消费方签名申请；提供方批准模型子集。批准不改变余额，余额也不自动产生授权。
 - **状态**：申请 `pending | approved | revoked`；消费者 `waiting-deposit | active | revoked`。
 - **撤销**：删除 Magpie 里的 Gateway Key（失败时用 rotate 兜底），删除前把该 key 的 used 转入 `used-base`；账目保留，重新批准会发新 Key（cap 已扣掉旧 key 的用量），消费方再 `connect_provider` 取一次。
-- **入账归属**：`Transfer.to` 是本节点地址，付款方是 `from`；不需要申请、单据或认领。交易所直接提币到提供方地址时，`from` 是交易所地址，那笔钱记在交易所名下，拿不到 Key。
+- **入账归属**：提供者只处理带本节点钱包签名的 `omai/deposit/1` claim；`Transfer.to` 是本节点地址、付款方是 `from`，仍然以链上 receipt 为准。交易所直接提币或外部钱包转账没有签名 claim，不会自动入账。
 - **最终性**：BSC 用 15 个确认（它的 `finalized` 标签等于 `latest`，没有深度信息），Base 用 `finalized` 标签。两条都拿不到就不入账，等下一轮。
 - **回滚**：已入账行所在块不再 canonical 时标 `reverted`，`D` 重算、`cap` 调低（`D` 归零就删 Key）；记录不删、不退款。
-- **出金**：`send_payment` 从节点钱包发 USDC 到任意地址，记录在 `payouts`，不影响任何余额；只广播一次，`E_TX_UNKNOWN` 要用哈希人工核对，不自动重发。
-- **金额**：全部是整数最小单位；BSC USDC 18 位，Base USDC 6 位，**永不混用**。
+- **出金**：`send_payment` 从节点钱包发 USDC（`asset:"usdc"`，默认）或原生币（`asset:"native"`，BSC 的 BNB / Base 的 ETH）到任意地址，记录在 `payouts`，不影响任何余额；只广播一次，`E_TX_UNKNOWN` 要用哈希人工核对，不自动重发。原生币只用于 gas 空投，不进 claim、不算提供方额度。
+- **金额**：全部是整数最小单位；BSC USDC 18 位，Base USDC 6 位，**永不混用**；原生币两边都是 18 位。
 
 ## Magpie 集成
 
@@ -259,52 +280,54 @@ remaining   = D − used
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/index.ts` | 插件入口。默认导出同步返回 `{tool}` 的 20 个工具；测试辅助放在 `_internal` 对象里，不额外导出函数。 |
+| `src/index.ts` | 插件入口。默认导出同步返回 `{tool}` 的 21 个工具；测试辅助放在 `_internal` 对象里，不额外导出函数。 |
 | `src/runtime.ts` | 一个宿主进程一个运行时：boot 顺序、30 秒目录重签、`cap`/Key 重同步、身份替换、退出钩子。 |
 | `src/config.ts` | `state.json`（version 3）的读写。 |
-| `src/db.ts` | `ledger.sqlite` 六张表和金额换算（整数 micro-USD）。 |
+| `src/db.ts` | `ledger.sqlite` 七张表和金额换算（整数 micro-USD）。 |
 | `src/grants.ts` | 申请、批准、拒绝、撤销，以及 Gateway Key 的签发/收窄/删除；`D → cap → key` 的唯一实现。 |
-| `src/http-router.ts` | 本插件唯一的监听：TUN 下绑覆盖网地址、no-TUN 下绑 `127.0.0.1` 的 3426，只有三个端点。 |
+| `src/http-router.ts` | 本插件唯一的监听：TUN 下绑覆盖网地址、no-TUN 下绑 `127.0.0.1` 的 3426，四个端点。 |
 | `src/catalog-service.ts` | `omai/catalog/1`、`/2`、`/3` 的构建、签名、解析；改共享只重签内存里的文档。 |
 | `src/signing.ts` | 规范化 JSON 与 EIP-191 `personal_sign`/验签。 |
 | `src/overlay.ts` | EasyTier TUN/no-TUN 生命周期：下载校验、生成 TOML、按 DHCP 地址分配转发口、重启与停止。 |
 | `src/socks.ts` | 经本机 EasyTier SOCKS5 发一个 HTTP 请求。 |
-| `src/chain-ws.ts` | 每条链的 `eth_subscribe("logs")` 加速器；连不上就静默退回纯扫描。 |
 | `src/daemon.ts` | macOS root LaunchDaemon 的安装、卸载与状态；配置由用户侧写、root 侧校验后运行。 |
 | `src/tun.ts` | 判断本机能否创建 TUN 设备（root / `OH_MY_AIHUB_TUN` 覆盖）。 |
 | `src/remote-provider.ts` | 识别本插件在 Magpie 里创建的 Remote Magpie（id + loopback URL 双重证明）。 |
 | `src/contacts.ts` | 地址簿：`alias → 地址` 的读写与归一化（去空格、转小写）。 |
 | `src/easytier-manifest.ts` | 固定 EasyTier 2.6.4 各平台资产与 SHA-256。 |
-| `src/chain.ts` | BSC/Base 注册表、USDC 精度、JSON-RPC 读取与唯一写路径。 |
-| `src/chain-watcher.ts` | 每链一个扫描循环：读头、算最终块、按块取 `Transfer` 日志、凭 receipt 入账、复查回滚。 |
+| `src/chain.ts` | BSC/Base 注册表、USDC/原生币精度、按需 JSON-RPC（receipt/余额/发送）与唯一写路径。 |
+| `src/deposit-claim.ts` | 提供者侧 claim 校验：receipt、Transfer、最终性、幂等入账；不扫区间。 |
+| `src/claims.ts` | 消费者侧 claim 队列：签名、直连提供者、退避重试、重启恢复。 |
 | `src/magpie.ts` | Magpie CLI 封装（模型、Gateway Key、Remote Magpie），以及价格能否被冻结的判断。 |
 | `src/paths.ts` | 插件数据目录与 `magpie` 可执行文件的解析（`OH_MY_AIHUB_MAGPIE` 可覆盖）。 |
 | `src/store.ts` | 原子写 JSON/TOML（临时文件 + fsync + rename，JSON 保留 `.prev`）。 |
 | `src/run.ts` | 唯一启动外部程序的地方：argv 数组，没有 shell。 |
 | `src/secure-key.ts` | secure mode 的 X25519 密钥对：首用生成、持久化、注册为日志敏感值。 |
 | `src/log.ts` | 脱敏日志（私钥、Key、网络密码、bearer 不落盘）。 |
-| `src/tools/*.ts` | 20 个工具；`types.ts` 是工具定义类型，`resolve.ts` 把地址参数里的别名解析成地址，`node-wallet.ts` 是钱包生命周期（不是工具）。 |
+| `src/tools/*.ts` | 21 个工具；`types.ts` 是工具定义类型，`resolve.ts` 把地址参数里的别名解析成地址，`node-wallet.ts` 是钱包生命周期（不是工具），`deposit.ts` 是手动 `claim_deposit`。 |
 | `scripts/build-page.ts` | 把 `page/doc.md` 渲染成 `page/index.html`，渲染器是很小的 Markdown 子集。 |
 
 ## 已知限制
 
 1. **私钥只保证「工具不返回」**。导出到文件后，如果 agent 有本机文件读权限，它还是能读到那个文件。这是本机权限问题，插件挡不住。
-2. **转 USDC 需要 gas**。地址上没有 BNB/ETH 时 `send_payment` 会失败，`wallet` 会显示 gas 余额。
+2. **转 USDC 或原生币都需要 gas**。地址上没有 BNB/ETH 时 `send_payment` 会失败，`wallet` 会显示 gas 余额。
 3. **同一个钱包 = 同一个账户**。两台机器用同一个私钥，余额共享。
 4. **价格变更会改变剩余额度**（D13），可能出现剩余为负、Magpie 拒服务，充值即恢复。
 5. **覆盖网地址不是身份**。安全靠签名 + Gateway Key + 余额；链路加密由网络决定（secure mode 下中继也不可解密，普通模式下中继能解）。
 6. **一笔转错地址的付款无法找回**。`send_payment` 不限目标、不二次确认。
-7. **交易所提币地址会成为账户**，但它拿不到 Key，所以那笔钱用不上。
+7. **交易所提币地址会成为付款方**，但它拿不到 Key；claim-only 也不会自动把它记到你的节点名下。
 8. **移除连接会重启 EasyTier 核心**（上游 bug），其他连接短暂中断。
 9. **一个数据目录一个宿主**。同时开两个 Magpie 指向同一数据目录不成立；没有 host lock，快速重启时会有一段 EasyTier 重试期。
 10. **0.1.2171 及更早版本没有 Library 自动接线**，只能手工把 MCP 地址填进 agent。
 11. **目录价格最多落后一个 tick**：Magpie 没有改价通知，目录每 30 秒重签。
-12. **首次扫描只回溯 24 小时**：全新安装的钱包地址是刚生成的，正常不会有更早的入账；导入一个早已收过钱的私钥则可能漏掉旧记录。
-13. **别的机器上的 agent** 要调这些工具，需要 Magpie 打开局域网共享并持有 Gateway Key；本机 agent 默认免 Key。
-14. **地址簿不跟钱包走**。别名存在本机 `ledger.sqlite`，换机器或换数据目录要重新录；同一个私钥在两台机器上不共享别名。
-15. **Remote Magpie 的 Gateway Key 仍会出现在 Magpie CLI 的 argv 里**。`magpie provider add remote-magpie <key>` 没有 stdin 形式，本机同用户的进程列表可能看到它；插件自己的 `gateway-key add` 已改用 `--key -`。
-16. **目录 `ts` 超过 5 分钟会被判为过期**：提供方每 30 秒重签；Magpie 读不到模型时保留旧文档，但超过 5 分钟后 `discover` 会把该节点标成离线，而不是拿旧价格继续算。
-17. **RPC 端点可以在环境里覆盖**：`OH_MY_AIHUB_BSC_RPC`、`OH_MY_AIHUB_BASE_RPC`（逗号分隔）。公共端点限流时，扫描会退避并按上次成功的端点继续，但恢复速度仍取决于端点。
+12. **别的机器上的 agent** 要调这些工具，需要 Magpie 打开局域网共享并持有 Gateway Key；本机 agent 默认免 Key。
+13. **地址簿不跟钱包走**。别名存在本机 `ledger.sqlite`，换机器或换数据目录要重新录；同一个私钥在两台机器上不共享别名。
+14. **Remote Magpie 的 Gateway Key 仍会出现在 Magpie CLI 的 argv 里**。`magpie provider add remote-magpie <key>` 没有 stdin 形式，本机同用户的进程列表可能看到它；插件自己的 `gateway-key add` 已改用 `--key -`。
+15. **目录 `ts` 超过 5 分钟会被判为过期**：提供方每 30 秒重签；Magpie 读不到模型时保留旧文档，但超过 5 分钟后 `discover` 会把该节点标成离线，而不是拿旧价格继续算。
+16. **claim 只覆盖本插件钱包发出的付款**：`send_payment` 能自动排队；交易所/外部钱包转账没有本节点签名，不会自动入账。
+17. **RPC 端点可以在环境里覆盖**：`OH_MY_AIHUB_BSC_RPC`、`OH_MY_AIHUB_BASE_RPC`（逗号分隔）。公共端点限流时，按需调用会退避并按上次成功的端点继续。
+18. **没有区块扫描 = 没有自动恢复**：提供者账本丢失或消费者 claim 丢失时，链上入账不会自己回来；需要消费者重发 claim 或人工按 `txHash` 处理。
+19. **BSC 深重组不会被复查**：claim 只在 15 个确认后入账；没有后台复查再做 reorg 回滚检查。Base 用 `finalized`，不受这条影响。
 
 ## 验证
 
@@ -315,7 +338,7 @@ bun run test           # bun test（签名、目录、账本、cap、RPC failove
 bun run build:page     # page/doc.md -> page/index.html
 ```
 
-临时目录 boot 冒烟：`OH_MY_AIHUB_MAGPIE=/nonexistent/magpie`，import `plugin/src/index.ts`；默认导出应返回 20 个工具，生成 `wallet/key.hex`（0600）与六张表，`status.network.state = "offline"`。
+临时目录 boot 冒烟：`OH_MY_AIHUB_MAGPIE=/nonexistent/magpie`，import `plugin/src/index.ts`；默认导出应返回 21 个工具，生成 `wallet/key.hex`（0600）与七张表，`status.network.state = "offline"`。
 
 链上实验只在本地 anvil 或受控模拟 RPC 上做；真实链只做只读。测试在 `plugin/test/`，CI 跑 typecheck、test 和 build:page。
 
@@ -327,6 +350,7 @@ bun run build:page     # page/doc.md -> page/index.html
 - 不做存款意图、EIP-712 单据、归属认领、对账单、离线账单文件。
 - 不做浏览器钱包、托管、多钱包、HD 账户、每消费者独立地址。
 - 不做退款、争议、仲裁、撮合、代币、跨链、法币。
+- 不做区块扫描或日志订阅；提供者只在 claim 到达时按需查一笔 receipt。
 - 不做 DHT、mDNS、新路由、中心目录服务器。
 - 不做 ENS/域名解析、不做全网友好名、不做跨机同步的通讯录：地址簿只解决本机打字。
 - 不把 Magpie 管理界面暴露到覆盖网（唯一例外是 Magpie 自己的模型网关，它本来就要给伙伴用）。
@@ -352,8 +376,8 @@ bun run build:page     # page/doc.md -> page/index.html
 | no-TUN 提供方无法计费 | 两个 no-TUN 节点跨机互访时，服务端看到的源地址是 `127.0.0.1`，Magpie 当本机免 Key，所以 no-TUN 不公布 3425 |
 | 虚拟 IP 来自 DHCP 且默认关闭 | 写 `dhcp = true` 后节点各自拿到 `10.126.126.x`；不写则全网没有虚拟 IP（实测 2.6.4 的 `DhcpConfig::default()` 是 `Enabled(false)`） |
 | 导出子网在 no-TUN 下不可用 | `mapped_cidr` + SOCKS5、`port_forward` 指向映射地址，2.6.4 与 2.7.0 都超时；这条路径已删除 |
-| 订阅推送能满足入账 | BSC 扫描游标落后 73,504 块、`getLogs` 全部 429 时，一笔 0.00003 USDC 在 44 秒内入账，日志标注 `via subscription` |
+| claim 入账 | 消费者离线重试、提供者恢复后 `POST /deposit` 只查一笔 receipt；重复 claim 幂等 |
 | macOS 无特权 TUN | LaunchDaemon（`dev.omai.easytier`）以 root 运行包装脚本，插件只写配置；`status` 里 `mode=tun`、`delegate=true` |
 | 未验证 | Linux 桌面、Windows、三节点以上的路由收敛与中继回退 |
 
-验证方法可以复用：`wallet` 的 `sync` 看扫描进度，`easytier-cli peer list` 看 `cost`（p2p / relay），覆盖网直连 `http://<虚拟IP>:3425/v1/models` 看是否 401。
+验证方法可以复用：`connections` 看 `pendingClaims/providerBehind`，`easytier-cli peer list` 看 `cost`（p2p / relay），覆盖网直连 `http://<虚拟IP>:3425/v1/models` 看是否 401。

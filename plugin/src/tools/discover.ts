@@ -169,6 +169,12 @@ function findPeer(peers: DiscoveredPeer[], address: string): DiscoveredPeer | un
   return peers.find((peer) => peer.address?.toLowerCase() === wanted);
 }
 
+/** Whether the last discovery pass saw this address online; no network call. */
+export function knownPeer(address: string): boolean {
+  const wanted = address.trim().toLowerCase();
+  return Boolean(cache?.peers.some((peer) => peer.address?.toLowerCase() === wanted && peer.online));
+}
+
 /**
  * Where to send a signed request for one address.
  *
@@ -181,7 +187,9 @@ export async function peerEndpoint(address: string): Promise<PeerEndpoint> {
   const wanted = address.trim().toLowerCase();
   let peers = cache?.peers ?? [];
   let peer = findPeer(peers, wanted);
-  if (!peer) {
+  // A provider that restarted has a new overlay address; a cached answer older
+  // than the TTL must not pin every retry to the old one.
+  if (!peer || !cache || Date.now() - cache.at >= CACHE_TTL_MS) {
     peers = await loadPeers(true);
     peer = findPeer(peers, wanted);
   }

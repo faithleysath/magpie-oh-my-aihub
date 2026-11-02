@@ -7,6 +7,7 @@ import {
   parseCatalogDocument,
   type CatalogPrice,
 } from "../src/catalog-service.ts";
+import { depositPayload } from "../src/http-router.ts";
 
 const PRICE: CatalogPrice = { in: 1, out: 2, cacheRead: 0.1, cacheWrite: 0.2 };
 
@@ -18,6 +19,14 @@ describe("canonicalJson", () => {
 });
 
 describe("EIP-191 signatures", () => {
+  test("signs the exact deposit-claim payload", async () => {
+    const wallet = Wallet.createRandom();
+    const payload = depositPayload(wallet.address.toLowerCase(), 56, "0x" + "ab".repeat(32), 1, new Date().toISOString());
+    const signature = await signCanonical(wallet, payload);
+    expect(signerOf(payload, signature)).toBe(wallet.address.toLowerCase());
+    expect("logIndex" in depositPayload(wallet.address, 56, "0x" + "ab".repeat(32), undefined, payload.ts)).toBe(false);
+  });
+
   test("round-trips and rejects a different payload", async () => {
     const wallet = Wallet.createRandom();
     const payload = { schema: "omai/test/1", address: wallet.address, n: 1 };

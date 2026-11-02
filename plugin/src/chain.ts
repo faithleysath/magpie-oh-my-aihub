@@ -8,7 +8,7 @@
 // 1e12. `db.ts` imports `decimalsForChain` from here for that reason.
 //
 // Reading is failover over an ordered endpoint list, with the endpoint that last
-// worked remembered: one dead public RPC must not stop the watcher. Writing is a
+// worked remembered: one dead public RPC must not stop an on-demand read. Writing is a
 // single legacy transaction, signed locally and broadcast once — never retried,
 // because "maybe it went out" is a different answer from "it failed".
 
@@ -39,20 +39,14 @@ export interface ChainRecord {
   /** what the chain charges gas in, for error messages */
   nativeSymbol: string;
   finality: FinalityPolicy;
-  /** blocks per 24h, used for the first scan when no cursor is stored */
-  lookbackBlocks: number;
   explorerTx?: string;
 }
 
 /**
- * Ordered endpoints, first is the default. The order is about `eth_getLogs`,
- * because reading balances is easy and reading history is not: measured on
- * 2026-11-01, BSC's own `bsc-dataseed` answers `eth_getLogs` with
- * `-32005 limit exceeded` even for a single block, `bsc.blockrazor.xyz` allows
- * 25 blocks per query, and publicnode allows thousands. The watcher halves its
- * range when a provider refuses, so a capped endpoint costs time, not
- * correctness. `bsc-dataseed` stays last because it is still the most reliable
- * endpoint for `eth_blockNumber`, receipts and broadcasting.
+ * Ordered endpoints, first is the default. The plugin no longer scans blocks:
+ * these are used for an on-demand receipt, balance, nonce/estimate or broadcast.
+ * `bsc-dataseed` stays last because it is still the most reliable endpoint for
+ * `eth_blockNumber`, receipts and broadcasting; publicnode is first for reads.
  */
 function rpcUrls(env: string, fallback: readonly string[]): readonly string[] {
   const raw = process.env[env]?.trim();
@@ -68,9 +62,8 @@ const BSC_RPC = rpcUrls("OH_MY_AIHUB_BSC_RPC", [
 ]);
 
 /**
- * Base: publicnode answered a 5000-block `eth_getLogs`; `mainnet.base.org`
- * answered `-32011 request limit reached` for the same query, so it is the
- * failover for reads and the trustworthy head. Both serve receipts and sends.
+ * Base: publicnode answers receipts/head; `mainnet.base.org` is the failover
+ * and the official head. Both serve receipts and sends.
  */
 const BASE_RPC = rpcUrls("OH_MY_AIHUB_BASE_RPC", [
   "https://base-rpc.publicnode.com",
@@ -88,7 +81,6 @@ export const BSC_CHAIN: ChainRecord = {
   decimals: 18,
   nativeSymbol: "BNB",
   finality: { mode: "confirmations", confirmations: 15 },
-  lookbackBlocks: 115_200,
   explorerTx: "https://bscscan.com/tx/",
 };
 
@@ -102,7 +94,6 @@ export const BASE_CHAIN: ChainRecord = {
   decimals: 6,
   nativeSymbol: "ETH",
   finality: { mode: "finalized" },
-  lookbackBlocks: 43_200,
   explorerTx: "https://basescan.org/tx/",
 };
 
@@ -232,13 +223,6 @@ export interface RpcReceipt {
   logs: RpcLog[];
 }
 
-export interface LogFilter {
-  address: string;
-  fromBlock: number;
-  toBlock: number;
-  topics: (string | null | string[])[];
-}
-
 function asHex(value: number | "latest" | "finalized" | "pending"): string {
   return typeof value === "number" ? `0x${value.toString(16)}` : value;
 }
@@ -253,8 +237,8 @@ function shortError(error: unknown): string {
  *
  * `call` walks the endpoints from the last-known-good one and returns the first
  * success. The last reason is surfaced as `E_RPC`, so a failure names the chain
- * and not an opaque fetch error. Nothing is cached: a watcher pass always sees
- * the head it asked for.
+ * and not an opaque fetch error. Nothing is cached: every call sees the head it
+ * asked for.
  */
 export class RpcClient {
   private readonly urls: string[];
@@ -358,17 +342,6 @@ export class RpcClient {
     return Number(BigInt(await this.call<string>("eth_blockNumber")));
   }
 
-  async getLogs(filter: LogFilter): Promise<RpcLog[]> {
-    return this.call<RpcLog[]>("eth_getLogs", [
-      {
-        address: filter.address,
-        fromBlock: asHex(filter.fromBlock),
-        toBlock: asHex(filter.toBlock),
-        topics: filter.topics,
-      },
-    ]);
-  }
-
   async receipt(txHash: string): Promise<RpcReceipt | null> {
     return this.call<RpcReceipt | null>("eth_getTransactionReceipt", [txHash]);
   }
@@ -447,6 +420,30 @@ export class RpcClient {
     } catch {
       throw new Error(`E_RPC: ${token} balanceOf returned malformed data`);
     }
+  }
+}
+
+/**
+ * The last block this chain can prove final, or null when it cannot today.
+ * Used by the deposit-claim path:
+ * BSC is a confirmation depth, Base uses the `finalized` tag.
+ */
+export async function finalBlockFor(chain: ChainRecord, client: RpcClient, head: number): Promise<number | null> {
+  if (chain.finality.mode === "confirmations") {
+    const final = head - chain.finality.confirmations;
+    return final >= 0 ? final : null;
+  }
+  try {
+    const block = await client.block("finalized");
+    if (!block?.number || !/^0x[0-9a-fA-F]+$/.test(block.number)) return null;
+    const number = Number(BigInt(block.number));
+    if (!Number.isSafeInteger(number)) return null;
+    return Math.min(number, head);
+  } catch (error) {
+    // A provider without the `finalized` tag cannot be used for credit on a
+    // chain that needs it: guessing `latest` here would credit unfinal blocks.
+    logger.warn(`chain: ${chain.label} has no finalized block (${shortError(error)})`);
+    return null;
   }
 }
 
@@ -531,6 +528,16 @@ export async function prepareUsdcTransfer(
   }
 }
 
+export interface PreparedNativeTransfer {
+  to: string;
+  value: bigint;
+  nonce: number;
+  gasLimit: bigint;
+  gasPrice: bigint;
+  /** gasLimit × gasPrice: the native balance the send must leave for gas */
+  fee: bigint;
+}
+
 export interface SendUsdcRequest {
   chain: ChainRecord;
   wallet: Wallet;
@@ -583,5 +590,79 @@ export async function sendPreparedUsdc(req: SendUsdcRequest): Promise<SendUsdcRe
     );
   }
 
+  return { txHash, nonce: prepared.nonce, gasLimit: prepared.gasLimit, gasPrice: prepared.gasPrice };
+}
+
+/** Headroom for a plain native transfer; a 21k transfer becomes 26k. */
+const NATIVE_GAS_HEADROOM = 5_000n;
+
+/**
+ * Prepare a native-coin transfer (BNB on BSC, ETH on Base). Native withdrawals
+ * are just gas money for a human; they never become provider credit and are not
+ * part of the deposit-claim path.
+ */
+export async function prepareNativeTransfer(
+  client: RpcClient,
+  chain: ChainRecord,
+  from: string,
+  to: string,
+  amountRaw: bigint,
+): Promise<PreparedNativeTransfer> {
+  if (amountRaw <= 0n) throw new Error("E_INPUT: amount must be greater than zero");
+  try {
+    const [gasPrice, nonce, estimate] = await Promise.all([
+      client.gasPrice(),
+      client.nonce(from),
+      client.estimateGas({ from, to, data: "0x", value: `0x${amountRaw.toString(16)}` }),
+    ]);
+    const gasLimit = estimate + NATIVE_GAS_HEADROOM;
+    return { to, value: amountRaw, nonce, gasLimit, gasPrice, fee: gasLimit * gasPrice };
+  } catch (error) {
+    throw new Error(`E_RPC: cannot prepare a ${chain.label} native transfer: ${shortError(error)}`);
+  }
+}
+
+export interface SendNativeRequest {
+  chain: ChainRecord;
+  wallet: Wallet;
+  client: RpcClient;
+  prepared: PreparedNativeTransfer;
+}
+
+export interface SendNativeResult {
+  txHash: string;
+  nonce: number;
+  gasLimit: bigint;
+  gasPrice: bigint;
+}
+
+/** Sign and broadcast one native transfer exactly once. */
+export async function sendPreparedNative(req: SendNativeRequest): Promise<SendNativeResult> {
+  const { chain, wallet, client, prepared } = req;
+  const signed = await wallet.signTransaction({
+    type: 0,
+    chainId: chain.chainId,
+    nonce: prepared.nonce,
+    to: prepared.to,
+    data: "0x",
+    value: prepared.value,
+    gasLimit: prepared.gasLimit,
+    gasPrice: prepared.gasPrice,
+  });
+  const txHash = Transaction.from(signed).hash;
+  if (!txHash) throw new Error("E_RPC: the signed transaction has no hash");
+  try {
+    const sent = await client.sendRawTransaction(signed);
+    if (sent.toLowerCase() !== txHash.toLowerCase()) {
+      logger.warn(`chain: ${chain.label} returned hash ${sent} for signed ${txHash}`);
+    }
+  } catch (error) {
+    throw new TxUnknownError(
+      `E_TX_UNKNOWN: the ${chain.label} broadcast did not confirm (${shortError(error)}); ` +
+        `the signed transaction may still reach the chain — check ${txHash} before trying again`,
+      txHash,
+      signed,
+    );
+  }
   return { txHash, nonce: prepared.nonce, gasLimit: prepared.gasLimit, gasPrice: prepared.gasPrice };
 }

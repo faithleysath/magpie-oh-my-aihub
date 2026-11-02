@@ -18,28 +18,35 @@ import {
   clientFor,
   formatTokenAmount,
   parseAmountRaw,
+  prepareNativeTransfer,
   prepareUsdcTransfer,
+  sendPreparedNative,
   sendPreparedUsdc,
   type ChainRecord,
   type RpcClient,
 } from "../chain.ts";
-import { listDeposits, listPayouts, recordPayout } from "../db.ts";
+import { enqueueDepositClaim, listDeposits, listPayouts, recordPayout, setPayoutState } from "../db.ts";
+import { flushClaims } from "../claims.ts";
 import { getRuntime } from "../runtime.ts";
 import {
   fail,
   jsonText,
   objectArgs,
+  optionalBoolean,
   optionalString,
   requiredString,
   type ToolDef,
 } from "./types.ts";
 import { resolveTarget } from "./resolve.ts";
+import { knownPeer } from "./discover.ts";
 
 const DEFAULT_HISTORY_LIMIT = 50;
 const MAX_HISTORY_LIMIT = 200;
 
 export interface SendPaymentResult {
   state: "sent" | "unknown";
+  /** which asset moved: USDC has a claim path; native is gas money only */
+  asset: "usdc" | "native";
   txHash: string;
   chain: string;
   chainId: number;
@@ -117,6 +124,7 @@ export async function executeSendPayment(
     });
     return {
       state: "sent",
+      asset: "usdc",
       txHash: sent.txHash,
       chain: chain.key,
       chainId: chain.chainId,
@@ -136,6 +144,89 @@ export async function executeSendPayment(
       });
       return {
         state: "unknown",
+        asset: "usdc",
+        txHash: error.txHash,
+        chain: chain.key,
+        chainId: chain.chainId,
+        to,
+        amountRaw: amountRaw.toString(),
+        detail:
+          "the broadcast could not be confirmed. The signed transaction may still be mined — check the hash " +
+          "on a block explorer or with history before sending again. This tool never resends.",
+      };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Sends the chain's native coin (BNB/ETH). This is deliberately separate from
+ * the deposit claim path: native money is gas for a human, not provider credit,
+ * and it never enters `localSentUsd`/`providerBehind`.
+ */
+export async function executeSendNative(
+  chain: ChainRecord,
+  to: string,
+  amountText: string,
+  deps: SendDeps,
+): Promise<SendPaymentResult> {
+  const amountRaw = parseAmountRaw(amountText, 18);
+  const client = (deps.client ?? ((record) => clientFor(record)))(chain);
+  const from = deps.wallet.address;
+  const now = deps.now ?? (() => new Date().toISOString());
+
+  const native = await client.balance(from);
+  if (native < amountRaw) {
+    fail(
+      "E_BALANCE",
+      `the node wallet holds ${formatEther(native)} ${chain.nativeSymbol} on ${chain.label} but the ` +
+        `transfer asks for ${formatEther(amountRaw)} ${chain.nativeSymbol}`,
+    );
+  }
+
+  const prepared = await prepareNativeTransfer(client, chain, from, to, amountRaw);
+  if (native < amountRaw + prepared.fee) {
+    fail(
+      "E_BALANCE",
+      `the node wallet has ${formatEther(native)} ${chain.nativeSymbol} on ${chain.label} but this transfer ` +
+        `needs ${formatEther(amountRaw + prepared.fee)} ${chain.nativeSymbol} including gas; top it up and try again`,
+    );
+  }
+
+  try {
+    const sent = await sendPreparedNative({ chain, wallet: deps.wallet, client, prepared });
+    recordPayout(deps.ledger, {
+      txHash: sent.txHash,
+      chainId: chain.chainId,
+      token: "native",
+      to,
+      amountRaw,
+      state: "sent",
+      at: now(),
+    });
+    return {
+      state: "sent",
+      asset: "native",
+      txHash: sent.txHash,
+      chain: chain.key,
+      chainId: chain.chainId,
+      to,
+      amountRaw: amountRaw.toString(),
+    };
+  } catch (error) {
+    if (error instanceof TxUnknownError) {
+      recordPayout(deps.ledger, {
+        txHash: error.txHash,
+        chainId: chain.chainId,
+        token: "native",
+        to,
+        amountRaw,
+        state: "unknown",
+        at: now(),
+      });
+      return {
+        state: "unknown",
+        asset: "native",
         txHash: error.txHash,
         chain: chain.key,
         chainId: chain.chainId,
@@ -179,6 +270,7 @@ export interface HistoryResult {
     chain: string | null;
     chainId: number;
     token: string;
+    asset: "usdc" | "native";
     to: string;
     amountRaw: string;
     amountUsd: string;
@@ -219,13 +311,15 @@ export function paymentHistory(deps: HistoryDeps): HistoryResult {
   });
   const payouts = listPayouts(deps.ledger, limit).map((row) => {
     const chain = PRODUCT_CHAINS.find((record) => record.chainId === row.chain_id) ?? null;
+    const native = row.token.toLowerCase() === "native";
     return {
       chain: chain?.key ?? null,
       chainId: row.chain_id,
       token: row.token,
+      asset: (native ? "native" : "usdc") as "native" | "usdc",
       to: row.to_addr,
       amountRaw: row.amount_raw,
-      amountUsd: formatTokenAmount(row.amount_raw, chain?.decimals ?? 0),
+      amountUsd: formatTokenAmount(row.amount_raw, native ? 18 : chain?.decimals ?? 0),
       state: row.state,
       txHash: row.tx_hash,
       createdAt: row.created_at,
@@ -258,7 +352,16 @@ const SEND_ARGS = {
       type: "string",
       description: 'USDC 数量，十进制字符串，例如 "1.25"；不接受浮点数，不接受超过该链小数位的位数',
     },
-    asset: { type: "string", description: '可选，只支持 "usdc"' },
+    asset: {
+      type: "string",
+      enum: ["usdc", "native"],
+      description: '可选；默认 "usdc"。native = 该链原生币（BSC 的 BNB / Base 的 ETH），只用于给地址转 gas',
+    },
+    claim: {
+      type: "boolean",
+      description:
+        "已知提供方默认 true：付款后自动投递入账 claim；传 false 则只转账、不通知提供者（赠送/不记额度），以后仍可用 claim_deposit 手动补",
+    },
   },
   required: ["chain", "to", "amount"],
   additionalProperties: false,
@@ -268,7 +371,9 @@ export const sendPaymentTool: ToolDef = {
   description:
     "从节点钱包发送 USDC（BSC 或 Base）到任意地址：出金、给提供方充值都用它。无二次确认、无目标白名单。" +
     '成功返回 state:"sent"；广播无法确认时返回 state:"unknown" 并给出已签名交易的哈希，工具不会重发——' +
-    "先核对再决定。需要该链的原生币付 gas。",
+    "先核对再决定。需要该链的原生币付 gas。目标是已知提供方时默认自动排队一条入账 claim（claim:queued），" +
+    "提供者离线也不影响付款，后台会重试；传 claim:false 则不投递、当赠送，之后仍可用 claim_deposit 手动补；" +
+    "外部钱包转账用 claim_deposit。",
   args: SEND_ARGS,
   async execute(rawArgs) {
     const args = objectArgs(rawArgs);
@@ -277,26 +382,69 @@ export const sendPaymentTool: ToolDef = {
     if (!chain || !PRODUCT_CHAINS.includes(chain)) {
       fail("E_INPUT", `chain must be one of ${PRODUCT_CHAINS.map((record) => record.key).join(", ")}`);
     }
-    const asset = optionalString(args, "asset", 16);
-    if (asset !== undefined && asset.toLowerCase() !== "usdc") {
-      fail("E_INPUT", `asset must be "usdc" — this plugin only moves USDC on ${chain.label}`);
+    const asset = (optionalString(args, "asset", 16) ?? "usdc").toLowerCase();
+    if (asset !== "usdc" && asset !== "native") {
+      fail("E_INPUT", `asset must be "usdc" or "native", not ${JSON.stringify(asset)}`);
     }
     const to = await resolveTarget(requiredString(args, "to", 64), "to");
     const amount = requiredString(args, "amount", 80);
+    const claimEnabled = args.claim === undefined || args.claim === null ? true : optionalBoolean(args, "claim");
 
     const runtime = await getRuntime();
-    const result = await executeSendPayment(chain, to, amount, {
-      ledger: runtime.db,
-      wallet: runtime.wallet,
+    const result =
+      asset === "native"
+        ? await executeSendNative(chain, to, amount, { ledger: runtime.db, wallet: runtime.wallet })
+        : await executeSendPayment(chain, to, amount, { ledger: runtime.db, wallet: runtime.wallet });
+    let claimQueued = false;
+    if (result.asset === "usdc" && (result.state === "sent" || result.state === "unknown")) {
+      if (!claimEnabled) {
+        // Deliberate gift: keep the on-chain payout in history, but exclude it
+        // from "local sent vs provider balance" so it is not reported as a
+        // provider lag. claim_deposit can still claim it later.
+        try {
+          setPayoutState(runtime.db, result.txHash, "gift");
+        } catch {
+          /* the payment is already on chain; a label failure is not fatal */
+        }
+      } else {
+        // A payment is already on chain; the claim is just a hint. Queue it only
+        // when the target is a known provider, so sending to an arbitrary
+        // address does not leave forever-pending claim rows. The background
+        // retry delivers it even if the provider is offline now.
+        const knownProvider =
+          runtime.config.connections.some((connection) => connection.provider === to) || knownPeer(to);
+        if (knownProvider) {
+          try {
+            enqueueDepositClaim(runtime.db, {
+              provider: to,
+              chainId: chain.chainId,
+              txHash: result.txHash,
+              at: new Date().toISOString(),
+            });
+            claimQueued = true;
+            void flushClaims();
+          } catch {
+            // The payment is already on chain; a local queue failure must not turn
+            // a successful send into an error. claim_deposit can retry by hand.
+          }
+        }
+      }
+    }
+    return jsonText({
+      ...result,
+      ...(claimQueued ? { claim: "queued" } : {}),
+      ...(!claimEnabled && result.asset === "usdc" && (result.state === "sent" || result.state === "unknown")
+        ? { claim: "suppressed" }
+        : {}),
+      ...(result.asset === "native" ? { claim: "not_applicable" } : {}),
     });
-    return jsonText(result);
   },
 };
 
 export const historyTool: ToolDef = {
   description:
     "本地账目：已确认（以及已回滚）的入账，加上本钱包的出金。limit 默认 50、上限 200；" +
-    "address 只过滤某个付款方的入账。金额是该链 USDC 的十进制值，不做换算。",
+    "address 只过滤某个付款方的入账。金额是该链资产的十进制值（USDC 或原生币），不做换算。",
   args: {
     type: "object",
     properties: {

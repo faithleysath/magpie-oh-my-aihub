@@ -29,7 +29,7 @@ function logFile(): string {
 }
 
 let ready = false;
-/** Keep the host's log bounded; a long-lived watcher is noisy by nature. */
+/** Keep the host's log bounded; a long-lived host is noisy by nature. */
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 
 function ensureDir(): void {

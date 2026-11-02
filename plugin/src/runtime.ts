@@ -16,20 +16,19 @@
 // loopback otherwise) is owned by
 // `http-router.ts`; this module only decides when to bind it.
 //
-// The chain watcher runs from boot, not from `join_network`: a deposit is
-// addressed to the wallet, not to the overlay, and money must be booked even
-// while the network is down. Its address is a getter so a `wallet_import` moves
-// the watcher to the new identity, and the scan cursors are dropped at that point
-// (they refer to the old address's logs).
+// Deposits are discovered on demand: a consumer sends a signed claim naming one
+// transaction, and the provider verifies that receipt. There is no background
+// block scanner; the chain is never polled for logs.
 
 import { mkdirSync } from "node:fs";
 import type { Database } from "bun:sqlite";
 import type { Wallet } from "ethers";
 import { CatalogService, type CatalogModel } from "./catalog-service.ts";
 import { hostnameForAddress, readConfig, writeConfig, type HubConfig } from "./config.ts";
-import { clearScanCursors, metaDelete, metaEntries, openLedger } from "./db.ts";
+import { clearDepositClaims, metaDelete, metaEntries, metaSet, openLedger } from "./db.ts";
 import { Grants } from "./grants.ts";
 import { DirectoryServer } from "./http-router.ts";
+import { DepositClaimService } from "./deposit-claim.ts";
 import { logger } from "./log.ts";
 import { CONTROL_PORT, GATEWAY_PORT, Overlay } from "./overlay.ts";
 import { magpieClient } from "./magpie.ts";
@@ -37,7 +36,6 @@ import { isOurRemoteProvider, remoteProviderId } from "./remote-provider.ts";
 import { stateDir } from "./paths.ts";
 import { listNativeModels } from "./tools/native-models.ts";
 import { loadOrCreateWallet } from "./tools/node-wallet.ts";
-import { Watcher } from "./chain-watcher.ts";
 
 export interface Runtime {
   config: HubConfig;
@@ -50,8 +48,6 @@ export interface Runtime {
   db: Database;
   /** applications, approvals, revocations and Gateway Keys */
   grants: Grants;
-  /** the per-chain deposit scanner (started at boot, stopped on exit) */
-  watcher: Watcher;
 }
 
 const GLOBAL_KEY = "__ohMyAiHubRuntimeV3__";
@@ -74,16 +70,11 @@ function clearCatalogTimer(): void {
   catalogTimer = null;
 }
 
-function installHooks(overlay: Overlay, server: DirectoryServer, db: Database, watcher: Watcher): void {
+function installHooks(overlay: Overlay, server: DirectoryServer, db: Database): void {
   if (hooksInstalled) return;
   hooksInstalled = true;
   const stop = () => {
     clearCatalogTimer();
-    try {
-      watcher.stop();
-    } catch {
-      /* the loop is already gone */
-    }
     try {
       server.stop();
     } catch {
@@ -251,8 +242,8 @@ function startCatalogRefresh(runtime: Runtime): void {
  *
  * Two gaps close here, and both come from the same fact: the Magpie write happens
  * after the ledger write, so a crash can separate them.
- *  - a `credited` row whose cap was never applied (the cursor moved on, so no
- *    later scan revisits that deposit);
+ *  - a `credited` row whose cap was never applied (the claim path already
+ *    returned);
  *  - a key created by `gateway-key add` and never narrowed — Magpie's default for
  *    a new key is all models and no cost limit.
  *
@@ -315,7 +306,12 @@ async function bootOnceInner(): Promise<Runtime> {
     // selection before re-signing, so disk is the truthful source here.
     published: () => readConfig().share.models,
   });
-  const server = new DirectoryServer({ catalog, grants, controlPort: CONTROL_PORT });
+  const deposits = new DepositClaimService({
+    db,
+    address: () => runtime?.wallet.address ?? wallet.address,
+    grants,
+  });
+  const server = new DirectoryServer({ catalog, grants, deposits, controlPort: CONTROL_PORT });
 
   const overlay = new Overlay(config, {
     onConfigChange: (next) => {
@@ -329,22 +325,13 @@ async function bootOnceInner(): Promise<Runtime> {
       if (runtime) void refreshCatalog(runtime);
     },
   });
-  const watcher = new Watcher({
-    db,
-    // wallet_import replaces the identity; the scanner must follow it.
-    address: () => runtime?.wallet.address ?? wallet.address,
-    credit: grants,
-  });
-  runtime = { config, wallet, overlay, catalog, server, db, grants, watcher };
+  runtime = { config, wallet, overlay, catalog, server, db, grants };
 
-  installHooks(overlay, server, db, watcher);
+  installHooks(overlay, server, db);
   // The tick runs from boot: a node whose LAN address or Magpie came up late
   // must still start publishing, and a price change must reach peers without a
   // tool call.
   startCatalogRefresh(runtime);
-  // Scanning starts with the host, not with `join_network`: a deposit is booked
-  // against the wallet address and does not need the overlay.
-  watcher.start();
   // A deposit booked just before a crash may have left its cap unwritten.
   // Reconcile in the background so boot stays fast and a missing Magpie only
   // costs a log line.
@@ -416,6 +403,7 @@ async function clearConsumingState(runtime: Runtime): Promise<{ clearedConnectio
   for (const row of [...metaEntries(runtime.db, "poll:"), ...metaEntries(runtime.db, "request:")]) {
     metaDelete(runtime.db, row.k);
   }
+  clearDepositClaims(runtime.db);
   return {
     clearedConnections: connections.length,
     removedProviders,
@@ -434,10 +422,13 @@ export async function replaceWallet(
   wallet: Wallet,
 ): Promise<{ clearedConnections: number; removedProviders: number; detail?: string }> {
   runtime.wallet = wallet;
-  // A LogTail captured the old address's to-topic; rebuild it for the new one.
-  runtime.watcher.rebindAddress();
   // Usage bases belong to the old provider identity; a new identity starts clean.
   runtime.grants.beginWalletChange();
+  try {
+    metaSet(runtime.db, "wallet:since", new Date().toISOString());
+  } catch (error) {
+    logger.warn(`wallet change: cannot record the new payout epoch: ${detailOf(error)}`);
+  }
   let cleared: { clearedConnections: number; removedProviders: number; detail?: string } = {
     clearedConnections: 0,
     removedProviders: 0,
@@ -450,15 +441,6 @@ export async function replaceWallet(
         `wallet change: cleared ${cleared.clearedConnections} connection(s), ` +
           `removed ${cleared.removedProviders} Remote Magpie provider(s)`,
       );
-    }
-    // The scan cursor is per chain, not per address: the logs behind it were
-    // filtered to the old address. Start the new identity from the 24h lookback
-    // instead of silently inheriting a cursor that skipped its deposits.
-    try {
-      const dropped = clearScanCursors(runtime.db);
-      if (dropped > 0) logger.info(`watcher: dropped ${dropped} scan cursor(s) after the wallet change`);
-    } catch (error) {
-      logger.error(`watcher: cannot drop the scan cursors: ${detailOf(error)}`);
     }
     // The new identity has its own `D` per payer (deposits were addressed to the
     // old wallet), so every cap has to be re-derived for it. Finish the wallet

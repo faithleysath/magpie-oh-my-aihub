@@ -17,7 +17,16 @@ import { writeConfig, type HubConfig } from "../config.ts";
 import { catalogTimestamp } from "../catalog-service.ts";
 import type { Database } from "bun:sqlite";
 import { listContacts } from "../contacts.ts";
-import { metaDelete, metaEntries, metaGet, metaSet } from "../db.ts";
+import {
+  countPendingClaims,
+  formatUsd4,
+  metaDelete,
+  metaEntries,
+  metaGet,
+  metaSet,
+  microFromUsd,
+  payoutMicroTo,
+} from "../db.ts";
 import { cleanModelList, type PollResponse, type PollState } from "../grants.ts";
 import { pollPayload, requestPayload } from "../http-router.ts";
 import { logger } from "../log.ts";
@@ -296,6 +305,21 @@ function localRemoteModels(): Map<string, string[]> {
   return out;
 }
 
+/** Compare what this wallet sent with the provider's last reported balance. */
+function claimDiagnostics(
+  runtime: Runtime,
+  provider: string,
+  reportedBalanceUsd: string | null,
+): { localSentUsd: string; pendingClaims: number; providerBehind: boolean } {
+  const localMicro = payoutMicroTo(runtime.db, provider);
+  const reportedMicro = reportedBalanceUsd ? microFromUsd(Number(reportedBalanceUsd)) : 0n;
+  return {
+    localSentUsd: formatUsd4(localMicro),
+    pendingClaims: countPendingClaims(runtime.db, provider),
+    providerBehind: reportedBalanceUsd !== null && localMicro > reportedMicro,
+  };
+}
+
 /**
  * `status.consuming`: what we asked for and what we hold. Read
  * from the ledger cache and state.json only — `status` must not depend on the
@@ -306,7 +330,12 @@ export function consumingSnapshot(runtime: Runtime): {
   connections: {
     provider: string;
     models: string[];
+    balanceUsd: string | null;
+    usedUsd: string | null;
     remainingUsd: string | null;
+    localSentUsd: string;
+    pendingClaims: number;
+    providerBehind: boolean;
     state: string;
     gatewayPort: number;
     localPort: number;
@@ -328,7 +357,10 @@ export function consumingSnapshot(runtime: Runtime): {
     return {
       provider: connection.provider,
       models: cached?.grantedModels ?? models.get(remoteProviderId(connection.provider)) ?? [],
+      balanceUsd: cached?.balanceUsd ?? null,
+      usedUsd: cached?.usedUsd ?? null,
       remainingUsd: cached?.remainingUsd ?? null,
+      ...claimDiagnostics(runtime, connection.provider, cached?.balanceUsd ?? null),
       state: cached?.state ?? "unknown",
       gatewayPort: cached?.gatewayPort ?? GATEWAY_PORT,
       localPort: connection.localPort,
@@ -627,8 +659,8 @@ export const disconnectTool: ToolDef = {
 
 export const connectionsTool: ToolDef = {
   description:
-    "列出本机持有的连接：提供方地址、授权模型、对方账户剩余额度、状态与本地转发口。" +
-    "会签名轮询每个提供方（对方离线时用上次缓存的值并标 unknown）。",
+    "列出本机持有的连接：提供方地址、授权模型、对方报告的余额/已用/剩余、本地已发送、待投递 claim、状态与本地转发口。" +
+    "会签名轮询每个提供方（对方离线时用上次缓存的值并标 unknown）。localSentUsd > balanceUsd 或 providerBehind:true 表示对方可能还没记上账。",
   args: { type: "object", properties: {}, additionalProperties: false },
   async execute() {
     const runtime = await getRuntime();
@@ -638,7 +670,10 @@ export const connectionsTool: ToolDef = {
         const base = {
           provider: connection.provider,
           models: cached?.grantedModels ?? [],
+          balanceUsd: cached?.balanceUsd ?? null,
+          usedUsd: cached?.usedUsd ?? null,
           remainingUsd: cached?.remainingUsd ?? null,
+          ...claimDiagnostics(runtime, connection.provider, cached?.balanceUsd ?? null),
           state: cached?.state ?? "unknown",
           gatewayPort: cached?.gatewayPort ?? GATEWAY_PORT,
           localPort: connection.localPort,
@@ -650,7 +685,10 @@ export const connectionsTool: ToolDef = {
           return {
             ...base,
             models: poll.grantedModels.length > 0 ? poll.grantedModels : base.models,
+            balanceUsd: poll.balanceUsd,
+            usedUsd: poll.usedUsd,
             remainingUsd: poll.remainingUsd,
+            ...claimDiagnostics(runtime, connection.provider, poll.balanceUsd),
             state: poll.state,
             gatewayPort: poll.gatewayPort,
           };

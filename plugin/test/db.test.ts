@@ -11,7 +11,15 @@ import {
   markDepositReverted,
   microFromRaw,
   openLedger,
+  payoutMicroTo,
   recreditDeposit,
+  countPendingClaims,
+  enqueueDepositClaim,
+  listPendingDepositClaims,
+  markDepositClaimAttempt,
+  markDepositClaimCredited,
+  recordPayout,
+  setPayoutState,
   type NewDeposit,
 } from "../src/db.ts";
 
@@ -66,6 +74,45 @@ describe("ledger", () => {
     expect(insertCreditedDeposit(db, revived)).toBe(false);
     expect(recreditDeposit(db, revived)).toBe(true);
     expect(balanceMicro(db, TO, FROM)).toBe(5_000_000n);
+  });
+
+  test("keeps deposit claims pending and counts payouts to a provider", () => {
+    dir = mkdtempSync(join(tmpdir(), "omai-claims-"));
+    db = openLedger(join(dir, "ledger.sqlite"));
+    const tx = `0x${"dd".repeat(32)}`;
+    recordPayout(db, {
+      txHash: tx,
+      chainId: 56,
+      token: TOKEN,
+      to: TO,
+      amountRaw: 10n ** 18n,
+      state: "sent",
+      at: new Date().toISOString(),
+    });
+    expect(payoutMicroTo(db, TO)).toBe(1_000_000n);
+    setPayoutState(db, tx, "gift");
+    expect(payoutMicroTo(db, TO)).toBe(0n);
+    setPayoutState(db, tx, "sent");
+    recordPayout(db, {
+      txHash: `0x${"ee".repeat(32)}`,
+      chainId: 56,
+      token: "native",
+      to: TO,
+      amountRaw: 10n ** 18n,
+      state: "sent",
+      at: new Date().toISOString(),
+    });
+    expect(payoutMicroTo(db, TO)).toBe(1_000_000n);
+
+    const claim = enqueueDepositClaim(db, { provider: TO, chainId: 56, txHash: tx, at: new Date().toISOString() });
+    expect(claim.state).toBe("pending");
+    expect(countPendingClaims(db, TO)).toBe(1);
+    expect(listPendingDepositClaims(db).map((row) => row.id)).toEqual([claim.id]);
+
+    markDepositClaimAttempt(db, claim.id, new Date().toISOString(), "offline");
+    expect(listPendingDepositClaims(db)[0]?.attempts).toBe(1);
+    markDepositClaimCredited(db, claim.id, new Date().toISOString());
+    expect(countPendingClaims(db, TO)).toBe(0);
   });
 
   test("converts raw token amounts and floors a cap to $0.0001", () => {

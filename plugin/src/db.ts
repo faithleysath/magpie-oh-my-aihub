@@ -4,7 +4,7 @@
 // the read side (`GET /request`) from blocking an approval; the file and its
 // sidecars are 0600 because `consumers.key_secret` is a bearer credential.
 //
-// The chain watcher writes `deposits` and `send_payment` writes `payouts`;
+// The deposit-claim path writes `deposits` and `send_payment` writes `payouts`;
 // `balanceMicro` reads credited deposits, which is the single number a cap is
 // derived from.
 //
@@ -79,6 +79,25 @@ CREATE TABLE IF NOT EXISTS payouts (
   state TEXT,
   created_at TEXT
 );
+
+-- Consumer-side hints: "please look at this transaction". They are not money;
+-- the provider credits only after checking the receipt on chain.
+CREATE TABLE IF NOT EXISTS deposit_claims (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  chain_id INTEGER NOT NULL,
+  tx_hash TEXT NOT NULL,
+  log_index INTEGER,
+  state TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_at TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS deposit_claims_state
+  ON deposit_claims(state, last_at);
+CREATE INDEX IF NOT EXISTS deposit_claims_provider
+  ON deposit_claims(provider, state);
 
 CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
@@ -248,7 +267,7 @@ export interface NewDeposit {
 
 /**
  * Books one confirmed deposit. `false` means the row already existed, which is
- * the whole of the duplicate protection: a re-scan of the same log changes
+ * the whole of the duplicate protection: a repeated claim changes
  * nothing and must not re-issue a key.
  */
 export function insertCreditedDeposit(db: Database, row: NewDeposit): boolean {
@@ -287,11 +306,10 @@ export function markDepositReverted(db: Database, id: string, when: string): boo
 /**
  * Puts a previously reverted row back to credited.
  *
- * This is the case the reorg handling deliberately leaves open: a deposit that
- * was reorged out and then re-included (same tx, same log index) in a block that
- * this scan has already verified and found final. Re-crediting is the correct
- * answer because the money really is on the chain; skipping it would silently
- * lose the deposit. Only a final, receipt-verified log can reach this.
+ * A row can be `reverted` from an earlier version or a manual correction. If a
+ * final receipt now proves the same transaction/log is included again, putting
+ * it back to credited is the correct answer; skipping it would silently lose
+ * the deposit. Only a final, receipt-verified log can reach this.
  */
 export function recreditDeposit(db: Database, row: NewDeposit): boolean {
   const id = depositId(row.chainId, row.token, row.txHash, row.logIndex);
@@ -301,24 +319,6 @@ export function recreditDeposit(db: Database, row: NewDeposit): boolean {
     [row.blockNumber, row.blockHash, row.seenAt, id, row.amountRaw.toString(), row.from, row.to],
   );
   return result.changes > 0;
-}
-
-export interface CreditedBlock {
-  id: string;
-  chain_id: number;
-  from_addr: string;
-  block_number: number;
-  block_hash: string;
-}
-
-/** Credited rows worth re-checking against the canonical chain (reorg rollback). */
-export function creditedBlocksSince(db: Database, toAddr: string, minBlock: number): CreditedBlock[] {
-  return db
-    .query(
-      "SELECT id, chain_id, from_addr, block_number, block_hash FROM deposits " +
-        "WHERE state = 'credited' AND lower(to_addr) = lower(?) AND block_number >= ?",
-    )
-    .all(toAddr, minBlock) as CreditedBlock[];
 }
 
 export interface DepositRow {
@@ -385,27 +385,128 @@ export function listPayouts(db: Database, limit: number): PayoutRow[] {
   return db.query("SELECT * FROM payouts ORDER BY created_at DESC LIMIT ?").all(limit) as PayoutRow[];
 }
 
-/** Where the per-chain scanner resumes: the last block it fully scanned. */
-export function scanCursor(db: Database, chainId: number): number | null {
-  const raw = metaGet(db, `scan:${chainId}`);
-  if (!raw) return null;
-  const value = Number(raw);
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+/** Reclassifies a payout after `send_payment` (for example, a deliberate gift). */
+export function setPayoutState(db: Database, txHash: string, state: string): void {
+  db.run("UPDATE payouts SET state = ? WHERE tx_hash = ?", [state, txHash.toLowerCase()]);
+}
+
+/** Σ payout micro-USD this wallet sent to one address, across both chains. */
+export function payoutMicroTo(db: Database, toAddr: string): bigint {
+  // After wallet_import, older payouts belong to the previous identity; the
+  // "local sent" comparison must not count them.
+  const since = metaGet(db, "wallet:since");
+  const rows = (
+    since
+      ? db
+          .query(
+            "SELECT chain_id, token, amount_raw FROM payouts " +
+              "WHERE lower(to_addr) = lower(?) AND state IN ('sent','unknown') AND created_at >= ?",
+          )
+          .all(toAddr, since)
+      : db
+          .query("SELECT chain_id, token, amount_raw FROM payouts WHERE lower(to_addr) = lower(?) AND state IN ('sent','unknown')")
+          .all(toAddr)
+  ) as { chain_id: number; token: string; amount_raw: string }[];
+  let total = 0n;
+  for (const row of rows) {
+    // Native gas airdrops are not provider credit and use 18 decimals on both
+    // chains, so they must not enter the USDC balance comparison.
+    if (row.token.toLowerCase() === "native") continue;
+    const micro = microFromRaw(Number(row.chain_id), row.amount_raw);
+    if (micro !== null) total += micro;
+  }
+  return total;
+}
+
+export type DepositClaimState = "pending" | "credited" | "failed";
+
+export interface DepositClaimRow {
+  id: string;
+  provider: string;
+  chain_id: number;
+  tx_hash: string;
+  log_index: number | null;
+  state: DepositClaimState;
+  attempts: number;
+  last_at: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+function claimId(chainId: number, txHash: string): string {
+  return `${chainId}:${txHash.toLowerCase()}`;
 }
 
 /**
- * Advances the cursor. The watcher calls this inside the same transaction as the
- * deposit inserts, so the two can never disagree after a crash.
+ * Records one "look at this transaction" hint. A credited claim stays credited;
+ * a failed one can be reset by the user before asking again.
  */
-export function setScanCursor(db: Database, chainId: number, block: number): void {
-  metaSet(db, `scan:${chainId}`, String(block));
+export function enqueueDepositClaim(
+  db: Database,
+  row: { provider: string; chainId: number; txHash: string; logIndex?: number | null; at: string },
+): DepositClaimRow {
+  const id = claimId(row.chainId, row.txHash);
+  db.run(
+    "INSERT INTO deposit_claims(id, provider, chain_id, tx_hash, log_index, state, attempts, last_at, error, created_at) " +
+      "VALUES(?,?,?,?,?, 'pending', 0, NULL, NULL, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, log_index = excluded.log_index",
+    [id, row.provider.toLowerCase(), row.chainId, row.txHash.toLowerCase(), row.logIndex ?? null, row.at],
+  );
+  return db.query("SELECT * FROM deposit_claims WHERE id = ?").get(id) as DepositClaimRow;
 }
 
-/** Drops every cursor; used when the node identity changes (a new address). */
-export function clearScanCursors(db: Database): number {
-  const rows = metaEntries(db, "scan:");
-  for (const row of rows) metaDelete(db, row.k);
-  return rows.length;
+export function resetDepositClaim(db: Database, chainId: number, txHash: string): boolean {
+  const result = db.run(
+    "UPDATE deposit_claims SET state = 'pending', attempts = 0, last_at = NULL, error = NULL WHERE id = ?",
+    [claimId(chainId, txHash)],
+  );
+  return result.changes > 0;
+}
+
+export function depositClaim(db: Database, chainId: number, txHash: string): DepositClaimRow | null {
+  return db.query("SELECT * FROM deposit_claims WHERE id = ?").get(claimId(chainId, txHash)) as DepositClaimRow | null;
+}
+
+export function listPendingDepositClaims(db: Database, limit = 50): DepositClaimRow[] {
+  return db
+    .query(
+      "SELECT * FROM deposit_claims WHERE state = 'pending' ORDER BY COALESCE(last_at, created_at), id LIMIT ?",
+    )
+    .all(limit) as DepositClaimRow[];
+}
+
+export function markDepositClaimAttempt(db: Database, id: string, at: string, error: string | null): void {
+  db.run(
+    "UPDATE deposit_claims SET attempts = attempts + 1, last_at = ?, error = ? WHERE id = ? AND state = 'pending'",
+    [at, error?.slice(0, 500) ?? null, id],
+  );
+}
+
+export function markDepositClaimCredited(db: Database, id: string, at: string): void {
+  db.run(
+    "UPDATE deposit_claims SET state = 'credited', last_at = ?, error = NULL WHERE id = ?",
+    [at, id],
+  );
+}
+
+export function markDepositClaimFailed(db: Database, id: string, at: string, error: string): void {
+  db.run(
+    "UPDATE deposit_claims SET state = 'failed', last_at = ?, error = ? WHERE id = ?",
+    [at, error.slice(0, 500), id],
+  );
+}
+
+/** Drops consumer hints that belong to an old wallet identity. */
+export function clearDepositClaims(db: Database): number {
+  const result = db.run("DELETE FROM deposit_claims");
+  return result.changes;
+}
+
+export function countPendingClaims(db: Database, provider: string): number {
+  const row = db
+    .query("SELECT COUNT(*) AS n FROM deposit_claims WHERE provider = lower(?) AND state = 'pending'")
+    .get(provider) as { n: number };
+  return row.n;
 }
 
 /** Every payer with credited deposits to `toAddr`, and how much. */

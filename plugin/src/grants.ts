@@ -10,7 +10,7 @@
 // per-request budget: there is exactly one source of money, the deposit.
 //
 // A key is issued only for `D >= $0.0001` (Magpie reads `--cost 0` as
-// unlimited). The chain watcher calls `onDeposit`/`onRevert` after every
+// unlimited). The deposit claim path calls `onDeposit` after every
 // bookkeeping change, and both recompute the whole chain `D → cap → key` for
 // that payer. With no money the approval stays `waiting-deposit` and the poll
 // answers `approved` with `key: null`; when the balance drops to zero the key is
@@ -86,6 +86,9 @@ export interface RequestAck {
   ts: string;
 }
 
+/** The poll answer without the key: safe for acknowledgements and listings. */
+export type AccountSummary = Omit<PollResponse, "key">;
+
 export interface ApproveResult {
   address: string;
   grantedModels: string[];
@@ -102,8 +105,8 @@ export interface RevokeResult {
 }
 
 /**
- * What one `D → cap → key` recomputation did. Returned to the watcher (which
- * only logs it) and never to a tool: a consumer sees the effects through
+ * What one `D → cap → key` recomputation did. Returned to the deposit path
+ * (which only logs it) and never to a tool: a consumer sees the effects through
  * `GET /request` and `history`.
  */
 export interface CreditResult {
@@ -323,6 +326,25 @@ export class Grants {
     return "pending";
   }
 
+  /** The account's public state; never includes the Gateway Key. */
+  summary(address: string): AccountSummary {
+    const target = normalizeAddress(address);
+    const state = this.pollState(target);
+    const consumer = this.consumer(target);
+    const balance = balanceMicro(this.db, this.provider(), target);
+    const used = this.totalUsed(target);
+    const granted = state === "approved" && consumer ? parseModels(consumer.granted_models) : [];
+    return {
+      state,
+      grantedModels: granted,
+      balanceUsd: formatUsd4(balance),
+      usedUsd: formatUsd4(used),
+      remainingUsd: formatUsd4(balance - used),
+      gatewayPort: this.opts.gatewayPort,
+      ts: catalogTimestamp(),
+    };
+  }
+
   /**
    * `key` is present only while the address has at least $0.0001 of a
    * remaining balance; `used` is the total already spent (a previous key's
@@ -445,7 +467,7 @@ export class Grants {
     const askedFor = parseModels(request?.models);
     this.writeRequest(target, askedFor.length > 0 ? askedFor : granted, request?.ts ?? now, "approved");
 
-    // One code path for `D → cap → key`, shared with the watcher: below $0.0001
+    // One code path for `D → cap → key`, shared with the claim path: below $0.0001
     // it also removes a key left over from a larger earlier balance, so the
     // approval cannot keep an unlimited-or-stale cap alive.
     const resynced = await this.resyncLocked(target, "deposit");
@@ -585,22 +607,12 @@ export class Grants {
   }
 
   /**
-   * A credited deposit reverted. Same recomputation, but the only outcome that
-   * matters here is a lower cap (or no key at all when `D` reached zero).
-   */
-  async onRevert(payer: string): Promise<CreditResult> {
-    return this.resync(payer, "revert");
-  }
-
-  /**
    * Boot-time reconciliation of every authorized consumer.
    *
-   * The ledger row and the scan cursor are written in one transaction, but the
-   * Magpie cap (and key) are written after it. A host killed between the two
-   * leaves a `credited` row whose cap was never applied — and because the cursor
-   * already moved, no later scan will revisit that deposit. This walks the
-   * consumers table once and re-derives `D → cap → key` for each of them, so the
-   * gap closes at the next start instead of at the next deposit.
+   * A ledger row and its Magpie cap (and key) are separate writes. A host killed
+   * between the two leaves a `credited` row whose cap was never applied; this
+   * walks the consumers table once and re-derives `D → cap → key` for each of
+   * them, so the gap closes at the next start instead of at the next deposit.
    *
    * One consumer failing must not stop the others: each row is independent and a
    * failure is logged and counted, never thrown.
@@ -634,11 +646,11 @@ export class Grants {
     return { checked, updated, failed };
   }
 
-  private async resync(payer: string, kind: "deposit" | "revert" | "resync"): Promise<CreditResult> {
+  private async resync(payer: string, kind: "deposit" | "resync"): Promise<CreditResult> {
     return this.withAddressLock(payer, () => this.resyncLocked(payer, kind));
   }
 
-  private async resyncLocked(payer: string, kind: "deposit" | "revert" | "resync"): Promise<CreditResult> {
+  private async resyncLocked(payer: string, kind: "deposit" | "resync"): Promise<CreditResult> {
     const target = normalizeAddress(payer);
     const consumer = this.consumer(target);
     const balance = balanceMicro(this.db, this.provider(), target);

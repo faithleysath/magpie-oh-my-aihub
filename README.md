@@ -22,7 +22,7 @@ Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTie
 
 Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agent 打开即可；更早的版本手工填上面的 URL。开了 MCP 路由时，agent 拿到的是 `magpie` 一个服务器（`/mcp/magpie/hub/<agent>`），工具名是 `magpie-plugin__<tool>`；关掉路由时，每个服务器单独一条，本插件是 `/mcp/magpie/tools/magpie-plugin`，工具名不带前缀。本机 agent 免 Gateway Key；别的机器上的 agent 需要 Magpie 打开 **Share on local network** 并拿到 Gateway Key。
 
-20 个工具。只本插件的地址没有前缀；全部插件地址是 `magpie-plugin_<tool>`；走 MCP 路由时是 `magpie-plugin__<tool>`：
+21 个工具。只本插件的地址没有前缀；全部插件地址是 `magpie-plugin_<tool>`；走 MCP 路由时是 `magpie-plugin__<tool>`：
 
 | 分类 | 工具 |
 | --- | --- |
@@ -30,7 +30,7 @@ Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agen
 | 地址簿 | `contacts` |
 | 提供方 | `native_models`、`share_models`、`consumers`、`approve_request`、`reject_request`、`revoke_consumer` |
 | 消费方 | `discover`、`request_access`、`connect_provider`、`disconnect_provider`、`connections` |
-| 钱 | `send_payment`、`history` |
+| 钱 | `send_payment`、`history`、`claim_deposit` |
 
 ## 安全边界
 
@@ -38,6 +38,7 @@ Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agen
 - **私钥只在本机**。工具永远不返回私钥；`wallet_export` 只写到本机文件。导出之后能读到那个文件的人（包括 agent）就能拿走它，这是本机权限问题，插件挡不住。
 - **地址簿只是省打字**。`contacts` 把名字映射到地址，存在本机 `ledger.sqlite`；它不进签名、不进目录、不参与授权，也不是转账白名单。所有收地址的工具都接受名字，但名字换成地址之后，行为和不写名字完全一样。
 - **插件不转发 AI 请求**。它不代理、不计 token、不另写请求账单；用量和限额都在 Magpie 自己的 Gateway Key 上。
+- **付款和通知解耦**。`send_payment` 先把交易发上链，再给已知提供者排队一条 `omai/deposit/1` claim；提供者离线时 claim 留在本地队列里重试，不会阻塞付款、不会重发交易。提供者恢复后只查这一笔 receipt。`connections` 会显示对方报告的余额、本地已发送、待投递 claim 和 `providerBehind`；对方可能滞后时用 `claim_deposit` 补发。交易所/外部钱包的转账没有本节点签名，不会自动入账；这是只靠 claim 的产品约束。`send_payment` 传 `claim:false` 可以只转账、不投递，当赠送；出金记录标为 `gift`，之后仍可用 `claim_deposit` 手动补。转原生币用 `asset:"native"`（BSC 的 BNB / Base 的 ETH），用于给朋友空投 gas；原生币不进 claim、不算提供方额度。
 - 覆盖网地址不是身份，只是路由线索。目录和申请靠签名证明「这份模型和价格确实是这个地址公布的」，签名者必须等于文档里的 `address`。
 - **节点名只是显示名**。在地址簿里给自己钱包地址起别名，就会签到目录里（`omai/catalog/3`）供别人 `discover` 看到；身份仍然是地址，改名不影响组网，也不影响别人对你的授权。
 - **目录里的价格是签名承诺**。基线是四段价（输入/输出/缓存读/缓存写，USD / 1M tokens）；带阶梯价（超过某个 token 数整笔涨价）或高峰价（供应商高峰时段乘倍数）的模型会签 `omai/catalog/2`，把 `tiers` 和 `peak` 一起公布。全是四段价时仍签 `/1`，老客户端照旧能读。真实扣费由提供方的 Magpie 按它自己的价目表算，目录不参与计费。
