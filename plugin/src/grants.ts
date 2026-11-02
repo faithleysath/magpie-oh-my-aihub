@@ -49,6 +49,27 @@ const MODEL_ID_LIMIT = 200;
 /** Effectively perpetual: 10 years, so `used` never resets. */
 export const LIMIT_WINDOW = "3650d";
 
+/** `LIMIT_WINDOW` the way Magpie stores it back (`period: "days"`). */
+const LIMIT_WINDOW_DAYS = 3650;
+
+/**
+ * Whether Magpie already holds exactly this whitelist. An absent or null
+ * `models` means "every model", which is never what a grant wants (it is what
+ * `gateway-key add` leaves behind), so that counts as a mismatch.
+ */
+function modelSetMatches(current: string[] | null | undefined, wanted: string[]): boolean {
+  if (!Array.isArray(current) || current.length !== wanted.length) return false;
+  const have = new Set(current);
+  return wanted.every((id) => have.has(id));
+}
+
+/** Whether the key already carries the cost window this plugin sets. */
+function costLimitMatches(record: KeyRecord, capUsd: number): boolean {
+  const limit = record.limit;
+  if (!limit || limit.period !== "days" || limit.days !== LIMIT_WINDOW_DAYS) return false;
+  return typeof limit.cost === "number" && Math.abs(limit.cost - capUsd) < 1e-9;
+}
+
 export interface ConsumerDbRow {
   address: string;
   granted_models: string;
@@ -1076,15 +1097,27 @@ export class Grants {
     const capUsd = Number(cap) / 1_000_000;
 
     if (existing) {
-      let modelsSet = false;
+      // Compare before writing. Every write is a `magpie gateway-key …` child,
+      // and magpie answers that child by loading this plugin — which boots and
+      // reconciles again. An unchanged key that is re-applied on every boot is
+      // therefore a self-sustaining process loop, seen in the field as one plugin
+      // host a second with an easytier-core next to each.
+      const modelsMatch = modelSetMatches(existing.models, models);
+      const capMatch = costLimitMatches(existing, capUsd);
+      if (modelsMatch && capMatch) {
+        return { name, secret: existing.secret, rotatedSecret: Boolean(stored && existing.secret !== stored) };
+      }
+      let modelsApplied = false;
       try {
-        await magpie.setModels(existing.id, models);
-        modelsSet = true;
-        await magpie.setCostLimit(existing.id, LIMIT_WINDOW, capUsd);
+        if (!modelsMatch) {
+          await magpie.setModels(existing.id, models);
+          modelsApplied = true;
+        }
+        if (!capMatch) await magpie.setCostLimit(existing.id, LIMIT_WINDOW, capUsd);
       } catch (error) {
-        const note = modelsSet
+        const note = modelsApplied
           ? (await this.reapplyCap(magpie, existing.id, capUsd)).note
-          : "the model list could not be updated, so the cap was left at its previous value";
+          : "the cap was left at its previous value";
         throw new Error(
           `E_MAGPIE: cannot update the Gateway Key ${name}: ${shortError(error)}; ` +
             `${note}. The authorization keeps the last limit Magpie accepted`,

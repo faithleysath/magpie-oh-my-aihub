@@ -15,6 +15,9 @@ const PAYER = `0x${"11".repeat(20)}`;
 class FakeMagpie {
   records: KeyRecord[] = [];
   caps: number[] = [];
+  /** how many CLI-equivalent writes the plugin asked for */
+  modelCalls = 0;
+  capCalls = 0;
   used = 0;
   private next = 1;
 
@@ -34,10 +37,19 @@ class FakeMagpie {
     return record;
   }
 
-  async setModels(): Promise<void> {}
+  // Mirrors caller-keys.json: what is written is what a later read sees, which
+  // is what lets the plugin skip a write it does not need.
+  async setModels(id: string, models: string[]): Promise<void> {
+    this.modelCalls += 1;
+    const record = this.records.find((key) => key.id === id);
+    if (record) record.models = [...models];
+  }
 
-  async setCostLimit(_id: string, _window: string, usd: number): Promise<void> {
+  async setCostLimit(id: string, _window: string, usd: number): Promise<void> {
     this.caps.push(usd);
+    this.capCalls += 1;
+    const record = this.records.find((key) => key.id === id);
+    if (record) record.limit = { period: "days", days: 3650, cost: usd };
   }
 
   async removeKey(id: string): Promise<void> {
@@ -134,6 +146,49 @@ describe("Gateway Key accounting", () => {
     const second = await grants.approve(PAYER, ["devin/swe-2"]);
     expect(second.state).toBe("waiting-deposit");
     expect(second.keyIssued).toBe(false);
+  });
+});
+
+describe("key reconciliation", () => {
+  test("a resync leaves a key that already matches untouched", async () => {
+    const { grants, fake } = setup();
+    await grants.approve(PAYER, ["devin/swe-2"]);
+    const models = fake.modelCalls;
+    const caps = fake.capCalls;
+
+    await grants.resyncAll();
+    await grants.resyncAll();
+
+    // Every write is a `magpie gateway-key …` child, and magpie answers that
+    // child by booting this plugin again: an unconditional write on boot is a
+    // process loop, not a slow path.
+    expect(fake.modelCalls).toBe(models);
+    expect(fake.capCalls).toBe(caps);
+  });
+
+  test("a new deposit widens the cap without rewriting the model list", async () => {
+    const { grants, fake } = setup();
+    await grants.approve(PAYER, ["devin/swe-2"]);
+    const models = fake.modelCalls;
+    const caps = fake.capCalls;
+
+    insertCreditedDeposit(db!, {
+      chainId: 56,
+      token: TOKEN,
+      from: PAYER,
+      to: PROVIDER,
+      amountRaw: 2_000_000_000_000_000_000n,
+      blockNumber: 2,
+      blockHash: `0x${"cc".repeat(32)}`,
+      txHash: `0x${"dd".repeat(32)}`,
+      logIndex: 0,
+      seenAt: new Date().toISOString(),
+    });
+    await grants.onDeposit(PAYER);
+
+    expect(fake.modelCalls).toBe(models);
+    expect(fake.capCalls).toBe(caps + 1);
+    expect(fake.caps.at(-1)).toBe(7);
   });
 });
 

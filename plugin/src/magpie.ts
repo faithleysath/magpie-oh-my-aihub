@@ -1,8 +1,29 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { magpieDataDir, resolveMagpieBin } from "./paths.ts";
-import { run, runOk } from "./run.ts";
+import { run, runOk, type RunOptions, type RunResult } from "./run.ts";
 import { registerSecret } from "./log.ts";
+
+/**
+ * Set on every child this plugin starts.
+ *
+ * Magpie answers a `gateway-key` question by loading the plugins, so running the
+ * CLI from inside a plugin host starts another plugin host. That host inherits
+ * this variable, and `runtime.ts` uses it to skip the cap/key reconciliation —
+ * which is the code that calls the CLI. Without it, reconciling one issued key
+ * once becomes a host every second.
+ */
+export const NO_REENTRY_ENV = "OMAI_NO_REENTRY";
+const NO_REENTRY = { [NO_REENTRY_ENV]: "1" };
+
+/** The CLI, marked. Every call in this file goes through one of these two. */
+function cli(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
+  return run(argv, { ...opts, env: { ...opts.env, ...NO_REENTRY } });
+}
+
+function cliOk(argv: string[], opts: RunOptions = {}): Promise<string> {
+  return runOk(argv, { ...opts, env: { ...opts.env, ...NO_REENTRY } });
+}
 
 /**
  * A price form this plugin cannot freeze; never a zero price.
@@ -431,7 +452,7 @@ export class Magpie {
     // list (`ps`) for every local user on the machine.
     if (ownSecret) args.push("--key", "-");
     const out = await this.serial(() =>
-      runOk(args, { timeoutMs: 30_000, ...(ownSecret ? { stdin: `${ownSecret}\n` } : {}) }),
+      cliOk(args, { timeoutMs: 30_000, ...(ownSecret ? { stdin: `${ownSecret}\n` } : {}) }),
     );
     const secret = out
       .split("\n")
@@ -457,7 +478,7 @@ export class Magpie {
 
   async setModels(id: string, models: string[]): Promise<void> {
     if (models.length === 0) throw new Error("refusing to set an empty model whitelist");
-    await this.serial(() => runOk([this.bin, "gateway-key", "models", id, ...models], { timeoutMs: 30_000 }));
+    await this.serial(() => cliOk([this.bin, "gateway-key", "models", id, ...models], { timeoutMs: 30_000 }));
   }
 
   /**
@@ -466,7 +487,7 @@ export class Magpie {
    * which is what makes this the fail-closed fallback when removal fails.
    */
   async rotateKey(id: string): Promise<string> {
-    const out = await this.serial(() => runOk([this.bin, "gateway-key", "rotate", id], { timeoutMs: 30_000 }));
+    const out = await this.serial(() => cliOk([this.bin, "gateway-key", "rotate", id], { timeoutMs: 30_000 }));
     const secret = out
       .split("\n")
       .map((l) => l.trim())
@@ -500,11 +521,11 @@ export class Magpie {
       if (!Number.isSafeInteger(limit.tokens) || limit.tokens <= 0) throw new Error(`refusing a token limit of ${String(limit.tokens)}`);
       args.push("--tokens", String(limit.tokens));
     }
-    await this.serial(() => runOk(args, { timeoutMs: 30_000 }));
+    await this.serial(() => cliOk(args, { timeoutMs: 30_000 }));
   }
 
   async removeKey(id: string): Promise<void> {
-    await this.serial(() => runOk([this.bin, "gateway-key", "remove", id], { timeoutMs: 30_000 }));
+    await this.serial(() => cliOk([this.bin, "gateway-key", "remove", id], { timeoutMs: 30_000 }));
   }
 
   /**
@@ -517,7 +538,7 @@ export class Magpie {
     // The name is what a human sees in Magpie's provider list; without it every
     // Remote Magpie this plugin adds is called "Remote magpie".
     if (opts.name) args.push(`name=${opts.name}`);
-    const r = await this.serial(() => run(args, { timeoutMs: 120_000 }));
+    const r = await this.serial(() => cli(args, { timeoutMs: 120_000 }));
     if (r.code !== 0) throw new Error(`provider add: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
   }
 
@@ -532,7 +553,7 @@ export class Magpie {
   }
 
   async removeProvider(id: string, timeoutMs = 60_000): Promise<void> {
-    const r = await this.serial(() => run([this.bin, "provider", "rm", id], { timeoutMs }));
+    const r = await this.serial(() => cli([this.bin, "provider", "rm", id], { timeoutMs }));
     if (r.code !== 0 && !/not found|no such|no provider/i.test(r.stderr + r.stdout)) {
       throw new Error(`provider rm: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
     }
@@ -546,7 +567,7 @@ export class Magpie {
    * Magpie's models as `<remote>/<provider>/<model>`.
    */
   async modelIds(): Promise<string[]> {
-    const r = await this.serial(() => run([this.bin, "models"], { timeoutMs: 30_000 }));
+    const r = await this.serial(() => cli([this.bin, "models"], { timeoutMs: 30_000 }));
     if (r.code !== 0) throw new Error(`magpie models: ${(r.stderr || r.stdout).trim().slice(0, 200)}`);
     const ids = new Set<string>();
     for (const line of r.stdout.split("\n")) {

@@ -31,7 +31,7 @@ import { DirectoryServer } from "./http-router.ts";
 import { DepositClaimService } from "./deposit-claim.ts";
 import { logger } from "./log.ts";
 import { CONTROL_PORT, GATEWAY_PORT, Overlay } from "./overlay.ts";
-import { magpieClient } from "./magpie.ts";
+import { NO_REENTRY_ENV, magpieClient } from "./magpie.ts";
 import { isOurRemoteProvider, remoteProviderId } from "./remote-provider.ts";
 import { stateDir } from "./paths.ts";
 import { listNativeModels } from "./tools/native-models.ts";
@@ -335,10 +335,17 @@ async function bootOnceInner(): Promise<Runtime> {
   // A deposit booked just before a crash may have left its cap unwritten.
   // Reconcile in the background so boot stays fast and a missing Magpie only
   // costs a log line.
-  void resyncCapAndKeys(runtime, "boot");
+  //
+  // Never from a host that exists only to answer one of this plugin's own CLI
+  // calls: the reconciliation writes keys through that same CLI, magpie answers
+  // by loading the plugins, and this file boots again. That recursion is why a
+  // node with one issued key ran at a load of 70.
+  const nested = Boolean(process.env[NO_REENTRY_ENV]);
+  if (nested) logger.info("boot: answering a CLI call; the cap/key resync is left to the host that owns the node");
+  else void resyncCapAndKeys(runtime, "boot");
   logger.info(
     `boot: wallet ${wallet.address}, hostname ${hostname}, network ${config.network?.name ?? "none"}, ` +
-      `ledger ${stateDir()}/ledger.sqlite`,
+      `ledger ${stateDir()}/ledger.sqlite${nested ? " (nested)" : ""}`,
   );
 
   if (config.network) overlay.beginStart(config);
