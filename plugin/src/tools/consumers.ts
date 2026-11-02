@@ -30,7 +30,7 @@ export const approveRequestTool: ToolDef = {
   description:
     "批准一个申请（或改模型）：只保留当前已共享且有价格的模型，空结果报 E_INPUT。" +
     "余额 ≥ $0.0001 时同时签发/更新 Gateway Key（cap = 余额）；余额为 0 时只记录批准，状态 waiting-deposit。" +
-    "省略 models 时用申请里的模型。",
+    "省略 models 时用申请里的模型。批准是整份替换、不是追加：这次列表里没有的模型会被撤掉，返回在 droppedModels 里。",
   args: {
     type: "object",
     properties: {
@@ -53,6 +53,9 @@ export const approveRequestTool: ToolDef = {
     return jsonText({
       address: result.address,
       grantedModels: result.grantedModels,
+      // An approval replaces the grant: a model left out of the list is taken
+      // away, and this field is the only place that says so.
+      droppedModels: result.droppedModels,
       state: result.state,
       keyIssued: result.keyIssued,
     });

@@ -114,6 +114,12 @@ export type AccountSummary = Omit<PollResponse, "key">;
 export interface ApproveResult {
   address: string;
   grantedModels: string[];
+  /**
+   * Models the previous grant had and this one does not. An approval is a
+   * replacement, not a merge, so a narrow list silently takes access away —
+   * this is how the caller sees that before the consumer does.
+   */
+  droppedModels: string[];
   state: ConsumerState;
   keyIssued: boolean;
 }
@@ -442,11 +448,15 @@ export class Grants {
     const approved = consumer?.state === "active" || consumer?.state === "waiting-deposit";
 
     if (consumer && approved) {
+      // The grant stands; only the wishlist moves. `requests.state` says whether
+      // anything in it is still unapproved, so a re-request is not filed as done.
+      const grantedNow = parseModels(consumer.granted_models);
+      const waiting = requested.some((id) => !grantedNow.includes(id));
       this.db.run("UPDATE consumers SET requested_models = ? WHERE address = ?", [modelsJson(requested), target]);
-      this.writeRequest(target, requested, requestTs, "approved");
+      this.writeRequest(target, requested, requestTs, waiting ? "pending" : "approved");
       return {
         state: this.pollState(target),
-        grantedModels: parseModels(consumer.granted_models),
+        grantedModels: grantedNow,
         requestedModels: requested,
         ts: now,
       };
@@ -502,6 +512,9 @@ export class Grants {
       );
     }
 
+    const previous = parseModels(consumer?.granted_models);
+    const dropped = previous.filter((id) => !granted.includes(id));
+
     const balance = balanceMicro(this.db, this.provider(), target);
     const base = this.usedBase(target);
     const available = balance > base ? balance - base : 0n;
@@ -537,9 +550,9 @@ export class Grants {
             "approve again to retry",
         );
       }
-      return { address: target, grantedModels: granted, state: "waiting-deposit", keyIssued: false };
+      return { address: target, grantedModels: granted, droppedModels: dropped, state: "waiting-deposit", keyIssued: false };
     }
-    return { address: target, grantedModels: granted, state: "active", keyIssued: true };
+    return { address: target, grantedModels: granted, droppedModels: dropped, state: "active", keyIssued: true };
   }
 
   /**

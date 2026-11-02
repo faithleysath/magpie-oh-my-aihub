@@ -386,7 +386,9 @@ function requiredModels(args: Record<string, unknown>): string[] {
 export const requestAccessTool: ToolDef = {
   description:
     "向某个提供方节点申请模型访问：用本节点钱包签名 POST /request（地址取自 discover 缓存，" +
-    "没有缓存就先发现一次）。返回申请状态。对同一个节点重复申请只覆盖 requested_models，不会撤销已有授权。",
+    "没有缓存就先发现一次）。对同一个节点重复申请只覆盖 requested_models，不会撤销已有授权。" +
+    "返回 requestedModels（这次申请的完整列表）、grantedModels（当前生效的）、pendingModels（还没批的）；" +
+    '已有授权时 state 仍是 "approved"——看 pendingModels 才知道新模型批没批。',
   args: {
     type: "object",
     properties: {
@@ -433,7 +435,7 @@ export const requestAccessTool: ToolDef = {
       throw new Error(`E_PEER_OFFLINE: cannot reach ${endpoint.host}:${CONTROL_PORT} (${shortError(error)})`);
     }
 
-    let ack: { state?: unknown; requestedModels?: unknown; error?: unknown };
+    let ack: { state?: unknown; grantedModels?: unknown; requestedModels?: unknown; error?: unknown };
     try {
       ack = JSON.parse(response.body) as typeof ack;
     } catch {
@@ -450,9 +452,14 @@ export const requestAccessTool: ToolDef = {
     const state = typeof ack.state === "string" ? (ack.state as PollState) : "pending";
     if (!POLL_STATES.has(state)) fail("E_PEER_OFFLINE", `the provider answered an unknown state ${String(ack.state)}`);
     const requestedModels = isStringArray(ack.requestedModels) ? ack.requestedModels : models;
+    const grantedModels = isStringArray(ack.grantedModels) ? ack.grantedModels : [];
+    // state is the account's state: for an address that already holds a grant it
+    // reads "approved" no matter what this request asked for. The models still
+    // waiting are the answer to "did my new one get in".
+    const pendingModels = requestedModels.filter((id) => !grantedModels.includes(id));
 
-    rememberRequest(runtime, provider, requestedModels, state, catalogTimestamp());
-    return jsonText({ provider, state, requestedModels });
+    rememberRequest(runtime, provider, requestedModels, pendingModels.length > 0 ? "pending" : state, catalogTimestamp());
+    return jsonText({ provider, state, grantedModels, requestedModels, pendingModels });
   },
 };
 

@@ -99,8 +99,8 @@ function setup(): { grants: Grants; fake: FakeMagpie } {
     db,
     address: () => PROVIDER,
     gatewayPort: 3425,
-    shareable: async () => [{ id: "devin/swe-2" }],
-    published: () => ["devin/swe-2"],
+    shareable: async () => [{ id: "devin/swe-2" }, { id: "devin/swe-3" }],
+    published: () => ["devin/swe-2", "devin/swe-3"],
     magpie: () => fake as unknown as Magpie,
   });
   return { grants, fake };
@@ -189,6 +189,48 @@ describe("key reconciliation", () => {
     expect(fake.modelCalls).toBe(models);
     expect(fake.capCalls).toBe(caps + 1);
     expect(fake.caps.at(-1)).toBe(7);
+  });
+});
+
+describe("asking for more models", () => {
+  test("the grant stands and the new request is filed as pending", async () => {
+    const { grants } = setup();
+    await grants.approve(PAYER, ["devin/swe-2"]);
+
+    const ack = grants.upsertRequest(PAYER, ["devin/swe-2", "devin/swe-3"], new Date().toISOString());
+
+    // The account is still approved, which is what the poll answer says; the
+    // grant is untouched and the wishlist grew.
+    expect(ack.state).toBe("approved");
+    expect(ack.grantedModels).toEqual(["devin/swe-2"]);
+    expect(ack.requestedModels).toEqual(["devin/swe-2", "devin/swe-3"]);
+    expect(grants.request(PAYER)?.state).toBe("pending");
+  });
+
+  test("a request for nothing new is not left pending", async () => {
+    const { grants } = setup();
+    await grants.approve(PAYER, ["devin/swe-2"]);
+
+    grants.upsertRequest(PAYER, ["devin/swe-2"], new Date().toISOString());
+    expect(grants.request(PAYER)?.state).toBe("approved");
+  });
+
+  test("an approval that takes a model away says which", async () => {
+    const { grants } = setup();
+    await grants.approve(PAYER, ["devin/swe-2"]);
+    grants.upsertRequest(PAYER, ["devin/swe-3"], new Date().toISOString());
+
+    const result = await grants.approve(PAYER);
+    expect(result.grantedModels).toEqual(["devin/swe-3"]);
+    expect(result.droppedModels).toEqual(["devin/swe-2"]);
+  });
+
+  test("re-approving the same list drops nothing", async () => {
+    const { grants } = setup();
+    await grants.approve(PAYER, ["devin/swe-2"]);
+
+    const result = await grants.approve(PAYER, ["devin/swe-2"]);
+    expect(result.droppedModels).toEqual([]);
   });
 });
 

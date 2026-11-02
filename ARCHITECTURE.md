@@ -198,6 +198,8 @@ EasyTier 用 **虚拟 IP** 组网：生成的 TOML 固定写 `dhcp = true`，每
 
 按 `address` 覆盖写一条申请（每地址一条，不排队、不生成请求 id）。提供方把它记成 `requestedModels`，不改变已有授权。响应 `{"state":"pending"|"approved"|"revoked","grantedModels":[…],"requestedModels":[…],"ts":"…"}`，不签名。限制：请求体 ≤16 KiB，每地址 30 次/分钟，模型列表非空。
 
+响应里的 `state` 是**账号**状态，不是这次申请的结果：地址已有授权时它永远是 `approved`，哪怕这次要的模型一个都没批。消费者要看 `grantedModels` 与 `requestedModels` 的差。`requests.state` 才是这份申请自己的状态——`requestedModels` 里有 `grantedModels` 没有的模型记 `pending`，全都已批准记 `approved`。
+
 ### `GET /request?address=&ts=&sig=`
 
 查询串自身被签：`{schema:"omai/poll/1", address, ts}`。
@@ -230,6 +232,7 @@ remaining   = D − used
 - **`cap = D − used-base`**：每次入账/回滚后重算并写入 Magpie：`gateway-key limit <id> 3650d --cost <cap>`。撤销/余额归零删掉 key 前先读一次该 key 的 used，转入 `used-base`；新 key 从剩余额度开始，不会把同一笔充值再放一遍。
 - **不发 `cap = 0` 的 Key**：Magpie 把 `0` 当无限额。剩余额度（`D − used-base`）`< $0.0001` 时不发 Key，状态「等待充值」。
 - **申请与批准是两件事**：消费方签名申请；提供方批准模型子集。批准不改变余额，余额也不自动产生授权。
+- **批准是整份替换，不是追加**：`granted = 申请列表 ∩ 已共享 ∩ 有价格`，列表里没有的旧模型会被撤掉，结果里以 `droppedModels` 报出来。
 - **状态**：申请 `pending | approved | revoked`；消费者 `waiting-deposit | active | revoked`。
 - **撤销**：删除 Magpie 里的 Gateway Key（失败时用 rotate 兜底），删除前把该 key 的 used 转入 `used-base`；账目保留，重新批准会发新 Key（cap 已扣掉旧 key 的用量），消费方再 `connect_provider` 取一次。
 - **入账归属**：提供者只处理带本节点钱包签名的 `omai/deposit/1` claim；`Transfer.to` 是本节点地址、付款方是 `from`，仍然以链上 receipt 为准。交易所直接提币或外部钱包转账没有签名 claim，不会自动入账。
