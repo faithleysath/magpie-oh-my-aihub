@@ -47,11 +47,9 @@ function fsyncDir(dir: string): void {
   }
 }
 
-/** Atomically replaces a JSON file, keeping the old content in `<path>.prev`. */
-export function writeJsonAtomic(path: string, value: unknown, mode = 0o600): void {
+function writeAtomic(path: string, body: string, mode: number, keepPrevious: boolean): void {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const body = JSON.stringify(value, null, 1) + "\n";
   const tmp = join(dir, `.${randomBytes(6).toString("hex")}.tmp`);
   const fd = openSync(tmp, "w", mode);
   try {
@@ -63,7 +61,7 @@ export function writeJsonAtomic(path: string, value: unknown, mode = 0o600): voi
     closeSync(fd);
   }
   // Keep the document that is being replaced, so a bad write can be undone.
-  if (existsSync(path)) {
+  if (keepPrevious && existsSync(path)) {
     try {
       writeFileSync(`${path}.prev`, readFileSync(path), { mode });
     } catch {
@@ -74,20 +72,14 @@ export function writeJsonAtomic(path: string, value: unknown, mode = 0o600): voi
   fsyncDir(dir);
 }
 
-/**
- * A copy of `path` next to it, named `<path>.<suffix>`. Used before a state
- * migration rewrites a document that may hold the only record of a provider.
- */
-export function backupFile(path: string, suffix: string): string | null {
-  if (!existsSync(path)) return null;
-  const safe = suffix.replace(/[^A-Za-z0-9._-]/g, "-");
-  const target = `${path}.${safe}`;
-  try {
-    writeFileSync(target, readFileSync(path), { mode: 0o600 });
-    return target;
-  } catch {
-    return null;
-  }
+/** Atomically replaces a text file (the generated EasyTier TOML, for example). */
+export function writeTextAtomic(path: string, body: string, mode = 0o600): void {
+  writeAtomic(path, body, mode, false);
+}
+
+/** Atomically replaces a JSON file, keeping the old content in `<path>.prev`. */
+export function writeJsonAtomic(path: string, value: unknown, mode = 0o600): void {
+  writeAtomic(path, JSON.stringify(value, null, 1) + "\n", mode, true);
 }
 
 /**

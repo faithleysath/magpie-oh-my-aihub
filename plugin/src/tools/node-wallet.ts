@@ -208,7 +208,7 @@ async function readChain(spec: ChainRecord, address: string): Promise<WalletChai
   try {
     // Same client as the watcher: ordered endpoints, sticky failover, no cached
     // head. A single dead public RPC must not turn a balance into "unavailable".
-    const client = clientFor(spec, { timeoutMs: 8_000 });
+    const client = clientFor(spec, { timeoutMs: 8_000, rounds: 1 });
     const [native, usdc] = await Promise.all([
       client.balance(address),
       client.erc20Balance(spec.usdc, address),

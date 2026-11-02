@@ -93,8 +93,12 @@ export const contactsTool: ToolDef = {
       // An alias that points at this node's own wallet is the name this node
       // publishes: the user already has one place to name things, so the address
       // book is that place. Re-signing makes it visible to peers immediately.
-      const published = address === runtime.wallet.address.toLowerCase();
-      if (published) await publishName(runtime, alias);
+      // Repointing it away from this node must withdraw that name; otherwise the
+      // directory keeps advertising a name no contact points at.
+      const self = runtime.wallet.address.toLowerCase();
+      const published = address === self;
+      if (published) await publishName(runtime, saved.contact.alias);
+      else if (saved.previousAddress === self) await withdrawIfSelf(runtime, [self]);
       return jsonText({
         state: saved.previousAddress ? "repointed" : "saved",
         ...saved.contact,

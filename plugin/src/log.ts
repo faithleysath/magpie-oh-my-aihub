@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { stateDir } from "./paths.ts";
 
@@ -29,6 +29,8 @@ function logFile(): string {
 }
 
 let ready = false;
+/** Keep the host's log bounded; a long-lived watcher is noisy by nature. */
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
 
 function ensureDir(): void {
   if (ready) return;
@@ -36,11 +38,23 @@ function ensureDir(): void {
   ready = true;
 }
 
+function rotateIfNeeded(path: string): void {
+  try {
+    if (!existsSync(path) || statSync(path).size <= MAX_LOG_BYTES) return;
+    rmSync(`${path}.1`, { force: true });
+    renameSync(path, `${path}.1`);
+  } catch {
+    /* rotation is best effort, exactly like the log itself */
+  }
+}
+
 export function log(level: Level, message: string): void {
   const line = `${new Date().toISOString()} ${level.toUpperCase()} ${redact(message)}`;
   try {
     ensureDir();
-    appendFileSync(logFile(), line + "\n", { mode: 0o600 });
+    const file = logFile();
+    rotateIfNeeded(file);
+    appendFileSync(file, line + "\n", { mode: 0o600 });
   } catch {
     /* the log is best effort */
   }

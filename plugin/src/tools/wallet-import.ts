@@ -7,7 +7,7 @@ import { fail, jsonText, objectArgs, optionalBoolean, requiredString, type ToolD
 export const walletImportTool: ToolDef = {
   description:
     "从绝对路径的 32 字节 hex 私钥文件导入节点钱包。已有钱包且地址不同时默认拒绝，除非 force:true。" +
-    "返回地址和是否发生了变更，不返回私钥。",
+    "换地址会清掉旧地址的消费连接和缓存（旧 Gateway Key 属于旧身份），返回地址和是否发生了变更，不返回私钥。",
   args: {
     type: "object",
     properties: {
@@ -32,7 +32,15 @@ export const walletImportTool: ToolDef = {
       if (/^E_[A-Z_]+:/.test(message)) throw error;
       fail("E_PATH", message);
     }
-    if (result.changed) replaceWallet(runtime, result.wallet);
-    return jsonText({ address: result.address, changed: result.changed });
+    let cleaned: { clearedConnections: number; removedProviders: number; detail?: string } | null = null;
+    if (result.changed) cleaned = await replaceWallet(runtime, result.wallet);
+    return jsonText({
+      address: result.address,
+      changed: result.changed,
+      ...(cleaned && cleaned.clearedConnections > 0
+        ? { clearedConnections: cleaned.clearedConnections, removedProviders: cleaned.removedProviders }
+        : {}),
+      ...(cleaned?.detail ? { cleanupDetail: cleaned.detail } : {}),
+    });
   },
 };

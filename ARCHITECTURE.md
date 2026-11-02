@@ -2,7 +2,7 @@
 
 Oh My AIHub 是 Magpie 的一个纯后端插件：让同一个 EasyTier 私有网里的几台 Magpie 互相把对方的**原生模型**当作 Remote Magpie 来用，用链上 USDC 预付结算。
 
-插件不做 AI 网关，不转发、不计 token、不做第二套计费。AI 请求始终是「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」。插件不提供控制台、CLI 或本机管理 API；唯一交互方式是 Magpie 暴露给 agent 的 18 个 MCP 工具。Magpie 里只有一页静态文档（`plugin/page/doc.md`），教用户把 agent 接上这些工具。
+插件不做 AI 网关，不转发、不计 token、不做第二套计费。AI 请求始终是「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」。插件不提供控制台、CLI 或本机管理 API；唯一交互方式是 Magpie 暴露给 agent 的 20 个 MCP 工具。Magpie 里只有一页静态文档（`plugin/page/doc.md`），教用户把 agent 接上这些工具。
 
 明确不是：模型市场、代币、撮合、托管、跨链、法币通道、公网服务、多租户 SaaS。
 
@@ -35,9 +35,9 @@ D13 的后果：Magpie 改价会重算历史用量，「剩余额度」会自己
 Magpie 进程
  └─ 插件宿主（Bun）
      ├─ boot：读 state.json → 钱包 → SQLite → EasyTier（有网络时）
-     │        → 3426 目录服务 → 链观察器 → 19 个工具
-     ├─ EasyTier no-TUN 子进程：3426 目录/控制、3425 网关、
-     │                          13400 SOCKS5、13425+ 本地转发
+     │        → 3426 目录服务 → 链观察器 → 20 个工具
+     ├─ EasyTier core：root daemon 的 TUN 或宿主 no-TUN；3426 目录/控制、
+     │                3425 网关、13400 SOCKS5、13425+ 本地转发
      ├─ 内置钱包（ethers）：keygen / 地址 / 签名 / 验签 / ERC-20 transfer
      └─ 工具层 ← MCP ← 用户 agent
 ```
@@ -53,7 +53,7 @@ Magpie 进程
 
 | 文件 | 内容 | 权限 |
 | --- | --- | --- |
-| `state.json` | `{version:3, network:{name,secret,initialNode,secureMode}, share:{models}, publish:{mappedCidr}, connections:[{provider,localPort,mappedHost}], hostname}`；上一版留 `.prev` | `0600` |
+| `state.json` | `{version:3, network:{name,secret,initialNode,secureMode,listen,tun}, share:{models}, connections:[{provider,localPort,peerHost}], hostname, displayName}`；上一版留 `.prev` | `0600` |
 | `wallet/key.hex` | 节点私钥。工具永远不返回它 | `0600` |
 | `ledger.sqlite` | 入账、申请、消费者、出金、扫描游标；WAL，`-wal`/`-shm` 同行 | `0600` |
 | `easytier/current.toml` | 生成的 EasyTier 配置（导出、ACL、SOCKS5、secure mode、逐连接转发） | `0600` |
@@ -111,15 +111,15 @@ EasyTier 用 **虚拟 IP** 组网：生成的 TOML 固定写 `dhcp = true`，每
 | 对端看到的源地址 | 对端的覆盖网地址（`10.126.x.y`） | `127.0.0.1`（EasyTier 会重写） |
 | 3426 目录 | 入站放行 | 入站放行（所有写操作都有签名） |
 | 3425 网关 | 入站放行，Magpie 按 Gateway Key 计费 | **不公布、不放行**：看起来像本机免 Key 调用，放行就是白送 |
-| 目录服务监听 | `0.0.0.0:3426` | `127.0.0.1:3426`（重写后的落点） |
+| 目录服务监听 | 本节点的覆盖网地址 `:3426` | `127.0.0.1:3426`（重写后的落点） |
 
 所以「能不能计费」取决于提供方有没有 TUN：`status.network.mode` 会写清楚，no-TUN 提供方的 `publishedPorts` 里没有 3425。TUN 模式下主机防火墙要看得到 tun 设备（`ufw allow in on tun0`），否则覆盖网流量会被静默丢弃 —— 表现是连接超时、日志里什么都没有。
 
-没有 root 又想要 TUN 时，可以装一个 root 守护进程（`network_daemon` 工具的 `install`）：它只做一件事 —— 以 root 运行 `plugin/scripts/omai-easytier-daemon.sh`，那个脚本校验插件写的 `current.toml`（顶层键白名单），copy 到 `/var/run/omai-easytier/`（root 所有）后用副本启动 core，并在文件哈希变化时重启。所以装的时候弹一次系统管理员密码框，之后**插件全程无特权**：改写配置就等于重启。守护进程存在时 `status.mode = "tun"`、`status.delegate = true`。
+没有 root 又想要 TUN 时，可以装一个 root 守护进程（`network_daemon` 工具的 `install`）：它只做一件事 —— 以 root 运行 `plugin/scripts/omai-easytier-daemon.sh`，那个脚本校验插件写的 `current.toml`（顶层键、表名和表字段白名单，并拒绝特权端口/非回环 SOCKS/转发），copy 到 `/var/run/omai-easytier/`（root 所有）后用副本启动 core，并在文件哈希变化时重启。所以装的时候弹一次系统管理员密码框，之后**插件全程无特权**：改写配置就等于重启。守护进程存在时 `status.mode = "tun"`、`status.delegate = true`。
 
 `listeners` **默认开**（`join_network` 的 `listen` 默认 `true`，`listen: false` 才关）：开着才有被直连的可能。不开时 EasyTier 一个端口都不开，所有流量都经已经连着的对端中继。入站端口不可达也不影响功能，只是那次直连会回退成中继。
 
-三个端点都监听 `<lan>:3426`，走覆盖网明文 HTTP。
+三个端点都在 3426 上：TUN 绑定本节点覆盖网地址，no-TUN 绑定 `127.0.0.1`；覆盖网内是明文 HTTP。
 
 **签名**（三处共用）：原文是规范化 JSON（键排序、无空白、UTF-8），签名是 EIP-191 `personal_sign`，65 字节 hex，`v` 为 27/28；被签对象带 `schema` 做域分离（`omai/catalog/1`、`omai/request/1`、`omai/poll/1`）；验签得到的地址必须等于 `payload.address`。`request`/`poll` 的 `ts` 要求 ±5 分钟。
 
@@ -200,15 +200,17 @@ EasyTier 用 **虚拟 IP** 组网：生成的 TOML 固定写 `dhcp = true`，每
 
 ```
 D(地址)     = Σ 已确认入账金额（同一付款方地址、跨 BSC/Base 求和）
-cap         = floor_0.0001(D)
-remaining   = D − Magpie 原生 used（当前窗口）
+used-base   = 已被删除的旧 key 花掉的金额（换 key 时结转）
+used        = used-base + 当前 key 的 Magpie 原生 used
+cap         = floor_0.0001(D − used-base)
+remaining   = D − used
 ```
 
-- **`cap = D`**：每次入账/回滚后重算并写入 Magpie：`gateway-key limit <id> 3650d --cost <cap>`。
-- **不发 `cap = 0` 的 Key**：Magpie 把 `0` 当无限额。`D < $0.0001` 时不发 Key，状态「等待充值」。
+- **`cap = D − used-base`**：每次入账/回滚后重算并写入 Magpie：`gateway-key limit <id> 3650d --cost <cap>`。撤销/余额归零删掉 key 前先读一次该 key 的 used，转入 `used-base`；新 key 从剩余额度开始，不会把同一笔充值再放一遍。
+- **不发 `cap = 0` 的 Key**：Magpie 把 `0` 当无限额。剩余额度（`D − used-base`）`< $0.0001` 时不发 Key，状态「等待充值」。
 - **申请与批准是两件事**：消费方签名申请；提供方批准模型子集。批准不改变余额，余额也不自动产生授权。
 - **状态**：申请 `pending | approved | revoked`；消费者 `waiting-deposit | active | revoked`。
-- **撤销**：删除 Magpie 里的 Gateway Key（失败时用 rotate 兜底），账目保留；重新批准会发新 Key，消费方再 `connect_provider` 取一次。
+- **撤销**：删除 Magpie 里的 Gateway Key（失败时用 rotate 兜底），删除前把该 key 的 used 转入 `used-base`；账目保留，重新批准会发新 Key（cap 已扣掉旧 key 的用量），消费方再 `connect_provider` 取一次。
 - **入账归属**：`Transfer.to` 是本节点地址，付款方是 `from`；不需要申请、单据或认领。交易所直接提币到提供方地址时，`from` 是交易所地址，那笔钱记在交易所名下，拿不到 Key。
 - **最终性**：BSC 用 15 个确认（它的 `finalized` 标签等于 `latest`，没有深度信息），Base 用 `finalized` 标签。两条都拿不到就不入账，等下一轮。
 - **回滚**：已入账行所在块不再 canonical 时标 `reverted`，`D` 重算、`cap` 调低（`D` 归零就删 Key）；记录不删、不退款。
@@ -257,29 +259,31 @@ remaining   = D − Magpie 原生 used（当前窗口）
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/index.ts` | 插件入口。默认导出同步返回 `{tool}` 的 19 个工具；测试辅助放在 `_internal` 对象里，不额外导出函数。 |
+| `src/index.ts` | 插件入口。默认导出同步返回 `{tool}` 的 20 个工具；测试辅助放在 `_internal` 对象里，不额外导出函数。 |
 | `src/runtime.ts` | 一个宿主进程一个运行时：boot 顺序、30 秒目录重签、`cap`/Key 重同步、身份替换、退出钩子。 |
 | `src/config.ts` | `state.json`（version 3）的读写。 |
 | `src/db.ts` | `ledger.sqlite` 六张表和金额换算（整数 micro-USD）。 |
 | `src/grants.ts` | 申请、批准、拒绝、撤销，以及 Gateway Key 的签发/收窄/删除；`D → cap → key` 的唯一实现。 |
-| `src/http-router.ts` | 本插件唯一的监听：`<lan>:3426`，只有三个端点。 |
-| `src/catalog-service.ts` | `omai/catalog/1` 的构建、签名、解析；改共享只重签内存里的文档。 |
+| `src/http-router.ts` | 本插件唯一的监听：TUN 下绑覆盖网地址、no-TUN 下绑 `127.0.0.1` 的 3426，只有三个端点。 |
+| `src/catalog-service.ts` | `omai/catalog/1`、`/2`、`/3` 的构建、签名、解析；改共享只重签内存里的文档。 |
 | `src/signing.ts` | 规范化 JSON 与 EIP-191 `personal_sign`/验签。 |
-| `src/overlay.ts` | EasyTier no-TUN 生命周期：下载校验、生成 TOML、导出 LAN 地址、分配转发口、重启与停止。 |
+| `src/overlay.ts` | EasyTier TUN/no-TUN 生命周期：下载校验、生成 TOML、按 DHCP 地址分配转发口、重启与停止。 |
 | `src/socks.ts` | 经本机 EasyTier SOCKS5 发一个 HTTP 请求。 |
-| `src/lan.ts` | 探测要导出的 LAN IPv4（`OH_MY_AIHUB_LAN_IP` 可覆盖，仅供隔离测试）。 |
-| `src/addresses.ts` | 稳定的 `10.66.a.b/32` 覆盖网导出前缀。 |
+| `src/chain-ws.ts` | 每条链的 `eth_subscribe("logs")` 加速器；连不上就静默退回纯扫描。 |
+| `src/daemon.ts` | macOS root LaunchDaemon 的安装、卸载与状态；配置由用户侧写、root 侧校验后运行。 |
+| `src/tun.ts` | 判断本机能否创建 TUN 设备（root / `OH_MY_AIHUB_TUN` 覆盖）。 |
+| `src/remote-provider.ts` | 识别本插件在 Magpie 里创建的 Remote Magpie（id + loopback URL 双重证明）。 |
 | `src/contacts.ts` | 地址簿：`alias → 地址` 的读写与归一化（去空格、转小写）。 |
 | `src/easytier-manifest.ts` | 固定 EasyTier 2.6.4 各平台资产与 SHA-256。 |
 | `src/chain.ts` | BSC/Base 注册表、USDC 精度、JSON-RPC 读取与唯一写路径。 |
 | `src/chain-watcher.ts` | 每链一个扫描循环：读头、算最终块、按块取 `Transfer` 日志、凭 receipt 入账、复查回滚。 |
 | `src/magpie.ts` | Magpie CLI 封装（模型、Gateway Key、Remote Magpie），以及价格能否被冻结的判断。 |
 | `src/paths.ts` | 插件数据目录与 `magpie` 可执行文件的解析（`OH_MY_AIHUB_MAGPIE` 可覆盖）。 |
-| `src/store.ts` | 原子写 JSON（临时文件 + fsync + rename，保留 `.prev`）。 |
+| `src/store.ts` | 原子写 JSON/TOML（临时文件 + fsync + rename，JSON 保留 `.prev`）。 |
 | `src/run.ts` | 唯一启动外部程序的地方：argv 数组，没有 shell。 |
 | `src/secure-key.ts` | secure mode 的 X25519 密钥对：首用生成、持久化、注册为日志敏感值。 |
 | `src/log.ts` | 脱敏日志（私钥、Key、网络密码、bearer 不落盘）。 |
-| `src/tools/*.ts` | 19 个工具；`types.ts` 是工具定义类型，`resolve.ts` 把地址参数里的别名解析成地址，`node-wallet.ts` 是钱包生命周期（不是工具）。 |
+| `src/tools/*.ts` | 20 个工具；`types.ts` 是工具定义类型，`resolve.ts` 把地址参数里的别名解析成地址，`node-wallet.ts` 是钱包生命周期（不是工具）。 |
 | `scripts/build-page.ts` | 把 `page/doc.md` 渲染成 `page/index.html`，渲染器是很小的 Markdown 子集。 |
 
 ## 已知限制
@@ -298,18 +302,22 @@ remaining   = D − Magpie 原生 used（当前窗口）
 12. **首次扫描只回溯 24 小时**：全新安装的钱包地址是刚生成的，正常不会有更早的入账；导入一个早已收过钱的私钥则可能漏掉旧记录。
 13. **别的机器上的 agent** 要调这些工具，需要 Magpie 打开局域网共享并持有 Gateway Key；本机 agent 默认免 Key。
 14. **地址簿不跟钱包走**。别名存在本机 `ledger.sqlite`，换机器或换数据目录要重新录；同一个私钥在两台机器上不共享别名。
+15. **Remote Magpie 的 Gateway Key 仍会出现在 Magpie CLI 的 argv 里**。`magpie provider add remote-magpie <key>` 没有 stdin 形式，本机同用户的进程列表可能看到它；插件自己的 `gateway-key add` 已改用 `--key -`。
+16. **目录 `ts` 超过 5 分钟会被判为过期**：提供方每 30 秒重签；Magpie 读不到模型时保留旧文档，但超过 5 分钟后 `discover` 会把该节点标成离线，而不是拿旧价格继续算。
+17. **RPC 端点可以在环境里覆盖**：`OH_MY_AIHUB_BSC_RPC`、`OH_MY_AIHUB_BASE_RPC`（逗号分隔）。公共端点限流时，扫描会退避并按上次成功的端点继续，但恢复速度仍取决于端点。
 
 ## 验证
 
 ```sh
 cd plugin
 bun run typecheck      # tsc --noEmit
-bun run build:page     # page/doc.md -> page/index.html，校验 19 个工具名与两个 MCP 地址
+bun run test           # bun test（签名、目录、账本、cap、RPC failover）
+bun run build:page     # page/doc.md -> page/index.html
 ```
 
-临时目录 boot 冒烟：`OH_MY_AIHUB_MAGPIE=/nonexistent/magpie OH_MY_AIHUB_LAN_IP=127.0.0.1`，import `plugin/src/index.ts`；默认导出应返回 19 个工具，生成 `wallet/key.hex`（0600）与六张表，`status.network.state = "offline"`。
+临时目录 boot 冒烟：`OH_MY_AIHUB_MAGPIE=/nonexistent/magpie`，import `plugin/src/index.ts`；默认导出应返回 20 个工具，生成 `wallet/key.hex`（0600）与六张表，`status.network.state = "offline"`。
 
-链上实验只在本地 anvil 或受控模拟 RPC 上做；真实链只做只读。测试文件不提交。
+链上实验只在本地 anvil 或受控模拟 RPC 上做；真实链只做只读。测试在 `plugin/test/`，CI 跑 typecheck、test 和 build:page。
 
 ## 明确不做
 

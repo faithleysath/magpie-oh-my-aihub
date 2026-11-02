@@ -53,6 +53,8 @@ export const CATALOG_MAX_MODEL_ID = 200;
 export const CATALOG_MAX_HOSTNAME = 64;
 /** Magpie's own price schema accepts at most ten tiers; the directory does too. */
 export const CATALOG_MAX_TIERS = 10;
+/** The directory is re-signed every 30 seconds; five minutes is already stale. */
+export const CATALOG_MAX_AGE_MS = 5 * 60_000;
 
 /**
  * One long-context tier. `above` is a prompt-token count: a request whose input
@@ -311,7 +313,7 @@ export type CatalogParse = { ok: true; doc: CatalogDocument } | { ok: false; err
  * signer required to equal `address`. A peer that fails any check is reported as
  * offline by `discover`; it is never partially trusted.
  */
-export function parseCatalogDocument(raw: unknown): CatalogParse {
+export function parseCatalogDocument(raw: unknown, now: number = Date.now()): CatalogParse {
   const reject = (error: string): CatalogParse => ({ ok: false, error });
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return reject("not a JSON object");
   const o = raw as Record<string, unknown>;
@@ -338,6 +340,10 @@ export function parseCatalogDocument(raw: unknown): CatalogParse {
   if (!isPort(o.controlPort)) return reject("controlPort is not a TCP port");
   if (o.gatewayPort !== null && !isPort(o.gatewayPort)) return reject("gatewayPort is not null or a TCP port");
   if (!isTimestamp(o.ts)) return reject("ts is not an ISO-8601 UTC timestamp");
+  const age = now - Date.parse(o.ts);
+  if (!Number.isFinite(age) || age > CATALOG_MAX_AGE_MS || age < -CATALOG_MAX_AGE_MS) {
+    return reject("ts is outside the five-minute freshness window");
+  }
   if (typeof o.sig !== "string" || !SIGNATURE_RE.test(o.sig)) return reject("sig is not 65 bytes of hex");
   if (!Array.isArray(o.models)) return reject("models is not an array");
   if (o.models.length > CATALOG_MAX_MODELS) return reject(`models has more than ${CATALOG_MAX_MODELS} entries`);

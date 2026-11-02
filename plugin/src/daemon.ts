@@ -13,7 +13,7 @@
 // says so rather than hanging.
 
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { statePath } from "./paths.ts";
 import { run } from "./run.ts";
 
@@ -104,6 +104,16 @@ ${args}
 `;
 }
 
+/** POSIX single-quote a value; a quote inside becomes `'\''`. */
+function shQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/** A double-quoted AppleScript string literal. */
+function appleScriptString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 /**
  * Runs a script as root through the standard admin sheet. The script lives in the
  * plugin's own directory (0700, this user only), which is the same trust boundary
@@ -117,7 +127,9 @@ async function runAsRoot(body: string, label: string): Promise<void> {
   writeFileSync(file, body, { mode: 0o700 });
   chmodSync(file, 0o700);
   try {
-    const script = `do shell script "/bin/sh ${file.replace(/"/g, '\\"')}" with administrator privileges`;
+    // `quoted form of` asks AppleScript for a shell-safe path, so spaces, quotes
+    // and `$` in a user's data directory cannot become shell syntax.
+    const script = `do shell script "/bin/sh " & quoted form of ${appleScriptString(file)} with administrator privileges`;
     const r = await run(["osascript", "-e", script], { timeoutMs: 180_000 });
     if (r.code !== 0) {
       const message = shortError(r.stderr || r.stdout);
@@ -145,16 +157,16 @@ export async function installDaemon(core: string, config: string, rpc: string): 
   const body = `#!/bin/sh
 set -eu
 install -d -m 0755 /usr/local/libexec
-install -m 0755 -o root -g wheel '${src}' '${DAEMON_WRAPPER}'
-install -m 0644 -o root -g wheel '${plistTmp}' '${DAEMON_PLIST}'
-mkdir -p '${DAEMON_STATE_DIR}'
-chmod 700 '${DAEMON_STATE_DIR}'
+install -m 0755 -o root -g wheel ${shQuote(src)} ${shQuote(DAEMON_WRAPPER)}
+install -m 0644 -o root -g wheel ${shQuote(plistTmp)} ${shQuote(DAEMON_PLIST)}
+mkdir -p ${shQuote(DAEMON_STATE_DIR)}
+chmod 700 ${shQuote(DAEMON_STATE_DIR)}
 # launchd answers EIO when a previous job of the same label is still going away,
 # so replacing a running daemon needs a retry rather than a single attempt.
 launchctl bootout system/${DAEMON_LABEL} 2>/dev/null || true
 i=0
 while [ "$i" -lt 10 ]; do
-  if launchctl bootstrap system '${DAEMON_PLIST}' 2>/dev/null; then break; fi
+  if launchctl bootstrap system ${shQuote(DAEMON_PLIST)} 2>/dev/null; then break; fi
   i=$((i + 1))
   sleep 1
 done
@@ -169,22 +181,8 @@ export async function uninstallDaemon(): Promise<void> {
   const body = `#!/bin/sh
 set -eu
 launchctl bootout system/${DAEMON_LABEL} 2>/dev/null || true
-rm -f '${DAEMON_PLIST}' '${DAEMON_WRAPPER}'
-rm -rf '${DAEMON_STATE_DIR}'
+rm -f ${shQuote(DAEMON_PLIST)} ${shQuote(DAEMON_WRAPPER)}
+rm -rf ${shQuote(DAEMON_STATE_DIR)}
 `;
   await runAsRoot(body, "uninstall-daemon");
-}
-
-/** Where the root side keeps its copy, for a `status` that explains itself. */
-export function daemonConfigPath(): string {
-  return join(DAEMON_STATE_DIR, "current.toml");
-}
-
-export function daemonLogPath(): string {
-  return join(DAEMON_STATE_DIR, "daemon.log");
-}
-
-/** Only used to keep the import graph honest in tests. */
-export function daemonDirHint(): string {
-  return dirname(DAEMON_PLIST);
 }

@@ -1,5 +1,5 @@
-// The one HTTP listener this plugin owns: port 3426, on the address a peer's
-// connection lands on (every interface with a TUN device, 127.0.0.1 without).
+// The one HTTP listener this plugin owns: port 3426, bound to this node's
+// overlay address with a TUN device, and to 127.0.0.1 without one.
 //
 // Three endpoints, nothing else:
 //   GET  /catalog    the signed directory
@@ -225,6 +225,7 @@ export class DirectoryServer {
   start(host: string | null): boolean {
     if (!host) {
       this.bindDetail = "no bind address (没有可绑定的地址)";
+      if (this.server) this.stop();
       return false;
     }
     if (this.server && this.boundHost === host) return true;
@@ -350,7 +351,15 @@ export class DirectoryServer {
     const cutoff = now - RATE_WINDOW_MS;
     let stamps = this.buckets.get(address);
     if (!stamps) {
-      if (this.buckets.size >= MAX_RATE_BUCKETS) this.pruneBuckets(cutoff);
+      if (this.buckets.size >= MAX_RATE_BUCKETS) {
+        this.pruneBuckets(cutoff);
+        // A flood of distinct, currently active addresses must not grow the map
+        // past the cap: evict the oldest bucket (Map preserves insertion order).
+        if (this.buckets.size >= MAX_RATE_BUCKETS) {
+          const oldest = this.buckets.keys().next().value;
+          if (oldest !== undefined) this.buckets.delete(oldest);
+        }
+      }
       stamps = [];
       this.buckets.set(address, stamps);
     }

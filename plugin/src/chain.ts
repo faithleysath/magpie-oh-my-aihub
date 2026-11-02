@@ -54,22 +54,29 @@ export interface ChainRecord {
  * correctness. `bsc-dataseed` stays last because it is still the most reliable
  * endpoint for `eth_blockNumber`, receipts and broadcasting.
  */
-const BSC_RPC = [
+function rpcUrls(env: string, fallback: readonly string[]): readonly string[] {
+  const raw = process.env[env]?.trim();
+  if (!raw) return fallback;
+  const urls = raw.split(",").map((value) => value.trim()).filter(Boolean);
+  return urls.length > 0 ? urls : fallback;
+}
+
+const BSC_RPC = rpcUrls("OH_MY_AIHUB_BSC_RPC", [
   "https://bsc-rpc.publicnode.com",
   "https://bsc.blockrazor.xyz",
   "https://bsc-dataseed.bnbchain.org",
-] as const;
+]);
 
 /**
  * Base: publicnode answered a 5000-block `eth_getLogs`; `mainnet.base.org`
  * answered `-32011 request limit reached` for the same query, so it is the
  * failover for reads and the trustworthy head. Both serve receipts and sends.
  */
-const BASE_RPC = [
+const BASE_RPC = rpcUrls("OH_MY_AIHUB_BASE_RPC", [
   "https://base-rpc.publicnode.com",
   "https://mainnet.base.org",
   "https://base.llamarpc.com",
-] as const;
+]);
 
 /** BSC: 3s blocks → 115_200 blocks ≈ 24h; USDC is the 18-decimal BEP-20. */
 export const BSC_CHAIN: ChainRecord = {
@@ -125,11 +132,6 @@ export function chainById(chainId: number): ChainRecord | null {
 
 export function chainByKey(key: string): ChainRecord | null {
   return byKey.get(key.trim().toLowerCase()) ?? null;
-}
-
-/** The registered chains, product chains first. */
-export function registeredChains(): ChainRecord[] {
-  return [...byId.values()];
 }
 
 /** USDC decimals for a chain id, or null when this build does not know it. */
@@ -190,9 +192,19 @@ export interface RpcOptions {
   fetchImpl?: typeof fetch;
 }
 
-interface RpcError extends Error {
-  code?: number;
-  data?: unknown;
+class RpcReplyError extends Error {
+  constructor(
+    message: string,
+    readonly code?: number,
+    readonly data?: unknown,
+  ) {
+    super(message);
+    this.name = "RpcReplyError";
+  }
+}
+
+interface RpcHttpError extends Error {
+  status?: number;
 }
 
 export interface RpcLog {
@@ -251,6 +263,8 @@ export class RpcClient {
   private readonly fetchImpl: typeof fetch;
   private preferred = 0;
   private nextId = 1;
+  /** Wall-clock until which an endpoint is skipped, per index. */
+  private readonly cooldownUntil: number[] = [];
 
   constructor(opts: RpcOptions) {
     if (opts.urls.length === 0) throw new Error("E_RPC: no RPC endpoint configured");
@@ -276,11 +290,31 @@ export class RpcClient {
       body,
       signal: AbortSignal.timeout(this.timeoutMs),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`.trim());
+    if (!res.ok) {
+      const error = new Error(`HTTP ${res.status} ${res.statusText}`.trim()) as RpcHttpError;
+      error.status = res.status;
+      throw error;
+    }
     return await res.json();
   }
 
-  /** One JSON-RPC call, with failover and a per-endpoint timeout. */
+  /** The endpoints to try now: preferred first, cooled ones only as a last resort. */
+  private endpointOrder(): number[] {
+    const all = this.urls.map((_, index) => index);
+    const now = Date.now();
+    const ready = all.filter((index) => (this.cooldownUntil[index] ?? 0) <= now);
+    const order = ready.length > 0 ? ready : all;
+    const at = order.indexOf(this.preferred);
+    return at > 0 ? [...order.slice(at), ...order.slice(0, at)] : order;
+  }
+
+  /** A 429 is a provider asking us to back off; other failures are shorter. */
+  private cool(index: number, error: unknown): void {
+    const status = (error as RpcHttpError).status;
+    this.cooldownUntil[index] = Date.now() + (status === 429 ? 60_000 : 10_000);
+  }
+
+  /** One JSON-RPC call, with failover, cooldown and a per-endpoint timeout. */
   async call<T>(method: string, params: unknown[] = []): Promise<T> {
     const reasons: string[] = [];
     // A JSON-RPC *error* is that endpoint's answer, not a transport hiccup: a
@@ -288,28 +322,28 @@ export class RpcClient {
     // skipped for the remaining rounds instead of being asked twice.
     const refused = new Set<number>();
     for (let round = 0; round < this.rounds; round++) {
-      for (let step = 0; step < this.urls.length; step++) {
-        const index = (this.preferred + step) % this.urls.length;
+      for (const index of this.endpointOrder()) {
         if (refused.has(index)) continue;
         const url = this.urls[index];
         const body = JSON.stringify({ jsonrpc: "2.0", id: this.nextId++, method, params });
+        let replyRefused = false;
         try {
           const payload = (await this.post(url, body)) as {
             result?: T;
             error?: { code?: number; message?: string; data?: unknown };
           };
           if (payload.error) {
-            const error = new Error(payload.error.message ?? "JSON-RPC error") as RpcError;
-            error.code = payload.error.code;
-            error.data = payload.error.data;
-            refused.add(index);
-            throw error;
+            replyRefused = true;
+            throw new RpcReplyError(payload.error.message ?? "JSON-RPC error", payload.error.code, payload.error.data);
           }
           if (!("result" in payload)) throw new Error("JSON-RPC reply has no result");
           this.preferred = index;
           return payload.result as T;
         } catch (error) {
           reasons.push(`${new URL(url).host}: ${shortError(error)}`);
+          this.cool(index, error);
+          // A 429 is not worth a second ask in the same call either.
+          if (replyRefused || (error as RpcHttpError).status === 429) refused.add(index);
         }
       }
     }
@@ -365,9 +399,10 @@ export class RpcClient {
 
   async sendRawTransaction(raw: string): Promise<string> {
     const reasons: string[] = [];
+    const refused = new Set<number>();
     for (let round = 0; round < this.rounds; round++) {
-      for (let step = 0; step < this.urls.length; step++) {
-        const index = (this.preferred + step) % this.urls.length;
+      for (const index of this.endpointOrder()) {
+        if (refused.has(index)) continue;
         const url = this.urls[index];
         const body = JSON.stringify({
           jsonrpc: "2.0",
@@ -375,6 +410,7 @@ export class RpcClient {
           method: "eth_sendRawTransaction",
           params: [raw],
         });
+        let replyRefused = false;
         try {
           const payload = (await this.post(url, body)) as { result?: string; error?: { message?: string } };
           if (payload.error) {
@@ -384,6 +420,7 @@ export class RpcClient {
               this.preferred = index;
               return Transaction.from(raw).hash ?? "";
             }
+            replyRefused = true;
             throw new Error(message);
           }
           if (typeof payload.result !== "string") throw new Error("no transaction hash in the reply");
@@ -391,6 +428,8 @@ export class RpcClient {
           return payload.result;
         } catch (error) {
           reasons.push(`${new URL(url).host}: ${shortError(error)}`);
+          this.cool(index, error);
+          if (replyRefused || (error as RpcHttpError).status === 429) refused.add(index);
         }
       }
     }
@@ -545,16 +584,4 @@ export async function sendPreparedUsdc(req: SendUsdcRequest): Promise<SendUsdcRe
   }
 
   return { txHash, nonce: prepared.nonce, gasLimit: prepared.gasLimit, gasPrice: prepared.gasPrice };
-}
-
-/** Prepare + send in one call; the tool path uses the split form. */
-export async function sendUsdcTransfer(req: {
-  chain: ChainRecord;
-  wallet: Wallet;
-  client: RpcClient;
-  to: string;
-  amountRaw: bigint;
-}): Promise<SendUsdcResult> {
-  const prepared = await prepareUsdcTransfer(req.client, req.chain, req.wallet.address, req.to, req.amountRaw);
-  return sendPreparedUsdc({ chain: req.chain, wallet: req.wallet, client: req.client, prepared });
 }

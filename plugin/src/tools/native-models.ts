@@ -8,8 +8,7 @@
 // provider rate windows, tier limits); this module adds the shape check the
 // directory needs — all four price parts present, finite and non-negative.
 
-import { Magpie, type ModelPriceRecord } from "../magpie.ts";
-import { resolveMagpieBin } from "../paths.ts";
+import { magpieClient, type ModelPriceRecord } from "../magpie.ts";
 import { CATALOG_MAX_TIERS, type CatalogPeak, type CatalogPrice, type CatalogPriceTier } from "../catalog-service.ts";
 import { jsonText, NO_ARGS, type ToolDef } from "./types.ts";
 
@@ -94,7 +93,7 @@ export function catalogPriceOf(price: ModelPriceRecord | null | undefined): Cata
 export async function listNativeModels(): Promise<NativeModel[]> {
   let metas;
   try {
-    metas = await new Magpie(resolveMagpieBin()).catalogModels();
+    metas = await magpieClient().catalogModels();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`E_MAGPIE: cannot read Magpie's model list: ${message}`);

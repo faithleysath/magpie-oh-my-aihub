@@ -15,6 +15,8 @@ export interface RunOptions {
   /** called for every complete stderr line (for long-running processes) */
   onStderrLine?: (line: string) => void;
   cwd?: string;
+  /** fed to stdin and closed; used for secrets the CLI can read with `-` */
+  stdin?: string;
 }
 
 /**
@@ -30,10 +32,20 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
     cmd: argv,
     cwd: opts.cwd,
     env: opts.env ? { ...process.env, ...opts.env } : process.env,
-    stdin: "ignore",
+    stdin: opts.stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
+
+  if (opts.stdin !== undefined) {
+    // The secret is written to the child, not put in its argv. The buffer is a
+    // few hundred bytes at most, so this cannot fill the pipe.
+    const stdin = proc.stdin;
+    if (stdin) {
+      stdin.write(opts.stdin);
+      await stdin.end();
+    }
+  }
 
   const timeout = opts.timeoutMs ?? 30_000;
   let timedOut = false;

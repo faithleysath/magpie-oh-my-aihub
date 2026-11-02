@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { magpieDataDir } from "./paths.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { magpieDataDir, resolveMagpieBin } from "./paths.ts";
 import { run, runOk } from "./run.ts";
 import { registerSecret } from "./log.ts";
 
@@ -226,74 +226,14 @@ export function gatewayBaseURL(): string {
  */
 export class Magpie {
   private queue: Promise<unknown> = Promise.resolve();
-  private versionLabel: string | null = null;
-  private cliTried = false;
 
   constructor(private bin: string) {}
-
-  /**
-   * The Magpie version, read from the app bundle on macOS.
-   *
-   * It is deliberately **not** `magpie --version`: in a portable copy whose
-   * bundle is already running as `magpie serve`, spawning the bundle again for
-   * `--version` can spin (the app tries to hand off to the running instance) and
-   * a host that boots repeatedly leaves a pile of those behind. The version is a
-   * label, never a reason to start a process.
-   */
-  version(): string {
-    if (this.versionLabel) return this.versionLabel;
-    try {
-      if (process.platform === "darwin") {
-        const bundle = dirname(dirname(dirname(this.bin)));
-        const plist = join(bundle, "Contents", "Info.plist");
-        if (existsSync(plist)) {
-          const r = Bun.spawnSync(["plutil", "-extract", "CFBundleShortVersionString", "raw", plist]);
-          const v = r.stdout.toString().trim();
-          if (v) this.versionLabel = `magpie ${v}`;
-        }
-      }
-    } catch {
-      /* label only */
-    }
-    if (!this.versionLabel) this.versionLabel = "magpie (version unknown)";
-    return this.versionLabel;
-  }
-
-  /**
-   * The version on a platform without an app bundle. Magpie itself has no
-   * cross-platform reader (`internal/update/cli_path.go`'s otherVersion is
-   * macOS/Homebrew only), so `--version` is the only source. It is tried once,
-   * with a short timeout, and never at boot: a hung CLI must not keep a host
-   * from starting.
-   */
-  async detectVersion(): Promise<string> {
-    const known = this.version();
-    if (!known.includes("unknown")) return known;
-    if (this.cliTried) return known;
-    this.cliTried = true;
-    try {
-      const r = await this.serial(() => run([this.bin, "--version"], { timeoutMs: 3000 }));
-      const m = /magpie\s+(\d+\.\d+\.\d+)/.exec(r.stdout);
-      if (r.code === 0 && m) this.versionLabel = `magpie ${m[1]}`;
-    } catch {
-      /* a label, not a dependency */
-    }
-    return this.version();
-  }
 
   /** One CLI call at a time: a stuck call must not pile up. */
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.queue.then(fn, fn);
     this.queue = next.catch(() => {});
     return next;
-  }
-
-  /**
-   * Magpie's own key store, read as a list. Used by recovery to find a key this
-   * plugin named but no ledger account backs.
-   */
-  keyList(): KeyRecord[] {
-    return this.keys();
   }
 
   /** All gateway keys, read from Magpie's own store (caller-keys.json). */
@@ -315,8 +255,11 @@ export class Magpie {
       const parsed = JSON.parse(raw) as { providers?: ProviderRecord[] } | ProviderRecord[];
       const list = Array.isArray(parsed) ? parsed : (parsed.providers ?? []);
       return Array.isArray(list) ? list : [];
-    } catch {
-      return [];
+    } catch (error) {
+      // A missing file means "no providers yet"; anything else is a read or a
+      // parse failure and must not look like an empty provider set.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw new Error(`cannot read providers.json: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -325,8 +268,10 @@ export class Magpie {
     try {
       const parsed = JSON.parse(readFileSync(join(magpieDataDir(), "settings.json"), "utf8")) as SettingsFile;
       return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
+    } catch (error) {
+      // No settings file is normal on a fresh install; a corrupt one is not.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw new Error(`cannot read settings.json: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -360,6 +305,9 @@ export class Magpie {
       }
     }
     if (ids.length === 0) return [];
+    if (!this.providersReadable()) {
+      throw new Error("providers.json cannot be read; refusing to publish an empty provider set");
+    }
     const settings = this.settings();
     const native = this.nativeProviderIds();
     const providerRecords = new Map(this.providers().map((p) => [p.id, p]));
@@ -453,22 +401,15 @@ export class Magpie {
       const raw = readFileSync(join(magpieDataDir(), "providers.json"), "utf8");
       const parsed = JSON.parse(raw) as { providers?: unknown } | unknown[];
       return Array.isArray(parsed) || Array.isArray((parsed as { providers?: unknown }).providers);
-    } catch {
-      return false;
+    } catch (error) {
+      // No providers file is a fresh Magpie with no providers: an empty list is
+      // the truth. A read/parse failure is not, and must keep the last directory.
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
     }
   }
 
   providerById(id: string): ProviderRecord | undefined {
     return this.providers().find((p) => p.id === id);
-  }
-
-  /**
-   * Providers this node owns. A Remote Magpie is another node's gateway: it is
-   * marked with Magpie's own `remote-magpie` preset. Only the rest may be
-   * shared — reselling somebody else's channel is not a feature of this phase.
-   */
-  remoteProviderIds(): Set<string> {
-    return new Set(this.providers().filter((p) => p.preset === "remote-magpie").map((p) => p.id));
   }
 
   nativeProviderIds(): Set<string> {
@@ -479,20 +420,19 @@ export class Magpie {
     return this.keys().find((k) => k.name === name);
   }
 
-  keyById(id: string): KeyRecord | undefined {
-    return this.keys().find((k) => k.id === id);
-  }
-
   /**
    * Creates a key and returns it with its secret. The CLI prints the secret; the
    * id comes from Magpie's store, matched by the unique name this plugin picks.
    */
   async addKey(name: string, ownSecret?: string): Promise<KeyRecord> {
     const args = [this.bin, "gateway-key", "add", name];
-    // Re-issuing with the same secret keeps the consumer's client configuration:
-    // the old key is removed first, then this one takes over its credential.
-    if (ownSecret) args.push("--key", ownSecret);
-    const out = await this.serial(() => runOk(args, { timeoutMs: 30_000 }));
+    // Re-issuing with the same secret keeps the consumer's client configuration.
+    // `--key -` reads it from stdin, so the secret never appears in the process
+    // list (`ps`) for every local user on the machine.
+    if (ownSecret) args.push("--key", "-");
+    const out = await this.serial(() =>
+      runOk(args, { timeoutMs: 30_000, ...(ownSecret ? { stdin: `${ownSecret}\n` } : {}) }),
+    );
     const secret = out
       .split("\n")
       .map((l) => l.trim())
@@ -506,7 +446,12 @@ export class Magpie {
       await new Promise((r) => setTimeout(r, 200));
     }
     const rec = this.keyByName(name);
-    if (rec) return { ...rec, secret };
+    if (rec) {
+      // Two keys with one name would make keyByName() ambiguous; never return a
+      // record whose id belongs to a different secret.
+      if (rec.secret !== secret) throw new Error(`created key ${name} but a different key with that name already exists`);
+      return { ...rec, secret };
+    }
     throw new Error(`created key ${name} but it is not in caller-keys.json yet`);
   }
 
@@ -530,25 +475,6 @@ export class Magpie {
     if (!secret) throw new Error("magpie gateway-key rotate printed no key");
     registerSecret(secret);
     return secret;
-  }
-
-  /**
-   * How many gateway requests are in flight right now, or null when the gateway
-   * cannot say. Loopback is enough for this read: a loopback caller is local.
-   * This is a hint for settlement, never a charge.
-   */
-  async inFlightRequests(timeoutMs = 5_000): Promise<number | null> {
-    try {
-      const res = await fetch(`${gatewayBaseURL()}/v1/magpie/concurrency`, {
-        headers: { "x-magpie-prices": "0" },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!res.ok) return null;
-      const body = (await res.json()) as { requests?: unknown };
-      return typeof body.requests === "number" && Number.isFinite(body.requests) ? body.requests : null;
-    } catch {
-      return null;
-    }
   }
 
   async setCostLimit(id: string, window: string, usd: number): Promise<void> {
@@ -575,10 +501,6 @@ export class Magpie {
       args.push("--tokens", String(limit.tokens));
     }
     await this.serial(() => runOk(args, { timeoutMs: 30_000 }));
-  }
-
-  async setQuotasOff(id: string): Promise<void> {
-    await this.serial(() => runOk([this.bin, "gateway-key", "quotas", id, "off"], { timeoutMs: 30_000 }));
   }
 
   async removeKey(id: string): Promise<void> {
@@ -609,8 +531,8 @@ export class Magpie {
     await this.addRemoteProvider(opts);
   }
 
-  async removeProvider(id: string): Promise<void> {
-    const r = await this.serial(() => run([this.bin, "provider", "rm", id], { timeoutMs: 60_000 }));
+  async removeProvider(id: string, timeoutMs = 60_000): Promise<void> {
+    const r = await this.serial(() => run([this.bin, "provider", "rm", id], { timeoutMs }));
     if (r.code !== 0 && !/not found|no such|no provider/i.test(r.stderr + r.stdout)) {
       throw new Error(`provider rm: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
     }
@@ -685,4 +607,23 @@ function configuredProtocols(p: ProviderRecord | undefined): string[] {
   if (p.responses) out.push("responses");
   if (p.anthropic) out.push("anthropic");
   return out.length ? out : ["chat"];
+}
+
+let shared: Magpie | null = null;
+
+/**
+ * The one Magpie client for this host.
+ *
+ * `serial()` is per instance, so a fresh client per call would let two
+ * approvals (or a watcher credit and an approval) run `gateway-key add` at the
+ * same time. One client is what makes "one CLI call at a time" true.
+ */
+export function magpieClient(): Magpie {
+  if (!shared) shared = new Magpie(resolveMagpieBin());
+  return shared;
+}
+
+/** Test seam: installs a client, or null to resolve the running Magpie again. */
+export function setMagpieClientForTest(client: Magpie | null): void {
+  shared = client;
 }

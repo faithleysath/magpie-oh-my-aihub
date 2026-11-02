@@ -161,6 +161,12 @@ export class Watcher {
   private readonly tails = new Map<number, LogTail>();
   /** Last head seen per chain, for `sync()` and for the hints' finality gate. */
   private readonly heads = new Map<number, number>();
+  /**
+   * One RPC client per chain, so `RpcClient.preferred` (the endpoint that last
+   * worked) and its cooldowns survive across the 15-second passes. A fresh
+   * client per pass would start at the first public endpoint again every time.
+   */
+  private readonly clients = new Map<number, RpcClient>();
 
   constructor(private readonly opts: WatcherOptions) {}
 
@@ -173,7 +179,13 @@ export class Watcher {
   }
 
   private client(chain: ChainRecord): RpcClient {
-    return (this.opts.client ?? ((record) => clientFor(record)))(chain);
+    if (this.opts.client) return this.opts.client(chain);
+    let client = this.clients.get(chain.chainId);
+    if (!client) {
+      client = clientFor(chain);
+      this.clients.set(chain.chainId, client);
+    }
+    return client;
   }
 
   private now(): string {
@@ -207,6 +219,19 @@ export class Watcher {
     this.timer = null;
     for (const tail of this.tails.values()) tail.stop();
     this.tails.clear();
+    this.clients.clear();
+  }
+
+  /**
+   * Rebuilds the subscription fast path for a replaced wallet. The sweep follows
+   * the address getter automatically; a `LogTail` captured the old `toTopic` at
+   * start-up, so it would keep watching the old address until a process restart.
+   */
+  rebindAddress(): void {
+    for (const tail of this.tails.values()) tail.stop();
+    this.tails.clear();
+    this.hints.clear();
+    if (!this.stopped) this.startTails();
   }
 
   /**

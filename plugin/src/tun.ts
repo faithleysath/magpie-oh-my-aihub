@@ -38,12 +38,3 @@ export function canCreateTun(probe: TunProbe = {}): boolean {
   if (platform === "linux") return exists("/dev/net/tun");
   return platform === "darwin" || platform === "win32";
 }
-
-/**
- * The mode a start will use. Asking for a device without the ability to create
- * one falls back to user space rather than failing: the node still joins, it
- * just cannot be a metered provider.
- */
-export function effectiveMode(requested: boolean, capability?: boolean): OverlayMode {
-  return requested && (capability ?? canCreateTun()) ? "tun" : "no-tun";
-}

@@ -6,6 +6,7 @@
   "main": "src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "build:page": "bun scripts/build-page.ts"
   },
   "devDependencies": {
@@ -23,6 +24,7 @@
     "permissions": []
   },
   "files": [
+    "scripts/omai-easytier-daemon.sh",
     "src/",
     "page/doc.md",
     "page/index.html",

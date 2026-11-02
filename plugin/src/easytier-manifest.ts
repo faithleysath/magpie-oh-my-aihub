@@ -77,7 +77,3 @@ export function assetFor(platform: string = process.platform, arch: string = pro
 export function assetUrl(a: Asset): string {
   return `${EASYTIER_RELEASE_URL}/${a.file}`;
 }
-
-export function allAssets(): Record<string, Asset> {
-  return table;
-}

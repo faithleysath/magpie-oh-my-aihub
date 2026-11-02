@@ -21,6 +21,7 @@ import { logger, registerSecret } from "./log.ts";
 import { statePath } from "./paths.ts";
 import { run } from "./run.ts";
 import { loadOrCreateSecureKeyPair, type SecureKeyPair } from "./secure-key.ts";
+import { writeTextAtomic } from "./store.ts";
 import { canCreateTun, type OverlayMode } from "./tun.ts";
 import { daemonLoaded } from "./daemon.ts";
 
@@ -531,7 +532,9 @@ export class Overlay {
     const text = renderOverlayConfig(this.cfg, this.mode ?? "no-tun", secure);
     const configPath = currentTomlPath();
     mkdirSync(join(statePath("easytier")), { recursive: true, mode: 0o700 });
-    writeFileSync(configPath, text, { mode: 0o600 });
+    // The root daemon hashes this file every two seconds; a partial write would
+    // look like a new config and could be copied before it is complete.
+    writeTextAtomic(configPath, text, 0o600);
     if (process.platform !== "win32") chmodSync(configPath, 0o600);
   }
 

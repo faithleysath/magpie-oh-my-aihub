@@ -2,7 +2,7 @@
 
 Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTier 私有网里的伙伴，或使用伙伴共享的模型。没有界面、没有本机控制台、不开第二个 AI 网关——所有操作由 agent 通过 MCP 工具完成。
 
-节点身份是一个内置的 EVM 钱包地址。共享的模型和价格由这把私钥签名发布；别人向你地址转入的 USDC 就是可用额度（`cap = 已确认入账总额 D`）；谁批准谁发 Gateway Key。AI 请求始终走「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」，插件只负责组网、签名目录、申请/审批和记账。
+节点身份是一个内置的 EVM 钱包地址。共享的模型和价格由这把私钥签名发布；别人向你地址转入的 USDC 就是可用额度（`cap = 已确认入账总额 D − 已被旧 Key 花掉的 used-base`）；谁批准谁发 Gateway Key。AI 请求始终走「你的应用 → 你的 Magpie → EasyTier → 伙伴的 Magpie」，插件只负责组网、签名目录、申请/审批和记账。
 
 ## 安装
 
@@ -41,8 +41,8 @@ Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agen
 - 覆盖网地址不是身份，只是路由线索。目录和申请靠签名证明「这份模型和价格确实是这个地址公布的」，签名者必须等于文档里的 `address`。
 - **节点名只是显示名**。在地址簿里给自己钱包地址起别名，就会签到目录里（`omai/catalog/3`）供别人 `discover` 看到；身份仍然是地址，改名不影响组网，也不影响别人对你的授权。
 - **目录里的价格是签名承诺**。基线是四段价（输入/输出/缓存读/缓存写，USD / 1M tokens）；带阶梯价（超过某个 token 数整笔涨价）或高峰价（供应商高峰时段乘倍数）的模型会签 `omai/catalog/2`，把 `tiers` 和 `peak` 一起公布。全是四段价时仍签 `/1`，老客户端照旧能读。真实扣费由提供方的 Magpie 按它自己的价目表算，目录不参与计费。
-- 对外只开两个端口：`3426` 目录/申请/轮询（总是），`3425` Magpie 模型网关（**只有 TUN 模式下才开**）。macOS 上以普通用户运行 Magpie 时，`network_daemon install` 会装一个 root 守护进程来提供 TUN（弹一次系统管理员密码框）。no-TUN 会把对端重写成 `127.0.0.1`，Magpie 会当本机免 Key 调用，所以那时不公布 3425。Magpie 管理界面永远不映射到覆盖网。
-- Gateway Key 只通过「提供方 → 消费方」的签名轮询交付给对应地址，不落日志、不进 `status`。
+- 对外只开两个端口：`3426` 目录/申请/轮询（绑覆盖网地址；no-TUN 时绑 `127.0.0.1`），`3425` Magpie 模型网关（**只有 TUN 模式下才开**）。macOS 上以普通用户运行 Magpie 时，`network_daemon install` 会装一个 root 守护进程来提供 TUN（弹一次系统管理员密码框；下载和密码框可能超过工具超时，返回 `state:"starting"` 后用 `status` 轮询）。no-TUN 会把对端重写成 `127.0.0.1`，Magpie 会当本机免 Key 调用，所以那时不公布 3425。Magpie 管理界面永远不映射到覆盖网。
+- Gateway Key 只通过「提供方 → 消费方」的签名轮询交付给对应地址，不落日志、不进 `status`。插件自己创建的 key 通过 stdin 交给 Magpie CLI；Remote Magpie 的 key 仍受上游 `magpie provider add` 只收 argv 的限制，同机同用户的进程列表可能看到。
 - 一个钱包就是一台节点的全部身份；两台机器用同一个私钥就是同一个账户，余额共享。
 
 ## 文档
@@ -54,4 +54,4 @@ Magpie 0.1.2516 起插件自动成为 Library 里的一个 MCP server，按 agen
 
 插件页 `plugin/page/doc.md` 是用户手册（构建产物 `plugin/page/index.html`，也就是 Magpie 里那一页）。
 
-类型检查：`cd plugin && bun run typecheck`。文档页由 `cd plugin && bun run build:page` 从 `page/doc.md` 渲染。
+检查：`cd plugin && bun run typecheck && bun test`。文档页由 `cd plugin && bun run build:page` 从 `page/doc.md` 渲染。CI 在 `.github/workflows/ci.yml` 跑这些检查，并额外检查 daemon 脚本语法。

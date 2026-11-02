@@ -12,7 +12,8 @@
 //
 // The ledger (`ledger.sqlite`) and the authorization store are opened before the
 // overlay starts, and both are reachable from tools as `runtime.db` /
-// `runtime.grants`. The single listener on <lan>:3426 is owned by
+// `runtime.grants`. The single listener on 3426 (the overlay address in TUN,
+// loopback otherwise) is owned by
 // `http-router.ts`; this module only decides when to bind it.
 //
 // The chain watcher runs from boot, not from `join_network`: a deposit is
@@ -26,11 +27,13 @@ import type { Database } from "bun:sqlite";
 import type { Wallet } from "ethers";
 import { CatalogService, type CatalogModel } from "./catalog-service.ts";
 import { hostnameForAddress, readConfig, writeConfig, type HubConfig } from "./config.ts";
-import { clearScanCursors, openLedger } from "./db.ts";
+import { clearScanCursors, metaDelete, metaEntries, openLedger } from "./db.ts";
 import { Grants } from "./grants.ts";
 import { DirectoryServer } from "./http-router.ts";
 import { logger } from "./log.ts";
 import { CONTROL_PORT, GATEWAY_PORT, Overlay } from "./overlay.ts";
+import { magpieClient } from "./magpie.ts";
+import { isOurRemoteProvider, remoteProviderId } from "./remote-provider.ts";
 import { stateDir } from "./paths.ts";
 import { listNativeModels } from "./tools/native-models.ts";
 import { loadOrCreateWallet } from "./tools/node-wallet.ts";
@@ -41,7 +44,7 @@ export interface Runtime {
   wallet: Wallet;
   overlay: Overlay;
   catalog: CatalogService;
-  /** the single <lan>:3426 listener (directory + request + poll) */
+  /** the single 3426 listener (directory + request + poll) */
   server: DirectoryServer;
   /** ledger.sqlite: requests, consumers, deposits, payouts, meta */
   db: Database;
@@ -203,7 +206,10 @@ export async function refreshCatalog(runtime: Runtime, resolve: SharedModelResol
       // interface. Through the user-space stack EasyTier rewrites it to 127.0.0.1.
       // `start` rebinds only when the host differs, so this is cheap to repeat.
       const mode = runtime.overlay.currentMode();
-      runtime.server.start(mode === "tun" ? "0.0.0.0" : "127.0.0.1");
+      // With a device the peer dials our overlay address; bind that address, not
+      // 0.0.0.0, so the same port is not also exposed on LAN or public
+      // interfaces. Without a device EasyTier rewrites inbound to loopback.
+      runtime.server.start(mode === "tun" ? runtime.overlay.status().virtualIp : "127.0.0.1");
     }
 
     const selected = runtime.config.share.models;
@@ -253,8 +259,8 @@ function startCatalogRefresh(runtime: Runtime): void {
  * Boot never waits for either. One summary line, and a failure in one phase does
  * not skip the other.
  */
-function resyncCapAndKeys(runtime: Runtime, reason: string): void {
-  void (async () => {
+function resyncCapAndKeys(runtime: Runtime, reason: string): Promise<void> {
+  return (async () => {
     let resync: string;
     try {
       const summary = await runtime.grants.resyncAll();
@@ -342,7 +348,7 @@ async function bootOnceInner(): Promise<Runtime> {
   // A deposit booked just before a crash may have left its cap unwritten.
   // Reconcile in the background so boot stays fast and a missing Magpie only
   // costs a log line.
-  resyncCapAndKeys(runtime, "boot");
+  void resyncCapAndKeys(runtime, "boot");
   logger.info(
     `boot: wallet ${wallet.address}, hostname ${hostname}, network ${config.network?.name ?? "none"}, ` +
       `ledger ${stateDir()}/ledger.sqlite`,
@@ -368,32 +374,107 @@ export function getRuntime(): Promise<Runtime> {
 }
 
 /**
+ * Drops state that belonged to the old wallet. Consumer-side connections carry
+ * Gateway Keys issued to the old address, and their cached poll/request rows are
+ * signed answers about that address; none of them should silently keep working
+ * under a new identity. The Remote Magpie entries this plugin created are
+ * removed first (the forward disappears when the overlay config is rewritten).
+ */
+async function clearConsumingState(runtime: Runtime): Promise<{ clearedConnections: number; removedProviders: number; detail?: string }> {
+  const connections = runtime.config.connections;
+  let removedProviders = 0;
+  const notes: string[] = [];
+  if (connections.length > 0) {
+    try {
+      const magpie = magpieClient();
+      for (const connection of connections) {
+        const id = remoteProviderId(connection.provider);
+        try {
+          const record = magpie.providerById(id);
+          if (record && isOurRemoteProvider(record, id, connection.localPort)) {
+            await magpie.removeProvider(id, 10_000);
+            removedProviders += 1;
+          }
+        } catch (error) {
+          notes.push(`${id}: ${detailOf(error)}`);
+        }
+      }
+    } catch (error) {
+      notes.push(`Magpie cannot be located: ${detailOf(error)}`);
+    }
+  }
+
+  if (connections.length > 0) {
+    const next = { ...runtime.config, connections: [] };
+    try {
+      writeConfig(next);
+      runtime.config = next;
+    } catch (error) {
+      notes.push(`cannot persist the cleared connections: ${detailOf(error)}`);
+    }
+  }
+  for (const row of [...metaEntries(runtime.db, "poll:"), ...metaEntries(runtime.db, "request:")]) {
+    metaDelete(runtime.db, row.k);
+  }
+  return {
+    clearedConnections: connections.length,
+    removedProviders,
+    ...(notes.length > 0 ? { detail: notes.join("; ") } : {}),
+  };
+}
+
+/**
  * Applies a wallet that wallet_import just installed. The overlay hostname is
  * derived from the address, so a changed identity also restarts a configured
  * overlay instead of leaving the old hostname running. The directory is re-signed
  * with the new key without waiting for the core.
  */
-export function replaceWallet(runtime: Runtime, wallet: Wallet): void {
+export async function replaceWallet(
+  runtime: Runtime,
+  wallet: Wallet,
+): Promise<{ clearedConnections: number; removedProviders: number; detail?: string }> {
   runtime.wallet = wallet;
-  // The scan cursor is per chain, not per address: the logs behind it were
-  // filtered to the old address. Start the new identity from the 24h lookback
-  // instead of silently inheriting a cursor that skipped its deposits.
+  // A LogTail captured the old address's to-topic; rebuild it for the new one.
+  runtime.watcher.rebindAddress();
+  // Usage bases belong to the old provider identity; a new identity starts clean.
+  runtime.grants.beginWalletChange();
+  let cleared: { clearedConnections: number; removedProviders: number; detail?: string } = {
+    clearedConnections: 0,
+    removedProviders: 0,
+  };
   try {
-    const dropped = clearScanCursors(runtime.db);
-    if (dropped > 0) logger.info(`watcher: dropped ${dropped} scan cursor(s) after the wallet change`);
-  } catch (error) {
-    logger.error(`watcher: cannot drop the scan cursors: ${detailOf(error)}`);
+    cleared = await clearConsumingState(runtime);
+    if (cleared.detail) logger.warn(`wallet change: ${cleared.detail}`);
+    if (cleared.clearedConnections > 0) {
+      logger.info(
+        `wallet change: cleared ${cleared.clearedConnections} connection(s), ` +
+          `removed ${cleared.removedProviders} Remote Magpie provider(s)`,
+      );
+    }
+    // The scan cursor is per chain, not per address: the logs behind it were
+    // filtered to the old address. Start the new identity from the 24h lookback
+    // instead of silently inheriting a cursor that skipped its deposits.
+    try {
+      const dropped = clearScanCursors(runtime.db);
+      if (dropped > 0) logger.info(`watcher: dropped ${dropped} scan cursor(s) after the wallet change`);
+    } catch (error) {
+      logger.error(`watcher: cannot drop the scan cursors: ${detailOf(error)}`);
+    }
+    // The new identity has its own `D` per payer (deposits were addressed to the
+    // old wallet), so every cap has to be re-derived for it. Finish the wallet
+    // change only after the old keys have been dropped, so their usage is not
+    // rolled into the new identity.
+    await resyncCapAndKeys(runtime, "wallet change");
+  } finally {
+    runtime.grants.finishWalletChange();
   }
-  // The new identity has its own `D` per payer (deposits were addressed to the
-  // old wallet), so every cap has to be re-derived for it.
-  resyncCapAndKeys(runtime, "wallet change");
   const hostname = hostnameForAddress(wallet.address);
   runtime.catalog.setWallet(wallet, hostname);
   void runtime.catalog
     .resign()
     .catch((error) => logger.error(`catalogue: cannot re-sign after the wallet change: ${detailOf(error)}`));
 
-  if (runtime.config.hostname === hostname) return;
+  if (runtime.config.hostname === hostname) return cleared;
   runtime.config = { ...runtime.config, hostname };
   try {
     writeConfig(runtime.config);
@@ -404,4 +485,5 @@ export function replaceWallet(runtime: Runtime, wallet: Wallet): void {
   }
   runtime.overlay.configure(runtime.config);
   if (runtime.config.network) runtime.overlay.beginStart(runtime.config);
+  return cleared;
 }

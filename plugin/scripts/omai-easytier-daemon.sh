@@ -26,18 +26,17 @@ chmod 755 "$STATE"
 if [ -f "$STATE/daemon.log" ]; then chmod 644 "$STATE/daemon.log"; fi
 if [ -f "$STATE/core.log" ]; then chmod 600 "$STATE/core.log"; fi
 
-# Only the prologue of the document (everything before the first table) is checked
-# against an allowlist, and every table name is checked as well. Inside a table the
-# keys belong to that table, which the name already bounds. Between the two, a
-# config cannot grow into a request for root to open a VPN portal, export a subnet
-# or exit-node traffic on someone's behalf.
+# Every field is checked against the table it belongs to, not only the table
+# name. The config the plugin generates uses a small, known vocabulary; a
+# tampered file cannot use this daemon as root to open a privileged listener,
+# export a subnet, turn on exit-node traffic or widen the ACL.
 #
 # sh rather than awk on purpose: bracket-heavy regexes in awk differ between
 # implementations, and a validator that silently accepts everything is worse than
 # no validator.
 allowed_key() {
   case "$1" in
-    instance_name|instance_id|hostname|dhcp|ipv4|peer|listeners|mapped_listeners|socks5_proxy) return 0 ;;
+    instance_name|hostname|dhcp|peer|listeners|socks5_proxy) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -45,6 +44,19 @@ allowed_key() {
 allowed_table() {
   case "$1" in
     network_identity|flags|secure_mode|acl.acl_v1|acl.acl_v1.chains|acl.acl_v1.chains.rules|port_forward) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+allowed_field() {
+  case "$1:$2" in
+    network_identity:network_name|network_identity:network_secret) return 0 ;;
+    flags:no_tun) return 0 ;;
+    secure_mode:enabled|secure_mode:local_private_key|secure_mode:local_public_key) return 0 ;;
+    acl.acl_v1.chains:name|acl.acl_v1.chains:chain_type|acl.acl_v1.chains:enabled|acl.acl_v1.chains:default_action) return 0 ;;
+    acl.acl_v1.chains.rules:name|acl.acl_v1.chains.rules:priority|acl.acl_v1.chains.rules:enabled) return 0 ;;
+    acl.acl_v1.chains.rules:protocol|acl.acl_v1.chains.rules:ports|acl.acl_v1.chains.rules:action|acl.acl_v1.chains.rules:stateful) return 0 ;;
+    port_forward:bind_addr|port_forward:dst_addr|port_forward:proto) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -59,6 +71,7 @@ log() {
 validate() {
   bad=0
   intable=0
+  table=""
   while IFS= read -r line; do
     case "$line" in
       ''|'#'*) continue ;;
@@ -66,13 +79,65 @@ validate() {
     case "$line" in
       '['*)
         intable=1
-        name=$(printf '%s' "$line" | sed -e 's/^\[\[//' -e 's/^\[//' -e 's/\]\]$//' -e 's/\]$//')
-        allowed_table "$name" || { printf 'refused table: %s\n' "$line"; bad=1; }
+        table=$(printf '%s' "$line" | sed -e 's/^\[\[//' -e 's/^\[//' -e 's/\]\]$//' -e 's/\]$//')
+        allowed_table "$table" || { printf 'refused table: %s\n' "$line"; bad=1; }
         ;;
       *)
-        [ "$intable" = 1 ] && continue
         key=$(printf '%s' "$line" | sed -e 's/[[:space:]]*=.*$//' -e 's/[[:space:]]*$//')
-        allowed_key "$key" || { printf 'refused key: %s\n' "$line"; bad=1; }
+        if [ "$intable" = 1 ]; then
+          allowed_field "$table" "$key" || { printf 'refused field in %s: %s\n' "$table" "$line"; bad=1; }
+        else
+          allowed_key "$key" || { printf 'refused key: %s\n' "$line"; bad=1; }
+        fi
+        # A root-run core may not bind a privileged port, whatever the file says.
+        if [ "$intable" = 0 ] && [ "$key" = "listeners" ]; then
+          for port in $(printf '%s' "$line" | grep -oE ':[0-9]{1,5}' | tr -d ':'); do
+            if [ "$port" -lt 1024 ]; then
+              printf 'refused privileged listener port: %s\n' "$line"
+              bad=1
+            fi
+          done
+        fi
+        # The generated ACL never widens beyond denying by default and allowing
+        # only the directory/gateway; a tampered rule is refused.
+        if [ "$table" = "acl.acl_v1.chains" ] && [ "$key" = "default_action" ]; then
+          case "$line" in
+            *"= 2") ;;
+            *) printf 'refused ACL default action: %s\n' "$line"; bad=1 ;;
+          esac
+        fi
+        if [ "$table" = "acl.acl_v1.chains.rules" ] && [ "$key" = "protocol" ]; then
+          case "$line" in
+            *"= 1") ;;
+            *) printf 'refused ACL protocol: %s\n' "$line"; bad=1 ;;
+          esac
+        fi
+        if [ "$table" = "acl.acl_v1.chains.rules" ] && [ "$key" = "action" ]; then
+          case "$line" in
+            *"= 1") ;;
+            *) printf 'refused ACL action: %s\n' "$line"; bad=1 ;;
+          esac
+        fi
+        if [ "$table" = "acl.acl_v1.chains.rules" ] && [ "$key" = "ports" ]; then
+          case "$line" in
+            *'"3425"'*|*'"3426"'*) ;;
+            *) printf 'refused ACL ports: %s\n' "$line"; bad=1 ;;
+          esac
+        fi
+        # The SOCKS portal is this node's own loopback helper; never public.
+        if [ "$intable" = 0 ] && [ "$key" = "socks5_proxy" ]; then
+          case "$line" in
+            *socks5://127.0.0.1:*) ;;
+            *) printf 'refused non-loopback SOCKS proxy: %s\n' "$line"; bad=1 ;;
+          esac
+        fi
+        # Consumer forwards are loopback listeners; never a public bind.
+        if [ "$table" = "port_forward" ] && [ "$key" = "bind_addr" ]; then
+          case "$line" in
+            *127.0.0.1:*) ;;
+            *) printf 'refused non-loopback forward: %s\n' "$line"; bad=1 ;;
+          esac
+        fi
         ;;
     esac
   done < "$1"

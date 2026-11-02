@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, readlinkSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 
 /** Magpie runs the plugin host with the settings directory as its working directory. */
@@ -134,18 +134,4 @@ export function resolveMagpieBin(opts: ResolveOptions = {}): string {
   const onPath = which();
   if (onPath && exists(onPath)) return onPath;
   throw new Error("cannot locate the magpie binary (set OH_MY_AIHUB_MAGPIE to its path)");
-}
-
-
-export function isMac(): boolean {
-  return process.platform === "darwin";
-}
-
-export function isLinux(): boolean {
-  return process.platform === "linux";
-}
-
-/** Kept for callers that only need the content of a small file. */
-export function readSmallFile(path: string): string {
-  return readFileSync(path, "utf8");
 }

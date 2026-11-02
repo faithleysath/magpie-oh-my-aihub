@@ -24,6 +24,7 @@
     "permissions": []
   },
   "files": [
+    "plugin/scripts/",
     "plugin/package.json",
     "plugin/src/",
     "plugin/page/doc.md",

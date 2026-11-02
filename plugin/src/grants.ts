@@ -22,14 +22,15 @@
 
 import type { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
-import { Magpie, type KeyRecord } from "./magpie.ts";
-import { resolveMagpieBin } from "./paths.ts";
+import { magpieClient, type Magpie, type KeyRecord } from "./magpie.ts";
 import { catalogTimestamp } from "./catalog-service.ts";
 import {
   balanceMicro,
   creditByPayer,
   capMicroOf,
   formatUsd4,
+  metaDelete,
+  metaEntries,
   metaGet,
   metaSet,
   microFromUsd,
@@ -195,6 +196,11 @@ export function gatewayKeyName(address: string): string {
   return `omai-${address.toLowerCase().replace(/^0x/, "").slice(-8)}`;
 }
 
+/** The collision-free form, used only when two wallets share the short suffix. */
+function fullGatewayKeyName(address: string): string {
+  return `omai-${address.toLowerCase().replace(/^0x/, "")}`;
+}
+
 function modelsJson(models: readonly string[]): string {
   return JSON.stringify(models);
 }
@@ -239,6 +245,25 @@ export function cleanModelList(raw: unknown, label = "models"): string[] {
 export class Grants {
   constructor(private readonly opts: GrantsOptions) {}
 
+  /** One mutation per consumer address; independent addresses still run in parallel. */
+  private readonly addressQueues = new Map<string, Promise<unknown>>();
+
+  private withAddressLock<T>(address: string, fn: () => Promise<T>): Promise<T> {
+    const key = address.toLowerCase();
+    const previous = this.addressQueues.get(key) ?? Promise.resolve();
+    const next = previous.then(fn, fn);
+    const settled = next.catch(() => {});
+    this.addressQueues.set(key, settled);
+    // Do not keep a queue per address forever: a deposit can name an address
+    // that never becomes a consumer. The map only holds work still in flight.
+    void settled
+      .finally(() => {
+        if (this.addressQueues.get(key) === settled) this.addressQueues.delete(key);
+      })
+      .catch(() => {});
+    return next;
+  }
+
   private get db(): Database {
     return this.opts.db;
   }
@@ -248,7 +273,7 @@ export class Grants {
   }
 
   private magpie(): Magpie {
-    return (this.opts.magpie ?? (() => new Magpie(resolveMagpieBin())))();
+    return (this.opts.magpie ?? magpieClient)();
   }
 
   private async shareableModels(): Promise<string[]> {
@@ -270,6 +295,23 @@ export class Grants {
     return this.db.query("SELECT * FROM requests WHERE address = ?").get(address) as RequestDbRow | null;
   }
 
+  /**
+   * The key name this consumer already uses, or a fresh one. A stored name wins
+   * (including the legacy last-8 form). Only a new wallet whose short suffix is
+   * already taken by another consumer gets the full-address form, so changing
+   * the naming scheme never orphans an existing key.
+   */
+  private keyNameFor(address: string): string {
+    const target = address.toLowerCase();
+    const stored = this.consumer(target)?.key_name;
+    if (stored) return stored;
+    const short = gatewayKeyName(target);
+    const clash = this.db
+      .query("SELECT 1 AS n FROM consumers WHERE address != ? AND key_name = ? LIMIT 1")
+      .get(target, short);
+    return clash ? fullGatewayKeyName(target) : short;
+  }
+
   /** The state a poll answer reports, derived from the one consumer row. */
   pollState(address: string): PollState {
     const consumer = this.consumer(address);
@@ -282,19 +324,20 @@ export class Grants {
   }
 
   /**
-   * `key` is present only for an approved address whose balance
-   * is at least $0.0001; `used` is the last value read from Magpie's limit
-   * endpoint (the read path never refreshes it).
+   * `key` is present only while the address has at least $0.0001 of a
+   * remaining balance; `used` is the total already spent (a previous key's
+   * usage carried in `used-base`, plus this key's last read cost).
    */
   snapshot(address: string): PollResponse {
     const target = normalizeAddress(address);
     const state = this.pollState(target);
     const consumer = this.consumer(target);
     const balance = balanceMicro(this.db, this.provider(), target);
-    const used = this.usedMicro(target);
+    const used = this.totalUsed(target);
+    const remaining = balance > used ? balance - used : 0n;
     const granted = state === "approved" && consumer ? parseModels(consumer.granted_models) : [];
     const key =
-      state === "approved" && balance >= MIN_CAP_MICRO && consumer?.key_secret ? consumer.key_secret : null;
+      state === "approved" && remaining >= MIN_CAP_MICRO && consumer?.key_secret ? consumer.key_secret : null;
     return {
       state,
       grantedModels: granted,
@@ -355,6 +398,10 @@ export class Grants {
    * leaves a retryable `waiting-deposit` row instead of losing the decision.
    */
   async approve(address: string, models?: string[]): Promise<ApproveResult> {
+    return this.withAddressLock(address, () => this.approveLocked(address, models));
+  }
+
+  private async approveLocked(address: string, models?: string[]): Promise<ApproveResult> {
     const target = normalizeAddress(address);
     const consumer = this.consumer(target);
     const request = this.request(target);
@@ -376,7 +423,9 @@ export class Grants {
     }
 
     const balance = balanceMicro(this.db, this.provider(), target);
-    const cap = capMicroOf(balance);
+    const base = this.usedBase(target);
+    const available = balance > base ? balance - base : 0n;
+    const cap = capMicroOf(available);
     const now = catalogTimestamp();
     const keep = consumer
       ? { name: consumer.key_name, secret: consumer.key_secret, created: consumer.created_at }
@@ -399,7 +448,7 @@ export class Grants {
     // One code path for `D → cap → key`, shared with the watcher: below $0.0001
     // it also removes a key left over from a larger earlier balance, so the
     // approval cannot keep an unlimited-or-stale cap alive.
-    const resynced = await this.resync(target, "deposit");
+    const resynced = await this.resyncLocked(target, "deposit");
     if (resynced.state !== "active") {
       if (cap >= MIN_CAP_MICRO) {
         throw new Error(
@@ -418,6 +467,10 @@ export class Grants {
    * through `revoke`, which also removes the Magpie key.
    */
   async reject(address: string): Promise<{ address: string; state: "revoked" }> {
+    return this.withAddressLock(address, () => this.rejectLocked(address));
+  }
+
+  private async rejectLocked(address: string): Promise<{ address: string; state: "revoked" }> {
     const target = normalizeAddress(address);
     const consumer = this.consumer(target);
     const request = this.request(target);
@@ -450,21 +503,35 @@ export class Grants {
    * key may keep working, and that is the honest answer.
    */
   async revoke(address: string): Promise<RevokeResult> {
+    return this.withAddressLock(address, () => this.revokeLocked(address));
+  }
+
+  private async revokeLocked(address: string): Promise<RevokeResult> {
     const target = normalizeAddress(address);
     const consumer = this.consumer(target);
-    const name = consumer?.key_name ?? gatewayKeyName(target);
+    let name = this.keyNameFor(target);
     let secret = consumer?.key_secret ?? null;
     let keyRemoved = false;
     let rotated = false;
+    let usedToRoll = 0n;
     let detail: string | undefined;
 
     try {
       const magpie = this.magpie();
-      const record = magpie.keyByName(name);
+      let record = magpie.keyByName(name);
+      if (!record) {
+        // A row from before the full-name fallback, or a hand-made key.
+        const legacy = gatewayKeyName(target);
+        if (legacy !== name) {
+          record = magpie.keyByName(legacy);
+          if (record) name = legacy;
+        }
+      }
       if (!record) {
         keyRemoved = true;
         secret = null;
       } else {
+        usedToRoll = await this.usedNow(magpie, target, record.secret ?? secret);
         try {
           await magpie.removeKey(record.id);
           keyRemoved = true;
@@ -486,6 +553,7 @@ export class Grants {
     } catch (error) {
       detail = `Magpie is unreachable (${shortError(error)}); the authorization is revoked locally, but the key may still work`;
     }
+    if (keyRemoved && usedToRoll > 0n) this.rollUsedIntoBase(target, usedToRoll);
 
     const now = catalogTimestamp();
     const request = this.request(target);
@@ -567,10 +635,16 @@ export class Grants {
   }
 
   private async resync(payer: string, kind: "deposit" | "revert" | "resync"): Promise<CreditResult> {
+    return this.withAddressLock(payer, () => this.resyncLocked(payer, kind));
+  }
+
+  private async resyncLocked(payer: string, kind: "deposit" | "revert" | "resync"): Promise<CreditResult> {
     const target = normalizeAddress(payer);
     const consumer = this.consumer(target);
     const balance = balanceMicro(this.db, this.provider(), target);
-    const cap = capMicroOf(balance);
+    const usedBefore = this.usedBase(target);
+    const available = balance > usedBefore ? balance - usedBefore : 0n;
+    const cap = capMicroOf(available);
     const base = { address: target, balanceUsd: formatUsd4(balance), capUsd: formatUsd4(cap) };
 
     if (!consumer) {
@@ -615,6 +689,7 @@ export class Grants {
         name = dropped.name;
         secret = dropped.secret;
         detail = dropped.detail;
+        if (dropped.removed && dropped.used) this.rollUsedIntoBase(target, dropped.used);
       }
       this.writeConsumer({
         address: target,
@@ -653,7 +728,7 @@ export class Grants {
         revokedAt: null,
       });
       logger.info(
-        `${kind}: ${target} now has ${formatUsd4(balance)} → cap $${formatUsd4(cap)} ` +
+        `${kind}: ${target} has ${formatUsd4(balance)} with $${formatUsd4(usedBefore)} spent → cap $${formatUsd4(cap)} ` +
           `on ${granted.length} model(s)${key.rotatedSecret ? " (key secret replaced)" : ""}`,
       );
       return { ...base, state: "active", keyIssued: true, keyRemoved: false };
@@ -684,8 +759,8 @@ export class Grants {
   private async dropKey(
     target: string,
     consumer: ConsumerDbRow,
-  ): Promise<{ removed: boolean; name: string | null; secret: string | null; detail?: string }> {
-    const name = consumer.key_name ?? gatewayKeyName(target);
+  ): Promise<{ removed: boolean; name: string | null; secret: string | null; used?: bigint; detail?: string }> {
+    let name = this.keyNameFor(target);
     let magpie: Magpie;
     try {
       magpie = this.magpie();
@@ -700,6 +775,13 @@ export class Grants {
     let record;
     try {
       record = magpie.keyByName(name);
+      if (!record) {
+        const legacy = gatewayKeyName(target);
+        if (legacy !== name) {
+          record = magpie.keyByName(legacy);
+          if (record) name = legacy;
+        }
+      }
     } catch (error) {
       return {
         removed: false,
@@ -709,9 +791,10 @@ export class Grants {
       };
     }
     if (!record) return { removed: true, name: null, secret: null };
+    const used = await this.usedNow(magpie, target, record.secret ?? consumer.key_secret);
     try {
       await magpie.removeKey(record.id);
-      return { removed: true, name: null, secret: null };
+      return { removed: true, name: null, secret: null, used };
     } catch (removeError) {
       try {
         const secret = await magpie.rotateKey(record.id);
@@ -751,12 +834,12 @@ export class Grants {
     const provider = this.provider();
     const consumers: ConsumerView[] = rows.map((row) => {
       const balance = balanceMicro(this.db, provider, row.address);
-      const used = this.usedMicro(row.address);
+      const used = this.totalUsed(row.address);
       return {
         address: row.address,
         grantedModels: parseModels(row.granted_models),
         requestedModels: parseModels(row.requested_models),
-        state: this.displayState(row, balance),
+        state: this.displayState(row, balance, used),
         depositsUsd: formatUsd4(balance),
         usedUsd: formatUsd4(used),
         remainingUsd: formatUsd4(balance - used),
@@ -772,20 +855,98 @@ export class Grants {
     return { consumers, unclaimed };
   }
 
-  private displayState(row: ConsumerDbRow, balance: bigint): ConsumerState {
+  private displayState(row: ConsumerDbRow, balance: bigint, used: bigint): ConsumerState {
     if (row.state === "revoked") return "revoked";
     if (row.state === "pending") return "pending";
-    return balance >= MIN_CAP_MICRO ? "active" : "waiting-deposit";
+    const remaining = balance > used ? balance - used : 0n;
+    return remaining >= MIN_CAP_MICRO ? "active" : "waiting-deposit";
   }
 
-  private usedMicro(address: string): bigint {
-    const raw = metaGet(this.db, `used:${address}`);
+  /** How much a key that no longer exists had already spent. */
+  private usedBase(address: string): bigint {
+    const raw = metaGet(this.db, `used-base:${address.toLowerCase()}`);
     if (!raw) return 0n;
     try {
-      return BigInt(raw);
+      const value = BigInt(raw);
+      return value > 0n ? value : 0n;
     } catch {
       return 0n;
     }
+  }
+
+  /** The last cost Magpie reported for the key that exists now. */
+  private usedMicro(address: string): bigint {
+    const raw = metaGet(this.db, `used:${address.toLowerCase()}`);
+    if (!raw) return 0n;
+    try {
+      const value = BigInt(raw);
+      return value > 0n ? value : 0n;
+    } catch {
+      return 0n;
+    }
+  }
+
+  private totalUsed(address: string): bigint {
+    return this.usedBase(address) + this.usedMicro(address);
+  }
+
+  /**
+   * Moves a removed key's usage into the per-address base. The next key is
+   * capped at `D - base`, so revoking and re-approving cannot hand the same
+   * deposit back. Both meta writes are one transaction.
+   */
+  private rollUsedIntoBase(address: string, used: bigint): void {
+    if (used <= 0n || this.discardUsage) return;
+    const target = address.toLowerCase();
+    this.db.transaction(() => {
+      metaSet(this.db, `used-base:${target}`, (this.usedBase(target) + used).toString());
+      metaSet(this.db, `used:${target}`, "0");
+    })();
+  }
+
+  /**
+   * During a wallet change, keys for the old provider are dropped with a new
+   * `D` of zero; rolling their old usage into the new identity's base would be
+   * wrong, so the caller suppresses that and clears the bases at the end.
+   */
+  private discardUsage = false;
+
+  beginWalletChange(): void {
+    this.discardUsage = true;
+    this.clearUsage();
+  }
+
+  finishWalletChange(): void {
+    this.discardUsage = false;
+    this.clearUsage();
+  }
+
+  /** Forgets all usage after the node identity changes (a different provider). */
+  clearUsage(): number {
+    const rows = [...metaEntries(this.db, "used:"), ...metaEntries(this.db, "used-base:")];
+    if (rows.length === 0) return 0;
+    this.db.transaction(() => {
+      for (const row of rows) metaDelete(this.db, row.k);
+    })();
+    return rows.length;
+  }
+
+  /**
+   * The live used cost of one key, or the last value read when Magpie is
+   * unreachable. Called right before a key is removed, because once it is gone
+   * Magpie's per-key usage is gone too.
+   */
+  private async usedNow(magpie: Magpie, address: string, secret: string | null): Promise<bigint> {
+    const fallback = this.usedMicro(address);
+    if (!secret) return fallback;
+    try {
+      const status = await magpie.limitStatus(secret, 3_000);
+      const cost = status.limit?.cost;
+      if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) return microFromUsd(cost);
+    } catch (error) {
+      logger.debug(`used: cannot read the live cost for ${address} (${shortError(error)}); using the last value`);
+    }
+    return fallback;
   }
 
   private async refreshUsage(): Promise<void> {
@@ -839,9 +1000,16 @@ export class Grants {
     cap: bigint,
   ): Promise<{ name: string; secret: string; rotatedSecret: boolean }> {
     const magpie = this.magpie();
-    const name = gatewayKeyName(address);
+    let name = this.keyNameFor(address);
     const stored = this.consumer(address)?.key_secret ?? undefined;
-    const existing = magpie.keyByName(name);
+    let existing = magpie.keyByName(name);
+    if (!existing) {
+      const legacy = gatewayKeyName(address);
+      if (legacy !== name) {
+        existing = magpie.keyByName(legacy);
+        if (existing) name = legacy;
+      }
+    }
     const capUsd = Number(cap) / 1_000_000;
 
     if (existing) {
@@ -991,14 +1159,22 @@ export class Grants {
     try {
       magpie = this.magpie();
       keys = magpie.keys();
-      // Only a consumer we actually hand a key to protects that key name. A
-      // revoked consumer, or one whose key was removed because D reached zero,
-      // must not shield a same-named key that reappears (an interrupted
-      // re-approval, or a hand-made leftover): that key is an orphan.
+      // Only an active grant protects a key name. A revoked consumer (or one
+      // whose key was removed because the balance was spent) must not shield a
+      // same-named key that reappears: that key is an orphan. Both the legacy
+      // short name and the stored name are protected, so a collision fallback
+      // never orphans a key the ledger still points at.
       const rows = this.db
-        .query("SELECT address FROM consumers WHERE key_secret IS NOT NULL ORDER BY address")
-        .all() as { address: string }[];
-      legal = new Set(rows.map((row) => gatewayKeyName(row.address)));
+        .query(
+          "SELECT address, key_name FROM consumers " +
+            "WHERE key_secret IS NOT NULL AND state IN ('active','waiting-deposit') ORDER BY address",
+        )
+        .all() as { address: string; key_name: string | null }[];
+      legal = new Set<string>();
+      for (const row of rows) {
+        legal.add(gatewayKeyName(row.address));
+        if (row.key_name) legal.add(row.key_name);
+      }
     } catch (error) {
       return { checked: 0, removed: 0, clamped: 0, failed: 0, detail: shortError(error) };
     }
@@ -1030,10 +1206,18 @@ export class Grants {
         continue;
       }
 
+      // A revoked row keeps its key when remove/rotate failed. Removing that
+      // key here must not forget what it spent, or a later re-approval would
+      // hand the same deposit back.
+      const owner = this.db
+        .query("SELECT address FROM consumers WHERE key_name = ? LIMIT 1")
+        .get(name) as { address: string } | null;
+      const used = owner && key.secret ? await this.usedNow(magpie, owner.address, key.secret) : 0n;
       try {
         await magpie.removeKey(key.id);
+        if (owner) this.rollUsedIntoBase(owner.address, used);
         removed += 1;
-        notes.push(`${name}: no consumer holds this key, removed`);
+        notes.push(`${name}: no active consumer holds this key, removed`);
       } catch (removeError) {
         logger.warn(`sweep: ${name} could not be removed (${shortError(removeError)})`);
         const retired = await this.retireKey(magpie, key.id, name, null, false);

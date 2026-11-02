@@ -11,7 +11,7 @@
 // across restarts. Disconnecting must restart the core: 2.6.4 cannot remove a
 // forward at runtime, and the caller is told that other connections blink.
 
-import { Magpie, type ProviderRecord } from "../magpie.ts";
+import { magpieClient, type Magpie, type ProviderRecord } from "../magpie.ts";
 import { CONTROL_PORT, GATEWAY_PORT, SOCKS_PORT, type Overlay } from "../overlay.ts";
 import { writeConfig, type HubConfig } from "../config.ts";
 import { catalogTimestamp } from "../catalog-service.ts";
@@ -21,11 +21,11 @@ import { metaDelete, metaEntries, metaGet, metaSet } from "../db.ts";
 import { cleanModelList, type PollResponse, type PollState } from "../grants.ts";
 import { pollPayload, requestPayload } from "../http-router.ts";
 import { logger } from "../log.ts";
-import { resolveMagpieBin } from "../paths.ts";
 import { getRuntime, type Runtime } from "../runtime.ts";
 import { signCanonical } from "../signing.ts";
 import { socksHttpRequest } from "../socks.ts";
 import { peerEndpoint } from "./discover.ts";
+import { isOurRemoteProvider, remoteProviderId, remoteProviderRoots } from "../remote-provider.ts";
 import { fail, jsonText, objectArgs, requiredString, type ToolDef } from "./types.ts";
 import { resolveTarget } from "./resolve.ts";
 
@@ -33,7 +33,6 @@ const POLL_TIMEOUT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_PEER_BYTES = 32 * 1024;
 const LOCAL_PORT_BASE = 13425;
-const PROVIDER_PREFIX = "omai-";
 
 const POLL_STATES = new Set<PollState>(["none", "pending", "approved", "revoked"]);
 
@@ -54,7 +53,7 @@ export interface ConsumerDeps {
 }
 
 const productionDeps: ConsumerDeps = {
-  magpie: () => new Magpie(resolveMagpieBin()),
+  magpie: magpieClient,
   addForward: (overlay, bindAddr, dstAddr) => overlay.addForward(bindAddr, dstAddr),
   applyConfig: (overlay, cfg) => overlay.applyConfig(cfg),
   // `magpie models` can lag right behind `provider add`: retry, bounded.
@@ -213,34 +212,9 @@ function refreshRequestState(runtime: Runtime, provider: string, state: PollStat
   }
 }
 
-/**
- * The URL roots Magpie stores for a Remote Magpie. Magpie normalises the
- * provider it was given (`chat` becomes `<root>/v1`, `anthropic` stays `<root>`),
- * so the comparison strips the suffixes rather than trusting one field.
- */
-function remoteProviderRoots(record: ProviderRecord): string[] {
-  const roots: string[] = [];
-  for (const value of [record.chat, record.responses, record.anthropic]) {
-    if (typeof value !== "string" || !value) continue;
-    roots.push(value.trim().replace(/\/+$/, "").replace(/\/v1$/, ""));
-  }
-  return roots;
-}
-
 function describeProvider(record: ProviderRecord): string {
   const root = remoteProviderRoots(record)[0] ?? record.chat ?? "(no address)";
   return `preset ${record.preset ?? "?"} at ${root}`;
-}
-
-/**
- * Whether a Magpie provider is the one this plugin created for `localPort`.
- * The `omai-` prefix alone is not proof: a user can create a provider by hand
- * with the same id. Ours is a `remote-magpie` whose stored root is exactly the
- * loopback forward we allocated.
- */
-function isOurRemoteProvider(record: ProviderRecord, id: string, localPort: number): boolean {
-  if (record.id !== id || record.preset !== "remote-magpie") return false;
-  return remoteProviderRoots(record).includes(`http://127.0.0.1:${localPort}`);
 }
 
 /**
@@ -270,11 +244,6 @@ async function waitForVisibleModels(magpie: Magpie, id: string, granted: string[
     `E_MAGPIE: the Remote Magpie ${id} was registered, but none of the granted models ` +
       `(${granted.join(", ")}) is visible after ${attempts} attempts; the provider may have changed the grant`,
   );
-}
-
-/** `<remote id>/<provider>/<model>` — the prefix Magpie gives a remote model. */
-function remoteProviderId(provider: string): string {
-  return `${PROVIDER_PREFIX}${provider.replace(/^0x/, "").slice(-8)}`;
 }
 
 /**
