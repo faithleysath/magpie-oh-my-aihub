@@ -11,7 +11,7 @@
 <main class="doc">
 <h2>快速开始</h2>
 <h3>1. 把工具接给 agent</h3>
-<p>打开 Magpie，进 <strong>资源库 → MCP 服务器</strong>，找到 <code>magpie-plugin</code>（本插件；Magpie 0.1.2516 起它已经自动列在那里），点 agent 圆点，把常用的 agent 点亮。改完重启 agent。</p>
+<p>打开 Magpie，进 <strong>资源库 → MCP 服务器</strong>，找到 <code>magpie-plugin</code>，点 agent 圆点，把常用的 agent 点亮。改完重启 agent。</p>
 <h3>2. 第一次对话</h3>
 <p>把下面这段发给 agent：</p>
 <pre><code class="language-text">用 Oh My AIHub 帮我做首次设置，一步一步来：
@@ -88,16 +88,6 @@
 <li>「连接断了，先看对方还在不在，再决定重连。」</li>
 <li>「这笔交易的哈希是 0x…，帮我核对上链没有；不要重发。」</li>
 <li>「哪条链上的 gas 不够？告诉我补哪种原生币。」</li>
-</ul>
-<h2>需要知道的</h2>
-<ul>
-<li><strong>一个钱包就是一台节点。</strong> 两台机器用同一把私钥，就是同一个账户，余额和授权一起共享；地址簿、配置和账本各是各的。</li>
-<li><strong>转账要原生币当 gas。</strong> BSC 上要 BNB，Base 上要 ETH。收款不需要，出款需要。</li>
-<li><strong>只有这个钱包自己发出的付款会自动记上。</strong> 付款工具会把交易哈希直接投递给对方；交易所提币、别人用别的钱包转账都不会自动入账，需要对方手动核对那一笔。</li>
-<li><strong>TUN 才能收钱。</strong> 提供方跑在 no-TUN（Mac 上没装 root 守护进程、服务器上没有 root）时，对端看到的源地址是本机回环，Magpie 会当成本机免 Key 调用，所以那时不对外公布网关端口——能共享，但计不了费。</li>
-<li><strong>改价会让剩余额度自己变。</strong> 价格是签名承诺，Magpie 按自己的价目表扣费；改价之后历史用量按新价重算，剩余额度跟着变，可能变成负的，充值即恢复。</li>
-<li><strong>名字只是名字。</strong> 地址簿里的别名不进签名、不进目录、不参与授权，也不是转账白名单。</li>
-<li><strong>私钥只在本机。</strong> 工具永远不返回它；导出到文件之后，那个文件就等于是你全部的钱。</li>
 </ul>
 </main>
 </body>

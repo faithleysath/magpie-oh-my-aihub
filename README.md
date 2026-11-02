@@ -8,7 +8,7 @@ Magpie 的纯后端插件：把自己的 Magpie 模型共享给同一个 EasyTie
 
 1. 打开 Magpie 的 **Plugins → Discover**。
 2. 如果搜不到，在列表底部用手动添加入口填：`github:faithleysath/magpie-oh-my-aihub`
-3. 打开 **Oh My AIHub** 插件页——那一页就是用户手册（快速开始、常用说法、需要知道的）。
+3. 打开 **Oh My AIHub** 插件页——那一页就是用户手册（快速开始、常用说法）。
 4. 让 agent 用 `join_network` 加入网络，其余按插件页走。网络方说这个网开了 secure mode，就一起给 agent：它会传 `secureMode:true`。
 
 插件装好后会自动生成节点钱包，私钥在插件数据目录的 `wallet/key.hex`（`0600`）。插件不写 Magpie 选项，也不读它的管理接口。
